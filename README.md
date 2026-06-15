@@ -223,9 +223,9 @@ Labeling Interface XML 模板（视频 + IMU 同步）：
   <Image name="image" value="$image"/>
 
   <RectangleLabels name="label" toName="image">
-    <Label value="狗" background="#FF6B6B"/>
-    <Label value="猫" background="#4ECDC4"/>
-    <Label value="人" background="#45B7D1"/>
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
   </RectangleLabels>
 </View>
 ```
@@ -253,9 +253,9 @@ python3 label_studio/import_tasks.py --project <项目ID> --media-dir ~/label_in
   <Image name="image" value="$image"/>
 
   <RectangleLabels name="label" toName="image">
-    <Label value="狗" background="#FF6B6B"/>
-    <Label value="猫" background="#4ECDC4"/>
-    <Label value="人" background="#45B7D1"/>
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
   </RectangleLabels>
 </View>
 ```
@@ -278,7 +278,7 @@ python3 label_studio/import_tasks.py --project <项目ID> --media-dir ~/label_in
             "x": 10.5, "y": 20.3,
             "width": 30.0, "height": 40.0,
             "rotation": 0,
-            "rectanglelabels": ["狗"]
+            "rectanglelabels": ["活动"]
           }
         }
       ]
