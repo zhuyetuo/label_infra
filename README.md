@@ -77,15 +77,15 @@ tail -f ~/transcode.log
 kill $(pgrep -f "auto_transcode.py")
 
 # 停止 Label Studio 容器
-docker stop label-studio
+docker stop label_studio
 
 # 停止 nginx 媒体服务容器
-docker stop ls-media
+docker stop label_studio_nginx
 ```
 
 重新启动容器：
 ```bash
-docker start label-studio ls-media
+docker start label_studio label_studio_nginx
 ```
 
 ---

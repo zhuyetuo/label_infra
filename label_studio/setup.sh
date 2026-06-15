@@ -47,11 +47,11 @@ server {
 NGINX_EOF
 
 # 3. 停止并移除旧容器（如果存在）
-docker rm -f label-studio ls-media 2>/dev/null || true
+docker rm -f label_studio label_studio_nginx 2>/dev/null || true
 
 # 4. 启动 nginx（托管媒体文件）
 docker run -d \
-  --name ls-media \
+  --name label_studio_nginx \
   -p "${MEDIA_PORT}:80" \
   -v "${MEDIA_DIR}:/usr/share/nginx/html" \
   -v "${PROJECT_DIR}/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
@@ -60,14 +60,14 @@ docker run -d \
 
 # 5. 启动 Label Studio
 docker run -d \
-  --name label-studio \
+  --name label_studio \
   -p "${LS_PORT}:8080" \
   --user root \
-  -v "${LS_DATA_DIR}:/label-studio/data" \
+  -v "${LS_DATA_DIR}:/label_studio/data" \
   -e SESSION_COOKIE_AGE="${SESSION_COOKIE_AGE}" \
   -e DATA_UPLOAD_MAX_NUMBER_FILES="${MAX_UPLOAD_FILES}" \
   --restart unless-stopped \
-  heartexlabs/label-studio:latest
+  heartexlabs/label_studio:latest
 
 echo ""
 echo "=== 部署完成 ==="
