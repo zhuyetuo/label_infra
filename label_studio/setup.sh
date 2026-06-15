@@ -127,9 +127,22 @@ else
 
     nohup python3 "${SCRIPT_DIR}/auto_transcode.py" >> "$LOG_FILE" 2>&1 &
     TRANSCODE_PID=$!
+
+    # 启动上传服务
+    UPLOAD_LOG="$HOME/label_infra/logs/upload.log"
+    > "$UPLOAD_LOG"
+    export UPLOAD_PORT=8183
+    nohup python3 "${SCRIPT_DIR}/upload_server.py" >> "$UPLOAD_LOG" 2>&1 &
+    UPLOAD_PID=$!
+
     echo ""
     echo "=== 自动转码服务已启动 ==="
     echo "  PID     : ${TRANSCODE_PID}"
     echo "  日志    : ${LOG_FILE}"
     echo "  查看日志: tail -f ${LOG_FILE}"
+    echo ""
+    echo "=== 上传服务已启动 ==="
+    echo "  PID     : ${UPLOAD_PID}"
+    echo "  地址    : http://${SERVER_IP}:8183"
+    echo "  日志    : ${UPLOAD_LOG}"
 fi
