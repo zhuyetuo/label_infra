@@ -114,13 +114,19 @@ Labeling Interface XML 模板（视频 + IMU 同步）：
 ```xml
 <View>
   <Video name="video" value="$video" frameRate="25" sync="sync_group"/>
+
   <TimeSeriesLabels name="label" toName="ts">
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
   </TimeSeriesLabels>
+
   <TimeSeries name="ts" value="$csv" valueType="url"
-              sync="sync_group" timeColumn="timestamp" sep=",">
+              sync="sync_group"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
     <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
     <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
     <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
@@ -130,6 +136,158 @@ Labeling Interface XML 模板（视频 + IMU 同步）：
   </TimeSeries>
 </View>
 ```
+
+---
+
+### Labeling Interface 模板
+
+#### 1. 视频 + IMU 同步标注
+
+任务数据字段：`$video`（视频 URL）、`$csv`（IMU CSV URL）
+
+```xml
+<View>
+  <Video name="video" value="$video" frameRate="25" sync="sync_group"/>
+
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+  </TimeSeriesLabels>
+
+  <TimeSeries name="ts" value="$csv" valueType="url"
+              sync="sync_group"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="60"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="60"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="60"/>
+  </TimeSeries>
+</View>
+```
+
+#### 2. 纯视频片段标注
+
+任务数据字段：`$video`（视频 URL）
+
+```xml
+<View>
+  <Video name="video" value="$video" frameRate="25"/>
+
+  <TimeSeriesLabels name="label" toName="video">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+  </TimeSeriesLabels>
+</View>
+```
+
+#### 3. 纯 IMU 时序标注
+
+任务数据字段：`$csv`（IMU CSV URL）
+
+```xml
+<View>
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+  </TimeSeriesLabels>
+
+  <TimeSeries name="ts" value="$csv" valueType="url"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="60"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="60"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="60"/>
+  </TimeSeries>
+</View>
+```
+
+#### 4. 图片目标检测（从零标注）
+
+任务数据字段：`$image`（图片 URL）
+
+```xml
+<View>
+  <Image name="image" value="$image"/>
+
+  <RectangleLabels name="label" toName="image">
+    <Label value="狗" background="#FF6B6B"/>
+    <Label value="猫" background="#4ECDC4"/>
+    <Label value="人" background="#45B7D1"/>
+  </RectangleLabels>
+</View>
+```
+
+批量导入图片任务（`import_tasks.py` 同目录下运行）：
+```bash
+# 将图片放到 ~/label_infra/data/media/，CSV 中每行一个图片 URL
+python3 label_studio/import_tasks.py --project <项目ID> --media-dir ~/label_infra/data/media/
+```
+
+或直接用 JSON 批量导入：
+```json
+[
+  {"data": {"image": "http://<服务器IP>:8182/dog001.jpg"}},
+  {"data": {"image": "http://<服务器IP>:8182/dog002.jpg"}}
+]
+```
+
+#### 5. 图片目标检测（已有预标注，导入后校验）
+
+任务数据字段：`$image`（图片 URL），预标注通过 `predictions` 字段传入：
+
+```xml
+<View>
+  <Image name="image" value="$image"/>
+
+  <RectangleLabels name="label" toName="image">
+    <Label value="狗" background="#FF6B6B"/>
+    <Label value="猫" background="#4ECDC4"/>
+    <Label value="人" background="#45B7D1"/>
+  </RectangleLabels>
+</View>
+```
+
+带预标注的导入 JSON 格式：
+```json
+[
+  {
+    "data": {"image": "http://<服务器IP>:8182/dog001.jpg"},
+    "predictions": [{
+      "model_version": "v1",
+      "result": [
+        {
+          "type": "rectanglelabels",
+          "from_name": "label",
+          "to_name": "image",
+          "original_width": 1920,
+          "original_height": 1080,
+          "value": {
+            "x": 10.5, "y": 20.3,
+            "width": 30.0, "height": 40.0,
+            "rotation": 0,
+            "rectanglelabels": ["狗"]
+          }
+        }
+      ]
+    }]
+  }
+]
+```
+
+> `x`、`y`、`width`、`height` 均为百分比（相对图片宽高），范围 0–100。
 
 #### 媒体文件目录
 ```
