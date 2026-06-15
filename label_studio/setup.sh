@@ -78,7 +78,24 @@ echo "首次访问请注册账号（第一个账号自动成为管理员）"
 echo "媒体文件放到: ${MEDIA_DIR}/"
 echo "转码输出目录: ${TRANSCODED_DIR}/"
 
-# 6. 启动自动转码服务
+# 6. 等待 Label Studio 就绪
+echo ""
+echo "=== 等待 Label Studio 启动 ==="
+MAX_WAIT=120
+ELAPSED=0
+until curl -s "http://${SERVER_IP}:${LS_PORT}/health" | grep -q "ok" 2>/dev/null; do
+    if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+        echo "⚠️  等待超时（${MAX_WAIT}s），Label Studio 可能还未就绪，转码服务将自动重试连接"
+        break
+    fi
+    printf "."
+    sleep 3
+    ELAPSED=$((ELAPSED + 3))
+done
+echo ""
+echo "Label Studio 已就绪"
+
+# 7. 启动自动转码服务
 # 安装 Python 依赖
 echo ""
 echo "=== 安装转码服务依赖 ==="
