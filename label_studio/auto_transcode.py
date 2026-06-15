@@ -120,8 +120,16 @@ def get_tasks(project_id: int) -> list:
         f"{LS_URL}/api/tasks/?project={project_id}&page_size=500",
         headers=headers(), timeout=10,
     )
+    r.raise_for_status()
     data = r.json()
-    return data.get("tasks", data) if isinstance(data, dict) else data
+    if isinstance(data, dict):
+        # 兼容两种返回格式：{tasks:[...]} 或 {results:[...]}
+        tasks = data.get("tasks") or data.get("results") or []
+    elif isinstance(data, list):
+        tasks = data
+    else:
+        tasks = []
+    return tasks
 
 
 def update_task_video(task_id: int, new_url: str) -> bool:
