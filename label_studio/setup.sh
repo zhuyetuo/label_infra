@@ -16,24 +16,22 @@ LS_REFRESH_TOKEN="${LS_REFRESH_TOKEN:-}"
 SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
 # ───────────────────────────────────────────────────────────────
 
-# 项目根目录（脚本所在目录的上一级，即 label_infra/）
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT_DIR="${PROJECT_DIR}/label_studio"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 数据和日志都放在项目目录下
-LS_DATA_DIR="${PROJECT_DIR}/data/label_studio"
-MEDIA_DIR="${PROJECT_DIR}/data/media"
-TRANSCODED_DIR="${MEDIA_DIR}/transcoded"
-LOG_FILE="${PROJECT_DIR}/logs/transcode.log"
+# 数据和日志都放在 ~/label_infra/ 下
+LS_DATA_DIR=~/label_infra/data/label_studio
+MEDIA_DIR=~/label_infra/data/media
+TRANSCODED_DIR=~/label_infra/data/media/transcoded
+LOG_FILE=~/label_infra/logs/transcode.log
 
 echo "=== Label Studio 部署 ==="
 
 # 1. 创建目录
-mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" "${PROJECT_DIR}/logs"
+mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" ~/label_infra/logs
 sudo chmod -R 777 "$MEDIA_DIR" "$LS_DATA_DIR" 2>/dev/null || true
 
 # 2. 写 nginx 配置（支持 CORS，供 Label Studio 加载本地媒体文件）
-cat > "${PROJECT_DIR}/data/nginx.conf" << 'NGINX_EOF'
+cat > "~/label_infra/data/nginx.conf" << 'NGINX_EOF'
 server {
     listen 80;
     root /usr/share/nginx/html;
@@ -54,7 +52,7 @@ docker run -d \
   --name label_studio_nginx \
   -p "${MEDIA_PORT}:80" \
   -v "${MEDIA_DIR}:/usr/share/nginx/html" \
-  -v "${PROJECT_DIR}/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
+  -v "~/label_infra/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
   --restart unless-stopped \
   nginx:alpine
 
@@ -123,7 +121,7 @@ else
     export LS_URL="http://${SERVER_IP}:${LS_PORT}"
     export NGINX_BASE_URL="http://${SERVER_IP}:${MEDIA_PORT}/transcoded"
     export OUTPUT_DIR="${TRANSCODED_DIR}"
-    export UPLOAD_DIR="${MEDIA_DIR}/upload"
+    export UPLOAD_DIR="${LS_DATA_DIR}/media/upload"
 
     nohup python3 "${SCRIPT_DIR}/auto_transcode.py" >> "$LOG_FILE" 2>&1 &
     TRANSCODE_PID=$!
