@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Label Studio 运行时数据（不提交到仓库）
+data/
+logs/
