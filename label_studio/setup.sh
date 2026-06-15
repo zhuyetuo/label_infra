@@ -83,7 +83,7 @@ echo ""
 echo "=== 等待 Label Studio 启动 ==="
 MAX_WAIT=120
 ELAPSED=0
-until curl -s "http://${SERVER_IP}:${LS_PORT}/health" | grep -q "ok" 2>/dev/null; do
+until curl -s "http://${SERVER_IP}:${LS_PORT}/health" | grep -q "UP" 2>/dev/null; do
     if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
         echo "⚠️  等待超时（${MAX_WAIT}s），Label Studio 可能还未就绪，转码服务将自动重试连接"
         break
