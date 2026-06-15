@@ -101,12 +101,10 @@ echo ""
 echo "=== 安装转码服务依赖 ==="
 pip install requests --break-system-packages -q
 
-# 停止旧的转码进程
-OLD_PID=$(pgrep -f "auto_transcode.py" 2>/dev/null || true)
-if [ -n "$OLD_PID" ]; then
-    echo "停止旧的转码进程 (PID: $OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null || true
-fi
+# 停止旧的后台进程
+pkill -f "auto_transcode.py" 2>/dev/null || true
+pkill -f "upload_server.py"  2>/dev/null || true
+sleep 1
 # 清空日志
 > "$LOG_FILE"
 
