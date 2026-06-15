@@ -156,6 +156,19 @@ def main():
     print(f"   媒体服务地址  : {NGINX_BASE_URL}", flush=True)
     print(f"   轮询间隔      : {POLL_INTERVAL}s", flush=True)
 
+    # 等待 Label Studio 就绪再开始轮询
+    import urllib.request
+    while True:
+        try:
+            with urllib.request.urlopen(f"{LS_URL}/health", timeout=5) as resp:
+                if b"UP" in resp.read():
+                    break
+        except Exception:
+            pass
+        print("⏳ 等待 Label Studio 就绪...", flush=True)
+        time.sleep(5)
+    print("✅ Label Studio 已就绪，开始轮询", flush=True)
+
     while True:
         try:
             projects = get_all_projects()
