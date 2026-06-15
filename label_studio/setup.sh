@@ -31,7 +31,7 @@ mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" ~/label_infra/logs
 sudo chmod -R 777 "$MEDIA_DIR" "$LS_DATA_DIR" 2>/dev/null || true
 
 # 2. 写 nginx 配置（支持 CORS，供 Label Studio 加载本地媒体文件）
-cat > "~/label_infra/data/nginx.conf" << 'NGINX_EOF'
+cat > "$HOME/label_infra/data/nginx.conf" << 'NGINX_EOF'
 server {
     listen 80;
     root /usr/share/nginx/html;
