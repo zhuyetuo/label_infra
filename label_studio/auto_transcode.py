@@ -64,7 +64,7 @@ def _refresh_access_token() -> str:
 
 
 def get_token() -> str:
-    if _access_token["val"] and (time.time() - _access_token["ts"]) < 270:
+    if _access_token["val"] and (time.time() - _access_token["ts"]) < 86400:
         return _access_token["val"]
     return _refresh_access_token()
 
