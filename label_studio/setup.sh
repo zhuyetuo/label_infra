@@ -52,7 +52,7 @@ docker run -d \
   --name label_studio_nginx \
   -p "${MEDIA_PORT}:80" \
   -v "${MEDIA_DIR}:/usr/share/nginx/html" \
-  -v "~/label_infra/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
+  -v "$HOME/label_infra/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
   --restart unless-stopped \
   nginx:alpine
 
