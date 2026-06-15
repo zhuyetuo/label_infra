@@ -63,11 +63,11 @@ docker run -d \
   --name label_studio \
   -p "${LS_PORT}:8080" \
   --user root \
-  -v "${LS_DATA_DIR}:/label_studio/data" \
+  -v "${LS_DATA_DIR}:/label-studio/data" \
   -e SESSION_COOKIE_AGE="${SESSION_COOKIE_AGE}" \
   -e DATA_UPLOAD_MAX_NUMBER_FILES="${MAX_UPLOAD_FILES}" \
   --restart unless-stopped \
-  heartexlabs/label_studio:latest
+  heartexlabs/label-studio:latest
 
 echo ""
 echo "=== 部署完成 ==="
