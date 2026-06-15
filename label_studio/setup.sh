@@ -123,7 +123,7 @@ else
     export LS_URL="http://${SERVER_IP}:${LS_PORT}"
     export NGINX_BASE_URL="http://${SERVER_IP}:${MEDIA_PORT}/transcoded"
     export OUTPUT_DIR="${TRANSCODED_DIR}"
-    export UPLOAD_DIR="${MEDIA_DIR}/upload"
+    export UPLOAD_DIR="${LS_DATA_DIR}/media/upload"
 
     nohup python3 "${SCRIPT_DIR}/auto_transcode.py" >> "$LOG_FILE" 2>&1 &
     TRANSCODE_PID=$!
