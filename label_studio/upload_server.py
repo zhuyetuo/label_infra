@@ -172,7 +172,10 @@ HTML = """<!DOCTYPE html>
 <body>
 <h1>数据上传</h1>
 <div class="card">
-  <label>目标项目</label>
+  <label>目标项目 <a href="/" style="color:#4ecca3;font-size:12px;margin-left:8px">↻ 刷新列表</a></label>
+  {% if error %}
+  <div style="color:#e94560;font-size:13px;margin-bottom:8px">⚠️ 获取项目列表失败：{{ error }}</div>
+  {% endif %}
   <select id="project">
     {% for p in projects %}
     <option value="{{ p.id }}">{{ p.title }} (ID: {{ p.id }})</option>
@@ -253,11 +256,13 @@ uploadBtn.onclick = async () => {
 
 @app.route("/")
 def index():
+    error = None
     try:
         projects = get_projects()
-    except Exception:
+    except Exception as e:
         projects = []
-    return render_template_string(HTML, projects=projects)
+        error = str(e)
+    return render_template_string(HTML, projects=projects, error=error)
 
 
 @app.route("/upload", methods=["POST"])

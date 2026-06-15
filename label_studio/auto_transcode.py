@@ -156,6 +156,19 @@ def main():
     print(f"   媒体服务地址  : {NGINX_BASE_URL}", flush=True)
     print(f"   轮询间隔      : {POLL_INTERVAL}s", flush=True)
 
+    # 等待 Label Studio 就绪再开始轮询
+    import urllib.request
+    while True:
+        try:
+            with urllib.request.urlopen(f"{LS_URL}/health", timeout=5) as resp:
+                if b"UP" in resp.read():
+                    break
+        except Exception:
+            pass
+        print("⏳ 等待 Label Studio 就绪...", flush=True)
+        time.sleep(5)
+    print("✅ Label Studio 已就绪，开始轮询", flush=True)
+
     while True:
         try:
             projects = get_all_projects()
@@ -170,13 +183,21 @@ def main():
 
                     video_url: str = task.get("data", {}).get("video", "")
 
-                    # 只处理还未转码的上传文件
+                    # 只处理还未转码的上传文件（URL 仍是内部路径）
                     if "/data/upload/" not in video_url:
                         continue
 
                     fname = video_url.split("/")[-1]
                     dst = os.path.join(OUTPUT_DIR, fname)
-                    processed.add(task_id)
+
+                    # 转码文件已存在且任务 URL 也已更新，则标记完成跳过
+                    if os.path.exists(dst):
+                        processed.add(task_id)
+                        # URL 还没更新则补更新
+                        new_url = f"{NGINX_BASE_URL}/{fname}"
+                        if update_task_video(task_id, new_url):
+                            print(f"[项目 {pid}] 补更新任务 {task_id} URL → {new_url}", flush=True)
+                        continue
 
                     print(f"\n[项目 {pid}] 发现待处理任务 {task_id}: {fname}", flush=True)
 
@@ -192,20 +213,17 @@ def main():
                         time.sleep(2)
                         s2 = os.path.getsize(src)
                         if s1 != s2:
-                            processed.discard(task_id)  # 还在上传，下次再处理
+                            print(f"  ⏳ 文件还在上传中，下次再处理: {fname}", flush=True)
                             continue
                     except OSError:
                         continue
 
-                    # 转码（已存在则跳过）
-                    if not os.path.exists(dst):
-                        success = transcode(src, dst)
-                    else:
-                        print(f"  ℹ️  已有转码文件，跳过转码", flush=True)
-                        success = True
-
+                    # 转码
+                    success = transcode(src, dst)
                     if not success:
                         continue
+
+                    processed.add(task_id)
 
                     # 更新 Label Studio 任务 URL
                     new_url = f"{NGINX_BASE_URL}/{fname}"
