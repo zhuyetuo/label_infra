@@ -73,14 +73,12 @@ tail -f ~/transcode.log
 ### 4. 停止服务
 
 ```bash
-# 停止自动转码服务
-kill $(pgrep -f "auto_transcode.py")
+# 停止所有后台服务
+pkill -f "auto_transcode.py" 2>/dev/null || true
+pkill -f "upload_server.py"  2>/dev/null || true
 
-# 停止 Label Studio 容器
-docker stop label_studio
-
-# 停止 nginx 媒体服务容器
-docker stop label_studio_nginx
+# 停止容器
+docker stop label_studio label_studio_nginx
 ```
 
 重新启动容器：
@@ -92,8 +90,16 @@ docker start label_studio label_studio_nginx
 
 ### 5. 使用说明
 
-#### 上传视频
-直接在 Label Studio 项目里上传 MP4 视频，`auto_transcode.py` 会自动：
+#### 上传视频 + IMU 数据（推荐方式）
+
+打开上传服务页面：`http://<服务器IP>:8183`
+
+1. 选择目标 Label Studio 项目
+2. 拖拽同名的 MP4 + CSV 文件（如 `26060315.mp4` + `26060315.csv`），支持多对同时上传
+3. 点击"上传并导入"，后台自动转码 + 配对 + 创建任务
+
+#### 视频自动转码
+直接在 Label Studio 项目里上传 MP4 视频，`auto_transcode.py` 也会自动：
 1. 检测到上传的视频（每 10 秒轮询一次）
 2. 用 GPU（h264_nvenc）转码为浏览器兼容的 H.264 格式，无 GPU 时自动降级到 CPU
 3. 将任务的视频 URL 更新为 nginx 托管的转码文件
