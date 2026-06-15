@@ -87,10 +87,14 @@ def transcode(src: str, dst: str) -> bool:
     mode = "GPU" if use_gpu else "CPU"
 
     print(f"  🎬 转码 [{mode}]: {os.path.basename(src)}", flush=True)
-    cmd = ["ffmpeg"]
     if use_gpu:
-        cmd += ["-hwaccel", "cuda"]
-    cmd += ["-i", src] + encode_args + ["-c:a", "aac", "-movflags", "+faststart", "-y", dst]
+        cmd = ["ffmpeg", "-hwaccel", "cuda", "-i", src,
+               "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
+               "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
+    else:
+        cmd = ["ffmpeg", "-i", src,
+               "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+               "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode == 0:

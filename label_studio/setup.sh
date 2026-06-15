@@ -105,6 +105,8 @@ if [ -n "$OLD_PID" ]; then
     echo "停止旧的转码进程 (PID: $OLD_PID)..."
     kill "$OLD_PID" 2>/dev/null || true
 fi
+# 清空日志
+> "$LOG_FILE"
 
 # 检查 token 是否已配置
 if [ -z "$LS_REFRESH_TOKEN" ]; then
