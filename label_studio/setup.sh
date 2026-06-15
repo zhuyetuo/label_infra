@@ -64,6 +64,8 @@ docker run -d \
   -v "${LS_DATA_DIR}:/label-studio/data" \
   -e SESSION_COOKIE_AGE="${SESSION_COOKIE_AGE}" \
   -e DATA_UPLOAD_MAX_NUMBER_FILES="${MAX_UPLOAD_FILES}" \
+  -e LABEL_STUDIO_JWT_ACCESS_TOKEN_LIFETIME=525600 \
+  -e LABEL_STUDIO_JWT_REFRESH_TOKEN_LIFETIME=525600 \
   --restart unless-stopped \
   heartexlabs/label-studio:latest
 

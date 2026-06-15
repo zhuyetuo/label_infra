@@ -34,7 +34,7 @@ _token: dict = {"val": None, "ts": 0}
 
 
 def get_token() -> str:
-    if _token["val"] and (time.time() - _token["ts"]) < 270:
+    if _token["val"] and (time.time() - _token["ts"]) < 86400:
         return _token["val"]
     r = requests.post(f"{LS_URL}/api/token/refresh",
                       json={"refresh": REFRESH_TOKEN}, timeout=10)
