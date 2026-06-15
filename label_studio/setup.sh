@@ -7,7 +7,6 @@ set -e
 # ── 配置项（按需修改）──────────────────────────────────────────
 LS_PORT=8181           # Label Studio Web 端口
 MEDIA_PORT=8182        # nginx 静态媒体端口
-LS_DATA_DIR="$HOME/ls-data"
 SESSION_COOKIE_AGE=1209600   # 14 天
 MAX_UPLOAD_FILES=10000
 
@@ -17,17 +16,24 @@ LS_REFRESH_TOKEN="${LS_REFRESH_TOKEN:-}"
 SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
 # ───────────────────────────────────────────────────────────────
 
-MEDIA_DIR="$LS_DATA_DIR/media"
-TRANSCODED_DIR="$MEDIA_DIR/transcoded"
+# 项目根目录（脚本所在目录的上一级，即 label_infra/）
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="${PROJECT_DIR}/label_studio"
+
+# 数据和日志都放在项目目录下
+LS_DATA_DIR="${PROJECT_DIR}/data/label_studio"
+MEDIA_DIR="${PROJECT_DIR}/data/media"
+TRANSCODED_DIR="${MEDIA_DIR}/transcoded"
+LOG_FILE="${PROJECT_DIR}/logs/transcode.log"
 
 echo "=== Label Studio 部署 ==="
 
 # 1. 创建目录
-mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR"
-sudo chmod -R 777 "$LS_DATA_DIR" 2>/dev/null || true
+mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" "${PROJECT_DIR}/logs"
+sudo chmod -R 777 "$MEDIA_DIR" "$LS_DATA_DIR" 2>/dev/null || true
 
 # 2. 写 nginx 配置（支持 CORS，供 Label Studio 加载本地媒体文件）
-cat > "$LS_DATA_DIR/nginx.conf" << 'NGINX_EOF'
+cat > "${PROJECT_DIR}/data/nginx.conf" << 'NGINX_EOF'
 server {
     listen 80;
     root /usr/share/nginx/html;
@@ -48,7 +54,7 @@ docker run -d \
   --name ls-media \
   -p "${MEDIA_PORT}:80" \
   -v "${MEDIA_DIR}:/usr/share/nginx/html" \
-  -v "${LS_DATA_DIR}/nginx.conf:/etc/nginx/conf.d/default.conf" \
+  -v "${PROJECT_DIR}/data/nginx.conf:/etc/nginx/conf.d/default.conf" \
   --restart unless-stopped \
   nginx:alpine
 
@@ -73,8 +79,6 @@ echo "媒体文件放到: ${MEDIA_DIR}/"
 echo "转码输出目录: ${TRANSCODED_DIR}/"
 
 # 6. 启动自动转码服务
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # 安装 Python 依赖
 echo ""
 echo "=== 安装转码服务依赖 ==="
@@ -96,10 +100,9 @@ if [ -z "$LS_REFRESH_TOKEN" ]; then
     echo "   export LS_REFRESH_TOKEN=\"你的JWT refresh token\""
     echo "   export LS_URL=\"http://${SERVER_IP}:${LS_PORT}\""
     echo "   export NGINX_BASE_URL=\"http://${SERVER_IP}:${MEDIA_PORT}/transcoded\""
-    echo "   nohup python3 ${SCRIPT_DIR}/auto_transcode.py >> ~/transcode.log 2>&1 &"
+    echo "   nohup python3 ${SCRIPT_DIR}/auto_transcode.py >> ${LOG_FILE} 2>&1 &"
     echo ""
 else
-    LOG_FILE="$HOME/transcode.log"
     export LS_URL="http://${SERVER_IP}:${LS_PORT}"
     export NGINX_BASE_URL="http://${SERVER_IP}:${MEDIA_PORT}/transcoded"
     export OUTPUT_DIR="${TRANSCODED_DIR}"

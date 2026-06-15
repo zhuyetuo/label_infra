@@ -7,9 +7,17 @@
 ## 目录结构
 
 ```
-label_studio/
-├── setup.sh            # 一键部署脚本
-└── auto_transcode.py   # 视频自动转码后台服务
+label_infra/
+├── label_studio/
+│   ├── setup.sh            # 一键部署脚本
+│   └── auto_transcode.py   # 视频自动转码后台服务
+├── data/                   # 运行时数据（gitignore，不提交）
+│   ├── label_studio/       # Label Studio 数据库、项目数据
+│   ├── media/              # 媒体文件
+│   │   └── transcoded/     # 转码后的视频
+│   └── nginx.conf
+└── logs/                   # 日志（gitignore，不提交）
+    └── transcode.log
 ```
 
 ---
@@ -119,10 +127,11 @@ Labeling Interface XML 模板（视频 + IMU 同步）：
 
 #### 媒体文件目录
 ```
-~/ls-data/
+label_infra/data/
 ├── media/
 │   ├── transcoded/   # 转码后的视频（auto_transcode.py 自动写入）
 │   └── upload/       # Label Studio 上传目录（自动管理）
+├── label_studio/     # Label Studio 数据库和项目数据
 └── nginx.conf
 ```
 
