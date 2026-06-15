@@ -122,6 +122,7 @@ if [ -z "$LS_REFRESH_TOKEN" ]; then
 else
     export LS_URL="http://${SERVER_IP}:${LS_PORT}"
     export NGINX_BASE_URL="http://${SERVER_IP}:${MEDIA_PORT}/transcoded"
+    export NGINX_MEDIA_URL="http://${SERVER_IP}:${MEDIA_PORT}"
     export OUTPUT_DIR="${TRANSCODED_DIR}"
     export UPLOAD_DIR="${LS_DATA_DIR}/media/upload"
 

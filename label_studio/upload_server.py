@@ -18,10 +18,10 @@ import time
 import requests
 from flask import Flask, jsonify, render_template_string, request
 
-LS_URL         = os.getenv("LS_URL",           "http://192.168.2.140:8181")
-REFRESH_TOKEN  = os.getenv("LS_REFRESH_TOKEN", "")
-NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",   "http://192.168.2.140:8182")
-MEDIA_DIR      = os.getenv("MEDIA_DIR",        os.path.expanduser("~/label_infra/data/media"))
+LS_URL          = os.getenv("LS_URL",            "http://192.168.2.140:8181")
+REFRESH_TOKEN   = os.getenv("LS_REFRESH_TOKEN",  "")
+NGINX_MEDIA_URL = os.getenv("NGINX_MEDIA_URL",   "http://192.168.2.140:8182")
+MEDIA_DIR       = os.getenv("MEDIA_DIR",         os.path.expanduser("~/label_infra/data/media"))
 TRANSCODED_DIR = os.path.join(MEDIA_DIR, "transcoded")
 PORT           = int(os.getenv("UPLOAD_PORT",  "8183"))
 
@@ -117,8 +117,8 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         log(f"✅ 转码完成: {name}.mp4")
 
         pairs.append({
-            "video": f"{NGINX_BASE_URL}/transcoded/{os.path.basename(dst)}",
-            "csv":   f"{NGINX_BASE_URL}/{os.path.basename(files['csv'])}",
+            "video": f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}",
+            "csv":   f"{NGINX_MEDIA_URL}/{os.path.basename(files['csv'])}",
         })
 
     if not pairs:
