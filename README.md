@@ -230,19 +230,25 @@ Labeling Interface XML 模板（视频 + IMU 同步）：
 </View>
 ```
 
-批量导入图片任务（`import_tasks.py` 同目录下运行）：
+> **注意**：图片项目只接受图片（JPG/PNG），不能直接上传 MP4。如果数据是视频，先用 `extract_frames.py` 抽帧。
+
+**从视频抽帧并导入：**
 ```bash
-# 将图片放到 ~/label_infra/data/media/，CSV 中每行一个图片 URL
-python3 label_studio/import_tasks.py --project <项目ID> --media-dir ~/label_infra/data/media/
+export LS_REFRESH_TOKEN="你的token"
+
+# 每秒抽 1 帧，抽完后自动导入项目
+python3 label_studio/extract_frames.py \
+    --video ~/label_infra/data/media/video.mp4 \
+    --project <项目ID> \
+    --fps 1
+
+# 只抽帧不导入（先预览帧数量）
+python3 label_studio/extract_frames.py \
+    --video ~/label_infra/data/media/video.mp4 \
+    --fps 1 --dry-run
 ```
 
-或直接用 JSON 批量导入：
-```json
-[
-  {"data": {"image": "http://<服务器IP>:8182/dog001.jpg"}},
-  {"data": {"image": "http://<服务器IP>:8182/dog002.jpg"}}
-]
-```
+帧图片保存到 `~/label_infra/data/media/frames/`，通过 `http://<服务器IP>:8182/frames/` 访问。
 
 #### 5. 图片目标检测（已有预标注，导入后校验）
 
