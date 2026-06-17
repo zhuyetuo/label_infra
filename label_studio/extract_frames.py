@@ -51,10 +51,16 @@ def extract_frames(video_path: str, output_dir: str, fps: float) -> list[str]:
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     pattern = os.path.join(output_dir, f"{video_name}_%06d.jpg")
 
+    # 已有帧则跳过抽帧
+    existing = sorted(glob.glob(os.path.join(output_dir, f"{video_name}_*.jpg")))
+    if existing:
+        print(f"ℹ️  已有 {len(existing)} 帧，跳过抽帧", flush=True)
+        return existing
+
     cmd = [
         "ffmpeg", "-i", video_path,
         "-vf", f"fps={fps}",
-        "-q:v", "2",       # JPEG 质量（2=高质量，31=低质量）
+        "-q:v", "2",
         "-y", pattern
     ]
 
