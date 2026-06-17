@@ -12,7 +12,7 @@ auto_transcode.py
 配置：
   编辑下方 CONFIG 区域，或通过环境变量覆盖：
     LS_URL              Label Studio 地址
-    LS_REFRESH_TOKEN    从 Label Studio 用户设置页面获取的 JWT refresh token
+    LS_API_KEY          静态 API Key（Account & Settings → Access Token）
     NGINX_BASE_URL      nginx 媒体服务的基础 URL
     OUTPUT_DIR          转码后文件存放目录
     UPLOAD_DIR          Label Studio 上传目录
@@ -33,44 +33,19 @@ import time
 import requests
 
 # ── 配置项（可用环境变量覆盖）────────────────────────────────
-LS_URL          = os.getenv("LS_URL",           "http://192.168.2.140:8181")
-REFRESH_TOKEN   = os.getenv("LS_REFRESH_TOKEN", "")   # 必填
-NGINX_BASE_URL  = os.getenv("NGINX_BASE_URL",   "http://192.168.2.140:8182/transcoded")
-OUTPUT_DIR      = os.getenv("OUTPUT_DIR",       os.path.expanduser("~/ls-data/media/transcoded"))
-UPLOAD_DIR      = os.getenv("UPLOAD_DIR",       os.path.expanduser("~/ls-data/media/upload"))
-POLL_INTERVAL   = int(os.getenv("POLL_INTERVAL", "10"))   # 轮询间隔（秒）
-
-# GPU 转码参数；若无 GPU 自动降级到 CPU
-FFMPEG_GPU_ARGS = ["-hwaccel", "cuda", "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23"]
-FFMPEG_CPU_ARGS = ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+LS_URL         = os.getenv("LS_URL",          "http://192.168.2.140:8181")
+LS_API_KEY     = os.getenv("LS_API_KEY",      "")   # 必填：Account & Settings → Access Token
+NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182/transcoded")
+OUTPUT_DIR     = os.getenv("OUTPUT_DIR",      os.path.expanduser("~/label_infra/data/media/transcoded"))
+UPLOAD_DIR     = os.getenv("UPLOAD_DIR",      os.path.expanduser("~/label_infra/data/label_studio/media/upload"))
+POLL_INTERVAL  = int(os.getenv("POLL_INTERVAL", "10"))
 # ─────────────────────────────────────────────────────────────
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-_access_token: dict = {"val": None, "ts": 0}
-
-
-def _refresh_access_token() -> str:
-    r = requests.post(
-        f"{LS_URL}/api/token/refresh",
-        json={"refresh": REFRESH_TOKEN},
-        timeout=10,
-    )
-    r.raise_for_status()
-    token = r.json()["access"]
-    _access_token["val"] = token
-    _access_token["ts"] = time.time()
-    return token
-
-
-def get_token() -> str:
-    if _access_token["val"] and (time.time() - _access_token["ts"]) < 86400:
-        return _access_token["val"]
-    return _refresh_access_token()
-
 
 def headers() -> dict:
-    return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
+    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def _detect_gpu() -> bool:
@@ -143,10 +118,10 @@ def update_task_video(task_id: int, new_url: str) -> bool:
 
 
 def main():
-    if not REFRESH_TOKEN:
+    if not LS_API_KEY:
         raise RuntimeError(
-            "请设置 LS_REFRESH_TOKEN 环境变量，或直接修改脚本中的 REFRESH_TOKEN 配置项。\n"
-            "Token 获取方式：登录 Label Studio → 右上角头像 → Account & Settings → Personal Access Token"
+            "请设置 LS_API_KEY 环境变量。\n"
+            "获取方式：登录 Label Studio → 右上角头像 → Account & Settings → Access Token"
         )
 
     processed: set[int] = set()

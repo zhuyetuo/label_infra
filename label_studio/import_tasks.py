@@ -23,27 +23,14 @@ import glob
 import requests
 import time
 
-LS_URL         = os.getenv("LS_URL",           "http://192.168.2.140:8181")
-REFRESH_TOKEN  = os.getenv("LS_REFRESH_TOKEN", "")
-NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",   "http://192.168.2.140:8182")
-MEDIA_DIR      = os.getenv("MEDIA_DIR",        os.path.expanduser("~/label_infra/data/media"))
-
-_token: dict = {"val": None, "ts": 0}
-
-
-def get_token() -> str:
-    if _token["val"] and (time.time() - _token["ts"]) < 270:
-        return _token["val"]
-    r = requests.post(f"{LS_URL}/api/token/refresh",
-                      json={"refresh": REFRESH_TOKEN}, timeout=10)
-    r.raise_for_status()
-    _token["val"] = r.json()["access"]
-    _token["ts"] = time.time()
-    return _token["val"]
+LS_URL         = os.getenv("LS_URL",          "http://192.168.2.140:8181")
+LS_API_KEY     = os.getenv("LS_API_KEY",      "")
+NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182")
+MEDIA_DIR      = os.getenv("MEDIA_DIR",       os.path.expanduser("~/label_infra/data/media"))
 
 
 def headers() -> dict:
-    return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
+    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def find_pairs(media_dir: str) -> list[dict]:
@@ -93,8 +80,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="只打印配对结果，不导入")
     args = parser.parse_args()
 
-    if not REFRESH_TOKEN:
-        raise RuntimeError("请设置 LS_REFRESH_TOKEN 环境变量")
+    if not LS_API_KEY:
+        raise RuntimeError("请设置 LS_API_KEY 环境变量")
 
     print(f"扫描目录：{args.media_dir}")
     pairs = find_pairs(args.media_dir)

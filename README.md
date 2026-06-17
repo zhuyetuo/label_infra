@@ -50,22 +50,26 @@ bash label_studio/setup.sh
 
 ---
 
-### 3. 单独启动自动转码服务
+### 3. 获取 API Key 并启动后台服务
 
-如果 `setup.sh` 时没有设置 token，部署完后单独启动：
+`setup.sh` 部署完成后，从 Label Studio 获取 API Key：
+1. 登录 Label Studio
+2. 右上角头像 → **Account & Settings**
+3. 左侧 **Access Token** → 复制
+
+然后启动后台服务：
 
 ```bash
-export LS_REFRESH_TOKEN="你的JWT refresh token"
-export LS_URL="http://192.168.2.140:8181"
-export NGINX_BASE_URL="http://192.168.2.140:8182/transcoded"
-
-nohup python3 label_studio/auto_transcode.py >> ~/transcode.log 2>&1 &
-echo "转码服务已启动，PID: $!"
+export LS_API_KEY="你的API Key"
+bash label_studio/restart.sh
 ```
 
-查看实时日志：
+> **注意**：`LS_API_KEY` 是静态 token，不会因容器重建失效，无需定期更新。
+
+查看日志：
 ```bash
-tail -f ~/transcode.log
+tail -f ~/label_infra/logs/transcode.log
+tail -f ~/label_infra/logs/upload.log
 ```
 
 ---
@@ -311,11 +315,12 @@ label_infra/data/
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LS_REFRESH_TOKEN` | 无（必填） | Label Studio JWT refresh token |
+| `LS_API_KEY` | 无（必填） | Label Studio 静态 API Key，不随容器重建失效。获取：右上角头像 → Account & Settings → Access Token |
 | `LS_URL` | `http://192.168.2.140:8181` | Label Studio 地址 |
 | `NGINX_BASE_URL` | `http://192.168.2.140:8182/transcoded` | 转码文件访问基础 URL |
-| `OUTPUT_DIR` | `~/ls-data/media/transcoded` | 转码输出目录 |
-| `UPLOAD_DIR` | `~/ls-data/media/upload` | Label Studio 上传目录 |
+| `NGINX_MEDIA_URL` | `http://192.168.2.140:8182` | nginx 根地址（upload_server 使用） |
+| `OUTPUT_DIR` | `~/label_infra/data/media/transcoded` | 转码输出目录 |
+| `UPLOAD_DIR` | `~/label_infra/data/label_studio/media/upload` | Label Studio 上传目录 |
 | `POLL_INTERVAL` | `10` | 轮询间隔（秒） |
 | `SERVER_IP` | 自动检测 | 服务器 IP（setup.sh 使用） |
 
