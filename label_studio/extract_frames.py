@@ -21,27 +21,14 @@ import glob
 import time
 import requests
 
-LS_URL         = os.getenv("LS_URL",           "http://192.168.2.140:8181")
-REFRESH_TOKEN  = os.getenv("LS_REFRESH_TOKEN", "")
-NGINX_BASE_URL = os.getenv("NGINX_MEDIA_URL",  "http://192.168.2.140:8182")
+LS_URL         = os.getenv("LS_URL",         "http://192.168.2.140:8181")
+LS_API_KEY     = os.getenv("LS_API_KEY",     "")
+NGINX_BASE_URL = os.getenv("NGINX_MEDIA_URL","http://192.168.2.140:8182")
 DEFAULT_OUTPUT = os.path.expanduser("~/label_infra/data/media/frames")
-
-_token: dict = {"val": None, "ts": 0}
-
-
-def get_token() -> str:
-    if _token["val"] and (time.time() - _token["ts"]) < 86400:
-        return _token["val"]
-    r = requests.post(f"{LS_URL}/api/token/refresh",
-                      json={"refresh": REFRESH_TOKEN}, timeout=10)
-    r.raise_for_status()
-    _token["val"] = r.json()["access"]
-    _token["ts"] = time.time()
-    return _token["val"]
 
 
 def headers() -> dict:
-    return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
+    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def extract_frames(video_path: str, output_dir: str, fps: float) -> list[str]:
@@ -51,10 +38,16 @@ def extract_frames(video_path: str, output_dir: str, fps: float) -> list[str]:
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     pattern = os.path.join(output_dir, f"{video_name}_%06d.jpg")
 
+    # 已有帧则跳过抽帧
+    existing = sorted(glob.glob(os.path.join(output_dir, f"{video_name}_*.jpg")))
+    if existing:
+        print(f"ℹ️  已有 {len(existing)} 帧，跳过抽帧", flush=True)
+        return existing
+
     cmd = [
         "ffmpeg", "-i", video_path,
         "-vf", f"fps={fps}",
-        "-q:v", "2",       # JPEG 质量（2=高质量，31=低质量）
+        "-q:v", "2",
         "-y", pattern
     ]
 
@@ -118,8 +111,8 @@ def main():
         print("❌ 请指定 --project <项目ID>")
         return
 
-    if not REFRESH_TOKEN:
-        print("❌ 请设置 LS_REFRESH_TOKEN 环境变量")
+    if not LS_API_KEY:
+        print("❌ 请设置 LS_API_KEY 环境变量")
         return
 
     import_tasks(args.project, frames, args.output_dir)

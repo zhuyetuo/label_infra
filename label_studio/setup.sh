@@ -11,8 +11,8 @@ SESSION_COOKIE_AGE=1209600   # 14 天
 MAX_UPLOAD_FILES=10000
 
 # 自动转码服务配置
-# LS_REFRESH_TOKEN：登录 Label Studio → 右上角头像 → Account & Settings → Personal Access Token
-LS_REFRESH_TOKEN="${LS_REFRESH_TOKEN:-}"
+# LS_API_KEY：登录 Label Studio → 右上角头像 → Account & Settings → Access Token
+LS_API_KEY="${LS_API_KEY:-}"
 SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
 # ───────────────────────────────────────────────────────────────
 
@@ -108,16 +108,14 @@ sleep 1
 # 清空日志
 > "$LOG_FILE"
 
-# 检查 token 是否已配置
-if [ -z "$LS_REFRESH_TOKEN" ]; then
+# 检查 API Key 是否已配置
+if [ -z "$LS_API_KEY" ]; then
     echo ""
-    echo "⚠️  LS_REFRESH_TOKEN 未设置，跳过自动转码服务启动。"
-    echo "   部署完成后，请手动启动："
+    echo "⚠️  LS_API_KEY 未设置，跳过自动转码服务启动。"
+    echo "   部署完成后，从 Label Studio 获取 API Key 再手动启动："
     echo ""
-    echo "   export LS_REFRESH_TOKEN=\"你的JWT refresh token\""
-    echo "   export LS_URL=\"http://${SERVER_IP}:${LS_PORT}\""
-    echo "   export NGINX_BASE_URL=\"http://${SERVER_IP}:${MEDIA_PORT}/transcoded\""
-    echo "   nohup python3 ${SCRIPT_DIR}/auto_transcode.py >> ${LOG_FILE} 2>&1 &"
+    echo "   export LS_API_KEY=\"你的API Key\""
+    echo "   bash ${SCRIPT_DIR}/restart.sh"
     echo ""
 else
     export LS_URL="http://${SERVER_IP}:${LS_PORT}"

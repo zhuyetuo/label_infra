@@ -14,9 +14,10 @@ TRANSCODED_DIR=~/label_infra/data/media/transcoded
 LOG_FILE=~/label_infra/logs/transcode.log
 UPLOAD_LOG=~/label_infra/logs/upload.log
 
-if [ -z "$LS_REFRESH_TOKEN" ]; then
-    echo "❌ 请先设置 LS_REFRESH_TOKEN"
-    echo "   export LS_REFRESH_TOKEN=\"你的token\""
+if [ -z "$LS_API_KEY" ]; then
+    echo "❌ 请先设置 LS_API_KEY"
+    echo "   Label Studio → 右上角头像 → Account & Settings → Access Token"
+    echo "   export LS_API_KEY=\"你的API Key\""
     exit 1
 fi
 

@@ -18,34 +18,21 @@ import time
 import requests
 from flask import Flask, jsonify, render_template_string, request
 
-LS_URL          = os.getenv("LS_URL",            "http://192.168.2.140:8181")
-REFRESH_TOKEN   = os.getenv("LS_REFRESH_TOKEN",  "")
-NGINX_MEDIA_URL = os.getenv("NGINX_MEDIA_URL",   "http://192.168.2.140:8182")
-MEDIA_DIR       = os.getenv("MEDIA_DIR",         os.path.expanduser("~/label_infra/data/media"))
-TRANSCODED_DIR = os.path.join(MEDIA_DIR, "transcoded")
-PORT           = int(os.getenv("UPLOAD_PORT",  "8183"))
+LS_URL          = os.getenv("LS_URL",          "http://192.168.2.140:8181")
+LS_API_KEY      = os.getenv("LS_API_KEY",      "")
+NGINX_MEDIA_URL = os.getenv("NGINX_MEDIA_URL", "http://192.168.2.140:8182")
+MEDIA_DIR       = os.getenv("MEDIA_DIR",       os.path.expanduser("~/label_infra/data/media"))
+TRANSCODED_DIR  = os.path.join(MEDIA_DIR, "transcoded")
+PORT            = int(os.getenv("UPLOAD_PORT", "8183"))
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 os.makedirs(TRANSCODED_DIR, exist_ok=True)
 
 app = Flask(__name__)
 
-_token: dict = {"val": None, "ts": 0}
-
-
-def get_token() -> str:
-    if _token["val"] and (time.time() - _token["ts"]) < 86400:
-        return _token["val"]
-    r = requests.post(f"{LS_URL}/api/token/refresh",
-                      json={"refresh": REFRESH_TOKEN}, timeout=10)
-    r.raise_for_status()
-    _token["val"] = r.json()["access"]
-    _token["ts"] = time.time()
-    return _token["val"]
-
 
 def auth_headers() -> dict:
-    return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
+    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def get_projects() -> list:
@@ -291,7 +278,7 @@ def status(job_id):
 
 
 if __name__ == "__main__":
-    if not REFRESH_TOKEN:
-        raise RuntimeError("请设置 LS_REFRESH_TOKEN 环境变量")
+    if not LS_API_KEY:
+        raise RuntimeError("请设置 LS_API_KEY 环境变量")
     print(f"🚀 上传服务启动: http://0.0.0.0:{PORT}", flush=True)
     app.run(host="0.0.0.0", port=PORT, debug=False)
