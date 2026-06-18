@@ -220,3 +220,5 @@ __marimo__/
 # Label Studio 运行时数据（不提交到仓库）
 data/
 logs/
+# 但保留目录结构占位文件
+!data/imu/.gitkeep

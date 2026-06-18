@@ -27,7 +27,7 @@ LOG_FILE=~/label_infra/logs/transcode.log
 echo "=== Label Studio 部署 ==="
 
 # 1. 创建目录
-mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" ~/label_infra/logs
+mkdir -p "$MEDIA_DIR" "$TRANSCODED_DIR" "$LS_DATA_DIR" ~/label_infra/logs ~/label_infra/data/imu
 sudo chmod -R 777 "$MEDIA_DIR" "$LS_DATA_DIR" 2>/dev/null || true
 
 # 2. 写 nginx 配置（支持 CORS，供 Label Studio 加载本地媒体文件）
