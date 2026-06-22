@@ -66,6 +66,7 @@ docker run -d \
   -e DATA_UPLOAD_MAX_NUMBER_FILES="${MAX_UPLOAD_FILES}" \
   -e LABEL_STUDIO_JWT_ACCESS_TOKEN_LIFETIME=525600 \
   -e LABEL_STUDIO_JWT_REFRESH_TOKEN_LIFETIME=525600 \
+  -e TASK_IMPORT_LIMIT=10000000 \
   --restart unless-stopped \
   heartexlabs/label-studio:latest
 
