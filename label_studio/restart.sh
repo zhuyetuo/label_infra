@@ -5,6 +5,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$HOME/label_infra/.env"
+
+# 自动加载 .env
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
 LS_PORT="${LS_PORT:-8181}"
 MEDIA_PORT="${MEDIA_PORT:-8182}"
@@ -15,9 +19,10 @@ LOG_FILE=~/label_infra/logs/transcode.log
 UPLOAD_LOG=~/label_infra/logs/upload.log
 
 if [ -z "$LS_API_KEY" ]; then
-    echo "❌ 请先设置 LS_API_KEY"
-    echo "   Label Studio → 右上角头像 → Account & Settings → Access Token"
-    echo "   export LS_API_KEY=\"你的API Key\""
+    echo "❌ 未找到 LS_API_KEY，请先运行："
+    echo "   bash label_studio/set_token.sh <你的API Key>"
+    echo ""
+    echo "Token 获取：Label Studio → 右上角头像 → Account & Settings → Access Token"
     exit 1
 fi
 

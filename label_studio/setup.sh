@@ -17,6 +17,10 @@ SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
 # ───────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$HOME/label_infra/.env"
+
+# 自动加载 .env
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
 # 数据和日志都放在 ~/label_infra/ 下
 LS_DATA_DIR=~/label_infra/data/label_studio
@@ -113,9 +117,9 @@ sleep 1
 if [ -z "$LS_API_KEY" ]; then
     echo ""
     echo "⚠️  LS_API_KEY 未设置，跳过自动转码服务启动。"
-    echo "   部署完成后，从 Label Studio 获取 API Key 再手动启动："
+    echo "   部署完成后，从 Label Studio 获取 API Key（Account & Settings → Access Token）："
     echo ""
-    echo "   export LS_API_KEY=\"你的API Key\""
+    echo "   bash ${SCRIPT_DIR}/set_token.sh \"你的API Key\""
     echo "   bash ${SCRIPT_DIR}/restart.sh"
     echo ""
 else
