@@ -39,19 +39,44 @@ def get_projects() -> list:
     return [{"id": p["id"], "title": p["title"]} for p in r.json().get("results", [])]
 
 
+def _find_ffmpeg() -> str:
+    """Return ffmpeg executable path, checking common Windows locations."""
+    import shutil
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    # Common Windows install locations
+    candidates = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(r"~\ffmpeg\bin\ffmpeg.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return "ffmpeg"  # fallback, will fail with clear error
+
+
+FFMPEG = _find_ffmpeg()
+
+
 def transcode(src: str, dst: str) -> tuple[bool, str]:
     src = os.path.normpath(src)
     dst = os.path.normpath(dst)
 
-    use_gpu = "h264_nvenc" in subprocess.run(
-        ["ffmpeg", "-encoders"], capture_output=True, text=True).stdout
+    try:
+        use_gpu = "h264_nvenc" in subprocess.run(
+            [FFMPEG, "-encoders"], capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        return False, f"找不到 ffmpeg，请安装并添加到 PATH，或放到 C:\\ffmpeg\\bin\\ffmpeg.exe"
 
     if use_gpu:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 

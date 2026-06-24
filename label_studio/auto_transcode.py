@@ -50,12 +50,31 @@ def headers() -> dict:
     return auth_headers()
 
 
+def _find_ffmpeg() -> str:
+    import shutil
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    candidates = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(r"~\ffmpeg\bin\ffmpeg.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return "ffmpeg"
+
+
+FFMPEG = _find_ffmpeg()
+
+
 def _detect_gpu() -> bool:
-    result = subprocess.run(
-        ["ffmpeg", "-encoders"],
-        capture_output=True, text=True
-    )
-    return "h264_nvenc" in result.stdout
+    try:
+        result = subprocess.run([FFMPEG, "-encoders"], capture_output=True, text=True)
+        return "h264_nvenc" in result.stdout
+    except FileNotFoundError:
+        return False
 
 
 def transcode(src: str, dst: str) -> bool:
@@ -66,11 +85,11 @@ def transcode(src: str, dst: str) -> bool:
 
     print(f"  🎬 转码 [{mode}]: {os.path.basename(src)}", flush=True)
     if use_gpu:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
