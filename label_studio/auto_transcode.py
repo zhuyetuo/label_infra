@@ -34,7 +34,7 @@ import time
 import requests
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ls_auth import auth_headers, LS_URL
+from ls_auth import auth_headers, LS_URL, request_with_auth
 
 # ── 配置项（可用环境变量覆盖）────────────────────────────────
 NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182/transcoded")
@@ -50,12 +50,31 @@ def headers() -> dict:
     return auth_headers()
 
 
+def _find_ffmpeg() -> str:
+    import shutil
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    candidates = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(r"~\ffmpeg\bin\ffmpeg.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return "ffmpeg"
+
+
+FFMPEG = _find_ffmpeg()
+
+
 def _detect_gpu() -> bool:
-    result = subprocess.run(
-        ["ffmpeg", "-encoders"],
-        capture_output=True, text=True
-    )
-    return "h264_nvenc" in result.stdout
+    try:
+        result = subprocess.run([FFMPEG, "-encoders"], capture_output=True, text=True)
+        return "h264_nvenc" in result.stdout
+    except FileNotFoundError:
+        return False
 
 
 def transcode(src: str, dst: str) -> bool:
@@ -66,11 +85,11 @@ def transcode(src: str, dst: str) -> bool:
 
     print(f"  🎬 转码 [{mode}]: {os.path.basename(src)}", flush=True)
     if use_gpu:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
-        cmd = ["ffmpeg", "-i", src,
+        cmd = [FFMPEG, "-i", src,
                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
@@ -94,15 +113,12 @@ def find_uploaded_file(fname: str) -> str | None:
 
 
 def get_all_projects() -> list:
-    r = requests.get(f"{LS_URL}/api/projects/?page_size=200", headers=headers(), timeout=10)
+    r = request_with_auth("GET", f"{LS_URL}/api/projects/?page_size=200", timeout=10)
     return r.json().get("results", [])
 
 
 def get_tasks(project_id: int) -> list:
-    r = requests.get(
-        f"{LS_URL}/api/tasks/?project={project_id}&page_size=500",
-        headers=headers(), timeout=10,
-    )
+    r = request_with_auth("GET", f"{LS_URL}/api/tasks/?project={project_id}&page_size=500", timeout=10)
     r.raise_for_status()
     data = r.json()
     if isinstance(data, dict):
@@ -116,12 +132,8 @@ def get_tasks(project_id: int) -> list:
 
 
 def update_task_video(task_id: int, new_url: str) -> bool:
-    r = requests.patch(
-        f"{LS_URL}/api/tasks/{task_id}/",
-        json={"data": {"video": new_url}},
-        headers=headers(),
-        timeout=10,
-    )
+    r = request_with_auth("PATCH", f"{LS_URL}/api/tasks/{task_id}/",
+                          json={"data": {"video": new_url}}, timeout=10)
     return r.status_code == 200
 
 
