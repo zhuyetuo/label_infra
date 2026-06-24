@@ -60,7 +60,6 @@ def _detect_gpu() -> bool:
 
 def transcode(src: str, dst: str) -> bool:
     use_gpu = _detect_gpu()
-    encode_args = FFMPEG_GPU_ARGS if use_gpu else FFMPEG_CPU_ARGS
     mode = "GPU" if use_gpu else "CPU"
 
     print(f"  🎬 转码 [{mode}]: {os.path.basename(src)}", flush=True)
