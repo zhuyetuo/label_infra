@@ -28,6 +28,7 @@ fi
 export LS_URL
 export NGINX_BASE_URL="http://localhost:${MEDIA_PORT}/transcoded"
 export NGINX_MEDIA_URL="http://localhost:${MEDIA_PORT}"
+export MEDIA_DIR="$MEDIA_DIR"
 export OUTPUT_DIR="$TRANSCODED_DIR"
 export UPLOAD_DIR="$UPLOAD_DIR"
 export UPLOAD_PORT=8183
