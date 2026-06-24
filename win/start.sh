@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE="$HOME/label_infra/.env"
 
 # 加载 .env
 [ -f "$ENV_FILE" ] && set -a && source "$ENV_FILE" && set +a
