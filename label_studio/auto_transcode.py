@@ -59,12 +59,14 @@ def _detect_gpu() -> bool:
 
 
 def transcode(src: str, dst: str) -> bool:
+    src = os.path.normpath(src)
+    dst = os.path.normpath(dst)
     use_gpu = _detect_gpu()
     mode = "GPU" if use_gpu else "CPU"
 
     print(f"  🎬 转码 [{mode}]: {os.path.basename(src)}", flush=True)
     if use_gpu:
-        cmd = ["ffmpeg", "-hwaccel", "cuda", "-i", src,
+        cmd = ["ffmpeg", "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
@@ -73,11 +75,16 @@ def transcode(src: str, dst: str) -> bool:
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
     result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0 and use_gpu:
+        print(f"  ⚠️  GPU 转码失败，降级 CPU", flush=True)
+        cmd[cmd.index("h264_nvenc")] = "libx264"
+        cmd[cmd.index("-cq")] = "-crf"
+        result = subprocess.run(cmd, capture_output=True)
     if result.returncode == 0:
         print(f"  ✅ 转码完成: {os.path.basename(dst)}", flush=True)
         return True
     else:
-        print(f"  ❌ 转码失败: {result.stderr.decode()[-300:]}", flush=True)
+        print(f"  ❌ 转码失败: {result.stderr.decode(errors='replace')[-300:]}", flush=True)
         return False
 
 

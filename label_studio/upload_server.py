@@ -40,11 +40,14 @@ def get_projects() -> list:
 
 
 def transcode(src: str, dst: str) -> tuple[bool, str]:
+    src = os.path.normpath(src)
+    dst = os.path.normpath(dst)
+
     use_gpu = "h264_nvenc" in subprocess.run(
         ["ffmpeg", "-encoders"], capture_output=True, text=True).stdout
 
     if use_gpu:
-        cmd = ["ffmpeg", "-hwaccel", "cuda", "-i", src,
+        cmd = ["ffmpeg", "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
@@ -53,6 +56,11 @@ def transcode(src: str, dst: str) -> tuple[bool, str]:
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
     result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0 and use_gpu:
+        # GPU encoder failed, retry with CPU
+        cmd[cmd.index("h264_nvenc")] = "libx264"
+        cmd[cmd.index("-cq")] = "-crf"
+        result = subprocess.run(cmd, capture_output=True)
     err = result.stderr.decode(errors="replace")[-500:] if result.returncode != 0 else ""
     return result.returncode == 0, err
 
