@@ -128,6 +128,12 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         count = import_tasks(project_id, pairs)
         log(f"✅ 成功导入 {count} 个任务到项目 {project_id}")
         jobs[job_id]["status"] = "done"
+    except requests.HTTPError as e:
+        body = e.response.text[:500] if e.response is not None else ""
+        log(f"❌ 导入失败: {e}")
+        if body:
+            log(f"   详情: {body}")
+        jobs[job_id]["status"] = "error"
     except Exception as e:
         log(f"❌ 导入失败: {e}")
         jobs[job_id]["status"] = "error"
