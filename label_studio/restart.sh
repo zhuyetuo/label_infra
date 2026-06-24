@@ -18,11 +18,11 @@ TRANSCODED_DIR=~/label_infra/data/media/transcoded
 LOG_FILE=~/label_infra/logs/transcode.log
 UPLOAD_LOG=~/label_infra/logs/upload.log
 
-if [ -z "$LS_API_KEY" ]; then
-    echo "❌ 未找到 LS_API_KEY，请先运行："
-    echo "   bash label_studio/set_token.sh <你的API Key>"
+if [ -z "$LS_REFRESH_TOKEN" ]; then
+    echo "❌ 未找到 LS_REFRESH_TOKEN，请先运行："
+    echo "   bash label_studio/set_token.sh <你的Personal Access Token>"
     echo ""
-    echo "Token 获取：Label Studio → 右上角头像 → Account & Settings → Access Token"
+    echo "Token 获取：Label Studio → 右上角头像 → Account & Settings → Personal Access Token"
     exit 1
 fi
 

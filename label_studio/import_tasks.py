@@ -20,17 +20,14 @@ import_tasks.py
 import argparse
 import os
 import glob
+import sys
 import requests
-import time
 
-LS_URL         = os.getenv("LS_URL",          "http://192.168.2.140:8181")
-LS_API_KEY     = os.getenv("LS_API_KEY",      "")
+sys.path.insert(0, os.path.dirname(__file__))
+from ls_auth import auth_headers as headers, LS_URL
+
 NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182")
 MEDIA_DIR      = os.getenv("MEDIA_DIR",       os.path.expanduser("~/label_infra/data/media"))
-
-
-def headers() -> dict:
-    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def find_pairs(media_dir: str) -> list[dict]:
@@ -80,8 +77,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="只打印配对结果，不导入")
     args = parser.parse_args()
 
-    if not LS_API_KEY:
-        raise RuntimeError("请设置 LS_API_KEY 环境变量")
+    from ls_auth import REFRESH_TOKEN
+    if not REFRESH_TOKEN:
+        raise RuntimeError("请先运行：bash label_studio/set_token.sh \"你的Personal Access Token\"")
 
     print(f"扫描目录：{args.media_dir}")
     pairs = find_pairs(args.media_dir)

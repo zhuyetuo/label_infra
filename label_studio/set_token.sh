@@ -15,11 +15,13 @@ fi
 mkdir -p "$(dirname "$ENV_FILE")"
 
 # 写入或更新 LS_API_KEY
-if grep -q "^LS_API_KEY=" "$ENV_FILE" 2>/dev/null; then
-    sed -i "s|^LS_API_KEY=.*|LS_API_KEY=$1|" "$ENV_FILE"
+if grep -q "^LS_REFRESH_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^LS_REFRESH_TOKEN=.*|LS_REFRESH_TOKEN=$1|" "$ENV_FILE"
 else
-    echo "LS_API_KEY=$1" >> "$ENV_FILE"
+    echo "LS_REFRESH_TOKEN=$1" >> "$ENV_FILE"
 fi
+# 同步清掉旧的 API_KEY 避免混淆
+sed -i "/^LS_API_KEY=/d" "$ENV_FILE" 2>/dev/null || true
 
 echo "✅ Token 已保存到 $ENV_FILE"
 echo "   后续直接运行 setup.sh / restart.sh，无需手动 export"
