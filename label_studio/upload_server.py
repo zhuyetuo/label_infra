@@ -39,7 +39,7 @@ def get_projects() -> list:
     return [{"id": p["id"], "title": p["title"]} for p in r.json().get("results", [])]
 
 
-def transcode(src: str, dst: str) -> bool:
+def transcode(src: str, dst: str) -> tuple[bool, str]:
     use_gpu = "h264_nvenc" in subprocess.run(
         ["ffmpeg", "-encoders"], capture_output=True, text=True).stdout
 
@@ -53,7 +53,8 @@ def transcode(src: str, dst: str) -> bool:
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
     result = subprocess.run(cmd, capture_output=True)
-    return result.returncode == 0
+    err = result.stderr.decode(errors="replace")[-500:] if result.returncode != 0 else ""
+    return result.returncode == 0, err
 
 
 def import_tasks(project_id: int, pairs: list) -> int:
@@ -95,9 +96,13 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         src = files["mp4"]
         dst = os.path.join(TRANSCODED_DIR, os.path.basename(src))
         log(f"🎬 转码: {name}.mp4")
+        log(f"   源文件: {src}")
         if not os.path.exists(dst):
-            if not transcode(src, dst):
+            ok, err = transcode(src, dst)
+            if not ok:
                 log(f"❌ 转码失败: {name}.mp4")
+                if err:
+                    log(f"   ffmpeg: {err}")
                 continue
         log(f"✅ 转码完成: {name}.mp4")
 
