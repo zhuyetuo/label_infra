@@ -12,14 +12,16 @@ upload_server.py
 import glob
 import os
 import subprocess
+import sys
 import threading
 import time
 
 import requests
 from flask import Flask, jsonify, render_template_string, request
 
-LS_URL          = os.getenv("LS_URL",          "http://192.168.2.140:8181")
-LS_API_KEY      = os.getenv("LS_API_KEY",      "")
+sys.path.insert(0, os.path.dirname(__file__))
+from ls_auth import auth_headers, LS_URL
+
 NGINX_MEDIA_URL = os.getenv("NGINX_MEDIA_URL", "http://192.168.2.140:8182")
 MEDIA_DIR       = os.getenv("MEDIA_DIR",       os.path.expanduser("~/label_infra/data/media"))
 TRANSCODED_DIR  = os.path.join(MEDIA_DIR, "transcoded")
@@ -29,10 +31,6 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 os.makedirs(TRANSCODED_DIR, exist_ok=True)
 
 app = Flask(__name__)
-
-
-def auth_headers() -> dict:
-    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def get_projects() -> list:
@@ -278,7 +276,8 @@ def status(job_id):
 
 
 if __name__ == "__main__":
-    if not LS_API_KEY:
-        raise RuntimeError("请设置 LS_API_KEY 环境变量")
+    from ls_auth import REFRESH_TOKEN
+    if not REFRESH_TOKEN:
+        raise RuntimeError("请先运行：bash label_studio/set_token.sh \"你的Personal Access Token\"")
     print(f"🚀 上传服务启动: http://0.0.0.0:{PORT}", flush=True)
     app.run(host="0.0.0.0", port=PORT, debug=False)

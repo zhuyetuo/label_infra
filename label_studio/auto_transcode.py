@@ -28,13 +28,15 @@ auto_transcode.py
 import glob
 import os
 import subprocess
+import sys
 import time
 
 import requests
 
+sys.path.insert(0, os.path.dirname(__file__))
+from ls_auth import auth_headers, LS_URL
+
 # ── 配置项（可用环境变量覆盖）────────────────────────────────
-LS_URL         = os.getenv("LS_URL",          "http://192.168.2.140:8181")
-LS_API_KEY     = os.getenv("LS_API_KEY",      "")   # 必填：Account & Settings → Access Token
 NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182/transcoded")
 OUTPUT_DIR     = os.getenv("OUTPUT_DIR",      os.path.expanduser("~/label_infra/data/media/transcoded"))
 UPLOAD_DIR     = os.getenv("UPLOAD_DIR",      os.path.expanduser("~/label_infra/data/label_studio/media/upload"))
@@ -45,7 +47,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def headers() -> dict:
-    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
+    return auth_headers()
 
 
 def _detect_gpu() -> bool:
@@ -118,10 +120,11 @@ def update_task_video(task_id: int, new_url: str) -> bool:
 
 
 def main():
-    if not LS_API_KEY:
+    from ls_auth import REFRESH_TOKEN
+    if not REFRESH_TOKEN:
         raise RuntimeError(
-            "请设置 LS_API_KEY 环境变量。\n"
-            "获取方式：登录 Label Studio → 右上角头像 → Account & Settings → Access Token"
+            "未找到 LS_REFRESH_TOKEN，请先运行：\n"
+            "  bash label_studio/set_token.sh \"你的Personal Access Token\""
         )
 
     processed: set[int] = set()

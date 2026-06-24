@@ -18,17 +18,14 @@ import argparse
 import os
 import subprocess
 import glob
-import time
+import sys
 import requests
 
-LS_URL         = os.getenv("LS_URL",         "http://192.168.2.140:8181")
-LS_API_KEY     = os.getenv("LS_API_KEY",     "")
+sys.path.insert(0, os.path.dirname(__file__))
+from ls_auth import auth_headers as headers, LS_URL
+
 NGINX_BASE_URL = os.getenv("NGINX_MEDIA_URL","http://192.168.2.140:8182")
 DEFAULT_OUTPUT = os.path.expanduser("~/label_infra/data/media/frames")
-
-
-def headers() -> dict:
-    return {"Authorization": f"Token {LS_API_KEY}", "Content-Type": "application/json"}
 
 
 def extract_frames(video_path: str, output_dir: str, fps: float) -> list[str]:
@@ -111,8 +108,9 @@ def main():
         print("❌ 请指定 --project <项目ID>")
         return
 
-    if not LS_API_KEY:
-        print("❌ 请设置 LS_API_KEY 环境变量")
+    from ls_auth import REFRESH_TOKEN
+    if not REFRESH_TOKEN:
+        print("❌ 请先运行：bash label_studio/set_token.sh \"你的Personal Access Token\"")
         return
 
     import_tasks(args.project, frames, args.output_dir)
