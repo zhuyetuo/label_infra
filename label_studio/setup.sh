@@ -19,8 +19,8 @@ SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$HOME/label_infra/.env"
 
-# 自动加载 .env
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+# 自动加载 .env（set -a 让所有变量自动 export 给子进程）
+[ -f "$ENV_FILE" ] && set -a && source "$ENV_FILE" && set +a
 
 # 数据和日志都放在 ~/label_infra/ 下
 LS_DATA_DIR=~/label_infra/data/label_studio
