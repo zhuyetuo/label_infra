@@ -34,7 +34,7 @@ import time
 import requests
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ls_auth import auth_headers, LS_URL
+from ls_auth import auth_headers, LS_URL, request_with_auth
 
 # ── 配置项（可用环境变量覆盖）────────────────────────────────
 NGINX_BASE_URL = os.getenv("NGINX_BASE_URL",  "http://192.168.2.140:8182/transcoded")
@@ -113,15 +113,12 @@ def find_uploaded_file(fname: str) -> str | None:
 
 
 def get_all_projects() -> list:
-    r = requests.get(f"{LS_URL}/api/projects/?page_size=200", headers=headers(), timeout=10)
+    r = request_with_auth("GET", f"{LS_URL}/api/projects/?page_size=200", timeout=10)
     return r.json().get("results", [])
 
 
 def get_tasks(project_id: int) -> list:
-    r = requests.get(
-        f"{LS_URL}/api/tasks/?project={project_id}&page_size=500",
-        headers=headers(), timeout=10,
-    )
+    r = request_with_auth("GET", f"{LS_URL}/api/tasks/?project={project_id}&page_size=500", timeout=10)
     r.raise_for_status()
     data = r.json()
     if isinstance(data, dict):
@@ -135,12 +132,8 @@ def get_tasks(project_id: int) -> list:
 
 
 def update_task_video(task_id: int, new_url: str) -> bool:
-    r = requests.patch(
-        f"{LS_URL}/api/tasks/{task_id}/",
-        json={"data": {"video": new_url}},
-        headers=headers(),
-        timeout=10,
-    )
+    r = request_with_auth("PATCH", f"{LS_URL}/api/tasks/{task_id}/",
+                          json={"data": {"video": new_url}}, timeout=10)
     return r.status_code == 200
 
 

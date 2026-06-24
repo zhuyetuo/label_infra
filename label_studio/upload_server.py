@@ -20,7 +20,7 @@ import requests
 from flask import Flask, jsonify, render_template_string, request
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ls_auth import auth_headers, LS_URL
+from ls_auth import auth_headers, LS_URL, request_with_auth
 
 NGINX_MEDIA_URL = os.getenv("NGINX_MEDIA_URL", "http://192.168.2.140:8182")
 MEDIA_DIR       = os.getenv("MEDIA_DIR",       os.path.expanduser("~/label_infra/data/media"))
@@ -34,7 +34,7 @@ app = Flask(__name__)
 
 
 def get_projects() -> list:
-    r = requests.get(f"{LS_URL}/api/projects/?page_size=200", headers=auth_headers(), timeout=10)
+    r = request_with_auth("GET", f"{LS_URL}/api/projects/?page_size=200", timeout=10)
     r.raise_for_status()
     return [{"id": p["id"], "title": p["title"]} for p in r.json().get("results", [])]
 
@@ -92,10 +92,8 @@ def transcode(src: str, dst: str) -> tuple[bool, str]:
 
 def import_tasks(project_id: int, pairs: list) -> int:
     tasks = [{"data": {"video": p["video"], "csv": p["csv"]}} for p in pairs]
-    r = requests.post(
-        f"{LS_URL}/api/projects/{project_id}/import",
-        json=tasks, headers=auth_headers(), timeout=60,
-    )
+    r = request_with_auth("POST", f"{LS_URL}/api/projects/{project_id}/import",
+                          json=tasks, timeout=60)
     r.raise_for_status()
     return r.json().get("task_count", len(tasks))
 
