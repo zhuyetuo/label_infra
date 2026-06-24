@@ -158,31 +158,6 @@ python3 label_studio/extract_frames.py \
 3. 更新任务 URL 为 nginx 地址
 
 ---
-  <Video name="video" value="$video" frameRate="25" sync="sync_group"/>
-
-  <TimeSeriesLabels name="label" toName="ts">
-    <Label value="活动" background="#4CAF50"/>
-    <Label value="睡觉" background="#2196F3"/>
-    <Label value="抓挠" background="#F44336"/>
-  </TimeSeriesLabels>
-
-  <TimeSeries name="ts" value="$csv" valueType="url"
-              sync="sync_group"
-              timeColumn="timestamp"
-              timeFormat="%Y-%m-%d %H:%M:%S.%f"
-              timeDisplayFormat="%H:%M:%S"
-              sep=",">
-    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
-    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
-    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
-    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="60"/>
-    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="60"/>
-    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="60"/>
-  </TimeSeries>
-</View>
-```
-
----
 
 ### Labeling Interface 模板
 
