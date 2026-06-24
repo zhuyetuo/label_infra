@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$HOME/label_infra/.env"
 
 # 自动加载 .env
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+[ -f "$ENV_FILE" ] && set -a && source "$ENV_FILE" && set +a
 
 LS_PORT="${LS_PORT:-8181}"
 MEDIA_PORT="${MEDIA_PORT:-8182}"
