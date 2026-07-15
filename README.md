@@ -177,6 +177,7 @@ python3 label_studio/extract_frames.py \
     <Label value="跳跃" background="#9C27B0"/>
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
 
   <TimeSeries name="ts" value="$csv" valueType="url"
@@ -211,6 +212,7 @@ python3 label_studio/extract_frames.py \
     <Label value="跳跃" background="#9C27B0"/>
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
 </View>
 ```
@@ -229,6 +231,7 @@ python3 label_studio/extract_frames.py \
     <Label value="跳跃" background="#9C27B0"/>
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
 
   <TimeSeries name="ts" value="$csv" valueType="url"
@@ -262,6 +265,7 @@ python3 label_studio/extract_frames.py \
     <Label value="跳跃" background="#9C27B0"/>
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
   </RectangleLabels>
 </View>
 ```
@@ -302,6 +306,7 @@ python3 label_studio/extract_frames.py \
     <Label value="跳跃" background="#9C27B0"/>
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
   </RectangleLabels>
 </View>
 ```
