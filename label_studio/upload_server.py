@@ -142,18 +142,20 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         jobs[job_id]["log"].append(msg)
 
     # ── 分类：多视角 vs 单视频 ──────────────────────────────────
-    multicam_groups: dict = {}  # base → {"mp4": [(cam_idx, name, path)], "csv": (name, path)}
+    # base → {"mp4": {cam_idx: (name, path)}, "csv": {cam_idx: (name, path)}}
+    multicam_groups: dict = {}
     single_files: dict = {}     # name → {"mp4": path, "csv": path}
 
     for f in files_info:
         name, ext, path = f["name"], f["ext"], f["path"]
         base = _multicam_base(name)
         if base:
-            g = multicam_groups.setdefault(base, {"mp4": [], "csv": None})
+            g = multicam_groups.setdefault(base, {"mp4": {}, "csv": {}})
+            idx = _cam_index(name)
             if ext == "mp4":
-                g["mp4"].append((_cam_index(name), name, path))
-            elif ext == "csv" and g["csv"] is None:
-                g["csv"] = (name, path)
+                g["mp4"][idx] = (name, path)
+            elif ext == "csv":
+                g["csv"][idx] = (name, path)
         else:
             single_files.setdefault(name, {})[ext] = path
 
@@ -168,25 +170,40 @@ def process_upload(files_info: list, project_id: int, job_id: str):
             log(f"⚠️  [{base}] 没有 CSV，跳过")
             continue
 
-        g["mp4"].sort()  # 按 cam 编号排序
-        log(f"\n📹 多视角会话: {base}（{len(g['mp4'])} 个视角）")
+        cam_indices = sorted(g["mp4"].keys())
+        csv_indices = sorted(g["csv"].keys())
+        n_cams = len(cam_indices)
+        n_csvs = len(csv_indices)
+        log(f"\n📹 多视角会话: {base}（{n_cams} 视角 / {n_csvs} IMU）")
 
         task_data = {}
         all_ok = True
-        for cam_idx, (_, name, src) in enumerate(g["mp4"], start=1):
+
+        # 转码所有 MP4，按排序后的位置编号 video1/video2/...
+        for pos, cam_idx in enumerate(cam_indices, start=1):
+            name, src = g["mp4"][cam_idx]
             dst = _transcode_mp4(src, name, log)
             if dst is None:
                 all_ok = False
                 break
-            task_data[f"video{cam_idx}"] = f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}"
+            task_data[f"video{pos}"] = f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}"
 
         if not all_ok:
             continue
 
-        csv_name, csv_path = g["csv"]
-        task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+        # CSV 按排序后的位置编号 csv1/csv2/...
+        # 若只有一个 CSV，字段名用 "csv"（兼容单 IMU 模板）
+        if n_csvs == 1:
+            _, csv_path = g["csv"][csv_indices[0]]
+            task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+        else:
+            for pos, csv_idx in enumerate(csv_indices, start=1):
+                _, csv_path = g["csv"][csv_idx]
+                task_data[f"csv{pos}"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+
         tasks.append({"data": task_data})
-        log(f"✅ 会话 {base} 准备完成，{len(g['mp4'])} 视角 + 1 CSV")
+        csv_desc = "1 CSV" if n_csvs == 1 else f"{n_csvs} CSV (csv1/csv2/...)"
+        log(f"✅ 会话 {base} 准备完成，{n_cams} 视角 + {csv_desc}")
 
     # ── 单视频逻辑（原有，不变）────────────────────────────────
     for name, files in single_files.items():
