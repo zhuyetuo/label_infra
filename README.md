@@ -173,6 +173,10 @@ python3 label_studio/extract_frames.py \
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
   </TimeSeriesLabels>
 
   <TimeSeries name="ts" value="$csv" valueType="url"
@@ -203,6 +207,10 @@ python3 label_studio/extract_frames.py \
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
   </TimeSeriesLabels>
 </View>
 ```
@@ -217,6 +225,10 @@ python3 label_studio/extract_frames.py \
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
   </TimeSeriesLabels>
 
   <TimeSeries name="ts" value="$csv" valueType="url"
@@ -246,6 +258,10 @@ python3 label_studio/extract_frames.py \
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
   </RectangleLabels>
 </View>
 ```
@@ -282,6 +298,10 @@ python3 label_studio/extract_frames.py \
     <Label value="活动" background="#4CAF50"/>
     <Label value="睡觉" background="#2196F3"/>
     <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
   </RectangleLabels>
 </View>
 ```
