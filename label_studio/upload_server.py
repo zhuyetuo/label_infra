@@ -11,6 +11,7 @@ upload_server.py
 
 import glob
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -90,32 +91,105 @@ def transcode(src: str, dst: str) -> tuple[bool, str]:
     return result.returncode == 0, err
 
 
-def import_tasks(project_id: int, pairs: list) -> int:
-    tasks = [{"data": {"video": p["video"], "csv": p["csv"]}} for p in pairs]
+def import_tasks(project_id: int, tasks: list) -> int:
     r = request_with_auth("POST", f"{LS_URL}/api/projects/{project_id}/import",
                           json=tasks, timeout=60)
     r.raise_for_status()
     return r.json().get("task_count", len(tasks))
 
 
+def _transcode_mp4(src: str, name: str, log) -> str | None:
+    """转码单个 MP4，返回转码后的本地路径，失败返回 None。"""
+    dst = os.path.join(TRANSCODED_DIR, os.path.basename(src))
+    log(f"🎬 转码: {name}.mp4")
+    log(f"   源文件: {src}")
+    if not os.path.exists(dst):
+        ok, err = transcode(src, dst)
+        if not ok:
+            log(f"❌ 转码失败: {name}.mp4")
+            if err:
+                log(f"   ffmpeg: {err}")
+            return None
+    log(f"✅ 转码完成: {name}.mp4")
+    return dst
+
+
+def _multicam_base(stem: str) -> str | None:
+    """
+    从文件名主干提取多视角会话前缀。
+    multicam_20260715_084939_cam1      → multicam_20260715_084939
+    multicam_20260715_084939_cam1_imu1 → multicam_20260715_084939
+    返回 None 表示不是多视角文件。
+    """
+    m = re.match(r'^(.+?)_cam\d+', stem)
+    return m.group(1) if m else None
+
+
+def _cam_index(stem: str) -> int:
+    """提取 cam 编号，用于排序。"""
+    m = re.search(r'_cam(\d+)', stem)
+    return int(m.group(1)) if m else 0
+
+
 def process_upload(files_info: list, project_id: int, job_id: str):
-    """后台线程：转码 + 配对 + 导入"""
+    """后台线程：转码 + 配对 + 导入。
+    自动识别多视角文件（含 _camN 后缀），其余按原有单视频逻辑处理。
+    """
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["log"] = []
 
     def log(msg):
         jobs[job_id]["log"].append(msg)
 
-    # 按文件名分组
-    by_name: dict = {}
-    for f in files_info:
-        name = f["name"]
-        ext = f["ext"]
-        path = f["path"]
-        by_name.setdefault(name, {})[ext] = path
+    # ── 分类：多视角 vs 单视频 ──────────────────────────────────
+    multicam_groups: dict = {}  # base → {"mp4": [(cam_idx, name, path)], "csv": (name, path)}
+    single_files: dict = {}     # name → {"mp4": path, "csv": path}
 
-    pairs = []
-    for name, files in by_name.items():
+    for f in files_info:
+        name, ext, path = f["name"], f["ext"], f["path"]
+        base = _multicam_base(name)
+        if base:
+            g = multicam_groups.setdefault(base, {"mp4": [], "csv": None})
+            if ext == "mp4":
+                g["mp4"].append((_cam_index(name), name, path))
+            elif ext == "csv" and g["csv"] is None:
+                g["csv"] = (name, path)
+        else:
+            single_files.setdefault(name, {})[ext] = path
+
+    tasks = []
+
+    # ── 多视角分组处理 ──────────────────────────────────────────
+    for base, g in multicam_groups.items():
+        if not g["mp4"]:
+            log(f"⚠️  [{base}] 没有 MP4，跳过")
+            continue
+        if not g["csv"]:
+            log(f"⚠️  [{base}] 没有 CSV，跳过")
+            continue
+
+        g["mp4"].sort()  # 按 cam 编号排序
+        log(f"\n📹 多视角会话: {base}（{len(g['mp4'])} 个视角）")
+
+        task_data = {}
+        all_ok = True
+        for cam_idx, (_, name, src) in enumerate(g["mp4"], start=1):
+            dst = _transcode_mp4(src, name, log)
+            if dst is None:
+                all_ok = False
+                break
+            task_data[f"video{cam_idx}"] = f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}"
+
+        if not all_ok:
+            continue
+
+        csv_name, csv_path = g["csv"]
+        task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+        tasks.append({"data": task_data})
+        log(f"✅ 会话 {base} 准备完成，{len(g['mp4'])} 视角 + 1 CSV")
+
+    # ── 单视频逻辑（原有，不变）────────────────────────────────
+    for name, files in single_files.items():
         if "csv" not in files:
             log(f"⚠️  {name}: 缺少 CSV，跳过")
             continue
@@ -123,32 +197,23 @@ def process_upload(files_info: list, project_id: int, job_id: str):
             log(f"⚠️  {name}: 缺少 MP4，跳过")
             continue
 
-        # 转码
-        src = files["mp4"]
-        dst = os.path.join(TRANSCODED_DIR, os.path.basename(src))
-        log(f"🎬 转码: {name}.mp4")
-        log(f"   源文件: {src}")
-        if not os.path.exists(dst):
-            ok, err = transcode(src, dst)
-            if not ok:
-                log(f"❌ 转码失败: {name}.mp4")
-                if err:
-                    log(f"   ffmpeg: {err}")
-                continue
-        log(f"✅ 转码完成: {name}.mp4")
+        dst = _transcode_mp4(files["mp4"], name, log)
+        if dst is None:
+            continue
 
-        pairs.append({
+        tasks.append({"data": {
             "video": f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}",
             "csv":   f"{NGINX_MEDIA_URL}/{os.path.basename(files['csv'])}",
-        })
+        }})
 
-    if not pairs:
+    # ── 导入 ────────────────────────────────────────────────────
+    if not tasks:
         jobs[job_id]["status"] = "error"
         log("❌ 没有可导入的配对文件")
         return
 
     try:
-        count = import_tasks(project_id, pairs)
+        count = import_tasks(project_id, tasks)
         log(f"✅ 成功导入 {count} 个任务到项目 {project_id}")
         jobs[job_id]["status"] = "done"
     except requests.HTTPError as e:
