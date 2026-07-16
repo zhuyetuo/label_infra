@@ -161,26 +161,179 @@ python3 label_studio/extract_frames.py \
 
 ### Labeling Interface 模板
 
-#### 1. 视频 + IMU 同步标注
-
-任务数据字段：`$video`（视频 URL）、`$csv`（IMU CSV URL）
+标签列表（所有模板通用）：
+`活动` `睡觉` `抓挠` `甩身体` `跳跃` `舔身体` `啃身体` `奔跑`
 
 ---
 
-#### 0. 多视角视频 + IMU 同步标注（双视角示例，可扩展）
+#### A. 三视频一行 + 双 IMU（3 cam / 2 dog）
 
-任务数据字段：`$video1`、`$video2`（视频 URL）、`$csv`（IMU CSV URL）
-
-> 三视角只需在 XML 中再加一个 `<Video name="video3" value="$video3" .../>`，上传服务会自动按 `_cam1`、`_cam2`、`_cam3` 分配字段。
+任务数据字段：`$video1` `$video2` `$video3` `$csv1` `$csv2`
 
 ```xml
 <View>
-  <View style="display:flex; gap:8px;">
-    <View style="flex:1;">
+  <View style="display:flex; gap:4px; background:#000;">
+    <View style="flex:1; min-width:0; background:#000;">
       <Header value="视角 1"/>
       <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
     </View>
-    <View style="flex:1;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 2"/>
+      <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 3"/>
+      <Video name="video3" value="$video3" frameRate="25" sync="sync_group"/>
+    </View>
+  </View>
+
+  <View style="display:flex; gap:8px; margin-top:12px;">
+    <View style="flex:1; min-width:0;">
+      <Header value="狗 1 IMU"/>
+      <TimeSeriesLabels name="label1" toName="ts1">
+        <Label value="活动" background="#4CAF50"/>
+        <Label value="睡觉" background="#2196F3"/>
+        <Label value="抓挠" background="#F44336"/>
+        <Label value="甩身体" background="#FF9800"/>
+        <Label value="跳跃" background="#9C27B0"/>
+        <Label value="舔身体" background="#00BCD4"/>
+        <Label value="啃身体" background="#795548"/>
+        <Label value="奔跑" background="#FF5722"/>
+      </TimeSeriesLabels>
+      <TimeSeries name="ts1" value="$csv1" valueType="url"
+                  sync="sync_group"
+                  timeColumn="timestamp"
+                  timeFormat="%Y-%m-%d %H:%M:%S.%f"
+                  timeDisplayFormat="%H:%M:%S"
+                  sep=",">
+        <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+        <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+        <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+        <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+        <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+        <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+      </TimeSeries>
+    </View>
+    <View style="flex:1; min-width:0;">
+      <Header value="狗 2 IMU"/>
+      <TimeSeriesLabels name="label2" toName="ts2">
+        <Label value="活动" background="#4CAF50"/>
+        <Label value="睡觉" background="#2196F3"/>
+        <Label value="抓挠" background="#F44336"/>
+        <Label value="甩身体" background="#FF9800"/>
+        <Label value="跳跃" background="#9C27B0"/>
+        <Label value="舔身体" background="#00BCD4"/>
+        <Label value="啃身体" background="#795548"/>
+        <Label value="奔跑" background="#FF5722"/>
+      </TimeSeriesLabels>
+      <TimeSeries name="ts2" value="$csv2" valueType="url"
+                  sync="sync_group"
+                  timeColumn="timestamp"
+                  timeFormat="%Y-%m-%d %H:%M:%S.%f"
+                  timeDisplayFormat="%H:%M:%S"
+                  sep=",">
+        <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+        <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+        <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+        <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+        <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+        <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+      </TimeSeries>
+    </View>
+  </View>
+</View>
+```
+
+---
+
+#### B. 两视频一行 + 双 IMU（2 cam / 2 dog）
+
+任务数据字段：`$video1` `$video2` `$csv1` `$csv2`
+
+```xml
+<View>
+  <View style="display:flex; gap:4px; background:#000;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 1"/>
+      <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 2"/>
+      <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
+    </View>
+  </View>
+
+  <View style="display:flex; gap:8px; margin-top:12px;">
+    <View style="flex:1; min-width:0;">
+      <Header value="狗 1 IMU"/>
+      <TimeSeriesLabels name="label1" toName="ts1">
+        <Label value="活动" background="#4CAF50"/>
+        <Label value="睡觉" background="#2196F3"/>
+        <Label value="抓挠" background="#F44336"/>
+        <Label value="甩身体" background="#FF9800"/>
+        <Label value="跳跃" background="#9C27B0"/>
+        <Label value="舔身体" background="#00BCD4"/>
+        <Label value="啃身体" background="#795548"/>
+        <Label value="奔跑" background="#FF5722"/>
+      </TimeSeriesLabels>
+      <TimeSeries name="ts1" value="$csv1" valueType="url"
+                  sync="sync_group"
+                  timeColumn="timestamp"
+                  timeFormat="%Y-%m-%d %H:%M:%S.%f"
+                  timeDisplayFormat="%H:%M:%S"
+                  sep=",">
+        <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+        <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+        <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+        <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+        <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+        <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+      </TimeSeries>
+    </View>
+    <View style="flex:1; min-width:0;">
+      <Header value="狗 2 IMU"/>
+      <TimeSeriesLabels name="label2" toName="ts2">
+        <Label value="活动" background="#4CAF50"/>
+        <Label value="睡觉" background="#2196F3"/>
+        <Label value="抓挠" background="#F44336"/>
+        <Label value="甩身体" background="#FF9800"/>
+        <Label value="跳跃" background="#9C27B0"/>
+        <Label value="舔身体" background="#00BCD4"/>
+        <Label value="啃身体" background="#795548"/>
+        <Label value="奔跑" background="#FF5722"/>
+      </TimeSeriesLabels>
+      <TimeSeries name="ts2" value="$csv2" valueType="url"
+                  sync="sync_group"
+                  timeColumn="timestamp"
+                  timeFormat="%Y-%m-%d %H:%M:%S.%f"
+                  timeDisplayFormat="%H:%M:%S"
+                  sep=",">
+        <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+        <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+        <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+        <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+        <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+        <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+      </TimeSeries>
+    </View>
+  </View>
+</View>
+```
+
+---
+
+#### C. 两视频一行 + 单 IMU（2 cam / 1 dog）
+
+任务数据字段：`$video1` `$video2` `$csv`
+
+```xml
+<View>
+  <View style="display:flex; gap:4px; background:#000;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 1"/>
+      <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
       <Header value="视角 2"/>
       <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
     </View>
@@ -196,7 +349,42 @@ python3 label_studio/extract_frames.py \
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
+  <TimeSeries name="ts" value="$csv" valueType="url"
+              sync="sync_group"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+  </TimeSeries>
+</View>
+```
 
+---
+
+#### D. 单视频 + 单 IMU（1 cam / 1 dog）
+
+任务数据字段：`$video` `$csv`
+
+```xml
+<View>
+  <Video name="video" value="$video" frameRate="25" sync="sync_group"/>
+
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
+  </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv" valueType="url"
               sync="sync_group"
               timeColumn="timestamp"
@@ -215,40 +403,9 @@ python3 label_studio/extract_frames.py \
 
 ---
 
-```xml
-<View>
-  <Video name="video" value="$video" frameRate="25" sync="sync_group"/>
+#### E. 纯视频片段标注
 
-  <TimeSeriesLabels name="label" toName="ts">
-    <Label value="活动" background="#4CAF50"/>
-    <Label value="睡觉" background="#2196F3"/>
-    <Label value="抓挠" background="#F44336"/>
-    <Label value="甩身体" background="#FF9800"/>
-    <Label value="跳跃" background="#9C27B0"/>
-    <Label value="舔身体" background="#00BCD4"/>
-    <Label value="啃身体" background="#795548"/>
-    <Label value="奔跑" background="#FF5722"/>
-  </TimeSeriesLabels>
-
-  <TimeSeries name="ts" value="$csv" valueType="url"
-              sync="sync_group"
-              timeColumn="timestamp"
-              timeFormat="%Y-%m-%d %H:%M:%S.%f"
-              timeDisplayFormat="%H:%M:%S"
-              sep=",">
-    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
-    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
-    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
-    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="60"/>
-    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="60"/>
-    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="60"/>
-  </TimeSeries>
-</View>
-```
-
-#### 2. 纯视频片段标注
-
-任务数据字段：`$video`（视频 URL）
+任务数据字段：`$video`
 
 ```xml
 <View>
@@ -267,41 +424,13 @@ python3 label_studio/extract_frames.py \
 </View>
 ```
 
-#### 3. 纯 IMU 时序标注
+---
 
-任务数据字段：`$csv`（IMU CSV URL）
+#### F. 图片目标检测
 
-```xml
-<View>
-  <TimeSeriesLabels name="label" toName="ts">
-    <Label value="活动" background="#4CAF50"/>
-    <Label value="睡觉" background="#2196F3"/>
-    <Label value="抓挠" background="#F44336"/>
-    <Label value="甩身体" background="#FF9800"/>
-    <Label value="跳跃" background="#9C27B0"/>
-    <Label value="舔身体" background="#00BCD4"/>
-    <Label value="啃身体" background="#795548"/>
-    <Label value="奔跑" background="#FF5722"/>
-  </TimeSeriesLabels>
+任务数据字段：`$image`
 
-  <TimeSeries name="ts" value="$csv" valueType="url"
-              timeColumn="timestamp"
-              timeFormat="%Y-%m-%d %H:%M:%S.%f"
-              timeDisplayFormat="%H:%M:%S"
-              sep=",">
-    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="60"/>
-    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="60"/>
-    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="60"/>
-    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="60"/>
-    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="60"/>
-    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="60"/>
-  </TimeSeries>
-</View>
-```
-
-#### 4. 图片目标检测（从零标注）
-
-任务数据字段：`$image`（图片 URL）
+> 图片项目只接受 JPG/PNG，视频需先用 `extract_frames.py` 抽帧。
 
 ```xml
 <View>
@@ -319,85 +448,14 @@ python3 label_studio/extract_frames.py \
   </RectangleLabels>
 </View>
 ```
-
-> **注意**：图片项目只接受图片（JPG/PNG），不能直接上传 MP4。如果数据是视频，先用 `extract_frames.py` 抽帧。
 
 **从视频抽帧并导入：**
 ```bash
 export LS_REFRESH_TOKEN="你的token"
 
-# 每秒抽 1 帧，抽完后自动导入项目
 python3 label_studio/extract_frames.py \
     --video ~/label_infra/data/media/video.mp4 \
-    --project <项目ID> \
-    --fps 1
-
-# 只抽帧不导入（先预览帧数量）
-python3 label_studio/extract_frames.py \
-    --video ~/label_infra/data/media/video.mp4 \
-    --fps 1 --dry-run
-```
-
-帧图片保存到 `~/label_infra/data/media/frames/`，通过 `http://<服务器IP>:8182/frames/` 访问。
-
-#### 5. 图片目标检测（已有预标注，导入后校验）
-
-任务数据字段：`$image`（图片 URL），预标注通过 `predictions` 字段传入：
-
-```xml
-<View>
-  <Image name="image" value="$image"/>
-
-  <RectangleLabels name="label" toName="image">
-    <Label value="活动" background="#4CAF50"/>
-    <Label value="睡觉" background="#2196F3"/>
-    <Label value="抓挠" background="#F44336"/>
-    <Label value="甩身体" background="#FF9800"/>
-    <Label value="跳跃" background="#9C27B0"/>
-    <Label value="舔身体" background="#00BCD4"/>
-    <Label value="啃身体" background="#795548"/>
-    <Label value="奔跑" background="#FF5722"/>
-  </RectangleLabels>
-</View>
-```
-
-带预标注的导入 JSON 格式：
-```json
-[
-  {
-    "data": {"image": "http://<服务器IP>:8182/dog001.jpg"},
-    "predictions": [{
-      "model_version": "v1",
-      "result": [
-        {
-          "type": "rectanglelabels",
-          "from_name": "label",
-          "to_name": "image",
-          "original_width": 1920,
-          "original_height": 1080,
-          "value": {
-            "x": 10.5, "y": 20.3,
-            "width": 30.0, "height": 40.0,
-            "rotation": 0,
-            "rectanglelabels": ["活动"]
-          }
-        }
-      ]
-    }]
-  }
-]
-```
-
-> `x`、`y`、`width`、`height` 均为百分比（相对图片宽高），范围 0–100。
-
-#### 媒体文件目录
-```
-label_infra/data/
-├── media/
-│   ├── transcoded/   # 转码后的视频（auto_transcode.py 自动写入）
-│   └── upload/       # Label Studio 上传目录（自动管理）
-├── label_studio/     # Label Studio 数据库和项目数据
-└── nginx.conf
+    --project <项目ID> --fps 1
 ```
 
 ---
