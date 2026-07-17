@@ -322,7 +322,56 @@ python3 label_studio/extract_frames.py \
 
 ---
 
-#### C. 两视频一行 + 单 IMU（2 cam / 1 dog）
+#### C. 三视频一行 + 单 IMU（3 cam / 1 dog）
+
+任务数据字段：`$video1` `$video2` `$video3` `$csv`
+
+```xml
+<View>
+  <View style="display:flex; gap:4px; background:#000;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 1"/>
+      <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 2"/>
+      <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 3"/>
+      <Video name="video3" value="$video3" frameRate="25" sync="sync_group"/>
+    </View>
+  </View>
+
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
+  </TimeSeriesLabels>
+  <TimeSeries name="ts" value="$csv" valueType="url"
+              sync="sync_group"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+  </TimeSeries>
+</View>
+```
+
+---
+
+#### D. 两视频一行 + 单 IMU（2 cam / 1 dog）
 
 任务数据字段：`$video1` `$video2` `$csv`
 
@@ -367,7 +416,7 @@ python3 label_studio/extract_frames.py \
 
 ---
 
-#### D. 单视频 + 单 IMU（1 cam / 1 dog）
+#### E. 单视频 + 单 IMU（1 cam / 1 dog）
 
 任务数据字段：`$video` `$csv`
 
@@ -403,7 +452,7 @@ python3 label_studio/extract_frames.py \
 
 ---
 
-#### E. 纯视频片段标注
+#### F. 纯视频片段标注
 
 任务数据字段：`$video`
 
@@ -426,7 +475,7 @@ python3 label_studio/extract_frames.py \
 
 ---
 
-#### F. 图片目标检测
+#### G. 图片目标检测
 
 任务数据字段：`$image`
 
