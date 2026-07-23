@@ -199,6 +199,11 @@ python3 label_studio/extract_frames.py \
         <Label value="舔身体" background="#00BCD4"/>
         <Label value="啃身体" background="#795548"/>
         <Label value="奔跑" background="#FF5722"/>
+        <Label value="行走" background="#607D8B"/>
+        <Label value="进食" background="#8BC34A"/>
+        <Label value="饮水" background="#03A9F4"/>
+        <Label value="蹭擦身体" background="#E91E63"/>
+        <Label value="嗅闻" background="#FFC107"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
                   sync="sync_group"
@@ -225,6 +230,11 @@ python3 label_studio/extract_frames.py \
         <Label value="舔身体" background="#00BCD4"/>
         <Label value="啃身体" background="#795548"/>
         <Label value="奔跑" background="#FF5722"/>
+        <Label value="行走" background="#607D8B"/>
+        <Label value="进食" background="#8BC34A"/>
+        <Label value="饮水" background="#03A9F4"/>
+        <Label value="蹭擦身体" background="#E91E63"/>
+        <Label value="嗅闻" background="#FFC107"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
                   sync="sync_group"
@@ -275,6 +285,11 @@ python3 label_studio/extract_frames.py \
         <Label value="舔身体" background="#00BCD4"/>
         <Label value="啃身体" background="#795548"/>
         <Label value="奔跑" background="#FF5722"/>
+        <Label value="行走" background="#607D8B"/>
+        <Label value="进食" background="#8BC34A"/>
+        <Label value="饮水" background="#03A9F4"/>
+        <Label value="蹭擦身体" background="#E91E63"/>
+        <Label value="嗅闻" background="#FFC107"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
                   sync="sync_group"
@@ -301,6 +316,11 @@ python3 label_studio/extract_frames.py \
         <Label value="舔身体" background="#00BCD4"/>
         <Label value="啃身体" background="#795548"/>
         <Label value="奔跑" background="#FF5722"/>
+        <Label value="行走" background="#607D8B"/>
+        <Label value="进食" background="#8BC34A"/>
+        <Label value="饮水" background="#03A9F4"/>
+        <Label value="蹭擦身体" background="#E91E63"/>
+        <Label value="嗅闻" background="#FFC107"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
                   sync="sync_group"
@@ -352,6 +372,11 @@ python3 label_studio/extract_frames.py \
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
@@ -397,6 +422,11 @@ python3 label_studio/extract_frames.py \
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
@@ -433,6 +463,11 @@ python3 label_studio/extract_frames.py \
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv" valueType="url"
               sync="sync_group"
@@ -469,6 +504,11 @@ python3 label_studio/extract_frames.py \
     <Label value="舔身体" background="#00BCD4"/>
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
   </TimeSeriesLabels>
 </View>
 ```
