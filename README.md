@@ -324,7 +324,7 @@ python3 label_studio/extract_frames.py \
 
 #### C. 三视频一行 + 单 IMU（3 cam / 1 dog）
 
-任务数据字段：`$video1` `$video2` `$video3` `$csv`
+任务数据字段：`$video1` `$video2` `$video3` `$csv1`
 
 ```xml
 <View>
@@ -353,7 +353,7 @@ python3 label_studio/extract_frames.py \
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
-  <TimeSeries name="ts" value="$csv" valueType="url"
+  <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
               timeColumn="timestamp"
               timeFormat="%Y-%m-%d %H:%M:%S.%f"
@@ -373,7 +373,7 @@ python3 label_studio/extract_frames.py \
 
 #### D. 两视频一行 + 单 IMU（2 cam / 1 dog）
 
-任务数据字段：`$video1` `$video2` `$csv`
+任务数据字段：`$video1` `$video2` `$csv1`
 
 ```xml
 <View>
@@ -398,7 +398,7 @@ python3 label_studio/extract_frames.py \
     <Label value="啃身体" background="#795548"/>
     <Label value="奔跑" background="#FF5722"/>
   </TimeSeriesLabels>
-  <TimeSeries name="ts" value="$csv" valueType="url"
+  <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
               timeColumn="timestamp"
               timeFormat="%Y-%m-%d %H:%M:%S.%f"
