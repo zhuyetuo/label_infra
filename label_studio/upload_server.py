@@ -193,25 +193,27 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         if not all_ok:
             continue
 
-        # CSV 按排序后的位置编号
-        # 单摄像头单CSV用 "csv"，多摄像头用 "csv1/csv2/..."
-        # 多摄像头只有1个CSV时，csv2 指向同一文件，兼容双IMU模板
+        # CSV 处理：
+        # 单摄像头单CSV → 1个任务，字段 "csv"
+        # 多摄像头单CSV → 1个任务，字段 "csv1"
+        # 多摄像头多CSV → 每个CSV生成1个独立任务，共享同一组视频，字段 "csv1"
         if n_cams == 1 and n_csvs == 1:
             _, csv_path = g["csv"][csv_indices[0]]
             task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+            tasks.append({"data": task_data})
+        elif n_csvs == 1:
+            _, csv_path = g["csv"][csv_indices[0]]
+            task_data["csv1"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+            tasks.append({"data": task_data})
         else:
-            csv_urls = []
-            for pos, csv_idx in enumerate(csv_indices, start=1):
+            # 每个CSV独立一个任务，视频字段共享
+            for csv_idx in csv_indices:
                 _, csv_path = g["csv"][csv_idx]
-                url = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
-                task_data[f"csv{pos}"] = url
-                csv_urls.append(url)
-            # 只有1个CSV时补齐csv2，兼容双IMU模板
-            if n_csvs == 1:
-                task_data["csv2"] = csv_urls[0]
+                t = dict(task_data)
+                t["csv1"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+                tasks.append({"data": t})
 
-        tasks.append({"data": task_data})
-        csv_desc = "1 CSV" if n_csvs == 1 else f"{n_csvs} CSV (csv1/csv2/...)"
+        csv_desc = "1 CSV" if n_csvs == 1 else f"{n_csvs} CSV → {n_csvs} 个任务"
         log(f"✅ 会话 {base} 准备完成，{n_cams} 视角 + {csv_desc}")
 
     # ── 单视频逻辑（原有，不变）────────────────────────────────
