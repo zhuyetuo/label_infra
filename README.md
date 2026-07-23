@@ -205,6 +205,7 @@ python3 label_studio/extract_frames.py \
         <Label value="蹭擦身体" background="#E91E63"/>
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
+        <Label value="伸懒腰" background="#FFEB3B"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
                   sync="sync_group"
@@ -237,6 +238,7 @@ python3 label_studio/extract_frames.py \
         <Label value="蹭擦身体" background="#E91E63"/>
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
+        <Label value="伸懒腰" background="#FFEB3B"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
                   sync="sync_group"
@@ -293,6 +295,7 @@ python3 label_studio/extract_frames.py \
         <Label value="蹭擦身体" background="#E91E63"/>
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
+        <Label value="伸懒腰" background="#FFEB3B"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
                   sync="sync_group"
@@ -325,6 +328,7 @@ python3 label_studio/extract_frames.py \
         <Label value="蹭擦身体" background="#E91E63"/>
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
+        <Label value="伸懒腰" background="#FFEB3B"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
                   sync="sync_group"
@@ -382,6 +386,7 @@ python3 label_studio/extract_frames.py \
     <Label value="蹭擦身体" background="#E91E63"/>
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
@@ -433,6 +438,7 @@ python3 label_studio/extract_frames.py \
     <Label value="蹭擦身体" background="#E91E63"/>
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
               sync="sync_group"
@@ -475,6 +481,7 @@ python3 label_studio/extract_frames.py \
     <Label value="蹭擦身体" background="#E91E63"/>
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv" valueType="url"
               sync="sync_group"
@@ -517,6 +524,7 @@ python3 label_studio/extract_frames.py \
     <Label value="蹭擦身体" background="#E91E63"/>
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
   </TimeSeriesLabels>
 </View>
 ```
