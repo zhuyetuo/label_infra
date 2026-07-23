@@ -179,21 +179,23 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         task_data = {}
         all_ok = True
 
-        # 转码所有 MP4，按排序后的位置编号 video1/video2/...
+        # 转码所有 MP4
+        # 只有1个视频时字段名用 "video"（兼容单视频模板），多个时用 video1/video2/...
         for pos, cam_idx in enumerate(cam_indices, start=1):
             name, src = g["mp4"][cam_idx]
             dst = _transcode_mp4(src, name, log)
             if dst is None:
                 all_ok = False
                 break
-            task_data[f"video{pos}"] = f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}"
+            field = "video" if n_cams == 1 else f"video{pos}"
+            task_data[field] = f"{NGINX_MEDIA_URL}/transcoded/{os.path.basename(dst)}"
 
         if not all_ok:
             continue
 
-        # CSV 按排序后的位置编号 csv1/csv2/...
-        # 若只有一个 CSV，字段名用 "csv"（兼容单 IMU 模板）
-        if n_csvs == 1:
+        # CSV 按排序后的位置编号
+        # 单摄像头单CSV用 "csv"，多摄像头用 "csv1/csv2/..."
+        if n_cams == 1 and n_csvs == 1:
             _, csv_path = g["csv"][csv_indices[0]]
             task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
         else:
