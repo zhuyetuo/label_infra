@@ -195,13 +195,20 @@ def process_upload(files_info: list, project_id: int, job_id: str):
 
         # CSV 按排序后的位置编号
         # 单摄像头单CSV用 "csv"，多摄像头用 "csv1/csv2/..."
+        # 多摄像头只有1个CSV时，csv2 指向同一文件，兼容双IMU模板
         if n_cams == 1 and n_csvs == 1:
             _, csv_path = g["csv"][csv_indices[0]]
             task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
         else:
+            csv_urls = []
             for pos, csv_idx in enumerate(csv_indices, start=1):
                 _, csv_path = g["csv"][csv_idx]
-                task_data[f"csv{pos}"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+                url = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
+                task_data[f"csv{pos}"] = url
+                csv_urls.append(url)
+            # 只有1个CSV时补齐csv2，兼容双IMU模板
+            if n_csvs == 1:
+                task_data["csv2"] = csv_urls[0]
 
         tasks.append({"data": task_data})
         csv_desc = "1 CSV" if n_csvs == 1 else f"{n_csvs} CSV (csv1/csv2/...)"
