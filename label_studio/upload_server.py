@@ -116,13 +116,26 @@ def _transcode_mp4(src: str, name: str, log) -> str | None:
 
 def _multicam_base(stem: str) -> str | None:
     """
-    从文件名主干提取多视角会话前缀。
-    multicam_20260715_084939_cam1      → multicam_20260715_084939
-    multicam_20260715_084939_cam1_imu1 → multicam_20260715_084939
+    从文件名主干提取多视角会话+片段前缀，用于分组。
+    multicam_20260717_210632_cam1_imu1_resampled16hz_clip01_210930-210948
+      → multicam_20260717_210632_clip01_210930-210948
+    multicam_20260715_084939_cam1_imu1_resampled16hz
+      → multicam_20260715_084939
     返回 None 表示不是多视角文件。
     """
+    # 必须以 multicam_ 开头
+    if not stem.startswith("multicam_"):
+        return None
+    # 提取 _cam\d+ 之前的 session 前缀
     m = re.match(r'^(.+?)_cam\d+', stem)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    session = m.group(1)
+    # 尝试提取 _clip\d+_\d+-\d+ 后缀（片段标识）
+    clip = re.search(r'(_clip\d+_\d+-\d+)', stem)
+    if clip:
+        return session + clip.group(1)
+    return session
 
 
 def _cam_index(stem: str) -> int:
