@@ -193,9 +193,9 @@ def process_upload(files_info: list, project_id: int, job_id: str):
         if not all_ok:
             continue
 
-        # CSV 按排序后的位置编号 csv1/csv2/...
-        # 若只有一个 CSV，字段名用 "csv"（兼容单 IMU 模板）
-        if n_csvs == 1:
+        # CSV 按排序后的位置编号
+        # 单摄像头单CSV用 "csv"，多摄像头用 "csv1/csv2/..."
+        if n_cams == 1 and n_csvs == 1:
             _, csv_path = g["csv"][csv_indices[0]]
             task_data["csv"] = f"{NGINX_MEDIA_URL}/{os.path.basename(csv_path)}"
         else:
