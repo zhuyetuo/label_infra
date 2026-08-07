@@ -565,6 +565,46 @@ python3 label_studio/extract_frames.py \
 
 ---
 
+#### H. 纯 IMU 标注（仅 CSV）
+
+任务数据字段：`$csv`
+
+```xml
+<View>
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
+    <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
+  </TimeSeriesLabels>
+  <TimeSeries name="ts" value="$csv" valueType="url"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+  </TimeSeries>
+</View>
+```
+
+---
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
