@@ -206,7 +206,7 @@ python3 label_studio/extract_frames.py \
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
         <Label value="伸懒腰" background="#FFEB3B"/>
-        <Label value="设备静置" background="#546E7A"/>
+        <Label value="未佩戴" background="#546E7A"/>
         <Label value="项圈松动" background="#FF7043"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
@@ -241,7 +241,7 @@ python3 label_studio/extract_frames.py \
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
         <Label value="伸懒腰" background="#FFEB3B"/>
-        <Label value="设备静置" background="#546E7A"/>
+        <Label value="未佩戴" background="#546E7A"/>
         <Label value="项圈松动" background="#FF7043"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
@@ -300,7 +300,7 @@ python3 label_studio/extract_frames.py \
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
         <Label value="伸懒腰" background="#FFEB3B"/>
-        <Label value="设备静置" background="#546E7A"/>
+        <Label value="未佩戴" background="#546E7A"/>
         <Label value="项圈松动" background="#FF7043"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts1" value="$csv1" valueType="url"
@@ -335,7 +335,7 @@ python3 label_studio/extract_frames.py \
         <Label value="嗅闻" background="#FFC107"/>
         <Label value="戴摘项圈" background="#9E9E9E"/>
         <Label value="伸懒腰" background="#FFEB3B"/>
-        <Label value="设备静置" background="#546E7A"/>
+        <Label value="未佩戴" background="#546E7A"/>
         <Label value="项圈松动" background="#FF7043"/>
       </TimeSeriesLabels>
       <TimeSeries name="ts2" value="$csv2" valueType="url"
@@ -395,7 +395,7 @@ python3 label_studio/extract_frames.py \
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
     <Label value="伸懒腰" background="#FFEB3B"/>
-    <Label value="设备静置" background="#546E7A"/>
+    <Label value="未佩戴" background="#546E7A"/>
     <Label value="项圈松动" background="#FF7043"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
@@ -449,7 +449,7 @@ python3 label_studio/extract_frames.py \
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
     <Label value="伸懒腰" background="#FFEB3B"/>
-    <Label value="设备静置" background="#546E7A"/>
+    <Label value="未佩戴" background="#546E7A"/>
     <Label value="项圈松动" background="#FF7043"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv1" valueType="url"
@@ -494,7 +494,7 @@ python3 label_studio/extract_frames.py \
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
     <Label value="伸懒腰" background="#FFEB3B"/>
-    <Label value="设备静置" background="#546E7A"/>
+    <Label value="未佩戴" background="#546E7A"/>
     <Label value="项圈松动" background="#FF7043"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv" valueType="url"
@@ -539,7 +539,7 @@ python3 label_studio/extract_frames.py \
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
     <Label value="伸懒腰" background="#FFEB3B"/>
-    <Label value="设备静置" background="#546E7A"/>
+    <Label value="未佩戴" background="#546E7A"/>
     <Label value="项圈松动" background="#FF7043"/>
   </TimeSeriesLabels>
 </View>
@@ -603,7 +603,7 @@ python3 label_studio/extract_frames.py \
     <Label value="嗅闻" background="#FFC107"/>
     <Label value="戴摘项圈" background="#9E9E9E"/>
     <Label value="伸懒腰" background="#FFEB3B"/>
-    <Label value="设备静置" background="#546E7A"/>
+    <Label value="未佩戴" background="#546E7A"/>
     <Label value="项圈松动" background="#FF7043"/>
   </TimeSeriesLabels>
   <TimeSeries name="ts" value="$csv" valueType="url"
