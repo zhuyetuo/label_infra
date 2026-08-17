@@ -581,6 +581,25 @@ python3 label_studio/extract_frames.py \
 
 ---
 
+#### I. 图片二分类目标检测（正常 / 异常）
+
+任务数据字段：`$image`
+
+> 图片项目只接受 JPG/PNG，视频需先用 `extract_frames.py` 抽帧。
+
+```xml
+<View>
+  <Image name="image" value="$image"/>
+
+  <RectangleLabels name="label" toName="image">
+    <Label value="正常" background="#4CAF50"/>
+    <Label value="异常" background="#F44336"/>
+  </RectangleLabels>
+</View>
+```
+
+---
+
 #### H. 纯 IMU 标注（仅 CSV）
 
 任务数据字段：`$csv`
