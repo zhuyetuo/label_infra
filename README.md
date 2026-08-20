@@ -585,26 +585,26 @@ python3 label_studio/extract_frames.py \
 
 任务数据字段：`$video1` `$video2` `$video3` `$video4` `$csv1`
 
+> 视频区域用滚动容器包裹，避免4个视频过于拥挤；`align-items:flex-start` 防止不同宽高比视频被拉伸出现黑边。
+
 ```xml
 <View>
-  <View style="display:flex; gap:4px; background:#000;">
-    <View style="flex:1; min-width:0; background:#000;">
-      <Header value="视角 1"/>
-      <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+  <View style="max-height:620px; overflow-y:auto; background:#000;">
+    <View style="display:flex; align-items:flex-start; gap:4px; background:#000;">
+      <View style="flex:1; min-width:0; background:#000;">
+        <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+      </View>
+      <View style="flex:1; min-width:0; background:#000;">
+        <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
+      </View>
     </View>
-    <View style="flex:1; min-width:0; background:#000;">
-      <Header value="视角 2"/>
-      <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
-    </View>
-  </View>
-  <View style="display:flex; gap:4px; background:#000; margin-top:4px;">
-    <View style="flex:1; min-width:0; background:#000;">
-      <Header value="视角 3"/>
-      <Video name="video3" value="$video3" frameRate="25" sync="sync_group"/>
-    </View>
-    <View style="flex:1; min-width:0; background:#000;">
-      <Header value="视角 4"/>
-      <Video name="video4" value="$video4" frameRate="25" sync="sync_group"/>
+    <View style="display:flex; align-items:flex-start; gap:4px; background:#000; margin-top:2px;">
+      <View style="flex:1; min-width:0; background:#000;">
+        <Video name="video3" value="$video3" frameRate="25" sync="sync_group"/>
+      </View>
+      <View style="flex:1; min-width:0; background:#000;">
+        <Video name="video4" value="$video4" frameRate="25" sync="sync_group"/>
+      </View>
     </View>
   </View>
 
