@@ -581,6 +581,70 @@ python3 label_studio/extract_frames.py \
 
 ---
 
+#### J. 四视频两行 + 单 IMU（4 cam / 1 dog）
+
+任务数据字段：`$video1` `$video2` `$video3` `$video4` `$csv1`
+
+```xml
+<View>
+  <View style="display:flex; gap:4px; background:#000;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 1"/>
+      <Video name="video1" value="$video1" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 2"/>
+      <Video name="video2" value="$video2" frameRate="25" sync="sync_group"/>
+    </View>
+  </View>
+  <View style="display:flex; gap:4px; background:#000; margin-top:4px;">
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 3"/>
+      <Video name="video3" value="$video3" frameRate="25" sync="sync_group"/>
+    </View>
+    <View style="flex:1; min-width:0; background:#000;">
+      <Header value="视角 4"/>
+      <Video name="video4" value="$video4" frameRate="25" sync="sync_group"/>
+    </View>
+  </View>
+
+  <TimeSeriesLabels name="label" toName="ts">
+    <Label value="活动" background="#4CAF50"/>
+    <Label value="睡觉" background="#2196F3"/>
+    <Label value="抓挠" background="#F44336"/>
+    <Label value="甩身体" background="#FF9800"/>
+    <Label value="跳跃" background="#9C27B0"/>
+    <Label value="舔身体" background="#00BCD4"/>
+    <Label value="啃身体" background="#795548"/>
+    <Label value="奔跑" background="#FF5722"/>
+    <Label value="行走" background="#607D8B"/>
+    <Label value="进食" background="#8BC34A"/>
+    <Label value="饮水" background="#03A9F4"/>
+    <Label value="蹭擦身体" background="#E91E63"/>
+    <Label value="嗅闻" background="#FFC107"/>
+    <Label value="戴摘项圈" background="#9E9E9E"/>
+    <Label value="伸懒腰" background="#FFEB3B"/>
+    <Label value="未佩戴" background="#546E7A"/>
+    <Label value="项圈松动" background="#FF7043"/>
+  </TimeSeriesLabels>
+  <TimeSeries name="ts" value="$csv1" valueType="url"
+              sync="sync_group"
+              timeColumn="timestamp"
+              timeFormat="%Y-%m-%d %H:%M:%S.%f"
+              timeDisplayFormat="%H:%M:%S"
+              sep=",">
+    <Channel column="acc_x"  strokeColor="#e74c3c" legend="Acc X"  height="50"/>
+    <Channel column="acc_y"  strokeColor="#2ecc71" legend="Acc Y"  height="50"/>
+    <Channel column="acc_z"  strokeColor="#3498db" legend="Acc Z"  height="50"/>
+    <Channel column="gyro_x" strokeColor="#e67e22" legend="Gyro X" height="50"/>
+    <Channel column="gyro_y" strokeColor="#1abc9c" legend="Gyro Y" height="50"/>
+    <Channel column="gyro_z" strokeColor="#9b59b6" legend="Gyro Z" height="50"/>
+  </TimeSeries>
+</View>
+```
+
+---
+
 #### I. 图片二分类目标检测（正常 / 异常）
 
 任务数据字段：`$image`
