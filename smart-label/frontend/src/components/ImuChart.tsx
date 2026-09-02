@@ -45,10 +45,19 @@ function formatTimestamp(epochSec: number): string {
   )}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
+export interface ChartSegment {
+  start_time_ms: number;
+  end_time_ms: number;
+  color: string;
+  label: string;
+}
+
 interface Props {
   sampleId: number;
   bus: TimeBus;
   rowHeight?: number;
+  /** 已标注的时间段，会以半透明色块画在曲线上（标注工作台用） */
+  segments?: ChartSegment[];
 }
 
 // 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
@@ -56,7 +65,7 @@ interface Props {
 // setScale + uPlot cursor.sync 联动缩放/平移/十字线。
 // 另外通过 bus 跟视频双向联动：视频播放时在6张图上画一条跟随的红色竖线
 // （playheadPlugin，区别于鼠标悬停的十字线），点击曲线任意位置能让视频跳转过去。
-export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
+export default function ImuChart({ sampleId, bus, rowHeight = 110, segments }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -64,6 +73,13 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   const fetchSeqRef = useRef(0);
   const syncingRef = useRef(false);
   const draggingRef = useRef(false);
+  // 标注色块走 ref 而不是进 effect 依赖，否则每加一条标注就要把6张图全部重建
+  const segmentsRef = useRef<ChartSegment[]>(segments ?? []);
+
+  useEffect(() => {
+    segmentsRef.current = segments ?? [];
+    plotRefs.current.forEach((p) => p?.redraw());
+  }, [segments]);
 
   useEffect(() => {
     let disposed = false;
@@ -176,6 +192,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
           ],
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
+            segmentBandPlugin(segmentsRef, () => startEpochRef.current, i === 0),
             dragPanPlugin(onClickSeek, playheadState, draggingRef, getFullRange),
             wheelZoomPlugin(),
             playheadPlugin(playheadState, i === 0),
@@ -243,6 +260,59 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
       ))}
     </div>
   );
+}
+
+// 把已标注的时间段画成半透明色块垫在曲线下面，第一张图上再标上标签名，
+// 这样一眼能看出哪段已经标了什么行为。
+function segmentBandPlugin(
+  segmentsRef: { current: ChartSegment[] },
+  getStartEpoch: () => number,
+  showLabel: boolean
+) {
+  return {
+    hooks: {
+      // drawClear 在清空画布之后、画曲线之前触发，所以色块会垫在曲线底下
+      drawClear: (u: uPlot) => {
+        const segs = segmentsRef.current;
+        if (!segs.length) return;
+        const startEpoch = getStartEpoch();
+        const ctx = u.ctx;
+        const left = u.bbox.left;
+        const right = u.bbox.left + u.bbox.width;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, u.bbox.top, u.bbox.width, u.bbox.height);
+        ctx.clip();
+
+        for (const seg of segs) {
+          const x0 = u.valToPos(startEpoch + seg.start_time_ms / 1000, "x", true);
+          const x1 = u.valToPos(startEpoch + seg.end_time_ms / 1000, "x", true);
+          if (x1 < left || x0 > right) continue;
+          ctx.fillStyle = seg.color;
+          ctx.globalAlpha = 0.22;
+          ctx.fillRect(x0, u.bbox.top, Math.max(1, x1 - x0), u.bbox.height);
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = seg.color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x0, u.bbox.top);
+          ctx.lineTo(x0, u.bbox.top + u.bbox.height);
+          ctx.moveTo(x1, u.bbox.top);
+          ctx.lineTo(x1, u.bbox.top + u.bbox.height);
+          ctx.stroke();
+
+          if (showLabel && x1 - x0 > 24) {
+            ctx.fillStyle = seg.color;
+            ctx.font = "11px sans-serif";
+            ctx.textBaseline = "top";
+            ctx.fillText(seg.label, x0 + 3, u.bbox.top + 2);
+          }
+        }
+        ctx.restore();
+      },
+    },
+  };
 }
 
 // 画一条跟随视频播放位置的竖线，跟鼠标悬停的十字线是两码事（互不干扰）；

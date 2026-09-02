@@ -13,6 +13,8 @@ export const createTask = (body: {
   assigned_to?: number;
 }) => request.post<never, Task>("/tasks", body);
 
+export const deleteTask = (id: number) => request.delete<never, null>(`/tasks/${id}`);
+
 export const claimTask = (id: number) => request.post<never, Task>(`/tasks/${id}/claim`);
 
 export const heartbeat = (id: number) => request.patch<never, null>(`/tasks/${id}/heartbeat`);
