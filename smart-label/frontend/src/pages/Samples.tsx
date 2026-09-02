@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
-import { Button, Collapse, Space, Table, Tag, message } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Collapse, Progress, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { importScan, listSamples } from "@/api/samples";
+import { getImportScanStatus, startImportScan, listSamples, type ScanProgress } from "@/api/samples";
 import type { Sample } from "@/types";
 
 const statusColor: Record<Sample["import_status"], string> = {
@@ -26,7 +26,34 @@ const columns = [
 export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
-  const [scanning, setScanning] = useState(false);
+  const [progress, setProgress] = useState<ScanProgress | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      const p = await getImportScanStatus();
+      setProgress(p);
+      if (p.status === "done" || p.status === "error") {
+        stopPolling();
+        if (p.status === "done") {
+          message.success(`扫描完成：新增 ${p.created}，跳过已存在 ${p.skipped_existing}，出错 ${p.errors}`);
+        } else {
+          message.error(`扫描出错：${p.error_message}`);
+        }
+        qc.invalidateQueries({ queryKey: ["samples"] });
+      }
+    }, 1000);
+  };
+
+  useEffect(() => stopPolling, []);
 
   const groups = useMemo(() => {
     const map = new Map<string, Sample[]>();
@@ -39,30 +66,41 @@ export default function Samples() {
   }, [data]);
 
   const handleScan = async () => {
-    if (scanning) return;
-    setScanning(true);
-    try {
-      const result = await importScan();
-      message.success(
-        `扫描完成：新增 ${result.created}，跳过已存在 ${result.skipped_existing}，出错 ${result.errors}`
-      );
-      if (result.detail.length) {
-        console.warn("扫描详情：", result.detail);
-      }
-      qc.invalidateQueries({ queryKey: ["samples"] });
-    } finally {
-      setScanning(false);
+    const result = await startImportScan();
+    if (result.already_running) {
+      message.info("已经有一个扫描在后台跑了，直接看进度");
     }
+    startPolling();
   };
+
+  const isRunning = progress?.status === "running";
 
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" onClick={handleScan} loading={scanning}>
-          扫描 NAS data_raw/ 导入新样本
+        <Button type="primary" onClick={handleScan} disabled={isRunning}>
+          立即扫描一次
         </Button>
-        <Button onClick={() => refetch()}>刷新</Button>
+        <Button onClick={() => refetch()}>刷新列表</Button>
+        <Typography.Text type="secondary">系统每 10 分钟自动扫描一次新数据，通常不用手动点</Typography.Text>
       </Space>
+
+      {progress && (progress.status === "running" || progress.status === "error") && (
+        <div style={{ marginBottom: 16 }}>
+          {progress.status === "running" && (
+            <Progress
+              percent={
+                progress.total_groups ? Math.round((progress.processed / progress.total_groups) * 100) : 0
+              }
+              status="active"
+              format={() => `${progress.processed}/${progress.total_groups || "?"}`}
+            />
+          )}
+          {progress.status === "error" && (
+            <Alert type="error" message="扫描出错" description={progress.error_message} showIcon />
+          )}
+        </div>
+      )}
 
       {isLoading ? (
         <Table loading rowKey="id" columns={columns} dataSource={[]} />
