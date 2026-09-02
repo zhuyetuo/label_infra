@@ -49,3 +49,12 @@ class DraftSaveRequest(BaseModel):
 class DraftOut(BaseModel):
     round_no: int
     items: list[LabelItemOut]
+
+
+class TaskCreate(BaseModel):
+    sample_id: int
+    task_type: TaskType
+    # 留空 = 整段样本的长任务；都填 = 样本内子时间段的短任务（决策②，两者可并存）
+    segment_start_ms: int | None = None
+    segment_end_ms: int | None = None
+    assigned_to: int | None = None  # 预指派给某标注员；留空 = 开放任务池

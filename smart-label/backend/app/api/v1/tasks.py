@@ -8,17 +8,38 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.sample import Sample
 from app.models.task import Task
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, TaskOut
+from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, TaskCreate, TaskOut
 from app.services.task_scope import apply_task_scope
 from app.services.task_service import TaskConflictError, claim_task, heartbeat, save_draft, submit_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)):
+    sample = await db.get(Sample, body.sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+
+    task = Task(
+        sample_id=body.sample_id,
+        task_type=body.task_type,
+        segment_start_ms=body.segment_start_ms,
+        segment_end_ms=body.segment_end_ms,
+        assigned_to=body.assigned_to,
+        created_by=admin.id,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return ok(TaskOut.model_validate(task).model_dump())
 
 
 @router.get("")

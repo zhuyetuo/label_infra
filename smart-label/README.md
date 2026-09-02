@@ -9,6 +9,7 @@
 - [x] 首个管理员：Web端 `/auth/bootstrap-admin`（仅数据库无用户时可调用一次）
 - [x] 任务认领/心跳/草稿/提交 API + 超时自动回收定时任务（`app/workers/scheduler.py`）
 - [x] 审核认领/通过/驳回 API（驳回后草稿自动拷贝到新一轮，不用重标）
+- [x] 样本导入：扫描 NAS `data_raw/` 按会话分组3路视频+CSV（`POST /samples/import-scan`）+ 手动建任务（`POST /tasks`）
 - [ ] IMU LTTB 降采样服务（`app/api/v1/imu.py`，TODO）
 - [ ] Clip 切片异步队列 + SSE 通知（`app/api/v1/clips.py`，TODO）
 - [ ] 统计看板（`app/api/v1/dashboard.py`，TODO）
