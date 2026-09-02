@@ -5,6 +5,8 @@
 export class TimeBus {
   private timeListeners: ((sec: number) => void)[] = [];
   private seekHandler: ((sec: number) => void) | null = null;
+  private pendingSec: number | null = null;
+  private rafId: number | null = null;
 
   onTime(cb: (sec: number) => void): () => void {
     this.timeListeners.push(cb);
@@ -13,8 +15,18 @@ export class TimeBus {
     };
   }
 
+  // 3路视频各自都会触发 timeupdate，同一帧内可能收到好几次上报；
+  // 用 rAF 合并成每帧最多一次通知，避免图表在一帧内被重复redraw导致卡顿。
   reportTime(sec: number): void {
-    for (const cb of this.timeListeners) cb(sec);
+    this.pendingSec = sec;
+    if (this.rafId != null) return;
+    this.rafId = requestAnimationFrame(() => {
+      this.rafId = null;
+      if (this.pendingSec == null) return;
+      const s = this.pendingSec;
+      this.pendingSec = null;
+      for (const cb of this.timeListeners) cb(s);
+    });
   }
 
   setSeekHandler(fn: ((sec: number) => void) | null): void {

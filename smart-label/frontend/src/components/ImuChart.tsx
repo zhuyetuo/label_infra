@@ -131,6 +131,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
             drag: { x: false, y: false, setScale: false },
             sync: { key: syncKey, setSeries: false },
           },
+          legend: { show: false },
           scales: { x: { time: true } },
           axes: [{ show: isLast }, {}],
           series: [
@@ -138,7 +139,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
             { label: c.label, stroke: c.color, width: 1.5 },
           ],
           hooks: { setScale: [onScaleChange(i)] },
-          plugins: [dragPanPlugin(onClickSeek), wheelZoomPlugin(), playheadPlugin(playheadState)],
+          plugins: [dragPanPlugin(onClickSeek), wheelZoomPlugin(), playheadPlugin(playheadState, i === 0)],
         };
 
         plotRefs.current[i] = new uPlot(opts, [t0, series[c.key]], container);
@@ -167,7 +168,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        滚轮缩放 / 按住拖动左右平移 / 单击跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置）
+        Shift+滚轮缩放 / 按住拖动左右平移 / 单击跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置，旁边标注的是当前时间）
       </div>
       {CHANNELS.map((c, i) => (
         <div
@@ -181,8 +182,10 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   );
 }
 
-// 画一条跟随视频播放位置的竖线，跟鼠标悬停的十字线是两码事（互不干扰）
-function playheadPlugin(stateRef: { current: number | null }) {
+// 画一条跟随视频播放位置的竖线，跟鼠标悬停的十字线是两码事（互不干扰）；
+// 不再用 uPlot 默认的居中图例展示当前时间/数值，改成直接标注在竖线旁边，
+// 只在第一张图（showLabel）画文字，避免6张图都重复显示同样的时间。
+function playheadPlugin(stateRef: { current: number | null }, showLabel: boolean) {
   return {
     hooks: {
       draw: (u: uPlot) => {
@@ -198,6 +201,18 @@ function playheadPlugin(stateRef: { current: number | null }) {
         ctx.moveTo(x, u.bbox.top);
         ctx.lineTo(x, u.bbox.top + u.bbox.height);
         ctx.stroke();
+
+        if (showLabel) {
+          ctx.setLineDash([]);
+          const label = formatTimestamp(stateRef.current);
+          ctx.font = "12px sans-serif";
+          const textWidth = ctx.measureText(label).width;
+          const nearRightEdge = x + 6 + textWidth > u.bbox.left + u.bbox.width;
+          const labelX = nearRightEdge ? x - 6 - textWidth : x + 6;
+          ctx.fillStyle = "#ff0000";
+          ctx.textBaseline = "top";
+          ctx.fillText(label, labelX, u.bbox.top + 2);
+        }
         ctx.restore();
       },
     },
@@ -223,6 +238,7 @@ function wheelZoomPlugin() {
         over.addEventListener(
           "wheel",
           (e: WheelEvent) => {
+            if (!e.shiftKey) return; // 不按shift就是正常滚动页面，不缩放
             e.preventDefault();
             const { left } = u.cursor;
             if (left == null) return;

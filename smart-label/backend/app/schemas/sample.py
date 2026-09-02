@@ -34,6 +34,7 @@ class SampleMediaOut(BaseModel):
     video2_id: int | None
     video3_id: int | None
     csv_id: int | None
+    video_fps: float | None
 
 
 class ScanStartResult(BaseModel):
