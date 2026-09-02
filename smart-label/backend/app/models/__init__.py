@@ -6,6 +6,7 @@ from app.models.background_job import BackgroundJob
 from app.models.clip import ClipJob
 from app.models.label import LabelDefinition
 from app.models.media_file import MediaFile
+from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task
@@ -13,6 +14,7 @@ from app.models.user import User
 
 __all__ = [
     "User",
+    "Project",
     "Sample",
     "Task",
     "LabelDefinition",

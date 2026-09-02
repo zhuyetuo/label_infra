@@ -1,11 +1,15 @@
 import request from "@/utils/request";
 import type { Draft, Task, TaskType } from "@/types";
 
-export const listTasks = () => request.get<never, Task[]>("/tasks");
+export const listTasks = (projectId?: number) =>
+  request.get<never, Task[]>("/tasks", {
+    params: projectId == null ? undefined : { project_id: projectId },
+  });
 
 export const getTask = (id: number) => request.get<never, Task>(`/tasks/${id}`);
 
 export const createTask = (body: {
+  project_id: number;
   sample_id: number;
   task_type: TaskType;
   segment_start_ms?: number;

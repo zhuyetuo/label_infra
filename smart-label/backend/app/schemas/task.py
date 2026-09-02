@@ -9,6 +9,7 @@ class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    project_id: int
     sample_id: int
     task_type: TaskType
     status: TaskStatus
@@ -52,6 +53,7 @@ class DraftOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    project_id: int
     sample_id: int
     task_type: TaskType
     # 留空 = 整段样本的长任务；都填 = 样本内子时间段的短任务（决策②，两者可并存）

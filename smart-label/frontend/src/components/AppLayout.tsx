@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/authStore";
 const { Header, Content, Sider } = Layout;
 
 const ALL_ITEMS = [
+  { key: "/projects", label: "项目", roles: ["admin", "annotator", "reviewer"] },
   { key: "/tasks", label: "任务", roles: ["admin", "annotator", "reviewer"] },
   { key: "/reviews", label: "审核", roles: ["admin", "reviewer"] },
   { key: "/samples", label: "样本", roles: ["admin"] },

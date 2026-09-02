@@ -11,7 +11,7 @@ export default function Reviews() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const { data, isLoading } = useQuery({ queryKey: ["review-queue"], queryFn: reviewQueue });
-  const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: listLabels });
+  const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
 
   const [rejectTaskId, setRejectTaskId] = useState<number | null>(null);
   const [comment, setComment] = useState("");
