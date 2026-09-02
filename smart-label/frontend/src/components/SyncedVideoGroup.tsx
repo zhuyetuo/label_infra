@@ -33,6 +33,7 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
   const isProgrammatic = useRef(false);
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
+  const [totalFrames, setTotalFrames] = useState<number | null>(null);
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
@@ -131,6 +132,24 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
     });
     return unsubscribe;
   }, [bus, fps]);
+
+  // 总帧数从视频元数据的 duration 算出来（duration*fps 四舍五入），不是瞎写的
+  useEffect(() => {
+    if (!fps) {
+      setTotalFrames(null);
+      return;
+    }
+    const video = refs.current[0];
+    if (!video) return;
+    const update = () => {
+      if (video.duration && Number.isFinite(video.duration)) {
+        setTotalFrames(Math.round(video.duration * fps));
+      }
+    };
+    update();
+    video.addEventListener("loadedmetadata", update);
+    return () => video.removeEventListener("loadedmetadata", update);
+  }, [videos, fps]);
 
   // 画面缩放/平移：按住shift+滚轮缩放，按住shift+左键拖拽平移；双击复原。
   // 直接操作DOM的transform，不进React状态，避免拖拽过程中的频繁重渲染。
@@ -237,8 +256,16 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
             <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
               帧：
             </Typography.Text>
-            <InputNumber size="small" min={0} value={frame} onChange={handleFrameJump} />
-            <Typography.Text type="secondary">（{fps} fps，画面内 Shift+滚轮缩放 / Shift+拖拽平移）</Typography.Text>
+            <InputNumber
+              size="small"
+              min={0}
+              max={totalFrames ?? undefined}
+              value={frame}
+              onChange={handleFrameJump}
+            />
+            <Typography.Text type="secondary">
+              of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放 / Shift+拖拽平移）
+            </Typography.Text>
           </>
         )}
       </Space>
