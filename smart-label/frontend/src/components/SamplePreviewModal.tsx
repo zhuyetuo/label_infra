@@ -22,6 +22,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   const [hasCsv, setHasCsv] = useState(false);
+  const [fps, setFps] = useState<number | null>(null);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
   const bus = useMemo(() => new TimeBus(), [sampleId]);
 
@@ -29,6 +30,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
     if (sampleId == null) {
       setVideos([]);
       setHasCsv(false);
+      setFps(null);
       return;
     }
     setLoading(true);
@@ -48,6 +50,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       }
       setVideos(vids);
       setHasCsv(media.csv_id != null);
+      setFps(media.video_fps);
       setLoading(false);
     })();
   }, [sampleId]);
@@ -63,7 +66,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       destroyOnClose
     >
       <Spin spinning={loading}>
-        {videos.length > 0 && <SyncedVideoGroup videos={videos} bus={bus} />}
+        {videos.length > 0 && <SyncedVideoGroup videos={videos} bus={bus} fps={fps} />}
         {!loading && videos.length === 0 && (
           <Typography.Text type="secondary">没有找到可播放的视频（可能未走标准导入流程）</Typography.Text>
         )}

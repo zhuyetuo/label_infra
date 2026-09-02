@@ -52,6 +52,7 @@ async def get_sample_media(sample_id: int, db: AsyncSession = Depends(get_db)):
             video2_id=by_path.get(sample.video_cam2_path),
             video3_id=by_path.get(sample.video_cam3_path),
             csv_id=by_path.get(sample.imu_csv_path),
+            video_fps=sample.video_fps,
         ).model_dump()
     )
 

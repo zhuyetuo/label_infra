@@ -8,6 +8,7 @@ export interface SampleMedia {
   video2_id: number | null;
   video3_id: number | null;
   csv_id: number | null;
+  video_fps: number | null;
 }
 
 export const getSampleMedia = (sampleId: number) =>
