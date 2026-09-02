@@ -1,5 +1,15 @@
+export interface Project {
+  id: number;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_by: number;
+  created_at: string;
+}
+
 export interface LabelDefinition {
   id: number;
+  project_id: number;
   code: string;
   display_name: string;
   color: string | null;
@@ -28,6 +38,7 @@ export type TaskType = "from_scratch" | "ai_assisted";
 
 export interface Task {
   id: number;
+  project_id: number;
   sample_id: number;
   task_type: TaskType;
   status: TaskStatus;

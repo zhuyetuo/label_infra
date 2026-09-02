@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Button, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimTask, createTask, deleteTask, listTasks } from "@/api/tasks";
+import { claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import ProjectPicker from "@/components/ProjectPicker";
+import { useProjectStore } from "@/stores/projectStore";
 import { useAuthStore } from "@/stores/authStore";
 import type { Task, TaskStatus } from "@/types";
 
@@ -20,9 +22,18 @@ export default function Tasks() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
-  const { data: tasks, isLoading } = useQuery({ queryKey: ["tasks"], queryFn: listTasks });
+  const projectId = useProjectStore((s) => s.currentProjectId);
+  const setProjectId = useProjectStore((s) => s.setCurrentProjectId);
+  const { data: tasks, isLoading } = useQuery({
+    queryKey: ["tasks", projectId],
+    queryFn: () => listTasks(projectId ?? undefined),
+  });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
-  const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: listLabels });
+  // 标注工作台里的标签按钮要按任务所属项目取，不能把别的项目的标签混进来
+  const { data: labels } = useQuery({
+    queryKey: ["labels", projectId],
+    queryFn: () => listLabels(projectId ?? undefined),
+  });
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
@@ -35,7 +46,11 @@ export default function Tasks() {
     sample_id: number;
     task_type: "from_scratch" | "ai_assisted";
   }) => {
-    await createTask(values);
+    if (projectId == null) {
+      message.warning("请先选择项目");
+      return;
+    }
+    await createTask({ ...values, project_id: projectId });
     message.success("任务已创建");
     setCreateOpen(false);
     createForm.resetFields();
@@ -54,6 +69,12 @@ export default function Tasks() {
     refresh();
   };
 
+  const handleReopen = async (id: number) => {
+    await reopenTask(id);
+    message.success("已退回重标，上一轮内容已带到新一轮");
+    refresh();
+  };
+
   const openWorkspace = (task: Task, readOnly: boolean) => {
     setWorkspaceReadOnly(readOnly);
     setWorkspaceTask(task);
@@ -64,8 +85,9 @@ export default function Tasks() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
+        <ProjectPicker value={projectId} onChange={setProjectId} />
         {role === "admin" && (
-          <Button type="primary" onClick={() => setCreateOpen(true)}>
+          <Button type="primary" disabled={projectId == null} onClick={() => setCreateOpen(true)}>
             新建任务
           </Button>
         )}
@@ -105,6 +127,18 @@ export default function Tasks() {
                   <Button size="small" type="link" onClick={() => openWorkspace(task, !editable)}>
                     {editable ? "编辑标注" : "查看标注"}
                   </Button>
+                  {(role === "admin" || role === "reviewer") &&
+                    (task.status === "APPROVED" || task.status === "REJECTED") && (
+                      <Popconfirm
+                        title="退回重标"
+                        description="轮次+1，这一轮的标注内容会原样带到新一轮，任务回到待认领"
+                        onConfirm={() => handleReopen(task.id)}
+                      >
+                        <Button size="small" type="link">
+                          退回重标
+                        </Button>
+                      </Popconfirm>
+                    )}
                   {role === "admin" && (
                     <Popconfirm
                       title="删除任务"

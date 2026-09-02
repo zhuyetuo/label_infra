@@ -9,6 +9,7 @@ class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    project_id: int
     sample_id: int
     task_type: TaskType
     status: TaskStatus
@@ -52,9 +53,16 @@ class DraftOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    project_id: int
     sample_id: int
     task_type: TaskType
     # 留空 = 整段样本的长任务；都填 = 样本内子时间段的短任务（决策②，两者可并存）
     segment_start_ms: int | None = None
     segment_end_ms: int | None = None
     assigned_to: int | None = None  # 预指派给某标注员；留空 = 开放任务池
+
+
+class ReopenRequest(BaseModel):
+    """退回重标时可以附一句原因，记进 audit_logs 方便追溯。"""
+
+    comment: str | None = None

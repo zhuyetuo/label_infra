@@ -45,6 +45,7 @@ class Task(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("projects.id"), nullable=False, index=True)
     sample_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("samples.id"), nullable=False)
     task_type: Mapped[TaskType] = mapped_column(Enum(TaskType), nullable=False)
     status: Mapped[TaskStatus] = mapped_column(

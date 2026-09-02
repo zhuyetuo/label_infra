@@ -12,11 +12,13 @@ from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.review import ReviewRecord
+from app.models.project import Project
 from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, TaskCreate, TaskOut
+from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, ReopenRequest, TaskCreate, TaskOut
+from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
 from app.services.task_service import TaskConflictError, claim_task, heartbeat, save_draft, submit_task
 
@@ -25,11 +27,15 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 @router.post("", dependencies=[Depends(require_role(UserRole.admin))])
 async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)):
+    project = await db.get(Project, body.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
     sample = await db.get(Sample, body.sample_id)
     if sample is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
 
     task = Task(
+        project_id=body.project_id,
         sample_id=body.sample_id,
         task_type=body.task_type,
         segment_start_ms=body.segment_start_ms,
@@ -40,6 +46,21 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.reviewer))])
+async def reopen(
+    task_id: int,
+    body: ReopenRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把已通过/已驳回的任务退回重标（轮次+1，上一轮内容原样带过去）。"""
+    try:
+        task = await reopen_task(db, task_id, user, body.comment)
+    except ReviewConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())
 
 
@@ -70,8 +91,13 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("")
-async def list_tasks(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    query = apply_task_scope(select(Task), user).order_by(Task.created_at.desc())
+async def list_tasks(
+    project_id: int | None = None, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+):
+    query = apply_task_scope(select(Task), user)
+    if project_id is not None:
+        query = query.where(Task.project_id == project_id)
+    query = query.order_by(Task.created_at.desc())
     result = await db.execute(query)
     tasks = result.scalars().all()
     return ok([TaskOut.model_validate(t).model_dump() for t in tasks])

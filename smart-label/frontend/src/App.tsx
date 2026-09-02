@@ -5,6 +5,7 @@ import Tasks from "@/pages/Tasks";
 import Reviews from "@/pages/Reviews";
 import Samples from "@/pages/Samples";
 import Labels from "@/pages/Labels";
+import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
 
 export default function App() {
@@ -12,6 +13,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route element={<AppLayout />}>
+        <Route path="/projects" element={<Projects />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/reviews" element={<Reviews />} />
         <Route path="/samples" element={<Samples />} />

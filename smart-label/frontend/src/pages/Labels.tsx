@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Button, Form, Input, InputNumber, Modal, Space, Table, Tag, message } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLabel, listLabels, updateLabel } from "@/api/labels";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
+import ProjectPicker from "@/components/ProjectPicker";
+import { useProjectStore } from "@/stores/projectStore";
 import type { LabelDefinition } from "@/types";
 
 interface FormValues {
@@ -14,7 +16,13 @@ interface FormValues {
 
 export default function Labels() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ["labels"], queryFn: listLabels });
+  const projectId = useProjectStore((s) => s.currentProjectId);
+  const setProjectId = useProjectStore((s) => s.setCurrentProjectId);
+  const { data, isLoading } = useQuery({
+    queryKey: ["labels", projectId],
+    queryFn: () => listLabels(projectId ?? undefined),
+    enabled: projectId != null,
+  });
   const [editing, setEditing] = useState<LabelDefinition | null>(null);
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<FormValues>();
@@ -54,7 +62,11 @@ export default function Labels() {
       });
       message.success("已保存");
     } else {
-      await createLabel(values);
+      if (projectId == null) {
+        message.warning("请先选择项目");
+        return;
+      }
+      await createLabel({ ...values, project_id: projectId });
       message.success("创建成功");
     }
     setOpen(false);
@@ -65,10 +77,14 @@ export default function Labels() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" onClick={openCreate}>
+        <ProjectPicker value={projectId} onChange={setProjectId} />
+        <Button type="primary" disabled={projectId == null} onClick={openCreate}>
           新建标签
         </Button>
       </Space>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        标签属于项目：不同项目要标的东西不一样，各自维护自己的标签，互不影响。
+      </Typography.Paragraph>
       <Table
         rowKey="id"
         loading={isLoading}
