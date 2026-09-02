@@ -14,11 +14,41 @@ from app.core.security import (
     verify_password,
 )
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenPair
+from app.schemas.bootstrap import BootstrapAdminRequest
 from app.schemas.envelope import ok
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/bootstrap-status")
+async def bootstrap_status(db: AsyncSession = Depends(get_db)):
+    """前端可用这个接口判断：要不要显示"创建首个管理员"引导页，还是正常登录页。"""
+    count = (await db.execute(select(User.id).limit(1))).scalar_one_or_none()
+    return ok({"needs_bootstrap": count is None})
+
+
+@router.post("/bootstrap-admin")
+async def bootstrap_admin(body: BootstrapAdminRequest, db: AsyncSession = Depends(get_db)):
+    """
+    只有数据库里一个用户都没有时才能调用，成功一次后永久失效（决策⑥的安全版本：
+    不是"谁先注册谁是管理员"，而是"部署后自己立刻调一次，之后这个接口对任何人都返回403"）。
+    """
+    exists = (await db.execute(select(User.id).limit(1))).scalar_one_or_none()
+    if exists is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "已存在账号，无法再创建首个管理员")
+
+    admin = User(
+        username=body.username,
+        display_name=body.display_name,
+        role=UserRole.admin,
+        password_hash=hash_password(body.password),
+        must_change_password=False,
+    )
+    db.add(admin)
+    await db.commit()
+    return ok(msg="首个管理员创建成功，请使用该账号登录")
 
 
 @router.post("/login")
