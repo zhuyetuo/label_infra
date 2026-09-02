@@ -63,6 +63,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   const startEpochRef = useRef<number>(0);
   const fetchSeqRef = useRef(0);
   const syncingRef = useRef(false);
+  const draggingRef = useRef(false);
 
   useEffect(() => {
     let disposed = false;
@@ -139,14 +140,41 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
             { label: c.label, stroke: c.color, width: 1.5 },
           ],
           hooks: { setScale: [onScaleChange(i)] },
-          plugins: [dragPanPlugin(onClickSeek), wheelZoomPlugin(), playheadPlugin(playheadState, i === 0)],
+          plugins: [
+            dragPanPlugin(onClickSeek, playheadState, draggingRef),
+            wheelZoomPlugin(),
+            playheadPlugin(playheadState, i === 0),
+          ],
         };
 
         plotRefs.current[i] = new uPlot(opts, [t0, series[c.key]], container);
       });
 
+      // 如果当前是放大状态（不是整体视图），播放头走到可视范围右边缘时，
+      // 自动把可视窗口往前挪，让播放头始终留在视野里（回退到窗口左侧10%处）；
+      // 走到左边缘同理（比如用户手动往回拖了一段）。完全缩小到整体视图时不用跟。
+      const followPlayhead = (epoch: number) => {
+        if (draggingRef.current) return;
+        const first = plotRefs.current[0];
+        if (!first) return;
+        const { min, max } = first.scales.x;
+        if (min == null || max == null) return;
+        const width = max - min;
+        if (width >= durationRef.current / 1000 - 0.01) return; // 整体视图不用跟
+        const rightMargin = width * 0.02;
+        const leftMargin = width * 0.02;
+        if (epoch <= max - rightMargin && epoch >= min + leftMargin) return;
+        const newMin = epoch - width * 0.1;
+        const newMax = newMin + width;
+        syncingRef.current = true;
+        plotRefs.current.forEach((p) => p?.setScale("x", { min: newMin, max: newMax }));
+        syncingRef.current = false;
+        scheduleRefetch(newMin, newMax);
+      };
+
       const unsubscribe = bus.onTime((sec) => {
         playheadState.current = startEpochRef.current + sec;
+        followPlayhead(playheadState.current);
         plotRefs.current.forEach((p) => p?.redraw());
       });
 
@@ -168,7 +196,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        Shift+滚轮缩放 / 按住拖动左右平移 / 单击跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置，旁边标注的是当前时间）
+        Shift+滚轮缩放 / 按住拖动左右平移 / 单击或拖动红色播放头跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置，旁边标注的是当前时间）
       </div>
       {CHANNELS.map((c, i) => (
         <div
@@ -194,16 +222,14 @@ function playheadPlugin(stateRef: { current: number | null }, showLabel: boolean
         if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
         const ctx = u.ctx;
         ctx.save();
-        ctx.strokeStyle = "#ff0000";
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "#e60000";
+        ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(x, u.bbox.top);
         ctx.lineTo(x, u.bbox.top + u.bbox.height);
         ctx.stroke();
 
         if (showLabel) {
-          ctx.setLineDash([]);
           const label = formatTimestamp(stateRef.current);
           ctx.font = "12px sans-serif";
           const textWidth = ctx.measureText(label).width;
@@ -260,9 +286,18 @@ function wheelZoomPlugin() {
   };
 }
 
-// 按住拖动左右平移（不是框选放大）；如果几乎没移动就当作一次单击，触发跳转视频
-function dragPanPlugin(onClickSeek: (epochVal: number) => void) {
+const PLAYHEAD_GRAB_PX = 8;
+
+// 按住拖动左右平移（不是框选放大）；如果几乎没移动就当作一次单击，触发跳转视频。
+// 如果按下的位置刚好在播放头竖线附近，则改成直接拖拽播放头来跳转视频播放位置
+// （拖拽期间暂停自动跟随，见 followPlayhead）。
+function dragPanPlugin(
+  onClickSeek: (epochVal: number) => void,
+  playheadState: { current: number | null },
+  draggingPlayheadRef: { current: boolean }
+) {
   let dragging = false;
+  let seekDragging = false;
   let startMin = 0;
   let startMax = 0;
   let startRelX = 0;
@@ -277,19 +312,39 @@ function dragPanPlugin(onClickSeek: (epochVal: number) => void) {
 
         const onMouseDown = (e: MouseEvent) => {
           if (e.button !== 0) return;
-          dragging = true;
           maxMoveDistance = 0;
-          over.style.cursor = "grabbing";
           overRectLeft = over.getBoundingClientRect().left;
           startRelX = e.clientX - overRectLeft;
+
+          if (playheadState.current != null) {
+            // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
+            // e.clientX 一样是 CSS 像素坐标（DOM鼠标坐标），所以不能传 true，
+            // 否则在 devicePixelRatio != 1 的屏幕上，附近判定会完全偏掉。
+            const playheadX = u.valToPos(playheadState.current, "x", false);
+            if (Math.abs(playheadX - startRelX) <= PLAYHEAD_GRAB_PX) {
+              seekDragging = true;
+              draggingPlayheadRef.current = true;
+              over.style.cursor = "ew-resize";
+              onClickSeek(u.posToVal(startRelX, "x"));
+              e.preventDefault();
+              return;
+            }
+          }
+
+          dragging = true;
+          over.style.cursor = "grabbing";
           startMin = u.scales.x.min!;
           startMax = u.scales.x.max!;
           e.preventDefault();
         };
 
         const onMouseMove = (e: MouseEvent) => {
-          if (!dragging) return;
           const relX = e.clientX - overRectLeft;
+          if (seekDragging) {
+            onClickSeek(u.posToVal(relX, "x"));
+            return;
+          }
+          if (!dragging) return;
           maxMoveDistance = Math.max(maxMoveDistance, Math.abs(relX - startRelX));
           const v0 = u.posToVal(startRelX, "x");
           const v1 = u.posToVal(relX, "x");
@@ -298,6 +353,12 @@ function dragPanPlugin(onClickSeek: (epochVal: number) => void) {
         };
 
         const onMouseUp = (e: MouseEvent) => {
+          if (seekDragging) {
+            seekDragging = false;
+            draggingPlayheadRef.current = false;
+            over.style.cursor = "grab";
+            return;
+          }
           if (!dragging) return;
           dragging = false;
           over.style.cursor = "grab";
