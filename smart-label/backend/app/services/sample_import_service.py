@@ -1,5 +1,6 @@
 """
-扫描 NAS 上 data_raw/ 目录，按会话前缀分组 3路视频+IMU CSV，写入 samples 表。
+扫描 NAS 上 data_raw/ 目录，按会话前缀分组 2或3路视频+IMU CSV，写入 samples 表
+（cam1+cam2 必须都有，cam3 可选，兼容早期只录2路的历史数据）。
 沿用 label_studio/upload_server.py 里已验证过的多摄像头文件名分组逻辑：
     multicam_{date}_{time}_cam{N}_imu{N}_...raw.{mp4,csv}
 会话前缀 = 文件名去掉 "_cam{N}..." 之后的部分。
@@ -115,10 +116,11 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     for session_key, cams in groups.items():
         _progress.processed += 1
 
-        if not all(c in cams for c in (1, 2, 3)):
-            _progress.detail.append(f"跳过 {session_key}：缺少完整的cam1/2/3")
+        # 至少要有 cam1+cam2 两路视频；cam3 是可选的（部分历史数据只有2路）
+        if not all(c in cams for c in (1, 2)):
+            _progress.detail.append(f"跳过 {session_key}：缺少cam1/cam2")
             continue
-        if any("mp4" not in cams[c] for c in (1, 2, 3)):
+        if any("mp4" not in cams[c] for c in (1, 2)) or (3 in cams and "mp4" not in cams[3]):
             _progress.detail.append(f"跳过 {session_key}：缺少视频文件")
             continue
 
@@ -127,12 +129,12 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             _progress.skipped_existing += 1
             continue
 
-        csv_rel = cams[1].get("csv") or next((cams[c]["csv"] for c in (2, 3) if "csv" in cams[c]), None)
+        csv_rel = cams[1].get("csv") or next((cams[c]["csv"] for c in (2, 3) if c in cams and "csv" in cams[c]), None)
         if csv_rel is None:
             _progress.detail.append(f"跳过 {session_key}：找不到IMU CSV")
             continue
 
-        cam_paths = {c: cams[c]["mp4"] for c in (1, 2, 3)}
+        cam_paths = {c: cams[c]["mp4"] for c in (1, 2, 3) if c in cams and "mp4" in cams[c]}
         all_files = [*cam_paths.values(), csv_rel]
         missing = [p for p in all_files if not os.path.isfile(os.path.join(nas_root, p))]
 
@@ -149,7 +151,7 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             session_date=_parse_session_date(session_key),
             video_cam1_path=cam_paths[1],
             video_cam2_path=cam_paths[2],
-            video_cam3_path=cam_paths[3],
+            video_cam3_path=cam_paths.get(3),
             imu_csv_path=csv_rel,
             video_duration_sec=probe["duration_sec"] if probe else None,
             video_fps=probe["fps"] if probe else None,
@@ -166,12 +168,9 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         try:
             async with db.begin_nested():
                 db.add(sample)
-                for rel_path, file_type in [
-                    (cam_paths[1], MediaFileType.raw_video),
-                    (cam_paths[2], MediaFileType.raw_video),
-                    (cam_paths[3], MediaFileType.raw_video),
-                    (csv_rel, MediaFileType.raw_imu_csv),
-                ]:
+                media_entries = [(p, MediaFileType.raw_video) for p in cam_paths.values()]
+                media_entries.append((csv_rel, MediaFileType.raw_imu_csv))
+                for rel_path, file_type in media_entries:
                     media_exists = (
                         await db.execute(select(MediaFile.id).where(MediaFile.relative_path == rel_path))
                     ).scalar_one_or_none()

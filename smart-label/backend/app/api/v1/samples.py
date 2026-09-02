@@ -1,5 +1,5 @@
 """
-样本导入/查询（admin）。扫描 NAS data_raw/ 目录，按会话分组3路视频+IMU CSV写入 samples 表。
+样本导入/查询（admin）。扫描 NAS data_raw/ 目录，按会话分组2或3路视频+IMU CSV写入 samples 表。
 调度器（app/workers/scheduler.py）每10分钟自动扫一次一次新数据，这里的手动触发只是
 "不想等，立刻扫一次"的快捷方式，不是唯一入口。
 """
@@ -40,7 +40,11 @@ async def get_sample_media(sample_id: int, db: AsyncSession = Depends(get_db)):
     if sample is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
 
-    paths = [sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path, sample.imu_csv_path]
+    paths = [
+        p
+        for p in (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path, sample.imu_csv_path)
+        if p is not None
+    ]
     rows = (await db.execute(select(MediaFile.id, MediaFile.relative_path).where(MediaFile.relative_path.in_(paths)))).all()
     by_path = {path: mid for mid, path in rows}
 
