@@ -5,12 +5,13 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
@@ -40,6 +41,32 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     await db.commit()
     await db.refresh(task)
     return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin))])
+async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    管理员删除任务。任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，
+    所以要按 标签条目 -> 标注记录 -> 审核记录 -> 任务 的顺序清掉，不能直接删任务。
+    被它当作父任务的子任务不跟着删，只把 parent_task_id 置空，避免误伤已拆分的短任务。
+    """
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+
+    record_ids = (
+        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id == task_id))).scalars().all()
+    )
+    if record_ids:
+        await db.execute(
+            delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids))
+        )
+    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id == task_id))
+    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id == task_id))
+    await db.execute(update(Task).where(Task.parent_task_id == task_id).values(parent_task_id=None))
+    await db.execute(delete(Task).where(Task.id == task_id))
+    await db.commit()
+    return ok(msg="任务已删除")
 
 
 @router.get("")
