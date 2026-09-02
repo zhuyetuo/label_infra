@@ -80,22 +80,51 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
 
       const toEpoch = (msArr: number[]) => msArr.map((ms) => startEpochRef.current + ms / 1000);
 
+      // 多取一屏宽度的余量（左右各50%），这样平移/拖播放头时窗口稍微移动一点
+      // 还落在已经取回来的数据里，曲线不会先变空白再补上。
+      const RANGE_PADDING = 0.5;
+
       const refetchForRange = async (minEpoch: number, maxEpoch: number) => {
         const seq = ++fetchSeqRef.current;
-        const startMs = Math.round(Math.max(0, (minEpoch - startEpochRef.current) * 1000));
-        const endMs = Math.round(Math.min(durationRef.current, (maxEpoch - startEpochRef.current) * 1000));
+        const pad = (maxEpoch - minEpoch) * RANGE_PADDING;
+        const startMs = Math.round(Math.max(0, (minEpoch - pad - startEpochRef.current) * 1000));
+        const endMs = Math.round(
+          Math.min(durationRef.current, (maxEpoch + pad - startEpochRef.current) * 1000)
+        );
         const s = await getSeries(sampleId, startMs, endMs);
         if (seq !== fetchSeqRef.current || plotRefs.current.some((p) => !p)) return;
         const t = toEpoch(s.t);
+
+        // 注意：setData 的第二个参数不能传 false。传 false 时 uPlot 会跳过整个
+        // commit，X轴对应的数据下标区间（u.idxs）还停留在旧数组上，换成新数组后
+        // 画出来的点就整段跑到视窗外面去了，表现就是"曲线一片空白"。
+        // 所以这里让它正常重置（顺带把Y轴重新自适应），再把视窗恢复回去。
+        const first = plotRefs.current[0]!;
+        const viewMin = first.scales.x.min!;
+        const viewMax = first.scales.x.max!;
+
+        syncingRef.current = true;
         CHANNELS.forEach((c, i) => {
-          plotRefs.current[i]?.setData([t, s[c.key]]);
+          const plot = plotRefs.current[i];
+          if (!plot) return;
+          plot.setData([t, s[c.key]]);
+          plot.setScale("x", { min: viewMin, max: viewMax });
         });
+        syncingRef.current = false;
+
+        // 请求发出去之后视窗可能又被拖走了，这一批数据不一定盖得住当前视窗，
+        // 那就再补一次（只在还没顶到整段数据边界时补，避免来回空跑）。
+        const reqStart = startEpochRef.current + startMs / 1000;
+        const reqEnd = startEpochRef.current + endMs / 1000;
+        if ((viewMin < reqStart && startMs > 0) || (viewMax > reqEnd && endMs < durationRef.current)) {
+          scheduleRefetch(viewMin, viewMax);
+        }
       };
 
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
       const scheduleRefetch = (min: number, max: number) => {
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => refetchForRange(min, max), 250);
+        debounceTimer = setTimeout(() => refetchForRange(min, max), 120);
       };
 
       const onScaleChange = (originIdx: number) => (u: uPlot, key: string) => {
@@ -115,6 +144,12 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
       const onClickSeek = (epochVal: number) => {
         bus.seek(epochVal - startEpochRef.current);
       };
+
+      // 整段数据的时间范围，拖到边缘自动滚动时用它做边界，不能滚出数据之外
+      const getFullRange = () => ({
+        min: startEpochRef.current,
+        max: startEpochRef.current + durationRef.current / 1000,
+      });
 
       const syncKey = `imu-sync-${sampleId}`;
       const t0 = toEpoch(series.t);
@@ -141,7 +176,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
           ],
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
-            dragPanPlugin(onClickSeek, playheadState, draggingRef),
+            dragPanPlugin(onClickSeek, playheadState, draggingRef, getFullRange),
             wheelZoomPlugin(),
             playheadPlugin(playheadState, i === 0),
           ],
@@ -196,7 +231,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        Shift+滚轮缩放 / 按住拖动左右平移 / 单击或拖动红色播放头跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置，旁边标注的是当前时间）
+        Shift+滚轮缩放 / 按住拖动左右平移 / 单击或拖动黑色播放头跳转视频到该时刻（放大后拖到边缘会自动继续滚动）/ 双击恢复整体视图
       </div>
       {CHANNELS.map((c, i) => (
         <div
@@ -222,7 +257,7 @@ function playheadPlugin(stateRef: { current: number | null }, showLabel: boolean
         if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
         const ctx = u.ctx;
         ctx.save();
-        ctx.strokeStyle = "#e60000";
+        ctx.strokeStyle = "#000000";
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(x, u.bbox.top);
@@ -235,7 +270,7 @@ function playheadPlugin(stateRef: { current: number | null }, showLabel: boolean
           const textWidth = ctx.measureText(label).width;
           const nearRightEdge = x + 6 + textWidth > u.bbox.left + u.bbox.width;
           const labelX = nearRightEdge ? x - 6 - textWidth : x + 6;
-          ctx.fillStyle = "#ff0000";
+          ctx.fillStyle = "#000000";
           ctx.textBaseline = "top";
           ctx.fillText(label, labelX, u.bbox.top + 2);
         }
@@ -287,6 +322,8 @@ function wheelZoomPlugin() {
 }
 
 const PLAYHEAD_GRAB_PX = 8;
+const EDGE_SCROLL_PX = 40; // 距离左右边缘多少像素内开始自动滚动
+const EDGE_SCROLL_RATIO = 0.012; // 每帧滚动可视宽度的比例
 
 // 按住拖动左右平移（不是框选放大）；如果几乎没移动就当作一次单击，触发跳转视频。
 // 如果按下的位置刚好在播放头竖线附近，则改成直接拖拽播放头来跳转视频播放位置
@@ -294,7 +331,8 @@ const PLAYHEAD_GRAB_PX = 8;
 function dragPanPlugin(
   onClickSeek: (epochVal: number) => void,
   playheadState: { current: number | null },
-  draggingPlayheadRef: { current: boolean }
+  draggingPlayheadRef: { current: boolean },
+  getFullRange: () => { min: number; max: number }
 ) {
   let dragging = false;
   let seekDragging = false;
@@ -303,6 +341,8 @@ function dragPanPlugin(
   let startRelX = 0;
   let overRectLeft = 0;
   let maxMoveDistance = 0;
+  let lastClientX = 0;
+  let autoScrollRaf: number | null = null;
 
   return {
     hooks: {
@@ -310,11 +350,64 @@ function dragPanPlugin(
         const over = u.over;
         over.style.cursor = "grab";
 
+        const stopAutoScroll = () => {
+          if (autoScrollRaf != null) {
+            cancelAnimationFrame(autoScrollRaf);
+            autoScrollRaf = null;
+          }
+        };
+
+        // 拖播放头拖到可视区左右边缘时，持续把窗口往那个方向滚，
+        // 这样放大之后也能一直往前/往后刷，不会拖到边就卡住不动了。
+        // 越靠边滚得越快，滚到整段数据的头尾为止。
+        const autoScrollStep = () => {
+          autoScrollRaf = null;
+          if (!seekDragging) return;
+
+          const w = over.clientWidth;
+          const relX = lastClientX - overRectLeft;
+          let dir = 0;
+          let strength = 0;
+          if (relX > w - EDGE_SCROLL_PX) {
+            dir = 1;
+            strength = Math.min(1, (relX - (w - EDGE_SCROLL_PX)) / EDGE_SCROLL_PX);
+          } else if (relX < EDGE_SCROLL_PX) {
+            dir = -1;
+            strength = Math.min(1, (EDGE_SCROLL_PX - relX) / EDGE_SCROLL_PX);
+          }
+
+          if (dir !== 0) {
+            const min = u.scales.x.min!;
+            const max = u.scales.x.max!;
+            const width = max - min;
+            const full = getFullRange();
+            const step = width * EDGE_SCROLL_RATIO * (0.25 + strength) * dir;
+            let nMin = min + step;
+            let nMax = max + step;
+            if (nMin < full.min) {
+              nMin = full.min;
+              nMax = nMin + width;
+            }
+            if (nMax > full.max) {
+              nMax = full.max;
+              nMin = nMax - width;
+            }
+            if (nMin !== min) {
+              u.setScale("x", { min: nMin, max: nMax });
+              // 播放头钉在光标所在的边缘上，跟着窗口一起走
+              onClickSeek(u.posToVal(Math.max(0, Math.min(w, relX)), "x"));
+            }
+          }
+
+          autoScrollRaf = requestAnimationFrame(autoScrollStep);
+        };
+
         const onMouseDown = (e: MouseEvent) => {
           if (e.button !== 0) return;
           maxMoveDistance = 0;
           overRectLeft = over.getBoundingClientRect().left;
           startRelX = e.clientX - overRectLeft;
+          lastClientX = e.clientX;
 
           if (playheadState.current != null) {
             // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
@@ -326,6 +419,8 @@ function dragPanPlugin(
               draggingPlayheadRef.current = true;
               over.style.cursor = "ew-resize";
               onClickSeek(u.posToVal(startRelX, "x"));
+              stopAutoScroll();
+              autoScrollRaf = requestAnimationFrame(autoScrollStep);
               e.preventDefault();
               return;
             }
@@ -339,9 +434,14 @@ function dragPanPlugin(
         };
 
         const onMouseMove = (e: MouseEvent) => {
+          lastClientX = e.clientX;
           const relX = e.clientX - overRectLeft;
           if (seekDragging) {
-            onClickSeek(u.posToVal(relX, "x"));
+            const w = over.clientWidth;
+            // 边缘区域交给 autoScrollStep 处理，这里只管窗口内的常规跟随
+            if (relX >= EDGE_SCROLL_PX && relX <= w - EDGE_SCROLL_PX) {
+              onClickSeek(u.posToVal(relX, "x"));
+            }
             return;
           }
           if (!dragging) return;
@@ -356,6 +456,7 @@ function dragPanPlugin(
           if (seekDragging) {
             seekDragging = false;
             draggingPlayheadRef.current = false;
+            stopAutoScroll();
             over.style.cursor = "grab";
             return;
           }

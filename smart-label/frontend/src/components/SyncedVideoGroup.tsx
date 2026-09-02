@@ -92,12 +92,34 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
       });
     });
 
-    bus.setSeekHandler((sec) => {
+    // 拖播放头时会以鼠标移动的频率不停发 seek 请求，如果每来一次就直接写
+    // currentTime，浏览器的解码请求会排队堆积，画面反而更新得又慢又顿。
+    // 这里改成"合并最新目标"：上一次 seek 还没完成就先把目标存起来，
+    // 等 seeked 回来立刻跳到最新目标，尽可能快地刷出每一帧。
+    let pendingSeek: number | null = null;
+
+    const applyPendingSeek = () => {
+      if (pendingSeek == null) return;
+      const vids = all();
+      const lead = vids[0];
+      if (!lead || lead.seeking) return;
+      const target = pendingSeek;
+      pendingSeek = null;
       isProgrammatic.current = true;
-      for (const v of all()) v.currentTime = sec;
+      for (const v of vids) v.currentTime = target;
       isProgrammatic.current = false;
-      bus.reportTime(sec);
+      bus.reportTime(target);
+    };
+
+    bus.setSeekHandler((sec) => {
+      pendingSeek = sec;
+      applyPendingSeek();
     });
+
+    const lead = all()[0];
+    const onLeadSeeked = () => applyPendingSeek();
+    lead?.addEventListener("seeked", onLeadSeeked);
+    cleanups.push(() => lead?.removeEventListener("seeked", onLeadSeeked));
 
     // 播放中定期做漂移校正，以第一路为基准
     const driftTimer = setInterval(() => {
@@ -124,13 +146,23 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
   useEffect(() => {
     if (!fps) return;
     let lastUpdate = 0;
+    let trailing: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = bus.onTime((sec) => {
       const now = performance.now();
-      if (now - lastUpdate < 250) return;
+      if (now - lastUpdate < 250) {
+        // 节流会把中间的值丢掉，补一个"最后一次"的延迟更新，
+        // 否则停下来之后帧号会停在上一次节流的旧值上，对不上画面
+        if (trailing) clearTimeout(trailing);
+        trailing = setTimeout(() => setFrame(Math.round(sec * fps)), 260);
+        return;
+      }
       lastUpdate = now;
       setFrame(Math.round(sec * fps));
     });
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (trailing) clearTimeout(trailing);
+    };
   }, [bus, fps]);
 
   // 总帧数从视频元数据的 duration 算出来（duration*fps 四舍五入），不是瞎写的
