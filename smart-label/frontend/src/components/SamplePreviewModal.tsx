@@ -56,7 +56,8 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       open={sampleId != null}
       onCancel={onClose}
       footer={null}
-      width={960}
+      width="95vw"
+      style={{ top: 16 }}
       destroyOnClose
     >
       <Spin spinning={loading}>

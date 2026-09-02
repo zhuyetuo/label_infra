@@ -7,7 +7,7 @@ interface ImuMeta {
   duration_ms: number;
   row_count: number;
   sample_rate_hz: number | null;
-  channels: string[];
+  start_timestamp: string | null;
 }
 
 interface ImuSeries {
@@ -20,8 +20,14 @@ interface ImuSeries {
   gyro_z: number[];
 }
 
-const ACC_COLORS = { acc_x: "#e74c3c", acc_y: "#2ecc71", acc_z: "#3498db" };
-const GYRO_COLORS = { gyro_x: "#e67e22", gyro_y: "#1abc9c", gyro_z: "#9b59b6" };
+const CHANNELS: { key: keyof Omit<ImuSeries, "t">; label: string; color: string }[] = [
+  { key: "acc_x", label: "Acc X", color: "#e74c3c" },
+  { key: "acc_y", label: "Acc Y", color: "#2ecc71" },
+  { key: "acc_z", label: "Acc Z", color: "#3498db" },
+  { key: "gyro_x", label: "Gyro X", color: "#e67e22" },
+  { key: "gyro_y", label: "Gyro Y", color: "#1abc9c" },
+  { key: "gyro_z", label: "Gyro Z", color: "#9b59b6" },
+];
 
 const getMeta = (sampleId: number) => request.get<never, ImuMeta>(`/imu/${sampleId}/meta`);
 const getSeries = (sampleId: number, startMs: number, endMs: number, maxPoints = 1500) =>
@@ -29,119 +35,126 @@ const getSeries = (sampleId: number, startMs: number, endMs: number, maxPoints =
     params: { start_ms: startMs, end_ms: endMs, max_points: maxPoints },
   });
 
-interface Props {
-  sampleId: number;
-  height?: number;
+function formatTimestamp(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+    d.getMinutes()
+  )}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
-// 加速度/角速度单位量级差很大（比如 acc 是 ±2g, gyro 是 ±250deg/s），共用一个Y轴会
-// 把小量级的通道压成直线看不清，所以拆成两张图各自独立Y轴，共享X轴+联动缩放平移。
-export default function ImuChart({ sampleId, height = 180 }: Props) {
-  const accRef = useRef<HTMLDivElement>(null);
-  const gyroRef = useRef<HTMLDivElement>(null);
-  const accPlotRef = useRef<uPlot | null>(null);
-  const gyroPlotRef = useRef<uPlot | null>(null);
+interface Props {
+  sampleId: number;
+  rowHeight?: number;
+}
+
+// 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
+// 面板风格一致），X轴用绝对时间戳（年月日时分秒毫秒），6张图通过手动同步
+// setScale + uPlot cursor.sync 联动缩放/平移/十字线。
+export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
+  const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
+  const startEpochRef = useRef<number>(0);
   const fetchSeqRef = useRef(0);
-  const syncingRef = useRef(false); // 防止两张图互相触发setScale死循环
+  const syncingRef = useRef(false);
 
   useEffect(() => {
     let disposed = false;
 
     (async () => {
       const meta = await getMeta(sampleId);
-      if (disposed || !accRef.current || !gyroRef.current) return;
+      if (disposed || containerRefs.current.some((el) => !el)) return;
       durationRef.current = meta.duration_ms;
+      startEpochRef.current = meta.start_timestamp ? new Date(meta.start_timestamp).getTime() / 1000 : 0;
 
       const series = await getSeries(sampleId, 0, meta.duration_ms);
-      if (disposed || !accRef.current || !gyroRef.current) return;
+      if (disposed) return;
 
-      const tSec = series.t.map((ms) => ms / 1000);
-      const accData: uPlot.AlignedData = [tSec, series.acc_x, series.acc_y, series.acc_z];
-      const gyroData: uPlot.AlignedData = [tSec, series.gyro_x, series.gyro_y, series.gyro_z];
+      const toEpoch = (msArr: number[]) => msArr.map((ms) => startEpochRef.current + ms / 1000);
 
-      const refetchForRange = async (minSec: number, maxSec: number) => {
+      const refetchForRange = async (minEpoch: number, maxEpoch: number) => {
         const seq = ++fetchSeqRef.current;
-        const s = await getSeries(
-          sampleId,
-          Math.round(Math.max(0, minSec * 1000)),
-          Math.round(Math.min(durationRef.current, maxSec * 1000))
-        );
-        if (seq !== fetchSeqRef.current || !accPlotRef.current || !gyroPlotRef.current) return;
-        const t = s.t.map((ms) => ms / 1000);
-        accPlotRef.current.setData([t, s.acc_x, s.acc_y, s.acc_z]);
-        gyroPlotRef.current.setData([t, s.gyro_x, s.gyro_y, s.gyro_z]);
+        const startMs = Math.round(Math.max(0, (minEpoch - startEpochRef.current) * 1000));
+        const endMs = Math.round(Math.min(durationRef.current, (maxEpoch - startEpochRef.current) * 1000));
+        const s = await getSeries(sampleId, startMs, endMs);
+        if (seq !== fetchSeqRef.current || plotRefs.current.some((p) => !p)) return;
+        const t = toEpoch(s.t);
+        CHANNELS.forEach((c, i) => {
+          plotRefs.current[i]?.setData([t, s[c.key]]);
+        });
       };
 
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-      const scheduleRefetch = (minSec: number, maxSec: number) => {
+      const scheduleRefetch = (min: number, max: number) => {
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => refetchForRange(minSec, maxSec), 250);
+        debounceTimer = setTimeout(() => refetchForRange(min, max), 250);
       };
 
-      // 一张图缩放/平移后，把同样的x范围同步到另一张图，并统一触发一次数据刷新
-      const onScaleChange = (source: "acc" | "gyro") => (u: uPlot, key: string) => {
+      const onScaleChange = (originIdx: number) => (u: uPlot, key: string) => {
         if (key !== "x" || syncingRef.current) return;
         const { min, max } = u.scales.x;
         if (min == null || max == null) return;
 
         syncingRef.current = true;
-        const other = source === "acc" ? gyroPlotRef.current : accPlotRef.current;
-        other?.setScale("x", { min, max });
+        plotRefs.current.forEach((p, i) => {
+          if (i !== originIdx) p?.setScale("x", { min, max });
+        });
         syncingRef.current = false;
 
         scheduleRefetch(min, max);
       };
 
       const syncKey = `imu-sync-${sampleId}`;
+      const t0 = toEpoch(series.t);
 
-      const makeOpts = (
-        title: string,
-        colors: Record<string, string>,
-        source: "acc" | "gyro",
-        showXAxis: boolean
-      ): uPlot.Options => ({
-        title,
-        width: (source === "acc" ? accRef.current! : gyroRef.current!).clientWidth,
-        height,
-        cursor: {
-          drag: { x: false, y: false, setScale: false },
-          sync: { key: syncKey, setSeries: false },
-        },
-        scales: { x: { time: false } },
-        axes: [{ show: showXAxis }, {}],
-        series: [
-          { label: "t(s)" },
-          ...Object.entries(colors).map(([label, stroke]) => ({ label, stroke, width: 1.5 })),
-        ],
-        hooks: { setScale: [onScaleChange(source)] },
-        plugins: [dragPanPlugin(), wheelZoomPlugin()],
+      CHANNELS.forEach((c, i) => {
+        const container = containerRefs.current[i];
+        if (!container) return;
+        const isLast = i === CHANNELS.length - 1;
+
+        const opts: uPlot.Options = {
+          title: c.label,
+          width: container.clientWidth,
+          height: rowHeight,
+          cursor: {
+            drag: { x: false, y: false, setScale: false },
+            sync: { key: syncKey, setSeries: false },
+          },
+          scales: { x: { time: true } },
+          axes: [{ show: isLast }, {}],
+          series: [
+            { value: (_u, v) => (v == null ? "" : formatTimestamp(v)) },
+            { label: c.label, stroke: c.color, width: 1.5 },
+          ],
+          hooks: { setScale: [onScaleChange(i)] },
+          plugins: [dragPanPlugin(), wheelZoomPlugin()],
+        };
+
+        plotRefs.current[i] = new uPlot(opts, [t0, series[c.key]], container);
       });
-
-      accPlotRef.current = new uPlot(makeOpts("加速度 Acc (g)", ACC_COLORS, "acc", false), accData, accRef.current);
-      gyroPlotRef.current = new uPlot(
-        makeOpts("角速度 Gyro (deg/s)", GYRO_COLORS, "gyro", true),
-        gyroData,
-        gyroRef.current
-      );
     })();
 
     return () => {
       disposed = true;
-      accPlotRef.current?.destroy();
-      gyroPlotRef.current?.destroy();
-      accPlotRef.current = null;
-      gyroPlotRef.current = null;
+      plotRefs.current.forEach((p) => p?.destroy());
+      plotRefs.current = [];
     };
-  }, [sampleId, height]);
+  }, [sampleId, rowHeight]);
 
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        滚轮缩放 / 按住拖动左右平移 / 双击恢复整体视图（两张图联动）
+        滚轮缩放 / 按住拖动左右平移 / 双击恢复整体视图（六张图联动，鼠标悬停显示精确时间戳）
       </div>
-      <div ref={accRef} />
-      <div ref={gyroRef} style={{ marginTop: 4 }} />
+      {CHANNELS.map((c, i) => (
+        <div
+          key={c.key}
+          ref={(el) => {
+            containerRefs.current[i] = el;
+          }}
+        />
+      ))}
     </div>
   );
 }
@@ -186,7 +199,7 @@ function wheelZoomPlugin() {
   };
 }
 
-// 按住拖动左右平移（不是框选放大）：记录起点时刻的值，跟随鼠标位移量整体平移可视窗口
+// 按住拖动左右平移（不是框选放大）
 function dragPanPlugin() {
   let dragging = false;
   let startMin = 0;

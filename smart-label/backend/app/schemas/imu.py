@@ -6,6 +6,7 @@ class ImuMeta(BaseModel):
     row_count: int
     sample_rate_hz: float | None
     channels: list[str]
+    start_timestamp: str | None
 
 
 class ImuSeries(BaseModel):

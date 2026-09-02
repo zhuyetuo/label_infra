@@ -6,6 +6,7 @@ interface ImuMeta {
   duration_ms: number;
   row_count: number;
   sample_rate_hz: number | null;
+  start_timestamp: string | null;
 }
 
 interface ImuSeries {
@@ -20,7 +21,7 @@ interface ImuSeries {
 
 interface Row {
   key: number;
-  t: number;
+  timestamp: string;
   acc_x: number;
   acc_y: number;
   acc_z: number;
@@ -35,9 +36,17 @@ const getSeries = (sampleId: number, startMs: number, endMs: number, maxPoints: 
     params: { start_ms: startMs, end_ms: endMs, max_points: maxPoints },
   });
 
+function formatTimestamp(epochMs: number): string {
+  const d = new Date(epochMs);
+  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+    d.getMinutes()
+  )}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
 const columns = [
-  { title: "#", dataIndex: "key", width: 70 },
-  { title: "时间(s)", dataIndex: "t", width: 100, render: (v: number) => v.toFixed(3) },
+  { title: "#", dataIndex: "key", width: 60 },
+  { title: "时间戳", dataIndex: "timestamp", width: 200 },
   { title: "acc_x", dataIndex: "acc_x" },
   { title: "acc_y", dataIndex: "acc_y" },
   { title: "acc_z", dataIndex: "acc_z" },
@@ -65,12 +74,13 @@ export default function ImuTable({ sampleId }: Props) {
       const m = await getMeta(sampleId);
       if (disposed) return;
       setMeta(m);
+      const startEpochMs = m.start_timestamp ? new Date(m.start_timestamp).getTime() : 0;
       const s = await getSeries(sampleId, 0, m.duration_ms, 5000);
       if (disposed) return;
       setRows(
         s.t.map((ms, i) => ({
           key: i,
-          t: ms / 1000,
+          timestamp: formatTimestamp(startEpochMs + ms),
           acc_x: s.acc_x[i],
           acc_y: s.acc_y[i],
           acc_z: s.acc_z[i],

@@ -61,9 +61,9 @@ export default function SyncedVideoGroup({ videos }: Props) {
   }, [videos]);
 
   return (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
       {videos.map((v, i) => (
-        <div key={v.label} style={{ flex: "1 1 280px", minWidth: 260 }}>
+        <div key={v.label} style={{ flex: "1 1 420px", minWidth: 380 }}>
           <Typography.Text type="secondary">
             {v.label}
             {i === 0 && "（主控）"}
@@ -75,7 +75,7 @@ export default function SyncedVideoGroup({ videos }: Props) {
             src={v.url}
             controls={i === 0}
             muted={i !== 0}
-            style={{ width: "100%", background: "#000" }}
+            style={{ width: "100%", maxHeight: "45vh", background: "#000" }}
           />
         </div>
       ))}
