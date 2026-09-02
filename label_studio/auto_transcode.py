@@ -87,10 +87,12 @@ def transcode(src: str, dst: str) -> bool:
     if use_gpu:
         cmd = [FFMPEG, "-i", src,
                "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
+               "-g", "25", "-keyint_min", "25", "-sc_threshold", "0",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
     else:
         cmd = [FFMPEG, "-i", src,
                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+               "-g", "25", "-keyint_min", "25", "-sc_threshold", "0",
                "-c:a", "aac", "-movflags", "+faststart", "-y", dst]
 
     result = subprocess.run(cmd, capture_output=True)
