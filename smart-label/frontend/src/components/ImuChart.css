@@ -1,0 +1,14 @@
+/* uPlot 默认标题和图例是居中的，改成左对齐 */
+.u-title {
+  text-align: left !important;
+  padding-left: 4px;
+}
+
+.u-legend {
+  text-align: left !important;
+  margin: 4px 0 0 0 !important;
+}
+
+.u-legend th {
+  text-align: left !important;
+}
