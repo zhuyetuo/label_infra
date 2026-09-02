@@ -58,6 +58,21 @@ interface Props {
   rowHeight?: number;
   /** 已标注的时间段，会以半透明色块画在曲线上（标注工作台用） */
   segments?: ChartSegment[];
+  /** 选中的标签颜色。传了就进入"在波形上拖拽划区间"模式，不传则拖拽=平移 */
+  activeColor?: string | null;
+  onCreateSegment?: (startMs: number, endMs: number) => void;
+  /** 拖已有色块的左右边缘改时间 */
+  onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
+}
+
+// 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
+// 初始化时创建一次，所以统一放在一个 ref 对象里，由 effect 保持更新。
+interface AnnotateCtx {
+  activeColor: string | null;
+  onCreate: ((startMs: number, endMs: number) => void) | null;
+  onResize: ((index: number, startMs: number, endMs: number) => void) | null;
+  pending: { startMs: number; endMs: number; color: string } | null;
+  redrawAll: () => void;
 }
 
 // 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
@@ -65,7 +80,15 @@ interface Props {
 // setScale + uPlot cursor.sync 联动缩放/平移/十字线。
 // 另外通过 bus 跟视频双向联动：视频播放时在6张图上画一条跟随的红色竖线
 // （playheadPlugin，区别于鼠标悬停的十字线），点击曲线任意位置能让视频跳转过去。
-export default function ImuChart({ sampleId, bus, rowHeight = 110, segments }: Props) {
+export default function ImuChart({
+  sampleId,
+  bus,
+  rowHeight = 110,
+  segments,
+  activeColor,
+  onCreateSegment,
+  onResizeSegment,
+}: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -75,6 +98,17 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110, segments }: P
   const draggingRef = useRef(false);
   // 标注色块走 ref 而不是进 effect 依赖，否则每加一条标注就要把6张图全部重建
   const segmentsRef = useRef<ChartSegment[]>(segments ?? []);
+  const annotateRef = useRef<AnnotateCtx>({
+    activeColor: null,
+    onCreate: null,
+    onResize: null,
+    pending: null,
+    redrawAll: () => {},
+  });
+  annotateRef.current.activeColor = activeColor ?? null;
+  annotateRef.current.onCreate = onCreateSegment ?? null;
+  annotateRef.current.onResize = onResizeSegment ?? null;
+  annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw());
 
   useEffect(() => {
     segmentsRef.current = segments ?? [];
@@ -192,8 +226,16 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110, segments }: P
           ],
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
-            segmentBandPlugin(segmentsRef, () => startEpochRef.current, i === 0),
-            dragPanPlugin(onClickSeek, playheadState, draggingRef, getFullRange),
+            segmentBandPlugin(segmentsRef, annotateRef, () => startEpochRef.current, i === 0),
+            dragPanPlugin(
+              onClickSeek,
+              playheadState,
+              draggingRef,
+              getFullRange,
+              annotateRef,
+              segmentsRef,
+              () => startEpochRef.current
+            ),
             wheelZoomPlugin(),
             playheadPlugin(playheadState, i === 0),
           ],
@@ -266,6 +308,7 @@ export default function ImuChart({ sampleId, bus, rowHeight = 110, segments }: P
 // 这样一眼能看出哪段已经标了什么行为。
 function segmentBandPlugin(
   segmentsRef: { current: ChartSegment[] },
+  annotateRef: { current: AnnotateCtx },
   getStartEpoch: () => number,
   showLabel: boolean
 ) {
@@ -273,7 +316,18 @@ function segmentBandPlugin(
     hooks: {
       // drawClear 在清空画布之后、画曲线之前触发，所以色块会垫在曲线底下
       drawClear: (u: uPlot) => {
-        const segs = segmentsRef.current;
+        const pending = annotateRef.current.pending;
+        const segs: ChartSegment[] = pending
+          ? [
+              ...segmentsRef.current,
+              {
+                start_time_ms: pending.startMs,
+                end_time_ms: pending.endMs,
+                color: pending.color,
+                label: "",
+              },
+            ]
+          : segmentsRef.current;
         if (!segs.length) return;
         const startEpoch = getStartEpoch();
         const ctx = u.ctx;
@@ -392,6 +446,8 @@ function wheelZoomPlugin() {
 }
 
 const PLAYHEAD_GRAB_PX = 8;
+const SEGMENT_EDGE_GRAB_PX = 5; // 色块边缘多少像素内按下算"拖边缘改时间"
+const MIN_SEGMENT_MS = 50; // 拖出来太短的当误点丢弃
 const EDGE_SCROLL_PX = 40; // 距离左右边缘多少像素内开始自动滚动
 const EDGE_SCROLL_RATIO = 0.012; // 每帧滚动可视宽度的比例
 
@@ -402,10 +458,18 @@ function dragPanPlugin(
   onClickSeek: (epochVal: number) => void,
   playheadState: { current: number | null },
   draggingPlayheadRef: { current: boolean },
-  getFullRange: () => { min: number; max: number }
+  getFullRange: () => { min: number; max: number },
+  annotateRef: { current: AnnotateCtx },
+  segmentsRef: { current: ChartSegment[] },
+  getStartEpoch: () => number
 ) {
   let dragging = false;
   let seekDragging = false;
+  // 划新区间 / 拖已有区间边缘
+  let bandDragging = false;
+  let bandAnchorMs = 0;
+  let resizeIdx = -1;
+  let resizeFixedMs = 0;
   let startMin = 0;
   let startMax = 0;
   let startRelX = 0;
@@ -472,12 +536,40 @@ function dragPanPlugin(
           autoScrollRaf = requestAnimationFrame(autoScrollStep);
         };
 
+        const toMs = (relX: number) => (u.posToVal(relX, "x") - getStartEpoch()) * 1000;
+
         const onMouseDown = (e: MouseEvent) => {
           if (e.button !== 0) return;
           maxMoveDistance = 0;
           overRectLeft = over.getBoundingClientRect().left;
           startRelX = e.clientX - overRectLeft;
           lastClientX = e.clientX;
+
+          // 优先级：拖已有色块边缘 > 拖播放头 > 选中标签时划新区间 > 平移
+          if (annotateRef.current.onResize) {
+            const startEpoch = getStartEpoch();
+            for (let idx = 0; idx < segmentsRef.current.length; idx++) {
+              const seg = segmentsRef.current[idx];
+              const xs = u.valToPos(startEpoch + seg.start_time_ms / 1000, "x", false);
+              const xe = u.valToPos(startEpoch + seg.end_time_ms / 1000, "x", false);
+              if (Math.abs(xs - startRelX) <= SEGMENT_EDGE_GRAB_PX) {
+                bandDragging = true;
+                resizeIdx = idx;
+                resizeFixedMs = seg.end_time_ms;
+                over.style.cursor = "ew-resize";
+                e.preventDefault();
+                return;
+              }
+              if (Math.abs(xe - startRelX) <= SEGMENT_EDGE_GRAB_PX) {
+                bandDragging = true;
+                resizeIdx = idx;
+                resizeFixedMs = seg.start_time_ms;
+                over.style.cursor = "ew-resize";
+                e.preventDefault();
+                return;
+              }
+            }
+          }
 
           if (playheadState.current != null) {
             // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
@@ -496,6 +588,21 @@ function dragPanPlugin(
             }
           }
 
+          // 选中了标签就是"划区间"模式，跟参考工具一致：选标签 -> 在波形上拖
+          if (annotateRef.current.activeColor && annotateRef.current.onCreate) {
+            bandDragging = true;
+            resizeIdx = -1;
+            bandAnchorMs = toMs(startRelX);
+            annotateRef.current.pending = {
+              startMs: bandAnchorMs,
+              endMs: bandAnchorMs,
+              color: annotateRef.current.activeColor,
+            };
+            over.style.cursor = "crosshair";
+            e.preventDefault();
+            return;
+          }
+
           dragging = true;
           over.style.cursor = "grabbing";
           startMin = u.scales.x.min!;
@@ -506,6 +613,29 @@ function dragPanPlugin(
         const onMouseMove = (e: MouseEvent) => {
           lastClientX = e.clientX;
           const relX = e.clientX - overRectLeft;
+
+          if (bandDragging) {
+            const cur = toMs(relX);
+            if (resizeIdx >= 0) {
+              const seg = segmentsRef.current[resizeIdx];
+              if (seg) {
+                annotateRef.current.pending = {
+                  startMs: Math.min(resizeFixedMs, cur),
+                  endMs: Math.max(resizeFixedMs, cur),
+                  color: seg.color,
+                };
+              }
+            } else {
+              annotateRef.current.pending = {
+                startMs: Math.min(bandAnchorMs, cur),
+                endMs: Math.max(bandAnchorMs, cur),
+                color: annotateRef.current.activeColor ?? "#1677ff",
+              };
+            }
+            annotateRef.current.redrawAll();
+            return;
+          }
+
           if (seekDragging) {
             const w = over.clientWidth;
             // 边缘区域交给 autoScrollStep 处理，这里只管窗口内的常规跟随
@@ -523,6 +653,25 @@ function dragPanPlugin(
         };
 
         const onMouseUp = (e: MouseEvent) => {
+          if (bandDragging) {
+            bandDragging = false;
+            over.style.cursor = "grab";
+            const pending = annotateRef.current.pending;
+            annotateRef.current.pending = null;
+            const idx = resizeIdx;
+            resizeIdx = -1;
+            // 太短的当成误点，不生成区间
+            if (pending && pending.endMs - pending.startMs >= MIN_SEGMENT_MS) {
+              if (idx >= 0) {
+                annotateRef.current.onResize?.(idx, Math.round(pending.startMs), Math.round(pending.endMs));
+              } else {
+                annotateRef.current.onCreate?.(Math.round(pending.startMs), Math.round(pending.endMs));
+              }
+            }
+            annotateRef.current.redrawAll();
+            return;
+          }
+
           if (seekDragging) {
             seekDragging = false;
             draggingPlayheadRef.current = false;
