@@ -28,6 +28,9 @@ interface Props {
   readOnly?: boolean;
   onClose: () => void;
   onSubmitted?: () => void;
+  /** 审核员看完可以直接在这里下结论，省得关掉再回列表点 */
+  onApprove?: () => void | Promise<void>;
+  onReject?: () => void;
 }
 
 interface VideoSrc {
@@ -52,7 +55,15 @@ function formatMs(ms: number): string {
 
 // 标注工作台：视频 + IMU 波形 + 打标签。时间点不再靠手填毫秒，而是把视频/波形
 // 拖到位置后直接"设为开始/设为结束"，所见即所得。
-export default function AnnotationWorkspace({ task, labels, readOnly, onClose, onSubmitted }: Props) {
+export default function AnnotationWorkspace({
+  task,
+  labels,
+  readOnly,
+  onClose,
+  onSubmitted,
+  onApprove,
+  onReject,
+}: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
 
@@ -268,7 +279,24 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
       style={{ top: 16 }}
       destroyOnClose
       footer={
-        readOnly ? null : (
+        readOnly ? (
+          // 注意：这里必须给 null 而不是 undefined。footer 传 undefined 时
+          // antd 会当成"没设置"，渲染它默认的 取消/确定 两个按钮。
+          onApprove || onReject ? (
+            <Space>
+              {onReject && (
+                <Button danger onClick={onReject}>
+                  驳回
+                </Button>
+              )}
+              {onApprove && (
+                <Popconfirm title="确认通过这份标注？" onConfirm={onApprove}>
+                  <Button type="primary">通过</Button>
+                </Popconfirm>
+              )}
+            </Space>
+          ) : null
+        ) : (
           <Space>
             <Button onClick={handleSaveDraft} loading={saving}>
               存草稿

@@ -15,6 +15,10 @@ export const createTask = (body: {
 
 export const deleteTask = (id: number) => request.delete<never, null>(`/tasks/${id}`);
 
+/** 已通过/已驳回的任务退回重标：轮次+1，上一轮标注内容原样带到新一轮 */
+export const reopenTask = (id: number, comment?: string) =>
+  request.post<never, Task>(`/tasks/${id}/reopen`, { comment });
+
 export const claimTask = (id: number) => request.post<never, Task>(`/tasks/${id}/claim`);
 
 export const heartbeat = (id: number) => request.patch<never, null>(`/tasks/${id}/heartbeat`);

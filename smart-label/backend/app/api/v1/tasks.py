@@ -16,7 +16,8 @@ from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, TaskCreate, TaskOut
+from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, ReopenRequest, TaskCreate, TaskOut
+from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
 from app.services.task_service import TaskConflictError, claim_task, heartbeat, save_draft, submit_task
 
@@ -40,6 +41,21 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.reviewer))])
+async def reopen(
+    task_id: int,
+    body: ReopenRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把已通过/已驳回的任务退回重标（轮次+1，上一轮内容原样带过去）。"""
+    try:
+        task = await reopen_task(db, task_id, user, body.comment)
+    except ReviewConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())
 
 

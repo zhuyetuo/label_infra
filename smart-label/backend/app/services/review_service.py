@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.audit_log import AuditLog
 from app.models.review import ReviewDecision, ReviewRecord
 from app.models.task import Task, TaskStatus
 from app.models.user import User
@@ -70,6 +72,45 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 created_by=item.created_by,
             )
         )
+
+
+async def reopen_task(db: AsyncSession, task_id: int, operator: User, comment: str | None) -> Task:
+    """
+    把已通过（或已驳回待重标）的任务退回重标：当时审通过了，后来复查发现问题，
+    需要能打回去重新标，而不是只能删掉重建（那样会丢掉历史轮次）。
+
+    处理方式跟驳回一致：轮次+1、把上一轮内容拷到新一轮、回到待分配。
+    不写 review_records —— (task_id, round_no) 上有唯一约束，那一轮的审核结论
+    确实就是"通过"，历史不该被改写；退回这个动作记到 audit_logs 里。
+    """
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise ReviewConflictError("任务不存在")
+    if task.status not in (TaskStatus.APPROVED, TaskStatus.REJECTED):
+        raise ReviewConflictError("只有已通过/已驳回的任务才能退回重标")
+
+    new_round_no = task.round_no + 1
+    await _clone_record_forward(db, task, new_round_no)
+    task.round_no = new_round_no
+    task.status = TaskStatus.PENDING_ASSIGN
+    task.assigned_to = None
+    task.reviewer_id = None
+    task.locked_by = None
+    task.lock_expires_at = None
+
+    db.add(
+        AuditLog(
+            user_id=operator.id,
+            action="task.reopen",
+            target_type="task",
+            target_id=task.id,
+            detail=json.dumps({"new_round_no": new_round_no, "comment": comment}, ensure_ascii=False),
+        )
+    )
+
+    await db.commit()
+    await db.refresh(task)
+    return task
 
 
 async def decide_review(

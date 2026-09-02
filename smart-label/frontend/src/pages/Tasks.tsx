@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimTask, createTask, deleteTask, listTasks } from "@/api/tasks";
+import { claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
@@ -51,6 +51,12 @@ export default function Tasks() {
   const handleDelete = async (id: number) => {
     await deleteTask(id);
     message.success("任务已删除");
+    refresh();
+  };
+
+  const handleReopen = async (id: number) => {
+    await reopenTask(id);
+    message.success("已退回重标，上一轮内容已带到新一轮");
     refresh();
   };
 
@@ -105,6 +111,18 @@ export default function Tasks() {
                   <Button size="small" type="link" onClick={() => openWorkspace(task, !editable)}>
                     {editable ? "编辑标注" : "查看标注"}
                   </Button>
+                  {(role === "admin" || role === "reviewer") &&
+                    (task.status === "APPROVED" || task.status === "REJECTED") && (
+                      <Popconfirm
+                        title="退回重标"
+                        description="轮次+1，这一轮的标注内容会原样带到新一轮，任务回到待认领"
+                        onConfirm={() => handleReopen(task.id)}
+                      >
+                        <Button size="small" type="link">
+                          退回重标
+                        </Button>
+                      </Popconfirm>
+                    )}
                   {role === "admin" && (
                     <Popconfirm
                       title="删除任务"

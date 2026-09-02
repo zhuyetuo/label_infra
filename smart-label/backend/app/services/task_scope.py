@@ -5,7 +5,7 @@
 
 from sqlalchemy import Select, or_
 
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 
 
@@ -20,8 +20,14 @@ def apply_task_scope(query: Select, user: User) -> Select:
     if user.role == UserRole.annotator:
         return query.where(Task.assigned_to == user.id)
     if user.role == UserRole.reviewer:
+        # 注意：这里必须带上 status==SUBMITTED 这个条件。只写 reviewer_id IS NULL
+        # 的话，任何还没人认领审核的任务（包括别人正在标、还没提交的）都会对
+        # 审核员可见，跟上面写的规则对不上，也会顺带放开这些任务对应的样本媒体。
         return query.where(
-            or_(Task.reviewer_id == user.id, Task.reviewer_id.is_(None))
+            or_(
+                Task.reviewer_id == user.id,
+                (Task.reviewer_id.is_(None)) & (Task.status == TaskStatus.SUBMITTED),
+            )
         )
     # 未知角色一律拒绝，返回恒假条件
     return query.where(Task.id.is_(None))

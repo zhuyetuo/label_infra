@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Button, Input, Modal, Space, Table, Tag, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimReview, decideReview, reviewQueue } from "@/api/reviews";
+import { listLabels } from "@/api/labels";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import type { Task } from "@/types";
 
@@ -9,9 +11,11 @@ export default function Reviews() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const { data, isLoading } = useQuery({ queryKey: ["review-queue"], queryFn: reviewQueue });
+  const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: listLabels });
 
   const [rejectTaskId, setRejectTaskId] = useState<number | null>(null);
   const [comment, setComment] = useState("");
+  const [viewTask, setViewTask] = useState<Task | null>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["review-queue"] });
 
@@ -56,6 +60,9 @@ export default function Reviews() {
             title: "操作",
             render: (_, task: Task) => (
               <Space>
+                <Button size="small" type="link" onClick={() => setViewTask(task)}>
+                  查看标注
+                </Button>
                 {task.reviewer_id == null && (
                   <Button size="small" onClick={() => handleClaim(task.id)}>
                     认领审核
@@ -75,6 +82,30 @@ export default function Reviews() {
             ),
           },
         ]}
+      />
+
+      <AnnotationWorkspace
+        task={viewTask}
+        labels={labels ?? []}
+        readOnly
+        onClose={() => setViewTask(null)}
+        // 只有自己认领了的才给下结论的按钮，跟列表里的判断保持一致
+        onApprove={
+          viewTask && viewTask.reviewer_id === userId
+            ? async () => {
+                await handleApprove(viewTask.id);
+                setViewTask(null);
+              }
+            : undefined
+        }
+        onReject={
+          viewTask && viewTask.reviewer_id === userId
+            ? () => {
+                setRejectTaskId(viewTask.id);
+                setViewTask(null);
+              }
+            : undefined
+        }
       />
 
       <Modal
