@@ -4,6 +4,118 @@
 
 > 当前阶段：**仅设计，未写代码**。落地前需要先收口"开放问题"一节列出的关键分歧。
 
+---
+
+## 已拍板决策（收口 4 项最高优先级分歧）
+
+### 决策① Clip 切片：异步队列 + 完成通知
+
+采纳 `clip_ffmpeg` 子系统的队列表方案（`clip_groups` + `clip_jobs`），而不是 `db_schema` 的扁平表：
+
+```sql
+CREATE TABLE clip_jobs (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  sample_id       BIGINT UNSIGNED NOT NULL,
+  task_id         BIGINT UNSIGNED NULL COMMENT '人工框选来源任务，AI批量生成时为空',
+  clip_source     ENUM('ai','human') NOT NULL,
+  start_time_ms   INT UNSIGNED NOT NULL,
+  end_time_ms     INT UNSIGNED NOT NULL,
+  camera_channel  TINYINT UNSIGNED NOT NULL COMMENT '1/2/3，三路各生成一条job',
+  status          ENUM('queued','processing','done','failed') NOT NULL DEFAULT 'queued',
+  priority        TINYINT NOT NULL DEFAULT 5 COMMENT '交互式框选=10，AI批量=1，防止批量任务饿死实时请求',
+  clip_file_path  VARCHAR(500) NULL COMMENT '完成后落盘的NAS相对路径',
+  error_message   VARCHAR(500) NULL,
+  requested_by    BIGINT UNSIGNED NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at     DATETIME NULL,
+  UNIQUE KEY uq_clip_dedup (sample_id, clip_source, camera_channel, start_time_ms, end_time_ms),
+  KEY idx_clip_status_priority (status, priority DESC, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+- 独立 worker 进程用 `SELECT ... FOR UPDATE SKIP LOCKED` 按 `(status='queued') ORDER BY priority DESC` 抢占任务，可多实例横向扩展
+- **完成通知**：不引入 Redis/WebSocket，用 **SSE（Server-Sent Events）**——FastAPI 原生支持单向推送，前端框选提交后打开一个 `/api/clips/jobs/{group_id}/events` 长连接，worker 完成后写库的同时向内存里的连接注册表 push 一条事件；退化方案是前端每 2 秀轮询一次 `/api/clips/jobs/{group_id}` 状态接口，SSE 连接断开时自动降级为轮询，不引入额外基础设施
+
+### 决策② 任务粒度：整段任务 + 可切分短任务并存
+
+`tasks` 表增加可空的时间段边界字段，`NULL` 代表整段样本（长任务），非空代表该样本的一个子时间段（短任务）：
+
+```sql
+ALTER TABLE tasks
+  ADD COLUMN segment_start_ms INT UNSIGNED NULL COMMENT 'NULL=覆盖整个样本（长任务）；非NULL=样本内子时间段（短任务）',
+  ADD COLUMN segment_end_ms   INT UNSIGNED NULL,
+  ADD COLUMN parent_task_id   BIGINT UNSIGNED NULL COMMENT '若由长任务拆分而来，指向被拆分的原任务，便于溯源',
+  ADD CONSTRAINT chk_segment_range CHECK (
+    (segment_start_ms IS NULL AND segment_end_ms IS NULL) OR
+    (segment_start_ms IS NOT NULL AND segment_end_ms IS NOT NULL AND segment_end_ms > segment_start_ms)
+  );
+```
+
+- 同一个 `sample_id` 下可以同时存在 1 个长任务 + N 个短任务，互不冲突（各自独立的行锁/状态机）
+- 管理员在"样本详情"页可以：直接分配整段长任务；或框选时间段批量生成多个短任务（短任务生成时若与已有短任务时间段重叠需要提示，避免同一段被重复标注）
+
+### 决策③ 标签不允许时间重叠
+
+`annotation_label_items` 同一份标注记录（`annotation_record_id`）内，任意两条标签的 `[start_time_ms, end_time_ms)` 不能有交集——这是应用层强制校验（MySQL 无原生区间排他约束），落在 `annotation_service.py` 的保存/提交校验里：保存草稿时允许暂时重叠（画到一半的中间态），但**提交（submit）时强制校验非重叠**，有重叠则拒绝提交并返回冲突的具体标签 id 对，前端据此高亮提示。
+
+### 决策④ 行为标签体系：管理员自定义 + 预留分层字段
+
+不再假设标签是写死的 ENUM，改为独立的标签定义表，管理员通过后台 CRUD 维护：
+
+```sql
+CREATE TABLE label_definitions (
+  id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code         VARCHAR(50)  NOT NULL COMMENT '英文标识，如 scratch，供AI/API使用',
+  display_name VARCHAR(50)  NOT NULL COMMENT '中文显示名，如 抓挠',
+  color        VARCHAR(20)  NULL COMMENT '标注UI显示色，如 #F44336',
+  parent_id    BIGINT UNSIGNED NULL COMMENT '预留分层字段，当前阶段一律为NULL（不启用分层），后续需要时直接可用',
+  sort_order   SMALLINT NOT NULL DEFAULT 0,
+  is_active    TINYINT(1) NOT NULL DEFAULT 1 COMMENT '停用后不再出现在标注UI，但历史标注记录仍保留引用',
+  created_by   BIGINT UNSIGNED NOT NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_label_code (code),
+  KEY idx_label_parent (parent_id),
+  CONSTRAINT fk_label_parent FOREIGN KEY (parent_id) REFERENCES label_definitions(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+`annotation_label_items.label_id` 改为外键指向 `label_definitions.id`（而不是存字符串），管理端提供标签的增删改查页面（对应前端 `admin/label-definitions/` 模块，需要补进目录结构）。
+
+### 决策⑤ AI 预标注 JSON 格式：参考 Label Studio 导出结构
+
+AI 侧生成 `data_labeled_ai/` 下的 JSON，格式对齐 Label Studio 的 `timeserieslabels` 导出结构，便于团队已有的 AI 推理脚本（`export_yolo.py` 那条线）复用经验，同时保留置信度等 smart-label 需要的字段：
+
+```json
+{
+  "sample_code": "26060315",
+  "model_version": "behavior_cls_v1",
+  "generated_at": "2026-06-03T15:20:00Z",
+  "result": [
+    {
+      "id": "seg_0001",
+      "type": "timeserieslabels",
+      "value": {
+        "start_time_ms": 12340,
+        "end_time_ms": 15670,
+        "label_code": "scratch",
+        "confidence": 0.87
+      }
+    },
+    {
+      "id": "seg_0002",
+      "type": "timeserieslabels",
+      "value": {
+        "start_time_ms": 20100,
+        "end_time_ms": 24300,
+        "label_code": "sleep",
+        "confidence": 0.95
+      }
+    }
+  ]
+}
+```
+
+后端 `POST /api/samples/{id}/ai-labels` 接口接收该文件、校验 `label_code` 是否存在于 `label_definitions`、按上面决策③的非重叠规则校验后，落盘到 NAS 并写入 `annotation_records`（`source_type='ai_generated'`）+ 逐条 `annotation_label_items`（`source_type='ai_generated'`, `is_modified=0`）。
 
 ---
 
