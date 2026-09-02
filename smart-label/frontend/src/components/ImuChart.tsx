@@ -290,7 +290,8 @@ export default function ImuChart({
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        Shift+滚轮缩放 / 按住拖动左右平移 / 单击或拖动黑色播放头跳转视频到该时刻（放大后拖到边缘会自动继续滚动）/ 双击恢复整体视图
+        Shift+滚轮缩放 / 放大后按住拖动左右平移（整体视图下全部数据已在视野内，无需拖动）/
+        单击或拖动黑色播放头跳转视频到该时刻（放大后拖到边缘会自动继续滚动）/ 双击恢复整体视图
       </div>
       {CHANNELS.map((c, i) => (
         <div
@@ -447,6 +448,7 @@ function wheelZoomPlugin() {
 
 const PLAYHEAD_GRAB_PX = 8;
 const SEGMENT_EDGE_GRAB_PX = 5; // 色块边缘多少像素内按下算"拖边缘改时间"
+const PAN_EPSILON = 1e-6; // 判断"是否已经是整体视图"的浮点容差
 const MIN_SEGMENT_MS = 50; // 拖出来太短的当误点丢弃
 const EDGE_SCROLL_PX = 40; // 距离左右边缘多少像素内开始自动滚动
 const EDGE_SCROLL_RATIO = 0.012; // 每帧滚动可视宽度的比例
@@ -477,12 +479,25 @@ function dragPanPlugin(
   let maxMoveDistance = 0;
   let lastClientX = 0;
   let autoScrollRaf: number | null = null;
+  let panEnabled = false;
 
   return {
     hooks: {
       ready: (u: uPlot) => {
         const over = u.over;
-        over.style.cursor = "grab";
+
+        const fullRangeWidth = () => {
+          const full = getFullRange();
+          return full.max - full.min;
+        };
+        // 只有放大之后才是"可以抓着拖"的状态，光标也跟着变，让人一眼知道能不能拖
+        const refreshCursor = () => {
+          const min = u.scales.x.min;
+          const max = u.scales.x.max;
+          const zoomed = min != null && max != null && max - min < fullRangeWidth() - PAN_EPSILON;
+          over.style.cursor = zoomed ? "grab" : "default";
+        };
+        refreshCursor();
 
         const stopAutoScroll = () => {
           if (autoScrollRaf != null) {
@@ -604,15 +619,19 @@ function dragPanPlugin(
           }
 
           dragging = true;
-          over.style.cursor = "grabbing";
           startMin = u.scales.x.min!;
           startMax = u.scales.x.max!;
+          // 没放大的时候整段数据本来就全在视野里，左右拖没有任何意义，
+          // 还会把波形拖到空白区去，所以这种情况只认单击跳转，不做平移。
+          panEnabled = startMax - startMin < fullRangeWidth() - PAN_EPSILON;
+          if (panEnabled) over.style.cursor = "grabbing";
           e.preventDefault();
         };
 
         const onMouseMove = (e: MouseEvent) => {
           lastClientX = e.clientX;
           const relX = e.clientX - overRectLeft;
+          if (!dragging && !seekDragging && !bandDragging) refreshCursor();
 
           if (bandDragging) {
             const cur = toMs(relX);
@@ -646,16 +665,24 @@ function dragPanPlugin(
           }
           if (!dragging) return;
           maxMoveDistance = Math.max(maxMoveDistance, Math.abs(relX - startRelX));
+          if (!panEnabled) return; // 没放大就只是按住不动，不平移
           const v0 = u.posToVal(startRelX, "x");
           const v1 = u.posToVal(relX, "x");
           const dv = v1 - v0;
-          u.setScale("x", { min: startMin - dv, max: startMax - dv });
+
+          // 平移不能超出整段数据的范围，否则会拖出一大片空白
+          const width = startMax - startMin;
+          const full = getFullRange();
+          let nMin = startMin - dv;
+          if (nMin < full.min) nMin = full.min;
+          if (nMin + width > full.max) nMin = full.max - width;
+          u.setScale("x", { min: nMin, max: nMin + width });
         };
 
         const onMouseUp = (e: MouseEvent) => {
           if (bandDragging) {
             bandDragging = false;
-            over.style.cursor = "grab";
+            refreshCursor();
             const pending = annotateRef.current.pending;
             annotateRef.current.pending = null;
             const idx = resizeIdx;
@@ -676,12 +703,13 @@ function dragPanPlugin(
             seekDragging = false;
             draggingPlayheadRef.current = false;
             stopAutoScroll();
-            over.style.cursor = "grab";
+            refreshCursor();
             return;
           }
           if (!dragging) return;
           dragging = false;
-          over.style.cursor = "grab";
+          panEnabled = false;
+          refreshCursor();
           if (maxMoveDistance < 5) {
             const relX = e.clientX - overRectLeft;
             onClickSeek(u.posToVal(relX, "x"));
