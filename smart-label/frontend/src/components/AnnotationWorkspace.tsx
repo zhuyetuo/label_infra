@@ -411,11 +411,7 @@ export default function AnnotationWorkspace({
         )}
 
         <div
-          style={
-            chartExpanded
-              ? { marginTop: 4, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }
-              : { marginTop: 4 }
-          }
+          style={{ marginTop: 4, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           {hasCsv && sampleId != null ? (
             <>
@@ -438,7 +434,11 @@ export default function AnnotationWorkspace({
                 <div
                   ref={chartBoxRef}
                   className="ws-charts"
-                  style={chartExpanded ? { flex: 1, minHeight: 0 } : { height: CHART_VIEWPORT_PX }}
+                  // 视频是按宽度定高的，画面越宽下面剩的空白越多；
+                  // 波形区把这块空白吃掉（至少露一条波形），别白白空着
+                  style={
+                    chartExpanded ? { flex: 1, minHeight: 0 } : { flex: 1, minHeight: CHART_VIEWPORT_PX }
+                  }
                 >
                   <ImuChart
                     sampleId={sampleId}

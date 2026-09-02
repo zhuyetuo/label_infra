@@ -27,11 +27,11 @@
   padding: 4px 8px;
 }
 
-/* 展开全部波形时，视频缩成一条（还能看，但把高度让给波形），
-   波形区拿走剩余空间，目标是六个通道一屏看全不用滚 */
-.ws-body--charts-expanded .ws-videos {
-  flex: 0 0 auto;
-  max-height: 17vh;
+/* 展开全部波形时视频要让出高度。这里靠"收窄整组视频的宽度"来缩小，
+   而不是压高度——压高度会让画面比它那一格窄，中间就露白缝了。 */
+.ws-body--charts-expanded .ws-videos-row {
+  width: 42%;
+  margin: 0 auto;
 }
 
 /* 展开时通道标题压扁一点，六行才塞得下 */
