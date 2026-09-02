@@ -129,6 +129,8 @@ AI 侧生成 `data_labeled_ai/` 下的 JSON，格式对齐 Label Studio 的 `tim
 
 - **端口分配**：后端 8283，前端 8284（与现有 Label Studio 的 8181-8183 错开）
 - **任务超时回收**：标注任务 48 小时、审核任务 24 小时未收到心跳自动回收为待分配；前端每 30 分钟发一次心跳（`PATCH /api/tasks/{id}/heartbeat`）推迟 `lock_expires_at`，后台定时任务扫描过期任务批量回收
+- **Clip 切片精度**：ffmpeg 用 `-c copy` 流复制（快，几乎不占CPU），接受最多一个 GOP 周期的边界误差，不做逐帧精确重编码
+- **三路视频同步容忍误差**：**100ms**（TimeSyncController 漂移校正阈值定为 100ms，超过则强制 seek 对齐，未超过则允许自然漂移不打断播放）
 
 ---
 
