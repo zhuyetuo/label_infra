@@ -132,6 +132,17 @@ AI 侧生成 `data_labeled_ai/` 下的 JSON，格式对齐 Label Studio 的 `tim
 - **Clip 切片精度**：ffmpeg 用 `-c copy` 流复制（快，几乎不占CPU），接受最多一个 GOP 周期的边界误差，不做逐帧精确重编码
 - **三路视频同步容忍误差**：**100ms**（TimeSyncController 漂移校正阈值定为 100ms，超过则强制 seek 对齐，未超过则允许自然漂移不打断播放）
 
+### 决策⑧ 任务回收/驳回重分配：草稿保留 + 标签级标注人溯源
+
+- **草稿归属**：`annotation_records` 的草稿挂在 `task_id + round_no` 上，跟当前 `assigned_to` 无关。任务因超时被回收或驳回后重新分配（无论分给原标注员还是新的人），打开任务时都会加载已有草稿，不会丢失已标注内容、不用重标
+- **逐条标注人溯源**：`annotation_label_items` 增加 `created_by` 字段，记录这一条具体是谁标的（而不只是笼统的 `source_type='human_added'`），支撑"任务被中途转手给另一人接着标"场景下按人统计标注量/准确率：
+
+```sql
+ALTER TABLE annotation_label_items
+  ADD COLUMN created_by BIGINT UNSIGNED NULL COMMENT '实际标注这一条的用户，AI生成的为NULL',
+  ADD CONSTRAINT fk_label_item_created_by FOREIGN KEY (created_by) REFERENCES users(id);
+```
+
 ---
 
 ## 架构总览
