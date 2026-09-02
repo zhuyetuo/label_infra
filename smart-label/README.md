@@ -14,26 +14,42 @@
 - [ ] 统计看板（`app/api/v1/dashboard.py`，TODO）
 - [ ] 前端（React + TS + uPlot + 同步引擎）
 
-## 后端本地启动
+## 启动方式（二选一）
+
+### 方式一：Docker Compose（推荐）
+
+```bash
+cd deploy
+cp config/.env.example config/.env   # 改数据库密码/JWT密钥/NAS路径
+docker compose up -d --build
+
+# 首次启动，进容器建表（本地生成迁移脚本后提交进仓库，不要每台机器各自生成一份）
+docker compose exec api alembic revision --autogenerate -m "init"
+docker compose exec api alembic upgrade head
+```
+
+三个容器：`mysql`（数据库）、`api`（FastAPI，映射到宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）。
+
+访问 `http://<服务器IP>:8283/docs` 查看 API 文档。首次用 `/api/v1/auth/bootstrap-admin` 创建管理员账号（仅数据库无用户时可调用一次）。
+
+停止：`docker compose down`（数据保留在 `mysql_data` volume 里，不会丢）。
+
+### 方式二：本地直接跑（开发调试用）
 
 ```bash
 cd backend
-cp .env.example .env   # 改数据库密码/JWT密钥
+cp .env.example .env   # 改数据库密码/JWT密钥，需要本地已有MySQL
 
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 首次建表（正式环境用 alembic migration，这里先用于本地快速起步）
-alembic upgrade head    # 需要先 alembic revision --autogenerate -m "init"
+alembic revision --autogenerate -m "init"   # 首次生成迁移脚本
+alembic upgrade head
 
-# 创建首个管理员账号
-python -m scripts.create_admin
-# 或者：起服务后调用 POST /api/v1/auth/bootstrap-admin（仅数据库无用户时可用一次）
+python -m scripts.create_admin   # 或用 /auth/bootstrap-admin 接口
 
 uvicorn app.main:app --reload --port 8283
 
 # 另开一个终端，跑超时回收定时任务（必须单实例，不要和uvicorn多worker混用）
 python -m app.workers.scheduler
 ```
-
-访问 `http://localhost:8283/docs` 查看 API 文档。
