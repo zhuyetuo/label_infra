@@ -50,3 +50,5 @@ class ScanProgressOut(BaseModel):
     errors: int
     detail: list[str]
     error_message: str | None
+    elapsed_sec: float
+    estimated_remaining_sec: float | None
