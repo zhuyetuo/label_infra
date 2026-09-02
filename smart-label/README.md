@@ -20,7 +20,7 @@
 
 ```bash
 cd deploy
-cp config/.env.example config/.env   # 改数据库密码/JWT密钥/NAS路径
+cp .env.example .env   # 改数据库密码/JWT密钥/NAS路径
 docker compose up -d --build
 
 # 首次启动，进容器建表（本地生成迁移脚本后提交进仓库，不要每台机器各自生成一份）
