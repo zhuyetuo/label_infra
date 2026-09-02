@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
+import "./ImuChart.css";
 import request from "@/utils/request";
 import type { TimeBus } from "@/utils/timeBus";
 
