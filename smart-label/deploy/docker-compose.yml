@@ -47,6 +47,16 @@ services:
     command: python -m app.workers.scheduler
     networks: [smart-label]
 
+  frontend:
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${FRONTEND_PORT:-8284}:8284"
+    networks: [smart-label]
+
 volumes:
   mysql_data:
 

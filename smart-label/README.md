@@ -10,10 +10,14 @@
 - [x] 任务认领/心跳/草稿/提交 API + 超时自动回收定时任务（`app/workers/scheduler.py`）
 - [x] 审核认领/通过/驳回 API（驳回后草稿自动拷贝到新一轮，不用重标）
 - [x] 样本导入：扫描 NAS `data_raw/` 按会话分组3路视频+CSV（`POST /samples/import-scan`）+ 手动建任务（`POST /tasks`）
+- [x] 测试用前端（React + TS + Vite + Ant Design）：登录/首个管理员引导、标签管理、样本导入、
+      任务列表/新建/认领/草稿编辑/提交、审核队列/认领/通过驳回、账号管理。已在沙箱内用 Playwright
+      跑通完整闭环截图验证。**这不是最终的视频+IMU标注界面**，只是让核心业务流程能点着测，
+      不用再手写curl/Swagger
 - [ ] IMU LTTB 降采样服务（`app/api/v1/imu.py`，TODO）
 - [ ] Clip 切片异步队列 + SSE 通知（`app/api/v1/clips.py`，TODO）
 - [ ] 统计看板（`app/api/v1/dashboard.py`，TODO）
-- [ ] 前端（React + TS + uPlot + 同步引擎）
+- [ ] 正式标注界面：3路视频+IMU曲线双向同步引擎（架构文档已评审出方案，待实现）
 
 ## 启动方式（二选一）
 
@@ -24,14 +28,18 @@ cd deploy
 cp .env.example .env   # 改数据库密码/JWT密钥/NAS路径
 docker compose up -d --build
 
-# 首次启动，进容器建表（本地生成迁移脚本后提交进仓库，不要每台机器各自生成一份）
-docker compose exec api alembic revision --autogenerate -m "init"
+# 首次启动，建表（迁移脚本已提交进仓库，不需要每台机器各自生成一份）
 docker compose exec api alembic upgrade head
 ```
 
-三个容器：`mysql`（数据库）、`api`（FastAPI，映射到宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）。
+四个容器：`mysql`（数据库）、`api`（FastAPI，映射宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）、`frontend`（映射宿主机 8284）。
 
-访问 `http://<服务器IP>:8283/docs` 查看 API 文档。首次用 `/api/v1/auth/bootstrap-admin` 创建管理员账号（仅数据库无用户时可调用一次）。
+访问 `http://<服务器IP>:8284` 打开测试用前端页面，首次会引导创建管理员账号。API 文档在 `http://<服务器IP>:8283/docs`。
+
+如果数据库版本记录跟迁移脚本对不上（比如之前手动生成过迁移文件但没提交），跑：
+```bash
+docker compose exec api alembic stamp --purge head
+```
 
 停止：`docker compose down`（数据保留在 `mysql_data` volume 里，不会丢）。
 
@@ -44,8 +52,7 @@ cp .env.example .env   # 改数据库密码/JWT密钥，需要本地已有MySQL
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-alembic revision --autogenerate -m "init"   # 首次生成迁移脚本
-alembic upgrade head
+alembic upgrade head   # 迁移脚本已提交进仓库，直接建表
 
 python -m scripts.create_admin   # 或用 /auth/bootstrap-admin 接口
 
@@ -54,3 +61,13 @@ uvicorn app.main:app --reload --port 8283
 # 另开一个终端，跑超时回收定时任务（必须单实例，不要和uvicorn多worker混用）
 python -m app.workers.scheduler
 ```
+
+### 前端单独跑（不用docker，开发调试用）
+
+```bash
+cd frontend
+npm install
+npm run dev   # 默认代理 /api 到 http://localhost:8283，见 vite.config.ts
+```
+
+访问 `http://localhost:8284`。
