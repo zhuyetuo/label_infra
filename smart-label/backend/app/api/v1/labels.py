@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.annotation import AnnotationLabelItem
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
@@ -15,10 +16,19 @@ router = APIRouter(prefix="/label-definitions", tags=["labels"])
 
 @router.get("")
 async def list_labels(
-    project_id: int | None = None, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)
+    project_id: int | None = None,
+    include_inactive: bool = False,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
-    """所有登录用户都可读（标注UI需要），仅 admin 可写。project_id 不传则返回全部项目的标签。"""
-    query = select(LabelDefinition).where(LabelDefinition.is_active.is_(True))
+    """
+    所有登录用户都可读（标注UI需要），仅 admin 可写。project_id 不传则返回全部项目的标签。
+    默认只返回启用中的（标注界面不该看到停用的标签）；标签管理页要能看到并重新启用
+    停用掉的，所以给了 include_inactive。
+    """
+    query = select(LabelDefinition)
+    if not include_inactive:
+        query = query.where(LabelDefinition.is_active.is_(True))
     if project_id is not None:
         query = query.where(LabelDefinition.project_id == project_id)
     result = await db.execute(query.order_by(LabelDefinition.sort_order))
@@ -46,6 +56,33 @@ async def create_label(
     await db.commit()
     await db.refresh(label)
     return ok(LabelOut.model_validate(label).model_dump())
+
+
+@router.delete("/{label_id}", dependencies=[Depends(require_role(UserRole.admin))])
+async def delete_label(label_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    删除标签。已经被标注结果引用的标签不能删——那些标注条目指着它，删了会变成
+    孤儿数据，历史标注也就读不出标签名了。这种情况让改成停用：停用后标注界面
+    不再出现，但历史数据还认得出来。
+    """
+    label = await db.get(LabelDefinition, label_id)
+    if label is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
+
+    used = (
+        await db.execute(
+            select(func.count()).select_from(AnnotationLabelItem).where(AnnotationLabelItem.label_id == label_id)
+        )
+    ).scalar_one()
+    if used:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"已有 {used} 条标注在用这个标签，不能删除；可以改成停用（停用后标注界面不再出现，历史标注不受影响）",
+        )
+
+    await db.delete(label)
+    await db.commit()
+    return ok(msg="标签已删除")
 
 
 @router.patch("/{label_id}", dependencies=[Depends(require_role(UserRole.admin))])

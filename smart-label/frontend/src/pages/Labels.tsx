@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Button, Form, Input, InputNumber, Modal, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createLabel, listLabels, updateLabel } from "@/api/labels";
+import { createLabel, deleteLabel, listLabels, updateLabel } from "@/api/labels";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
@@ -19,8 +19,8 @@ export default function Labels() {
   const projectId = useProjectStore((s) => s.currentProjectId);
   const setProjectId = useProjectStore((s) => s.setCurrentProjectId);
   const { data, isLoading } = useQuery({
-    queryKey: ["labels", projectId],
-    queryFn: () => listLabels(projectId ?? undefined),
+    queryKey: ["labels", projectId, "withInactive"],
+    queryFn: () => listLabels(projectId ?? undefined, true),
     enabled: projectId != null,
   });
   const [editing, setEditing] = useState<LabelDefinition | null>(null);
@@ -28,6 +28,18 @@ export default function Labels() {
   const [form] = Form.useForm<FormValues>();
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["labels"] });
+
+  const handleDelete = async (id: number) => {
+    await deleteLabel(id);
+    message.success("标签已删除");
+    refresh();
+  };
+
+  const toggleActive = async (l: LabelDefinition) => {
+    await updateLabel(l.id, { is_active: !l.is_active });
+    message.success(l.is_active ? "已停用" : "已启用");
+    refresh();
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -95,9 +107,12 @@ export default function Labels() {
           {
             title: "显示名",
             render: (_, l: LabelDefinition) => (
-              <Tag color={l.color ?? undefined} style={{ fontSize: 13 }}>
-                {l.display_name}
-              </Tag>
+              <Space>
+                <Tag color={l.color ?? undefined} style={{ fontSize: 13 }}>
+                  {l.display_name}
+                </Tag>
+                {!l.is_active && <Tag>已停用</Tag>}
+              </Space>
             ),
           },
           {
@@ -126,11 +141,26 @@ export default function Labels() {
           { title: "排序", dataIndex: "sort_order", width: 80 },
           {
             title: "操作",
-            width: 100,
+            width: 220,
             render: (_, l: LabelDefinition) => (
-              <Button size="small" type="link" onClick={() => openEdit(l)}>
-                编辑
-              </Button>
+              <Space>
+                <Button size="small" type="link" onClick={() => openEdit(l)}>
+                  编辑
+                </Button>
+                <Button size="small" type="link" onClick={() => toggleActive(l)}>
+                  {l.is_active ? "停用" : "启用"}
+                </Button>
+                <Popconfirm
+                  title="删除标签"
+                  description="已经被标注用过的标签删不掉，那种情况请改成停用"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => handleDelete(l.id)}
+                >
+                  <Button size="small" danger type="link">
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
             ),
           },
         ]}
