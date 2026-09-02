@@ -6,11 +6,21 @@
 会话前缀 = 文件名去掉 "_cam{N}..." 之后的部分。
 
 扫描在后台异步跑（不阻塞请求线程），前端通过轮询状态接口显示进度条。
+
+性能设计（一万级session规模下验证过原版本会很慢，这里做了两处优化）：
+1. 存在性检查批量查询：原来每个session单独查一次"是否已存在"，上万个session
+   就是上万次数据库往返。改成扫描开始时一次性把所有已存在的sample_code/
+   media relative_path拉出来放进内存set，成员判断变成O(1)。
+2. ffprobe/CSV行数统计并发跑：这两个操作是"起外部进程/读文件"的IO密集型
+   同步调用，原来是新session挨个串行跑。改成 asyncio.to_thread + 信号量
+   限流并发（默认8路并发），数据库写入仍然串行（保证SAVEPOINT语义），
+   但最耗时的探测环节被并行化了。
 """
 
 import asyncio
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -26,6 +36,7 @@ from app.utils.ffprobe import count_csv_rows, probe_video
 
 _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
+_PROBE_CONCURRENCY = 8
 
 
 @dataclass
@@ -39,6 +50,19 @@ class ScanProgress:
     errors: int = 0
     detail: list[str] = field(default_factory=list)
     error_message: str | None = None
+    started_at: float | None = None
+    elapsed_sec: float = 0.0
+    estimated_remaining_sec: float | None = None
+
+    def tick(self) -> None:
+        """每处理完一个session调用一次，刷新耗时/预计剩余时间。"""
+        if self.started_at is None:
+            return
+        self.elapsed_sec = time.time() - self.started_at
+        if self.processed > 0 and self.elapsed_sec > 0:
+            rate = self.processed / self.elapsed_sec
+            remaining = max(self.total_groups - self.processed, 0)
+            self.estimated_remaining_sec = remaining / rate if rate > 0 else None
 
 
 # 单进程内只允许一个扫描任务在跑；进度状态直接放内存里，不用建表
@@ -63,7 +87,7 @@ async def run_scan(nas_root: str, admin_id: int) -> None:
     """跑一次完整扫描；供 web 触发（start_scan_background）和定时任务（scheduler）共用。"""
     global _progress
     async with _scan_lock:
-        _progress = ScanProgress(status="running")
+        _progress = ScanProgress(status="running", started_at=time.time())
         try:
             async with SessionLocal() as db:
                 admin = await db.get(User, admin_id)
@@ -94,10 +118,9 @@ def _parse_session_date(session_key: str) -> date | None:
         return None
 
 
-async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
-    data_raw_dir = os.path.join(nas_root, "data_raw")
+def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[int, dict[str, str]]]:
+    """纯文件系统遍历，不涉及数据库/子进程，跑在线程池里避免阻塞事件循环。"""
     groups: dict[str, dict[int, dict[str, str]]] = {}
-
     for root, _dirs, files in os.walk(data_raw_dir):
         for fname in files:
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
@@ -110,41 +133,83 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             full_path = os.path.join(root, fname)
             rel_path = os.path.relpath(full_path, nas_root)
             groups.setdefault(session_key, {}).setdefault(cam_idx, {})[ext] = rel_path
+    return groups
 
+
+def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) -> dict:
+    """一个session的全部探测工作（IO密集，在线程池里跑）。"""
+    all_files = [*cam_paths.values(), csv_rel]
+    missing = [p for p in all_files if not os.path.isfile(os.path.join(nas_root, p))]
+    probe = probe_video(os.path.join(nas_root, cam_paths[1]))
+    row_count = count_csv_rows(os.path.join(nas_root, csv_rel))
+    total_size = sum(
+        os.path.getsize(os.path.join(nas_root, p)) for p in all_files if os.path.isfile(os.path.join(nas_root, p))
+    )
+    return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size}
+
+
+async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
+    data_raw_dir = os.path.join(nas_root, "data_raw")
+    groups = await asyncio.to_thread(_scan_filesystem, data_raw_dir, nas_root)
     _progress.total_groups = len(groups)
 
+    # 先过滤出结构完整、且还没写文件级候选路径的候选session（不查库，纯内存判断）
+    candidates: dict[str, dict] = {}
+    all_candidate_paths: set[str] = set()
     for session_key, cams in groups.items():
-        _progress.processed += 1
-
-        # 至少要有 cam1+cam2 两路视频；cam3 是可选的（部分历史数据只有2路）
         if not all(c in cams for c in (1, 2)):
+            _progress.processed += 1
             _progress.detail.append(f"跳过 {session_key}：缺少cam1/cam2")
+            _progress.tick()
             continue
         if any("mp4" not in cams[c] for c in (1, 2)) or (3 in cams and "mp4" not in cams[3]):
+            _progress.processed += 1
             _progress.detail.append(f"跳过 {session_key}：缺少视频文件")
+            _progress.tick()
             continue
-
-        exists = (await db.execute(select(Sample.id).where(Sample.sample_code == session_key))).scalar_one_or_none()
-        if exists is not None:
-            _progress.skipped_existing += 1
-            continue
-
         csv_rel = cams[1].get("csv") or next((cams[c]["csv"] for c in (2, 3) if c in cams and "csv" in cams[c]), None)
         if csv_rel is None:
+            _progress.processed += 1
             _progress.detail.append(f"跳过 {session_key}：找不到IMU CSV")
+            _progress.tick()
             continue
-
         cam_paths = {c: cams[c]["mp4"] for c in (1, 2, 3) if c in cams and "mp4" in cams[c]}
-        all_files = [*cam_paths.values(), csv_rel]
-        missing = [p for p in all_files if not os.path.isfile(os.path.join(nas_root, p))]
+        candidates[session_key] = {"cam_paths": cam_paths, "csv_rel": csv_rel}
+        all_candidate_paths.update(cam_paths.values())
+        all_candidate_paths.add(csv_rel)
 
-        probe = probe_video(os.path.join(nas_root, cam_paths[1]))
-        row_count = count_csv_rows(os.path.join(nas_root, csv_rel))
-        total_size = sum(
-            os.path.getsize(os.path.join(nas_root, p))
-            for p in all_files
-            if os.path.isfile(os.path.join(nas_root, p))
-        )
+    if not candidates:
+        return
+
+    # 一次性批量查询已存在的 sample_code / media_files，避免每个session单独往返数据库
+    existing_codes = set(
+        (await db.execute(select(Sample.sample_code).where(Sample.sample_code.in_(candidates.keys())))).scalars()
+    )
+    existing_media_paths = set(
+        (
+            await db.execute(select(MediaFile.relative_path).where(MediaFile.relative_path.in_(all_candidate_paths)))
+        ).scalars()
+    )
+
+    new_session_keys = [k for k in candidates if k not in existing_codes]
+    _progress.skipped_existing += len(candidates) - len(new_session_keys)
+    _progress.processed += len(candidates) - len(new_session_keys)
+    _progress.tick()
+
+    # 并发探测（ffprobe/csv行数/文件大小），限流避免一下起几千个ffmpeg进程
+    semaphore = asyncio.Semaphore(_PROBE_CONCURRENCY)
+
+    async def probe_one(session_key: str) -> tuple[str, dict]:
+        async with semaphore:
+            info = candidates[session_key]
+            result = await asyncio.to_thread(_probe_group_sync, nas_root, info["cam_paths"], info["csv_rel"])
+            return session_key, result
+
+    for coro in asyncio.as_completed([probe_one(k) for k in new_session_keys]):
+        session_key, result = await coro
+        info = candidates[session_key]
+        cam_paths, csv_rel = info["cam_paths"], info["csv_rel"]
+        probe, row_count, total_size, missing = result["probe"], result["row_count"], result["total_size"], result["missing"]
 
         sample = Sample(
             sample_code=session_key,
@@ -171,18 +236,18 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
                 media_entries = [(p, MediaFileType.raw_video) for p in cam_paths.values()]
                 media_entries.append((csv_rel, MediaFileType.raw_imu_csv))
                 for rel_path, file_type in media_entries:
-                    media_exists = (
-                        await db.execute(select(MediaFile.id).where(MediaFile.relative_path == rel_path))
-                    ).scalar_one_or_none()
-                    if media_exists is None:
+                    if rel_path not in existing_media_paths:
                         content_type = "text/csv" if file_type == MediaFileType.raw_imu_csv else "video/mp4"
                         db.add(MediaFile(file_type=file_type, relative_path=rel_path, content_type=content_type))
+                        existing_media_paths.add(rel_path)  # 同一批新session可能共享文件，避免重复insert
                 await db.flush()
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
             _progress.detail.append(f"跳过 {session_key}：数据库冲突：{exc.orig}")
             _progress.skipped_existing += 1
+            _progress.processed += 1
+            _progress.tick()
             continue
 
         _progress.created += 1
@@ -190,3 +255,5 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             _progress.errors += 1
         else:
             _progress.verified += 1
+        _progress.processed += 1
+        _progress.tick()

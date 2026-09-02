@@ -4,8 +4,6 @@
 "不想等，立刻扫一次"的快捷方式，不是唯一入口。
 """
 
-from dataclasses import asdict
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,4 +66,19 @@ async def import_scan(admin: User = Depends(get_current_user)):
 @router.get("/import-scan/status")
 async def import_scan_status():
     """前端轮询这个接口显示进度条。"""
-    return ok(ScanProgressOut(**asdict(get_progress())).model_dump())
+    p = get_progress()
+    return ok(
+        ScanProgressOut(
+            status=p.status,
+            total_groups=p.total_groups,
+            processed=p.processed,
+            created=p.created,
+            skipped_existing=p.skipped_existing,
+            verified=p.verified,
+            errors=p.errors,
+            detail=p.detail,
+            error_message=p.error_message,
+            elapsed_sec=p.elapsed_sec,
+            estimated_remaining_sec=p.estimated_remaining_sec,
+        ).model_dump()
+    )

@@ -11,6 +11,13 @@ const statusColor: Record<Sample["import_status"], string> = {
   error: "red",
 };
 
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}秒`;
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}分${s}秒`;
+}
+
 export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
@@ -98,13 +105,20 @@ export default function Samples() {
       {progress && (progress.status === "running" || progress.status === "error") && (
         <div style={{ marginBottom: 16 }}>
           {progress.status === "running" && (
-            <Progress
-              percent={
-                progress.total_groups ? Math.round((progress.processed / progress.total_groups) * 100) : 0
-              }
-              status="active"
-              format={() => `${progress.processed}/${progress.total_groups || "?"}`}
-            />
+            <>
+              <Progress
+                percent={
+                  progress.total_groups ? Math.round((progress.processed / progress.total_groups) * 100) : 0
+                }
+                status="active"
+                format={() => `${progress.processed}/${progress.total_groups || "?"}`}
+              />
+              <Typography.Text type="secondary">
+                已耗时 {formatDuration(progress.elapsed_sec)}
+                {progress.estimated_remaining_sec != null &&
+                  ` · 预计还需 ${formatDuration(progress.estimated_remaining_sec)}`}
+              </Typography.Text>
+            </>
           )}
           {progress.status === "error" && (
             <Alert type="error" message="扫描出错" description={progress.error_message} showIcon />

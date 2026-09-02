@@ -23,6 +23,8 @@ export interface ScanProgress {
   errors: number;
   detail: string[];
   error_message: string | null;
+  elapsed_sec: number;
+  estimated_remaining_sec: number | null;
 }
 
 export const startImportScan = () =>
