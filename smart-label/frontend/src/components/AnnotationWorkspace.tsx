@@ -4,6 +4,7 @@ import {
   Empty,
   Modal,
   Popconfirm,
+  Collapse,
   Segmented,
   Space,
   Spin,
@@ -19,6 +20,7 @@ import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
+import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
 interface Props {
@@ -42,6 +44,8 @@ const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", 
 const HEARTBEAT_MS = 30_000;
 // 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
 const HOTKEYS = "1234567890qwertyasdfgh".split("");
+// 波形区默认露出的高度：约等于一条通道 + X轴，其余通道滚动查看
+const CHART_VIEWPORT_PX = 190;
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -275,8 +279,10 @@ export default function AnnotationWorkspace({
       }
       open={taskId != null}
       onCancel={onClose}
-      width="95vw"
-      style={{ top: 16 }}
+      // 标注要看细节，占满整个屏幕，别把空间浪费在弹窗留白上
+      width="100vw"
+      style={{ top: 0, paddingBottom: 0, maxWidth: "100vw" }}
+      styles={{ body: { height: "calc(100vh - 108px)", overflow: "hidden", paddingTop: 8 } }}
       destroyOnClose
       footer={
         readOnly ? (
@@ -310,9 +316,10 @@ export default function AnnotationWorkspace({
         )
       }
     >
+      <div className="ws-body">
       <Spin spinning={loading}>
         {videos.length > 0 ? (
-          <SyncedVideoGroup videos={videos} bus={bus} fps={fps} />
+          <SyncedVideoGroup videos={videos} bus={bus} fps={fps} fill />
         ) : (
           !loading && <Empty description="没有找到可播放的视频" />
         )}
@@ -381,7 +388,7 @@ export default function AnnotationWorkspace({
           </div>
         )}
 
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 4 }}>
           {hasCsv && sampleId != null ? (
             <>
               <Segmented
@@ -391,16 +398,21 @@ export default function AnnotationWorkspace({
                 style={{ marginBottom: 8 }}
               />
               {imuView === "曲线图" ? (
-                <ImuChart
-                  sampleId={sampleId}
-                  bus={bus}
-                  segments={segments}
-                  activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
-                  onCreateSegment={readOnly ? undefined : handleCreateFromChart}
-                  onResizeSegment={readOnly ? undefined : handleResizeFromChart}
-                />
+                // 只露出一条波形的高度，其他通道往下滚就能看到
+                <div className="ws-charts" style={{ height: CHART_VIEWPORT_PX }}>
+                  <ImuChart
+                    sampleId={sampleId}
+                    bus={bus}
+                    segments={segments}
+                    activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
+                    onCreateSegment={readOnly ? undefined : handleCreateFromChart}
+                    onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+                  />
+                </div>
               ) : (
-                <ImuTable sampleId={sampleId} />
+                <div className="ws-charts" style={{ height: CHART_VIEWPORT_PX }}>
+                  <ImuTable sampleId={sampleId} />
+                </div>
               )}
             </>
           ) : (
@@ -408,9 +420,17 @@ export default function AnnotationWorkspace({
           )}
         </div>
 
-        <Typography.Title level={5} style={{ marginTop: 16 }}>
-          已标注片段（{items.length}）
-        </Typography.Title>
+        <Collapse
+          size="small"
+          style={{ marginTop: 8 }}
+          // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
+          // 审核就是来看这些片段的，默认展开
+          defaultActiveKey={readOnly ? ["segs"] : []}
+          items={[
+            {
+              key: "segs",
+              label: `已标注片段（${items.length}）`,
+              children: (
         <Table
           size="small"
           rowKey="id"
@@ -453,7 +473,12 @@ export default function AnnotationWorkspace({
             },
           ]}
         />
+              ),
+            },
+          ]}
+        />
       </Spin>
+      </div>
     </Modal>
   );
 }

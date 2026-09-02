@@ -1,0 +1,28 @@
+/* 标注工作台走全屏：弹窗body撑满视口高度，内部用flex分配空间，
+   视频区占大头，波形区固定一小条自己滚动。 */
+.ws-body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+/* antd Spin 会包两层 div，不撑高的话里面的 flex 布局就塌了 */
+.ws-body > .ant-spin-nested-loading,
+.ws-body > .ant-spin-nested-loading > .ant-spin-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* 波形区：默认只露出一条波形的高度，想看其他通道往下滚 */
+.ws-charts {
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  padding: 4px 8px;
+}

@@ -11,6 +11,8 @@ interface Props {
   videos: VideoSrc[];
   bus: TimeBus;
   fps?: number | null;
+  /** 撑满可用高度（标注工作台全屏时用），默认按 45vh 封顶（预览弹窗用） */
+  fill?: boolean;
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -27,7 +29,7 @@ interface ZoomState {
   ty: number;
 }
 
-export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
+export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   const refs = useRef<(HTMLVideoElement | null)[]>([]);
   const wrapperRefs = useRef<(HTMLDivElement | null)[]>([]);
   const isProgrammatic = useRef(false);
@@ -273,7 +275,7 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
   };
 
   return (
-    <div>
+    <div style={fill ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined}>
       <Space style={{ marginBottom: 8 }} wrap>
         <Typography.Text type="secondary">播放速度：</Typography.Text>
         <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
@@ -301,15 +303,32 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
           </>
         )}
       </Space>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <div
+        style={
+          fill
+            ? { display: "flex", gap: 8, flex: 1, minHeight: 0 }
+            : { display: "flex", gap: 12, flexWrap: "wrap" }
+        }
+      >
         {videos.map((v, i) => (
-          <div key={v.label} style={{ flex: "1 1 420px", minWidth: 380 }}>
+          <div
+            key={v.label}
+            style={
+              fill
+                ? { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }
+                : { flex: "1 1 420px", minWidth: 380 }
+            }
+          >
             <Typography.Text type="secondary">{v.label}</Typography.Text>
             <div
               ref={(el) => {
                 wrapperRefs.current[i] = el;
               }}
-              style={{ overflow: "hidden", maxHeight: "45vh", background: "#000" }}
+              style={
+                fill
+                  ? { overflow: "hidden", background: "#000", flex: 1, minHeight: 0, display: "flex" }
+                  : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
+              }
             >
               <video
                 ref={(el) => {
@@ -317,7 +336,12 @@ export default function SyncedVideoGroup({ videos, bus, fps }: Props) {
                 }}
                 src={v.url}
                 controls
-                style={{ width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }}
+                style={
+                  fill
+                    ? // 撑满容器，画面按比例完整显示（不裁切）
+                      { width: "100%", height: "100%", objectFit: "contain", display: "block", transformOrigin: "center" }
+                    : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
+                }
               />
             </div>
           </div>
