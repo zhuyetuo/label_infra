@@ -3,6 +3,16 @@ import type { Sample } from "@/types";
 
 export const listSamples = () => request.get<never, Sample[]>("/samples");
 
+export interface SampleMedia {
+  video1_id: number | null;
+  video2_id: number | null;
+  video3_id: number | null;
+  csv_id: number | null;
+}
+
+export const getSampleMedia = (sampleId: number) =>
+  request.get<never, SampleMedia>(`/samples/${sampleId}/media`);
+
 export interface ScanProgress {
   status: "idle" | "running" | "done" | "error";
   total_groups: number;

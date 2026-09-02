@@ -29,6 +29,13 @@ class SampleOut(BaseModel):
     created_at: datetime
 
 
+class SampleMediaOut(BaseModel):
+    video1_id: int | None
+    video2_id: int | None
+    video3_id: int | None
+    csv_id: int | None
+
+
 class ScanStartResult(BaseModel):
     already_running: bool
 
