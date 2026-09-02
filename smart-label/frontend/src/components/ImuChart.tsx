@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import request from "@/utils/request";
+import type { TimeBus } from "@/utils/timeBus";
 
 interface ImuMeta {
   duration_ms: number;
@@ -45,13 +46,16 @@ function formatTimestamp(epochSec: number): string {
 
 interface Props {
   sampleId: number;
+  bus: TimeBus;
   rowHeight?: number;
 }
 
 // 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
 // 面板风格一致），X轴用绝对时间戳（年月日时分秒毫秒），6张图通过手动同步
 // setScale + uPlot cursor.sync 联动缩放/平移/十字线。
-export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
+// 另外通过 bus 跟视频双向联动：视频播放时在6张图上画一条跟随的红色竖线
+// （playheadPlugin，区别于鼠标悬停的十字线），点击曲线任意位置能让视频跳转过去。
+export default function ImuChart({ sampleId, bus, rowHeight = 110 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -61,6 +65,7 @@ export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
 
   useEffect(() => {
     let disposed = false;
+    const playheadState: { current: number | null } = { current: null };
 
     (async () => {
       const meta = await getMeta(sampleId);
@@ -105,6 +110,10 @@ export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
         scheduleRefetch(min, max);
       };
 
+      const onClickSeek = (epochVal: number) => {
+        bus.seek(epochVal - startEpochRef.current);
+      };
+
       const syncKey = `imu-sync-${sampleId}`;
       const t0 = toEpoch(series.t);
 
@@ -128,24 +137,36 @@ export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
             { label: c.label, stroke: c.color, width: 1.5 },
           ],
           hooks: { setScale: [onScaleChange(i)] },
-          plugins: [dragPanPlugin(), wheelZoomPlugin()],
+          plugins: [dragPanPlugin(onClickSeek), wheelZoomPlugin(), playheadPlugin(playheadState)],
         };
 
         plotRefs.current[i] = new uPlot(opts, [t0, series[c.key]], container);
       });
-    })();
+
+      const unsubscribe = bus.onTime((sec) => {
+        playheadState.current = startEpochRef.current + sec;
+        plotRefs.current.forEach((p) => p?.redraw());
+      });
+
+      return unsubscribe;
+    })().then((unsub) => {
+      cleanupBusRef.current = unsub;
+    });
+
+    const cleanupBusRef: { current: (() => void) | null | undefined } = { current: null };
 
     return () => {
       disposed = true;
+      cleanupBusRef.current?.();
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight]);
+  }, [sampleId, rowHeight, bus]);
 
   return (
     <div>
       <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        滚轮缩放 / 按住拖动左右平移 / 双击恢复整体视图（六张图联动，鼠标悬停显示精确时间戳）
+        滚轮缩放 / 按住拖动左右平移 / 单击跳转视频到该时刻 / 双击恢复整体视图（红色竖线=视频当前播放位置）
       </div>
       {CHANNELS.map((c, i) => (
         <div
@@ -157,6 +178,29 @@ export default function ImuChart({ sampleId, rowHeight = 110 }: Props) {
       ))}
     </div>
   );
+}
+
+// 画一条跟随视频播放位置的竖线，跟鼠标悬停的十字线是两码事（互不干扰）
+function playheadPlugin(stateRef: { current: number | null }) {
+  return {
+    hooks: {
+      draw: (u: uPlot) => {
+        if (stateRef.current == null) return;
+        const x = u.valToPos(stateRef.current, "x", true);
+        if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+        const ctx = u.ctx;
+        ctx.save();
+        ctx.strokeStyle = "#ff0000";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, u.bbox.top);
+        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+        ctx.stroke();
+        ctx.restore();
+      },
+    },
+  };
 }
 
 // 滚轮缩放：以光标位置为中心，不能超出数据整体范围
@@ -199,13 +243,14 @@ function wheelZoomPlugin() {
   };
 }
 
-// 按住拖动左右平移（不是框选放大）
-function dragPanPlugin() {
+// 按住拖动左右平移（不是框选放大）；如果几乎没移动就当作一次单击，触发跳转视频
+function dragPanPlugin(onClickSeek: (epochVal: number) => void) {
   let dragging = false;
   let startMin = 0;
   let startMax = 0;
   let startRelX = 0;
   let overRectLeft = 0;
+  let maxMoveDistance = 0;
 
   return {
     hooks: {
@@ -216,6 +261,7 @@ function dragPanPlugin() {
         const onMouseDown = (e: MouseEvent) => {
           if (e.button !== 0) return;
           dragging = true;
+          maxMoveDistance = 0;
           over.style.cursor = "grabbing";
           overRectLeft = over.getBoundingClientRect().left;
           startRelX = e.clientX - overRectLeft;
@@ -227,16 +273,21 @@ function dragPanPlugin() {
         const onMouseMove = (e: MouseEvent) => {
           if (!dragging) return;
           const relX = e.clientX - overRectLeft;
+          maxMoveDistance = Math.max(maxMoveDistance, Math.abs(relX - startRelX));
           const v0 = u.posToVal(startRelX, "x");
           const v1 = u.posToVal(relX, "x");
           const dv = v1 - v0;
           u.setScale("x", { min: startMin - dv, max: startMax - dv });
         };
 
-        const onMouseUp = () => {
+        const onMouseUp = (e: MouseEvent) => {
           if (!dragging) return;
           dragging = false;
           over.style.cursor = "grab";
+          if (maxMoveDistance < 5) {
+            const relX = e.clientX - overRectLeft;
+            onClickSeek(u.posToVal(relX, "x"));
+          }
         };
 
         over.addEventListener("mousedown", onMouseDown);

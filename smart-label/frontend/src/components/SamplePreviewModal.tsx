@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal, Segmented, Spin, Typography } from "antd";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleMedia } from "@/api/samples";
 import ImuChart from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
+import { TimeBus } from "@/utils/timeBus";
 
 interface Props {
   sampleId: number | null;
@@ -22,6 +23,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   const [hasCsv, setHasCsv] = useState(false);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
+  const bus = useMemo(() => new TimeBus(), [sampleId]);
 
   useEffect(() => {
     if (sampleId == null) {
@@ -61,7 +63,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       destroyOnClose
     >
       <Spin spinning={loading}>
-        {videos.length > 0 && <SyncedVideoGroup videos={videos} />}
+        {videos.length > 0 && <SyncedVideoGroup videos={videos} bus={bus} />}
         {!loading && videos.length === 0 && (
           <Typography.Text type="secondary">没有找到可播放的视频（可能未走标准导入流程）</Typography.Text>
         )}
@@ -75,7 +77,11 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
                 onChange={(v) => setImuView(v as "曲线图" | "表格")}
                 style={{ marginBottom: 8 }}
               />
-              {imuView === "曲线图" ? <ImuChart sampleId={sampleId} /> : <ImuTable sampleId={sampleId} />}
+              {imuView === "曲线图" ? (
+                <ImuChart sampleId={sampleId} bus={bus} />
+              ) : (
+                <ImuTable sampleId={sampleId} />
+              )}
             </>
           ) : (
             !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
