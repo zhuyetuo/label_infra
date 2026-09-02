@@ -16,6 +16,22 @@ services:
       retries: 20
     networks: [smart-label]
 
+  # 数据库迁移单独跑一次性容器：api 和 scheduler 都等它跑完再起，
+  # 避免两个容器同时执行迁移打架，也避免忘记手动执行迁移导致表结构对不上
+  # （之前就是没有这一步，加了新表/新字段之后线上直接 ProgrammingError）。
+  migrate:
+    build:
+      context: ../backend
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
+    command: alembic upgrade head
+    networks: [smart-label]
+
   api:
     build:
       context: ../backend
@@ -23,6 +39,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
@@ -40,6 +58,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}

@@ -26,15 +26,24 @@
 ```bash
 cd deploy
 cp .env.example .env   # 改数据库密码/JWT密钥/NAS路径
-docker compose up -d --build
-
-# 首次启动，建表（迁移脚本已提交进仓库，不需要每台机器各自生成一份）
-docker compose exec api alembic upgrade head
+bash up.sh             # 等价于 docker compose up -d --build，跑完会打印访问地址
 ```
 
-四个容器：`mysql`（数据库）、`api`（FastAPI，映射宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）、`frontend`（映射宿主机 8284）。
+建表和后续的表结构升级都由 `migrate` 容器自动完成（`alembic upgrade head`），
+`api` 和 `scheduler` 会等它跑成功再启动，所以**不需要手动执行迁移**，
+每次 `git pull` 之后直接 `bash up.sh` 就行。
+
+容器：`mysql`（数据库）、`migrate`（一次性，跑数据库迁移，跑完就退出）、`api`（FastAPI，映射宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）、`frontend`（映射宿主机 8284）。
 
 访问 `http://<服务器IP>:8284` 打开测试用前端页面，首次会引导创建管理员账号。API 文档在 `http://<服务器IP>:8283/docs`。
+
+如果页面上冒出 `服务器内部错误: ProgrammingError / OperationalError`，基本都是表结构比代码旧
+（少了新加的表或字段）。先看迁移容器日志，再手动补跑一次：
+```bash
+docker compose logs migrate
+docker compose exec api alembic current   # 看当前版本
+docker compose run --rm migrate           # 手动补跑迁移
+```
 
 如果数据库版本记录跟迁移脚本对不上（比如之前手动生成过迁移文件但没提交），跑：
 ```bash
