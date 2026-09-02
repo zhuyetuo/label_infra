@@ -143,6 +143,15 @@ ALTER TABLE annotation_label_items
   ADD CONSTRAINT fk_label_item_created_by FOREIGN KEY (created_by) REFERENCES users(id);
 ```
 
+### 决策⑨ 其余开放问题：按默认值收尾
+
+- **审核快照**：不做。审核意见（通过/驳回+备注）保留，但不单独留存"审核那一刻的标签内容"快照
+- **标注终端浏览器**：统一要求 Chrome/Edge 最新版
+- **数据保留清理**：暂不做自动清理，先靠人工
+- **后台任务部署拓扑**：统一成一张队列表（`job_type` 区分任务超时回收/clip生成/IMU入库），减少维护面
+
+**至此全部18项开放问题收口完毕，进入开发阶段。**
+
 ---
 
 ## 架构总览
