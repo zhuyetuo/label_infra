@@ -117,6 +117,14 @@ AI 侧生成 `data_labeled_ai/` 下的 JSON，格式对齐 Label Studio 的 `tim
 
 后端 `POST /api/samples/{id}/ai-labels` 接口接收该文件、校验 `label_code` 是否存在于 `label_definitions`、按上面决策③的非重叠规则校验后，落盘到 NAS 并写入 `annotation_records`（`source_type='ai_generated'`）+ 逐条 `annotation_label_items`（`source_type='ai_generated'`, `is_modified=0`）。
 
+### 决策⑥ 账号注册：无公开注册页，管理员手动建号
+
+服务外网可访问，但用户固定是内部5-7人+外包3人，不做自助注册审核流程：
+
+- **首个管理员**：一次性 CLI 脚本 `scripts/create_admin.py`（部署时手动运行一次，交互式输入用户名/密码，直接写库），不经过 Web 界面，避免"谁先注册谁是管理员"的竞态风险
+- **其他账号**：管理员登录后台"用户管理"页手动创建（用户名+角色+是否外包），系统生成随机临时密码，管理员通过其他渠道（微信/邮件）告知，首次登录强制修改密码（`users` 表加 `must_change_password TINYINT(1)` 字段）
+- 不提供任何公开的 `/register` 接口或页面
+
 ---
 
 ## 架构总览
