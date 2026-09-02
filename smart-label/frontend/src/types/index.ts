@@ -15,7 +15,7 @@ export interface Sample {
   session_date: string | null;
   video_cam1_path: string;
   video_cam2_path: string;
-  video_cam3_path: string;
+  video_cam3_path: string | null;
   imu_csv_path: string;
   video_duration_sec: number | null;
   video_resolution: string | null;
