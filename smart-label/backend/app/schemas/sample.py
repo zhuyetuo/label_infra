@@ -29,10 +29,17 @@ class SampleOut(BaseModel):
     created_at: datetime
 
 
-class ImportScanResult(BaseModel):
-    scanned_sessions: int
+class ScanStartResult(BaseModel):
+    already_running: bool
+
+
+class ScanProgressOut(BaseModel):
+    status: str
+    total_groups: int
+    processed: int
     created: int
     skipped_existing: int
     verified: int
     errors: int
     detail: list[str]
+    error_message: str | None
