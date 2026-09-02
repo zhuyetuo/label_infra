@@ -54,11 +54,13 @@ def get_meta(csv_path: str) -> dict:
     row_count = len(df)
     duration_ms = int(df["_t_ms"].iloc[-1]) if row_count else 0
     sample_rate_hz = round(row_count / (duration_ms / 1000), 2) if duration_ms > 0 else None
+    start_timestamp = df["_ts"].iloc[0].isoformat() if row_count else None
     return {
         "duration_ms": duration_ms,
         "row_count": row_count,
         "sample_rate_hz": sample_rate_hz,
         "channels": _CHANNELS,
+        "start_timestamp": start_timestamp,
     }
 
 
