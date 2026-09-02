@@ -79,8 +79,20 @@ def upgrade() -> None:
     op.create_index("ix_label_definitions_project_id", "label_definitions", ["project_id"])
     op.create_foreign_key("fk_labels_project", "label_definitions", "projects", ["project_id"], ["id"])
 
-    # code 改成项目内唯一
-    op.drop_constraint("code", "label_definitions", type_="unique")
+    # code 从全局唯一改成项目内唯一。旧的唯一索引名字不一定叫 "code"
+    # （建库方式不同可能是 code_2 之类），所以从 information_schema 查出来再删，
+    # 不要写死名字。
+    old_unique = conn.execute(
+        sa.text(
+            "SELECT s.INDEX_NAME FROM information_schema.STATISTICS s "
+            "WHERE s.TABLE_SCHEMA = DATABASE() AND s.TABLE_NAME = 'label_definitions' "
+            "AND s.NON_UNIQUE = 0 AND s.INDEX_NAME <> 'PRIMARY' "
+            "GROUP BY s.INDEX_NAME "
+            "HAVING COUNT(*) = 1 AND MAX(s.COLUMN_NAME) = 'code'"
+        )
+    ).scalar()
+    if old_unique:
+        op.drop_constraint(old_unique, "label_definitions", type_="unique")
     op.create_unique_constraint("uq_label_project_code", "label_definitions", ["project_id", "code"])
 
 
