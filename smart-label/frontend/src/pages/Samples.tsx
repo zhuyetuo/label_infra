@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Collapse, Progress, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getImportScanStatus, startImportScan, listSamples, type ScanProgress } from "@/api/samples";
+import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
 
 const statusColor: Record<Sample["import_status"], string> = {
@@ -10,23 +11,11 @@ const statusColor: Record<Sample["import_status"], string> = {
   error: "red",
 };
 
-const columns = [
-  { title: "ID", dataIndex: "id", width: 60 },
-  { title: "样本编号", dataIndex: "sample_code" },
-  {
-    title: "状态",
-    dataIndex: "import_status",
-    render: (s: Sample["import_status"]) => <Tag color={statusColor[s]}>{s}</Tag>,
-  },
-  { title: "时长(秒)", dataIndex: "video_duration_sec" },
-  { title: "分辨率", dataIndex: "video_resolution" },
-  { title: "错误信息", dataIndex: "import_error" },
-];
-
 export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  const [preview, setPreview] = useState<Sample | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -54,6 +43,27 @@ export default function Samples() {
   };
 
   useEffect(() => stopPolling, []);
+
+  const columns = [
+    { title: "ID", dataIndex: "id", width: 60 },
+    { title: "样本编号", dataIndex: "sample_code" },
+    {
+      title: "状态",
+      dataIndex: "import_status",
+      render: (s: Sample["import_status"]) => <Tag color={statusColor[s]}>{s}</Tag>,
+    },
+    { title: "时长(秒)", dataIndex: "video_duration_sec" },
+    { title: "分辨率", dataIndex: "video_resolution" },
+    { title: "错误信息", dataIndex: "import_error" },
+    {
+      title: "操作",
+      render: (_: unknown, record: Sample) => (
+        <Button size="small" type="link" onClick={() => setPreview(record)}>
+          预览
+        </Button>
+      ),
+    },
+  ];
 
   const groups = useMemo(() => {
     const map = new Map<string, Sample[]>();
@@ -121,6 +131,12 @@ export default function Samples() {
           }))}
         />
       )}
+
+      <SamplePreviewModal
+        sampleId={preview?.id ?? null}
+        sampleCode={preview?.sample_code}
+        onClose={() => setPreview(null)}
+      />
     </div>
   );
 }
