@@ -26,3 +26,18 @@
   border-radius: 4px;
   padding: 4px 8px;
 }
+
+/* 展开全部波形时，视频缩成一条（还能看，但把高度让给波形），
+   波形区拿走剩余空间，目标是六个通道一屏看全不用滚 */
+.ws-body--charts-expanded .ws-videos {
+  flex: 0 0 auto;
+  max-height: 17vh;
+}
+
+/* 展开时通道标题压扁一点，六行才塞得下 */
+.ws-body--charts-expanded .ws-charts .u-title {
+  font-size: 12px;
+  line-height: 1.1;
+  margin: 0;
+  padding-left: 4px;
+}

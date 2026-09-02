@@ -298,7 +298,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   };
 
   return (
-    <div style={fill ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined}>
+    <div
+      className={fill ? "ws-videos" : undefined}
+      style={fill ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined}
+    >
       <Space style={{ marginBottom: 8 }} wrap>
         <Typography.Text type="secondary">播放速度：</Typography.Text>
         <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
