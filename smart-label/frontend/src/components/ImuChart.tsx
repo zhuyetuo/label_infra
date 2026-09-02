@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./ImuChart.css";
@@ -45,6 +45,25 @@ function formatTimestamp(epochSec: number): string {
   )}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
+// uPlot 默认的时间轴除了时分秒，还会在下面单独加一行日期（"9/1/26 12:00am"），
+// 六个通道就重复六遍。这里只输出时分秒，日期由图表下方那一行统一显示一次。
+function axisTimeValues(u: uPlot, splits: number[]): string[] {
+  const span = (u.scales.x.max ?? 0) - (u.scales.x.min ?? 0);
+  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+  return splits.map((v) => {
+    const d = new Date(v * 1000);
+    const hms = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    return span < 10 ? `${hms}.${pad(d.getMilliseconds(), 3)}` : hms;
+  });
+}
+
+function formatDayCaption(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const half = d.getHours() < 12 ? "AM 上午" : "PM 下午";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}  ${half}`;
+}
+
 export interface ChartSegment {
   start_time_ms: number;
   end_time_ms: number;
@@ -63,6 +82,8 @@ interface Props {
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
+  /** 紧凑模式：通道名画进图里而不是单独占一行标题，六轴同屏时能省下不少高度 */
+  compact?: boolean;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -83,11 +104,12 @@ interface AnnotateCtx {
 export default function ImuChart({
   sampleId,
   bus,
-  rowHeight = 110,
+  rowHeight = 125,
   segments,
   activeColor,
   onCreateSegment,
   onResizeSegment,
+  compact,
 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
@@ -98,6 +120,9 @@ export default function ImuChart({
   const draggingRef = useRef(false);
   // 标注色块走 ref 而不是进 effect 依赖，否则每加一条标注就要把6张图全部重建
   const segmentsRef = useRef<ChartSegment[]>(segments ?? []);
+  // 最底下那条轴除了时间刻度，再补一个"哪一天 + 上午/下午"，
+  // 时间刻度本身只有时分秒，光看刻度不知道是哪天的上午还是下午
+  const [rangeCaption, setRangeCaption] = useState("");
   const annotateRef = useRef<AnnotateCtx>({
     activeColor: null,
     onCreate: null,
@@ -182,6 +207,8 @@ export default function ImuChart({
         const { min, max } = u.scales.x;
         if (min == null || max == null) return;
 
+        setRangeCaption(formatDayCaption(min));
+
         syncingRef.current = true;
         plotRefs.current.forEach((p, i) => {
           if (i !== originIdx) p?.setScale("x", { min, max });
@@ -203,6 +230,7 @@ export default function ImuChart({
 
       const syncKey = `imu-sync-${sampleId}`;
       const t0 = toEpoch(series.t);
+      setRangeCaption(formatDayCaption(t0[0] ?? startEpochRef.current));
 
       CHANNELS.forEach((c, i) => {
         const container = containerRefs.current[i];
@@ -210,7 +238,7 @@ export default function ImuChart({
         const isLast = i === CHANNELS.length - 1;
 
         const opts: uPlot.Options = {
-          title: c.label,
+          title: compact ? undefined : c.label,
           width: container.clientWidth,
           height: rowHeight,
           cursor: {
@@ -219,13 +247,18 @@ export default function ImuChart({
           },
           legend: { show: false },
           scales: { x: { time: true } },
-          axes: [{ show: isLast }, {}],
+          // 每个通道都带时间刻度，不用回头去看最底下那条；
+          // 日期只在图表下方统一显示一次，不在每条轴上重复
+          // size 要显式给：uPlot 的 X 轴默认预留 50px（够放两行日期+时间），
+          // 现在每个通道都带轴，再按默认值留就把绘图区挤没了（110的行高只剩43px）
+          axes: [{ show: true, values: axisTimeValues, size: X_AXIS_PX }, {}],
           series: [
             { value: (_u, v) => (v == null ? "" : formatTimestamp(v)) },
             { label: c.label, stroke: c.color, width: 1.5 },
           ],
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
+            ...(compact ? [channelLabelPlugin(c.label, c.color)] : []),
             segmentBandPlugin(segmentsRef, annotateRef, () => startEpochRef.current, i === 0),
             dragPanPlugin(
               onClickSeek,
@@ -285,7 +318,7 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus]);
+  }, [sampleId, rowHeight, bus, compact]);
 
   return (
     <div>
@@ -301,8 +334,29 @@ export default function ImuChart({
           }}
         />
       ))}
+      {rangeCaption && (
+        <div style={{ fontSize: 12, color: "#555", textAlign: "right", paddingRight: 8 }}>{rangeCaption}</div>
+      )}
     </div>
   );
+}
+
+// 紧凑模式下把通道名画在绘图区左上角，省掉 uPlot 的标题行（六轴同屏时
+// 六行标题就要吃掉一百多像素，波形会被压得看不清）
+function channelLabelPlugin(label: string, color: string) {
+  return {
+    hooks: {
+      draw: (u: uPlot) => {
+        const ctx = u.ctx;
+        ctx.save();
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillStyle = color;
+        ctx.textBaseline = "top";
+        ctx.fillText(label, u.bbox.left + 4, u.bbox.top + 2);
+        ctx.restore();
+      },
+    },
+  };
 }
 
 // 把已标注的时间段画成半透明色块垫在曲线下面，第一张图上再标上标签名，
@@ -448,6 +502,7 @@ function wheelZoomPlugin() {
 
 const PLAYHEAD_GRAB_PX = 8;
 const SEGMENT_EDGE_GRAB_PX = 5; // 色块边缘多少像素内按下算"拖边缘改时间"
+const X_AXIS_PX = 30; // 单行时间刻度需要的高度
 const PAN_EPSILON = 1e-6; // 判断"是否已经是整体视图"的浮点容差
 const MIN_SEGMENT_MS = 50; // 拖出来太短的当误点丢弃
 const EDGE_SCROLL_PX = 40; // 距离左右边缘多少像素内开始自动滚动

@@ -45,7 +45,7 @@ const HEARTBEAT_MS = 30_000;
 // 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
 const HOTKEYS = "1234567890qwertyasdfgh".split("");
 // 波形区默认露出的高度：约等于一条通道 + X轴，其余通道滚动查看
-const CHART_VIEWPORT_PX = 190;
+const CHART_VIEWPORT_PX = 205;
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -76,6 +76,12 @@ export default function AnnotationWorkspace({
   const [hasCsv, setHasCsv] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
+  // 默认只露一条波形把高度让给视频；想通盘看六轴时切到"展开全部"，
+  // 波形区改为占满剩余高度，视频相应缩小
+  const [chartExpanded, setChartExpanded] = useState(false);
+  // 展开时要"一屏看全六轴"，所以行高不能写死，得按波形区实际拿到多少高度算
+  const chartBoxRef = useRef<HTMLDivElement | null>(null);
+  const [chartBoxH, setChartBoxH] = useState(0);
 
   const [items, setItems] = useState<LabelItem[]>([]);
   const [markStart, setMarkStart] = useState<number | null>(null);
@@ -243,6 +249,22 @@ export default function AnnotationWorkspace({
     }
   };
 
+  useEffect(() => {
+    const el = chartBoxRef.current;
+    if (!el || !chartExpanded) return;
+    const ro = new ResizeObserver(() => setChartBoxH(el.clientHeight));
+    ro.observe(el);
+    setChartBoxH(el.clientHeight);
+    return () => ro.disconnect();
+  }, [chartExpanded, imuView, videos]);
+
+  // 紧凑模式下通道名画进图里，没有额外的标题行，height 本身已含时间轴
+  const CHANNEL_CHROME_PX = 4;
+  const expandedRowHeight = Math.max(
+    40,
+    Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
+  );
+
   const canAdd = !readOnly && labelId != null && markStart != null && markEnd != null;
 
   // 数字/字母键快速切标签，跟参考工具一样，标注时手不用离开键盘
@@ -316,7 +338,7 @@ export default function AnnotationWorkspace({
         )
       }
     >
-      <div className="ws-body">
+      <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
         {videos.length > 0 ? (
           <SyncedVideoGroup videos={videos} bus={bus} fps={fps} fill />
@@ -388,21 +410,41 @@ export default function AnnotationWorkspace({
           </div>
         )}
 
-        <div style={{ marginTop: 4 }}>
+        <div
+          style={
+            chartExpanded
+              ? { marginTop: 4, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }
+              : { marginTop: 4 }
+          }
+        >
           {hasCsv && sampleId != null ? (
             <>
-              <Segmented
-                options={["曲线图", "表格"]}
-                value={imuView}
-                onChange={(v) => setImuView(v as "曲线图" | "表格")}
-                style={{ marginBottom: 8 }}
-              />
+              <Space style={{ marginBottom: 8 }}>
+                <Segmented
+                  options={["曲线图", "表格"]}
+                  value={imuView}
+                  onChange={(v) => setImuView(v as "曲线图" | "表格")}
+                />
+                {imuView === "曲线图" && (
+                  <Segmented
+                    options={["单条波形", "展开全部"]}
+                    value={chartExpanded ? "展开全部" : "单条波形"}
+                    onChange={(v) => setChartExpanded(v === "展开全部")}
+                  />
+                )}
+              </Space>
               {imuView === "曲线图" ? (
                 // 只露出一条波形的高度，其他通道往下滚就能看到
-                <div className="ws-charts" style={{ height: CHART_VIEWPORT_PX }}>
+                <div
+                  ref={chartBoxRef}
+                  className="ws-charts"
+                  style={chartExpanded ? { flex: 1, minHeight: 0 } : { height: CHART_VIEWPORT_PX }}
+                >
                   <ImuChart
                     sampleId={sampleId}
                     bus={bus}
+                    rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+                    compact={chartExpanded}
                     segments={segments}
                     activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                     onCreateSegment={readOnly ? undefined : handleCreateFromChart}
