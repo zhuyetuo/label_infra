@@ -222,3 +222,4 @@ data/
 logs/
 # 但保留目录结构占位文件
 !data/imu/.gitkeep
+.vite/
