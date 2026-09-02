@@ -36,6 +36,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
+  // 每路画面的宽高比，元数据加载后才知道。用它给容器定死比例，
+  // 画面就能等比缩放到刚好填满位置，既不会留黑边也不会被裁切。
+  const [aspects, setAspects] = useState<Record<number, number>>({});
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
@@ -166,6 +169,26 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
       if (trailing) clearTimeout(trailing);
     };
   }, [bus, fps]);
+
+  useEffect(() => {
+    const cleanups: (() => void)[] = [];
+    refs.current.forEach((video, i) => {
+      if (!video) return;
+      const update = () => {
+        if (video.videoWidth && video.videoHeight) {
+          setAspects((prev) =>
+            prev[i] === video.videoWidth / video.videoHeight
+              ? prev
+              : { ...prev, [i]: video.videoWidth / video.videoHeight }
+          );
+        }
+      };
+      update();
+      video.addEventListener("loadedmetadata", update);
+      cleanups.push(() => video.removeEventListener("loadedmetadata", update));
+    });
+    return () => cleanups.forEach((fn) => fn());
+  }, [videos]);
 
   // 总帧数从视频元数据的 duration 算出来（duration*fps 四舍五入），不是瞎写的
   useEffect(() => {
@@ -306,7 +329,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
       <div
         style={
           fill
-            ? { display: "flex", gap: 8, flex: 1, minHeight: 0 }
+            ? // 三路画面无缝挨在一起：不留间距，标题浮在画面上不占额外的行
+              { display: "flex", gap: 0, flex: 1, minHeight: 0, alignItems: "stretch" }
             : { display: "flex", gap: 12, flexWrap: "wrap" }
         }
       >
@@ -315,18 +339,45 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
             key={v.label}
             style={
               fill
-                ? { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }
+                ? { flex: "1 1 0", minWidth: 0, display: "flex", minHeight: 0, position: "relative" }
                 : { flex: "1 1 420px", minWidth: 380 }
             }
           >
-            <Typography.Text type="secondary">{v.label}</Typography.Text>
+            {fill ? (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  left: 4,
+                  zIndex: 2,
+                  fontSize: 12,
+                  color: "#fff",
+                  textShadow: "0 0 3px rgba(0,0,0,0.9)",
+                  pointerEvents: "none",
+                }}
+              >
+                {v.label}
+              </span>
+            ) : (
+              <Typography.Text type="secondary">{v.label}</Typography.Text>
+            )}
             <div
               ref={(el) => {
                 wrapperRefs.current[i] = el;
               }}
               style={
                 fill
-                  ? { overflow: "hidden", background: "#000", flex: 1, minHeight: 0, display: "flex" }
+                  ? // 不给底色，容器只是裁切用；video 元素本身按比例缩放到刚好放得下，
+                    // 元素大小就等于画面大小，所以不会出现上下黑边
+                    {
+                      overflow: "hidden",
+                      flex: 1,
+                      minWidth: 0,
+                      minHeight: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }
                   : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
               }
             >
@@ -338,8 +389,16 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 controls
                 style={
                   fill
-                    ? // 撑满容器，画面按比例完整显示（不裁切）
-                      { width: "100%", height: "100%", objectFit: "contain", display: "block", transformOrigin: "center" }
+                    ? {
+                        // 定死宽高比 + 宽度占满，高度就按比例算出来；超过可用高度时
+                        // 浏览器会连宽带高一起缩，元素大小始终等于画面大小 -> 没有黑边
+                        aspectRatio: aspects[i],
+                        width: "100%",
+                        height: "auto",
+                        maxHeight: "100%",
+                        display: "block",
+                        transformOrigin: "center",
+                      }
                     : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
                 }
               />
