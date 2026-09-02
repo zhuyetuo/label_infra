@@ -23,7 +23,7 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    env_file: config/.env
+    env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
     ports:
@@ -40,7 +40,7 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    env_file: config/.env
+    env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
     # 超时回收定时任务必须只跑一个实例，不要 scale 这个 service
