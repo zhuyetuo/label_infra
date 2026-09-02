@@ -5,7 +5,6 @@ import {
   Modal,
   Popconfirm,
   Segmented,
-  Select,
   Space,
   Spin,
   Table,
@@ -38,6 +37,8 @@ interface VideoSrc {
 
 const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", "#13c2c2"];
 const HEARTBEAT_MS = 30_000;
+// 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
+const HOTKEYS = "1234567890qwertyasdfgh".split("");
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -143,6 +144,23 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
     [items, labels]
   );
 
+  const appendItem = (startMs: number, endMs: number, forLabel: number) => {
+    setItems((prev) => [
+      ...prev,
+      {
+        id: -Date.now(),
+        label_id: forLabel,
+        start_time_ms: Math.round(Math.max(0, startMs)),
+        end_time_ms: Math.round(Math.max(0, endMs)),
+        origin_item_id: null,
+        source_type: "human_added",
+        is_modified: false,
+        ai_confidence: null,
+        created_by: null,
+      },
+    ]);
+  };
+
   const addItem = () => {
     if (labelId == null || markStart == null || markEnd == null) return;
     const start = Math.min(markStart, markEnd);
@@ -151,22 +169,26 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
       message.warning("时间段太短");
       return;
     }
-    setItems((prev) => [
-      ...prev,
-      {
-        id: -Date.now(),
-        label_id: labelId,
-        start_time_ms: Math.round(start),
-        end_time_ms: Math.round(end),
-        origin_item_id: null,
-        source_type: "human_added",
-        is_modified: false,
-        ai_confidence: null,
-        created_by: null,
-      },
-    ]);
+    appendItem(start, end, labelId);
     setMarkStart(null);
     setMarkEnd(null);
+  };
+
+  // 在波形上直接拖出来一段（参考工具的主要标注方式）
+  const handleCreateFromChart = (startMs: number, endMs: number) => {
+    if (labelId == null) return;
+    appendItem(startMs, endMs, labelId);
+  };
+
+  // 拖已有色块的左右边缘改时间
+  const handleResizeFromChart = (index: number, startMs: number, endMs: number) => {
+    setItems((prev) =>
+      prev.map((it, i) =>
+        i === index
+          ? { ...it, start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)) }
+          : it
+      )
+    );
   };
 
   const persist = async () => {
@@ -208,6 +230,29 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
 
   const canAdd = !readOnly && labelId != null && markStart != null && markEnd != null;
 
+  // 数字/字母键快速切标签，跟参考工具一样，标注时手不用离开键盘
+  useEffect(() => {
+    if (taskId == null || readOnly) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Escape") {
+        // 取消选中 -> 回到拖动平移模式
+        setLabelId(null);
+        return;
+      }
+      const idx = HOTKEYS.indexOf(e.key.toLowerCase());
+      if (idx >= 0 && idx < labels.length) {
+        e.preventDefault();
+        // 再按一次同一个键就取消选中，跟点按钮的行为一致
+        setLabelId((prev) => (prev === labels[idx].id ? null : labels[idx].id));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [taskId, readOnly, labels]);
+
   return (
     <Modal
       title={
@@ -245,7 +290,40 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
         )}
 
         {!readOnly && (
-          <Space wrap style={{ margin: "12px 0", padding: 8, background: "#fafafa", borderRadius: 4 }}>
+          <div style={{ margin: "12px 0", padding: 8, background: "#fafafa", borderRadius: 4 }}>
+            <Space wrap size={6} style={{ marginBottom: 8 }}>
+              {labels.map((l, i) => {
+                const selected = labelId === l.id;
+                const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
+                return (
+                  <Button
+                    key={l.id}
+                    size="small"
+                    onClick={() => setLabelId(selected ? null : l.id)}
+                    style={{
+                      borderColor: c,
+                      color: selected ? "#fff" : c,
+                      background: selected ? c : "#fff",
+                      fontWeight: selected ? 600 : 400,
+                    }}
+                  >
+                    {l.display_name}
+                    {i < HOTKEYS.length && (
+                      <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{HOTKEYS[i]}</span>
+                    )}
+                  </Button>
+                );
+              })}
+              {labels.length === 0 && (
+                <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
+              )}
+            </Space>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
+              选一个标签（或按快捷键），然后直接在下面的波形上按住左键拖出一段即可；已画出来的色块，
+              拖它的左右边缘可以改时间。再按一次同一个快捷键（或按 Esc）取消选中，拖动就恢复成平移。
+              也可以用下面的「设为开始/设为结束」按当前播放位置打点。
+            </div>
+            <Space wrap>
             <Typography.Text strong>当前位置 {formatMs(currentMsShown)}</Typography.Text>
             <Button size="small" onClick={() => setMarkStart(currentMsRef.current)}>
               设为开始
@@ -259,15 +337,6 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
             <Typography.Text type={markEnd == null ? "secondary" : undefined}>
               结束 {markEnd == null ? "--" : formatMs(markEnd)}
             </Typography.Text>
-            <Select
-              placeholder="选择行为标签"
-              style={{ width: 180 }}
-              value={labelId ?? undefined}
-              onChange={setLabelId}
-              options={labels.map((l) => ({ value: l.id, label: l.display_name }))}
-              showSearch
-              optionFilterProp="label"
-            />
             <Button type="primary" size="small" disabled={!canAdd} onClick={addItem}>
               添加这一段
             </Button>
@@ -280,7 +349,8 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
             >
               清除
             </Button>
-          </Space>
+            </Space>
+          </div>
         )}
 
         <div style={{ marginTop: 12 }}>
@@ -293,7 +363,14 @@ export default function AnnotationWorkspace({ task, labels, readOnly, onClose, o
                 style={{ marginBottom: 8 }}
               />
               {imuView === "曲线图" ? (
-                <ImuChart sampleId={sampleId} bus={bus} segments={segments} />
+                <ImuChart
+                  sampleId={sampleId}
+                  bus={bus}
+                  segments={segments}
+                  activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
+                  onCreateSegment={readOnly ? undefined : handleCreateFromChart}
+                  onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+                />
               ) : (
                 <ImuTable sampleId={sampleId} />
               )}
