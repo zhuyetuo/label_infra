@@ -5,10 +5,13 @@
 会话前缀 = 文件名去掉 "_cam{N}..." 之后的部分。
 """
 
+import asyncio
 import os
 import re
+from datetime import date
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.media_file import MediaFile, MediaFileType
@@ -18,6 +21,13 @@ from app.schemas.sample import ImportScanResult
 from app.utils.ffprobe import count_csv_rows, probe_video
 
 _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)", re.IGNORECASE)
+_DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
+
+# 同一进程内，防止两次扫描请求（比如用户手快点了两下按钮）并发跑导致
+# 互相看不到对方未提交的insert，双双插入同一批sample_code最后撞唯一键崩溃。
+# 部署只有单个api容器，进程内锁足够；如果以后多进程/多副本部署，
+# 需要换成MySQL命名锁 GET_LOCK()。
+_scan_lock = asyncio.Lock()
 
 
 def _group_key_and_cam(filename: str) -> tuple[str, int] | None:
@@ -28,7 +38,28 @@ def _group_key_and_cam(filename: str) -> tuple[str, int] | None:
     return match.group(1), int(match.group(2))
 
 
+def _parse_session_date(session_key: str) -> date | None:
+    match = _DATE_RE.search(session_key)
+    if not match:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
+
+
 async def scan_and_import(db: AsyncSession, nas_root: str, admin: User) -> ImportScanResult:
+    if _scan_lock.locked():
+        return ImportScanResult(
+            scanned_sessions=0, created=0, skipped_existing=0, verified=0, errors=0,
+            detail=["已有一个扫描任务正在运行，请等它结束后再试（避免同一批样本被重复插入导致冲突）"],
+        )
+
+    async with _scan_lock:
+        return await _do_scan(db, nas_root, admin)
+
+
+async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> ImportScanResult:
     data_raw_dir = os.path.join(nas_root, "data_raw")
     groups: dict[str, dict[int, dict[str, str]]] = {}
 
@@ -61,7 +92,6 @@ async def scan_and_import(db: AsyncSession, nas_root: str, admin: User) -> Impor
             skipped += 1
             continue
 
-        # IMU CSV：优先用 cam1 关联的那份（多路CSV场景下的既定约定，见 cam1_imu1 命名）
         csv_rel = cams[1].get("csv") or next((cams[c]["csv"] for c in (2, 3) if "csv" in cams[c]), None)
         if csv_rel is None:
             detail.append(f"跳过 {session_key}：找不到IMU CSV")
@@ -81,6 +111,7 @@ async def scan_and_import(db: AsyncSession, nas_root: str, admin: User) -> Impor
 
         sample = Sample(
             sample_code=session_key,
+            session_date=_parse_session_date(session_key),
             video_cam1_path=cam_paths[1],
             video_cam2_path=cam_paths[2],
             video_cam3_path=cam_paths[3],
@@ -94,20 +125,31 @@ async def scan_and_import(db: AsyncSession, nas_root: str, admin: User) -> Impor
             import_error=f"缺失文件: {missing}" if missing else None,
             created_by=admin.id,
         )
-        db.add(sample)
 
-        for rel_path, file_type in [
-            (cam_paths[1], MediaFileType.raw_video),
-            (cam_paths[2], MediaFileType.raw_video),
-            (cam_paths[3], MediaFileType.raw_video),
-            (csv_rel, MediaFileType.raw_imu_csv),
-        ]:
-            media_exists = (
-                await db.execute(select(MediaFile.id).where(MediaFile.relative_path == rel_path))
-            ).scalar_one_or_none()
-            if media_exists is None:
-                content_type = "text/csv" if file_type == MediaFileType.raw_imu_csv else "video/mp4"
-                db.add(MediaFile(file_type=file_type, relative_path=rel_path, content_type=content_type))
+        # 每个session独立一个SAVEPOINT提交：万一撞了唯一键冲突（并发扫描/数据被别的
+        # 请求抢先插入），只回滚这一个session，不会拖累已经处理完的其他session
+        try:
+            async with db.begin_nested():
+                db.add(sample)
+                for rel_path, file_type in [
+                    (cam_paths[1], MediaFileType.raw_video),
+                    (cam_paths[2], MediaFileType.raw_video),
+                    (cam_paths[3], MediaFileType.raw_video),
+                    (csv_rel, MediaFileType.raw_imu_csv),
+                ]:
+                    media_exists = (
+                        await db.execute(select(MediaFile.id).where(MediaFile.relative_path == rel_path))
+                    ).scalar_one_or_none()
+                    if media_exists is None:
+                        content_type = "text/csv" if file_type == MediaFileType.raw_imu_csv else "video/mp4"
+                        db.add(MediaFile(file_type=file_type, relative_path=rel_path, content_type=content_type))
+                await db.flush()
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            detail.append(f"跳过 {session_key}：数据库冲突（可能已被其他请求同时导入）：{exc.orig}")
+            skipped += 1
+            continue
 
         created += 1
         if missing:
@@ -115,7 +157,6 @@ async def scan_and_import(db: AsyncSession, nas_root: str, admin: User) -> Impor
         else:
             verified += 1
 
-    await db.commit()
     return ImportScanResult(
         scanned_sessions=len(groups),
         created=created,
