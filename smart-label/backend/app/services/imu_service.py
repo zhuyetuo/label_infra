@@ -211,8 +211,23 @@ def _get_series(csv_path: str, start_ms: int, end_ms: int, max_points: int) -> d
     return result
 
 
+def _get_rows(csv_path: str, offset: int, limit: int) -> dict:
+    """逐行原始记录，不做 LTTB 降采样——表格页要看真实数据，跟曲线图那份是两回事。"""
+    df = _load_dataframe(csv_path)
+    total = len(df)
+    page = df.iloc[offset : offset + limit]
+    result: dict = {"total": total, "t": page["_t_ms"].tolist()}
+    for c in _CHANNELS:
+        result[c] = _to_json_floats(page[c].to_numpy(dtype=np.float64))
+    return result
+
+
 def get_meta(csv_path: str) -> dict:
     return _safe(_get_meta, csv_path)
+
+
+def get_rows(csv_path: str, offset: int, limit: int) -> dict:
+    return _safe(_get_rows, csv_path, offset, limit)
 
 
 def get_series(csv_path: str, start_ms: int, end_ms: int, max_points: int) -> dict:
