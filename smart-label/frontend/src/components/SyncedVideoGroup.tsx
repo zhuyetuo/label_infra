@@ -460,6 +460,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                   }}
                   src={v.url}
                   controls
+                  preload="auto"
                   style={
                     fill
                       ? { width: "100%", height: "100%", display: "block", transformOrigin: "center" }
