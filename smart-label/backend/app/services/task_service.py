@@ -55,6 +55,31 @@ async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
     return task
 
 
+async def release_task(db: AsyncSession, task_id: int, user: User) -> Task:
+    """
+    标注员主动放弃任务：不管标了没标、标了多少，草稿都留着不动（草稿按
+    task_id+round_no 存，跟谁认领的没关系），只是把任务退回公共池，
+    换个人认领之后打开工作台会看到上一个人留下的草稿，接着标即可。
+
+    跟"退回重标"（reopen）不是一回事：那个是审核驳回专用，会开新一轮；
+    这个是标注中途自己放弃，轮次不变。
+    """
+    stmt = (
+        update(Task)
+        .where(Task.id == task_id, Task.locked_by == user.id, Task.status == TaskStatus.IN_PROGRESS)
+        .values(status=TaskStatus.PENDING_ASSIGN, assigned_to=None, locked_by=None, lock_expires_at=None)
+    )
+    result = await db.execute(stmt)
+    if result.rowcount != 1:
+        await db.rollback()
+        raise TaskConflictError("任务不在你名下或已不在进行中，无法放弃")
+
+    await db.commit()
+    task = await db.get(Task, task_id)
+    assert task is not None
+    return task
+
+
 async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     """只有当前锁定人能续期，推迟 lock_expires_at。"""
     ttl_hours = settings.annotation_timeout_hours

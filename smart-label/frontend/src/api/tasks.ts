@@ -25,6 +25,9 @@ export const reopenTask = (id: number, comment?: string) =>
 
 export const claimTask = (id: number) => request.post<never, Task>(`/tasks/${id}/claim`);
 
+/** 标注中途主动放弃任务：退回公共池，草稿保留，换人接手能接着标 */
+export const releaseTask = (id: number) => request.post<never, Task>(`/tasks/${id}/release`);
+
 export const heartbeat = (id: number) => request.patch<never, null>(`/tasks/${id}/heartbeat`);
 
 export const getDraft = (id: number) => request.get<never, Draft>(`/tasks/${id}/draft`);

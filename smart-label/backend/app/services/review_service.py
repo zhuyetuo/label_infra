@@ -38,6 +38,23 @@ async def claim_review(db: AsyncSession, task_id: int, reviewer: User) -> Task:
     return task
 
 
+async def release_review(db: AsyncSession, task_id: int, reviewer: User) -> Task:
+    """审核员主动放弃认领：任务还是 SUBMITTED，退回待审核队列给别人接手。"""
+    stmt = (
+        update(Task)
+        .where(Task.id == task_id, Task.reviewer_id == reviewer.id, Task.status == TaskStatus.SUBMITTED)
+        .values(reviewer_id=None, locked_by=None, lock_expires_at=None)
+    )
+    result = await db.execute(stmt)
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ReviewConflictError("任务不在你名下或已不是待审核状态，无法放弃")
+    await db.commit()
+    task = await db.get(Task, task_id)
+    assert task is not None
+    return task
+
+
 async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int) -> None:
     """驳回重标：把当前轮次的标注内容拷贝到新一轮，标注员重新认领后能接着改，不用从空白开始（决策⑧）。"""
     old_record = (

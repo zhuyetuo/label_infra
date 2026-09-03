@@ -50,6 +50,8 @@ export interface Task {
   locked_by: number | null;
   lock_expires_at: string | null;
   created_at: string;
+  /** 待认领状态下有没有上一个人留下的草稿（只有 GET /tasks 列表接口会算这个） */
+  has_draft?: boolean;
 }
 
 export interface LabelItem {

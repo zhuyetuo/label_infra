@@ -11,7 +11,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
-from app.services.review_service import ReviewConflictError, claim_review, decide_review
+from app.services.review_service import ReviewConflictError, claim_review, decide_review, release_review
 
 router = APIRouter(
     prefix="/reviews", tags=["reviews"], dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin, UserRole.super_admin))]
@@ -33,6 +33,16 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
 async def claim(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         task = await claim_review(db, task_id, user)
+    except ReviewConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/{task_id}/release")
+async def release(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """审核员主动放弃认领，任务退回待审核队列给别人接手。"""
+    try:
+        task = await release_review(db, task_id, user)
     except ReviewConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())

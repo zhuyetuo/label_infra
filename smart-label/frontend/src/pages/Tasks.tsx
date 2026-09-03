@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Button, Empty, Input, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
+import { claimTask, deleteTask, listTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -56,6 +56,12 @@ export default function Tasks() {
   const handleReopen = async (id: number) => {
     await reopenTask(id);
     message.success("已退回重标，上一轮内容已带到新一轮");
+    refresh();
+  };
+
+  const handleRelease = async (id: number) => {
+    await releaseTask(id);
+    message.success("已放弃，任务退回公共池，草稿已保留");
     refresh();
   };
 
@@ -116,8 +122,14 @@ export default function Tasks() {
           {
             title: "状态",
             dataIndex: "status",
-            width: 110,
-            render: (s: TaskStatus) => <TaskStatusTag status={s} />,
+            width: 150,
+            render: (s: TaskStatus, task: Task) => (
+              <Space size={4}>
+                <TaskStatusTag status={s} />
+                {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
+                {s === "PENDING_ASSIGN" && task.has_draft && <Tag color="gold">有草稿</Tag>}
+              </Space>
+            ),
           },
           {
             title: "指派给",
@@ -148,6 +160,17 @@ export default function Tasks() {
                   >
                     {editable ? "编辑标注" : "查看标注"}
                   </Button>
+                  {editable && (
+                    <Popconfirm
+                      title="放弃任务"
+                      description="退回公共池，别人可以接手；已经标的内容会保留成草稿，不会丢"
+                      onConfirm={() => handleRelease(task.id)}
+                    >
+                      <Button size="small" type="link">
+                        放弃
+                      </Button>
+                    </Popconfirm>
+                  )}
                   {(isAdmin || role === "reviewer") &&
                     (task.status === "APPROVED" || task.status === "REJECTED") && (
                       <Popconfirm
