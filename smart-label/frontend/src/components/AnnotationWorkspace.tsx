@@ -44,9 +44,9 @@ const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", 
 const HEARTBEAT_MS = 30_000;
 // 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
 const HOTKEYS = "1234567890qwertyasdfgh".split("");
-// 波形区默认露出的高度：单条波形模式下 ImuChart 本身只画一条通道（没有其余
-// 通道可滚），刚好卡住一条通道 + 顶部说明 + 底部日期行的高度即可，剩下的
-// 高度让给视频。
+// 波形区（单条波形模式）默认露出的高度：六条通道全都渲染在里面，这个盒子只
+// 卡住"一条通道 + 顶部说明 + 底部日期行"的高度，刚好够，多出来的部分往下滚
+// 才看得到，不占视频的地盘。
 const CHART_VIEWPORT_PX = 185;
 
 function formatMs(ms: number): string {
@@ -443,14 +443,17 @@ export default function AnnotationWorkspace({
                 )}
               </Space>
               {imuView === "曲线图" ? (
-                // 只露出一条波形的高度，其他通道往下滚就能看到
+                // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
+                // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏），
+                // 六条通道全部渲染在里面，往下滚就能看到其余五条。
+                // 展开全部模式：盒子改成 flex:1 占满剩余高度，六条一次性铺开不用滚。
                 <div
                   ref={chartBoxRef}
                   className="ws-charts"
-                  // 视频是按宽度定高的，画面越宽下面剩的空白越多；
-                  // 波形区把这块空白吃掉（至少露一条波形），别白白空着
                   style={
-                    chartExpanded ? { flex: 1, minHeight: 0 } : { flex: 1, minHeight: CHART_VIEWPORT_PX }
+                    chartExpanded
+                      ? { flex: 1, minHeight: 0 }
+                      : { flex: "0 0 auto", height: CHART_VIEWPORT_PX }
                   }
                 >
                   <ImuChart
@@ -458,7 +461,6 @@ export default function AnnotationWorkspace({
                     bus={bus}
                     rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
                     compact={chartExpanded}
-                    singleChannel={!chartExpanded}
                     segments={segments}
                     activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                     onCreateSegment={readOnly ? undefined : handleCreateFromChart}
