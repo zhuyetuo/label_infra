@@ -9,7 +9,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.audit_log import AuditLog
 from app.models.review import ReviewDecision, ReviewRecord
 from app.models.task import Task, TaskStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 
 
 class ReviewConflictError(Exception):
@@ -99,12 +99,20 @@ async def reopen_task(db: AsyncSession, task_id: int, operator: User, comment: s
     处理方式跟驳回一致：轮次+1、把上一轮内容拷到新一轮、回到待分配。
     不写 review_records —— (task_id, round_no) 上有唯一约束，那一轮的审核结论
     确实就是"通过"，历史不该被改写；退回这个动作记到 audit_logs 里。
+
+    权限：管理员/超级管理员/审核员随时能退，另外——如果这条正是自己被驳回的，
+    标注员本人也能自己点，不用等审核员或管理员回头操作（人少的时候经常是
+    自己一路标到审，被自己驳回了还得等自己去后台点一下，纯属多余）。
     """
     task = await db.get(Task, task_id)
     if task is None:
         raise ReviewConflictError("任务不存在")
     if task.status not in (TaskStatus.APPROVED, TaskStatus.REJECTED):
         raise ReviewConflictError("只有已通过/已驳回的任务才能退回重标")
+    is_privileged = operator.role in (UserRole.admin, UserRole.super_admin, UserRole.reviewer)
+    is_own_rejected = task.status == TaskStatus.REJECTED and task.assigned_to == operator.id
+    if not is_privileged and not is_own_rejected:
+        raise ReviewConflictError("没有权限退回这个任务")
 
     new_round_no = task.round_no + 1
     await _clone_record_forward(db, task, new_round_no)
@@ -154,12 +162,13 @@ async def decide_review(
         task.locked_by = None
         task.lock_expires_at = None
     else:
-        new_round_no = task.round_no + 1
-        await _clone_record_forward(db, task, new_round_no)
-        task.round_no = new_round_no
-        task.status = TaskStatus.PENDING_ASSIGN
-        task.assigned_to = None  # 驳回后回到待分配，由管理员/标注员重新认领（决策⑧：草稿已保留，不会白标）
-        task.reviewer_id = None
+        # 驳回先停在 REJECTED 这个状态上（不是马上转回待分配）：之前的写法是驳回
+        # 立刻 round+1 打回待分配，任务在列表里一晃就变回"待认领"，标注员根本
+        # 看不出这条被驳回过、也看不到审核意见。assigned_to/reviewer_id 都不清，
+        # 原来的标注员和审核员是谁一目了然，"只看指派给我的"筛选也还能看到它。
+        # 真正的 round+1/清空指派要等标注员自己点"退回重标"开始改的时候才发生
+        # （见 reopen_task），审核意见就留在这一轮的 review_records 里。
+        task.status = TaskStatus.REJECTED
         task.locked_by = None
         task.lock_expires_at = None
 

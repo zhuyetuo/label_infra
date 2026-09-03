@@ -14,7 +14,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.review import ReviewRecord
 from app.models.project import Project
 from app.models.sample import Sample
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.task import (
@@ -113,14 +113,18 @@ async def bulk_create_tasks(
     )
 
 
-@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin, UserRole.reviewer))])
+@router.post("/{task_id}/reopen")
 async def reopen(
     task_id: int,
     body: ReopenRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """把已通过/已驳回的任务退回重标（轮次+1，上一轮内容原样带过去）。"""
+    """
+    把已通过/已驳回的任务退回重标（轮次+1，上一轮内容原样带过去）。
+    管理员/审核员随时能退；标注员只能退自己被驳回的那条（reopen_task 里判断），
+    所以这里不按角色卡权限，交给 service 按具体任务判断。
+    """
     try:
         task = await reopen_task(db, task_id, user, body.comment)
     except ReviewConflictError as exc:
@@ -179,9 +183,24 @@ async def list_tasks(
         )
         draft_task_ids = set(rows.scalars().all())
 
+    # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
+    rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
+    review_comments: dict[int, str | None] = {}
+    if rejected_ids:
+        rows = await db.execute(
+            select(ReviewRecord.task_id, ReviewRecord.comment)
+            .join(Task, Task.id == ReviewRecord.task_id)
+            .where(ReviewRecord.task_id.in_(rejected_ids), ReviewRecord.round_no == Task.round_no)
+        )
+        review_comments = dict(rows.all())
+
     return ok(
         [
-            {**TaskOut.model_validate(t).model_dump(), "has_draft": t.id in draft_task_ids}
+            {
+                **TaskOut.model_validate(t).model_dump(),
+                "has_draft": t.id in draft_task_ids,
+                "review_comment": review_comments.get(t.id),
+            }
             for t in tasks
         ]
     )

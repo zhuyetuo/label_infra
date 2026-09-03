@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Empty, Input, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Empty, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimTask, deleteTask, listTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
@@ -128,6 +128,14 @@ export default function Tasks() {
                 <TaskStatusTag status={s} />
                 {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
                 {s === "PENDING_ASSIGN" && task.has_draft && <Tag color="gold">有草稿</Tag>}
+                {/* 被驳回时把审核意见带出来，不用另外去问审核员为什么 */}
+                {s === "REJECTED" && task.review_comment && (
+                  <Tooltip title={task.review_comment}>
+                    <Tag color="red" style={{ cursor: "help" }}>
+                      审核意见
+                    </Tag>
+                  </Tooltip>
+                )}
               </Space>
             ),
           },
@@ -171,18 +179,20 @@ export default function Tasks() {
                       </Button>
                     </Popconfirm>
                   )}
-                  {(isAdmin || role === "reviewer") &&
-                    (task.status === "APPROVED" || task.status === "REJECTED") && (
-                      <Popconfirm
-                        title="退回重标"
-                        description="轮次+1，这一轮的标注内容会原样带到新一轮，任务回到待认领"
-                        onConfirm={() => handleReopen(task.id)}
-                      >
-                        <Button size="small" type="link">
-                          退回重标
-                        </Button>
-                      </Popconfirm>
-                    )}
+                  {((isAdmin || role === "reviewer") &&
+                    (task.status === "APPROVED" || task.status === "REJECTED")) ||
+                  // 被驳回的任务，标注员本人不用等审核员/管理员，自己就能点着重标
+                  (task.status === "REJECTED" && task.assigned_to === userId) ? (
+                    <Popconfirm
+                      title="退回重标"
+                      description="轮次+1，这一轮的标注内容会原样带到新一轮，任务回到待认领"
+                      onConfirm={() => handleReopen(task.id)}
+                    >
+                      <Button size="small" type="link">
+                        退回重标
+                      </Button>
+                    </Popconfirm>
+                  ) : null}
                   {isAdmin && (
                     <Popconfirm
                       title="删除任务"

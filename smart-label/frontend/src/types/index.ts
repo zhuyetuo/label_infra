@@ -52,6 +52,8 @@ export interface Task {
   created_at: string;
   /** 待认领状态下有没有上一个人留下的草稿（只有 GET /tasks 列表接口会算这个） */
   has_draft?: boolean;
+  /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
+  review_comment?: string | null;
 }
 
 export interface LabelItem {
