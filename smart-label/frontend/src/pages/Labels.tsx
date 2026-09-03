@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLabel, deleteLabel, listLabels, updateLabel } from "@/api/labels";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
@@ -8,9 +8,23 @@ import {
   listLabelTemplates,
   saveProjectLabelsAsTemplate,
 } from "@/api/labelTemplates";
+import LabelTemplates from "@/pages/LabelTemplates";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
 import type { LabelDefinition } from "@/types";
+
+// 标签模板本来是单独一个导航项，并进这里做成第二个 Tab——它跟"标签"本来就是
+// 同一件事（给标注用的标签），不用单独占一条侧边栏。
+export default function Labels() {
+  return (
+    <Tabs
+      items={[
+        { key: "labels", label: "标签", children: <LabelDefinitionsPanel /> },
+        { key: "templates", label: "标签模板", children: <LabelTemplates /> },
+      ]}
+    />
+  );
+}
 
 interface FormValues {
   code: string;
@@ -19,7 +33,7 @@ interface FormValues {
   sort_order?: number;
 }
 
-export default function Labels() {
+function LabelDefinitionsPanel() {
   const qc = useQueryClient();
   const projectId = useProjectStore((s) => s.currentProjectId);
   const setProjectId = useProjectStore((s) => s.setCurrentProjectId);

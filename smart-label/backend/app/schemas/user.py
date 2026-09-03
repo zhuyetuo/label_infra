@@ -16,6 +16,7 @@ class UserOut(BaseModel):
     is_outsourced: bool
     is_active: bool
     must_change_password: bool
+    remark: str | None
     last_login_at: datetime | None
     created_at: datetime
 
@@ -26,6 +27,7 @@ class UserCreate(BaseModel):
     email: str | None = None
     role: UserRole
     is_outsourced: bool = False
+    remark: str | None = None
 
 
 class UserCreateOut(BaseModel):
@@ -39,3 +41,4 @@ class UserUpdate(BaseModel):
     role: UserRole | None = None
     is_outsourced: bool | None = None
     is_active: bool | None = None
+    remark: str | None = None

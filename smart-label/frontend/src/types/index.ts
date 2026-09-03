@@ -78,5 +78,7 @@ export interface AppUser {
   is_outsourced: boolean;
   is_active: boolean;
   must_change_password: boolean;
+  /** 管理员之间的备注（外包/实习/入离职时间等），纯人事记录 */
+  remark: string | null;
   created_at: string;
 }

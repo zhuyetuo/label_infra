@@ -3,6 +3,7 @@ import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, T
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
+import { ROLE_META } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
 
 const ROLE_OPTIONS = [
@@ -27,6 +28,7 @@ export default function Users() {
     display_name: string;
     role: AppUser["role"];
     is_outsourced: boolean;
+    remark?: string;
   }) => {
     const result = await createUser(values);
     setTempPassword(result.temp_password);
@@ -61,6 +63,13 @@ export default function Users() {
   const handleDelete = async (u: AppUser) => {
     await deleteUser(u.id);
     message.success("账号已删除");
+    refresh();
+  };
+
+  const handleRemarkChange = async (u: AppUser, remark: string) => {
+    const trimmed = remark.trim();
+    if (trimmed === (u.remark ?? "")) return;
+    await updateUser(u.id, { remark: trimmed === "" ? null : trimmed });
     refresh();
   };
 
@@ -101,8 +110,23 @@ export default function Users() {
                 size="small"
                 value={r}
                 variant="borderless"
-                style={{ width: 110 }}
+                style={{ width: 116, color: ROLE_META[r]?.hex, fontWeight: 500 }}
                 options={ROLE_OPTIONS}
+                // 下拉列表里每个选项前面加个色点，跟表格里的颜色对上，一眼选对
+                optionRender={(opt) => (
+                  <Space>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: ROLE_META[opt.value as string]?.hex,
+                      }}
+                    />
+                    {opt.label}
+                  </Space>
+                )}
                 onChange={(role) => handleRoleChange(u, role)}
               />
             ),
@@ -111,6 +135,23 @@ export default function Users() {
             title: "外包",
             dataIndex: "is_outsourced",
             render: (v: boolean) => (v ? <Tag color="orange">外包</Tag> : "-"),
+          },
+          {
+            title: "备注",
+            dataIndex: "remark",
+            render: (remark: string | null, u: AppUser) => (
+              <Typography.Text
+                type={remark ? undefined : "secondary"}
+                editable={{
+                  text: remark ?? "",
+                  onChange: (v) => handleRemarkChange(u, v),
+                  autoSize: { minRows: 1, maxRows: 4 },
+                }}
+                style={{ maxWidth: 220 }}
+              >
+                {remark || "点击填写备注"}
+              </Typography.Text>
+            ),
           },
           {
             title: "状态",
@@ -183,6 +224,9 @@ export default function Users() {
             </Form.Item>
             <Form.Item name="is_outsourced" label="外包账号" valuePropName="checked" initialValue={false}>
               <Switch />
+            </Form.Item>
+            <Form.Item name="remark" label="备注（外包/实习/入离职时间等，仅管理员可见）">
+              <Input.TextArea rows={2} placeholder="比如：外包，学生实习，2026-09入职" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block>
               创建
