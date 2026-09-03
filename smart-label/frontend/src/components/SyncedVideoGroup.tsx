@@ -346,6 +346,19 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           </Radio.Button>
         ))}
       </Radio.Group>
+      {/* 上面几档是常用速度，这个用来微调到中间值（比如 0.75x、1.2x），
+          按钮点不出来的精细速度用这个 */}
+      <InputNumber
+        size="small"
+        min={0.1}
+        max={8}
+        step={0.05}
+        precision={2}
+        value={speed}
+        addonAfter="x"
+        style={{ width: 100 }}
+        onChange={(v) => v != null && handleSpeedChange(v)}
+      />
       {!!fps && (
         <>
           <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
