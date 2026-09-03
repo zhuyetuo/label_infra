@@ -208,6 +208,8 @@ export default function Projects() {
           { title: "ID", dataIndex: "id", width: 60 },
           {
             title: "项目名",
+            width: 160,
+            ellipsis: true,
             render: (_, p: Project) => (
               <Space>
                 <strong>{p.name}</strong>
@@ -215,7 +217,13 @@ export default function Projects() {
               </Space>
             ),
           },
-          { title: "说明", dataIndex: "description", render: (d: string | null) => d || "-" },
+          {
+            title: "说明",
+            dataIndex: "description",
+            width: 180,
+            ellipsis: true,
+            render: (d: string | null) => d || "-",
+          },
           {
             title: "任务",
             width: 240,
