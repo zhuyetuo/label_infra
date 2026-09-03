@@ -163,13 +163,18 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     lead?.addEventListener("seeked", onLeadSeeked);
     cleanups.push(() => lead?.removeEventListener("seeked", onLeadSeeked));
 
-    // 播放中定期做漂移校正，以第一路为基准
+    // 播放中定期做漂移校正，以第一路为基准。容差要跟着倍速放大：容差是"视频时间"，
+    // 但三路解码器之间的天然抖动是按"真实时间"发生的——倍速越高，同样一段真实时间
+    // 里视频时间流逝得越快，天然抖动换算成视频时间也跟着放大，用固定容差会导致
+    // 高倍速时几乎每秒都触发一次强制 seek（这本身就是很明显的卡顿），而不是真的
+    // 不同步了。按倍速放大容差，只在真正能感知到的不同步时才纠偏。
     const driftTimer = setInterval(() => {
       const [lead, ...rest] = all();
       if (!lead || lead.paused || isProgrammatic.current) return;
+      const tolerance = DRIFT_TOLERANCE_SEC * Math.max(1, lead.playbackRate);
       isProgrammatic.current = true;
       for (const v of rest) {
-        if (Math.abs(v.currentTime - lead.currentTime) > DRIFT_TOLERANCE_SEC) {
+        if (Math.abs(v.currentTime - lead.currentTime) > tolerance) {
           v.currentTime = lead.currentTime;
         }
       }
