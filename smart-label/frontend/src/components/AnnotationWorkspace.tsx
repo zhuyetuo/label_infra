@@ -77,9 +77,6 @@ export default function AnnotationWorkspace({
 
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
-  // 三路视频整段下载完再播（局域网快，等这几秒换来全程丝滑：拖进度条/倍速播放
-  // 都不用再等网络，跟本地播放器一个体验）。这里存下载进度给 Spin 提示用。
-  const [preloadPct, setPreloadPct] = useState(0);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
@@ -110,12 +107,7 @@ export default function AnnotationWorkspace({
       return;
     }
     setLoading(true);
-    setPreloadPct(0);
     setImuView("曲线图");
-    const controller = new AbortController();
-    let cancelled = false;
-    const blobUrls: string[] = [];
-
     (async () => {
       const media = await getSampleMedia(sampleId);
       const entries: [string, number | null][] = [
@@ -123,64 +115,20 @@ export default function AnnotationWorkspace({
         ["视角2", media.video2_id],
         ["视角3", media.video3_id],
       ];
-      const targets = entries.filter((e): e is [string, number] => e[1] != null);
-
-      // 每路视频各自的下载进度，汇总成一个总百分比给 Spin 提示用
-      const loadedBytes = new Array(targets.length).fill(0);
-      const totalBytes = new Array(targets.length).fill(0);
-      const reportProgress = () => {
-        const total = totalBytes.reduce((a, b) => a + b, 0);
-        if (total <= 0) return;
-        const loaded = loadedBytes.reduce((a, b) => a + b, 0);
-        setPreloadPct(Math.min(99, Math.round((loaded / total) * 100)));
-      };
-
-      // 整段下载完存成 blob 再播——局域网快，等这几秒换来全程丝滑：
-      // 拖进度条/倍速播放都不用再等网络，跟本地播放器一个体验。
-      const vids = await Promise.all(
-        targets.map(async ([label, id], i): Promise<VideoSrc> => {
-          const { token } = await getMediaToken(id);
-          const res = await fetch(mediaStreamUrl(id, token), { signal: controller.signal });
-          totalBytes[i] = Number(res.headers.get("content-length") ?? 0);
-          const reader = res.body?.getReader();
-          if (!reader) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            blobUrls.push(url);
-            return { label, url };
-          }
-          const chunks: Uint8Array[] = [];
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            loadedBytes[i] += value.byteLength;
-            reportProgress();
-          }
-          const url = URL.createObjectURL(new Blob(chunks as BlobPart[]));
-          blobUrls.push(url);
-          return { label, url };
-        })
-      );
-      if (cancelled) return;
-
+      const vids: VideoSrc[] = [];
+      for (const [label, id] of entries) {
+        if (id == null) continue;
+        const { token } = await getMediaToken(id);
+        vids.push({ label, url: mediaStreamUrl(id, token) });
+      }
       setVideos(vids);
       setHasCsv(media.csv_id != null);
       setFps(media.video_fps);
 
       const draft = await getDraft(taskId);
-      if (cancelled) return;
       setItems(draft.items);
       setLoading(false);
-    })().catch((err) => {
-      if (!cancelled) throw err;
-    });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      blobUrls.forEach((u) => URL.revokeObjectURL(u));
-    };
+    })();
   }, [taskId, sampleId]);
 
   // 认领期间定时续锁，不然标到一半锁超时被回收
@@ -390,7 +338,7 @@ export default function AnnotationWorkspace({
       }
     >
       <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
-      <Spin spinning={loading} tip={preloadPct > 0 ? `视频加载中 ${preloadPct}%` : "加载中"}>
+      <Spin spinning={loading}>
         {videos.length > 0 ? (
           <SyncedVideoGroup
             videos={videos}
