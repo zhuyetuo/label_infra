@@ -84,8 +84,6 @@ interface Props {
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
   /** 紧凑模式：通道名画进图里而不是单独占一行标题，六轴同屏时能省下不少高度 */
   compact?: boolean;
-  /** 单条波形模式：只画 Acc X 一条，不是六条里露一条又滚不干净地留个尾巴 */
-  singleChannel?: boolean;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -112,9 +110,7 @@ export default function ImuChart({
   onCreateSegment,
   onResizeSegment,
   compact,
-  singleChannel,
 }: Props) {
-  const channels = singleChannel ? CHANNELS.slice(0, 1) : CHANNELS;
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -150,7 +146,7 @@ export default function ImuChart({
 
     (async () => {
       const meta = await getMeta(sampleId);
-      if (disposed || containerRefs.current.slice(0, channels.length).some((el) => !el)) return;
+      if (disposed || containerRefs.current.some((el) => !el)) return;
       durationRef.current = meta.duration_ms;
       startEpochRef.current = meta.start_timestamp ? new Date(meta.start_timestamp).getTime() / 1000 : 0;
 
@@ -183,7 +179,7 @@ export default function ImuChart({
         const viewMax = first.scales.x.max!;
 
         syncingRef.current = true;
-        channels.forEach((c, i) => {
+        CHANNELS.forEach((c, i) => {
           const plot = plotRefs.current[i];
           if (!plot) return;
           plot.setData([t, s[c.key]]);
@@ -236,10 +232,10 @@ export default function ImuChart({
       const t0 = toEpoch(series.t);
       setRangeCaption(formatDayCaption(t0[0] ?? startEpochRef.current));
 
-      channels.forEach((c, i) => {
+      CHANNELS.forEach((c, i) => {
         const container = containerRefs.current[i];
         if (!container) return;
-        const isLast = i === channels.length - 1;
+        const isLast = i === CHANNELS.length - 1;
 
         const opts: uPlot.Options = {
           title: compact ? undefined : c.label,
@@ -322,7 +318,7 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus, compact, singleChannel]);
+  }, [sampleId, rowHeight, bus, compact]);
 
   return (
     <div>
@@ -330,7 +326,7 @@ export default function ImuChart({
         Shift+滚轮缩放 / 放大后按住拖动左右平移（整体视图下全部数据已在视野内，无需拖动）/
         单击或拖动黑色播放头跳转视频到该时刻（放大后拖到边缘会自动继续滚动）/ 双击恢复整体视图
       </div>
-      {channels.map((c, i) => (
+      {CHANNELS.map((c, i) => (
         <div
           key={c.key}
           ref={(el) => {
