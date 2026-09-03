@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
+import { useAuthStore } from "@/stores/authStore";
 import type { AppUser } from "@/types";
 
 const ROLE_OPTIONS = [
@@ -13,6 +14,7 @@ const ROLE_OPTIONS = [
 
 export default function Users() {
   const qc = useQueryClient();
+  const isSuperAdmin = useAuthStore((s) => s.userInfo?.role) === "super_admin";
   const { data, isLoading } = useQuery({ queryKey: ["users"], queryFn: listUsers });
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
@@ -128,16 +130,18 @@ export default function Users() {
                     重置密码
                   </Button>
                 </Popconfirm>
-                <Popconfirm
-                  title="删除账号"
-                  description="已经产生过工作记录的账号删不掉，那种情况请用「禁用」"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => handleDelete(u)}
-                >
-                  <Button size="small" danger type="link">
-                    删除
-                  </Button>
-                </Popconfirm>
+                {isSuperAdmin && (
+                  <Popconfirm
+                    title="删除账号"
+                    description="已经产生过工作记录的账号删不掉，那种情况请用「禁用」"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => handleDelete(u)}
+                  >
+                    <Button size="small" danger type="link">
+                      删除
+                    </Button>
+                  </Popconfirm>
+                )}
               </Space>
             ),
           },

@@ -52,10 +52,13 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
     return ok({"username": user.username, "temp_password": temp_password})
 
 
-@router.delete("/{user_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+@router.delete("/{user_id}", dependencies=[Depends(require_role(UserRole.super_admin))])
 async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User = Depends(get_current_user)):
     """
-    删除账号。已经产生过工作记录的账号不能真删——任务、标注、审核记录里都记着
+    删除账号。只有超级管理员能删账号，普通管理员没有这个权限（决策：
+    删除是不可逆操作，收紧到只有超级管理员能做，其余权限管理员和超级管理员完全一样）。
+
+    已经产生过工作记录的账号不能真删——任务、标注、审核记录里都记着
     是谁干的，删了这些记录要么变成孤儿要么得连坐删掉，历史就查不清了。
     这种情况请用「禁用」：禁用后无法登录，但历史记录仍然可追溯。
     """
@@ -65,10 +68,6 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "账号不存在")
-
-    # Super admin can delete admin, but admin cannot delete super admin
-    if user.role == UserRole.super_admin and me.role != UserRole.super_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权删除超级管理员")
 
     if user.role == UserRole.admin:
         admin_count = (
