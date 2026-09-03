@@ -20,6 +20,7 @@ import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
+import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -48,6 +49,7 @@ const HOTKEYS = "1234567890qwertyasdfgh".split("");
 // 卡住"一条通道 + 顶部说明 + 底部日期行"的高度，刚好够，多出来的部分往下滚
 // 才看得到，不占视频的地盘。
 const CHART_VIEWPORT_PX = 185;
+const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -86,6 +88,9 @@ export default function AnnotationWorkspace({
   // 展开时要"一屏看全六轴"，所以行高不能写死，得按波形区实际拿到多少高度算
   const chartBoxRef = useRef<HTMLDivElement | null>(null);
   const [chartBoxH, setChartBoxH] = useState(0);
+  // 单条波形模式下这块区域的高度，可以拖底边把手调整；跟视频区一样记到
+  // localStorage，下次打开别的任务不用重新拖
+  const [chartHeight, setChartHeight] = useState(() => getSavedHeight(CHART_HEIGHT_KEY) ?? CHART_VIEWPORT_PX);
 
   const [items, setItems] = useState<LabelItem[]>([]);
   const [labelId, setLabelId] = useState<number | null>(null);
@@ -238,6 +243,27 @@ export default function AnnotationWorkspace({
     Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
   );
 
+  // 拖波形区（单条波形模式）底边的把手改高度，跟视频区的把手一个用法；
+  // 拖的过程只更新状态，松手才写 localStorage
+  const handleChartResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = chartBoxRef.current?.getBoundingClientRect().height ?? chartHeight;
+    const maxHeight = Math.max(240, window.innerHeight - 260);
+    let latest = startHeight;
+    const onMove = (ev: MouseEvent) => {
+      latest = Math.min(maxHeight, Math.max(80, startHeight + (ev.clientY - startY)));
+      setChartHeight(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      saveHeight(CHART_HEIGHT_KEY, latest);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   // 数字/字母键快速切标签，跟参考工具一样，标注时手不用离开键盘
   useEffect(() => {
     if (taskId == null || readOnly) return;
@@ -382,28 +408,53 @@ export default function AnnotationWorkspace({
                 // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏），
                 // 六条通道全部渲染在里面，往下滚就能看到其余五条。
                 // 展开全部模式：盒子改成 flex:1 占满剩余高度，六条一次性铺开不用滚。
-                <div
-                  ref={chartBoxRef}
-                  className="ws-charts"
-                  style={
-                    chartExpanded
-                      ? { flex: 1, minHeight: 0 }
-                      : { flex: "0 0 auto", height: CHART_VIEWPORT_PX }
-                  }
-                >
-                  <ImuChart
-                    sampleId={sampleId}
-                    bus={bus}
-                    rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
-                    compact={chartExpanded}
-                    segments={segments}
-                    activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
-                    onCreateSegment={readOnly ? undefined : handleCreateFromChart}
-                    onResizeSegment={readOnly ? undefined : handleResizeFromChart}
-                  />
-                </div>
+                <>
+                  <div
+                    ref={chartBoxRef}
+                    className="ws-charts"
+                    style={
+                      chartExpanded
+                        ? { flex: 1, minHeight: 0 }
+                        : { flex: "0 0 auto", height: chartHeight }
+                    }
+                  >
+                    <ImuChart
+                      sampleId={sampleId}
+                      bus={bus}
+                      rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+                      compact={chartExpanded}
+                      segments={segments}
+                      activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
+                      onCreateSegment={readOnly ? undefined : handleCreateFromChart}
+                      onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+                    />
+                  </div>
+                  {!chartExpanded && (
+                    // 单条波形模式才有这个把手：展开全部时波形区本来就占满剩余高度，
+                    // 没有"再拖大"的空间
+                    <div
+                      onMouseDown={handleChartResizeStart}
+                      onDoubleClick={() => {
+                        setChartHeight(CHART_VIEWPORT_PX);
+                        saveHeight(CHART_HEIGHT_KEY, null);
+                      }}
+                      title="拖拽调整波形区域高度，双击恢复默认"
+                      style={{
+                        flex: "0 0 auto",
+                        height: 8,
+                        margin: "2px 0",
+                        cursor: "row-resize",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <div style={{ width: 40, height: 3, borderRadius: 2, background: "#d9d9d9" }} />
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="ws-charts" style={{ height: CHART_VIEWPORT_PX }}>
+                <div className="ws-charts" style={{ height: chartHeight }}>
                   <ImuTable sampleId={sampleId} />
                 </div>
               )}

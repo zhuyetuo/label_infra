@@ -2,6 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { InputNumber, Radio, Slider, Space, Typography } from "antd";
 import type { TimeBus } from "@/utils/timeBus";
+import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
+
+const VIDEO_HEIGHT_KEY = "smart-label:video-area-height";
 
 interface VideoSrc {
   label: string;
@@ -56,8 +59,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const [rowSize, setRowSize] = useState({ w: 0, h: 0 });
   // 三路视频是一个整体区域，手动拖高度就在这块区域里调整，三路视频跟着自适应
   // （靠上面 rowSize 的 ResizeObserver 自动重算宽高，不用额外写联动逻辑）。
-  // null = 沿用默认的自动铺满高度，拖过一次之后才切换成固定高度。
-  const [customHeight, setCustomHeight] = useState<number | null>(null);
+  // null = 沿用默认的自动铺满高度，拖过一次之后才切换成固定高度。拖过的高度记
+  // 到 localStorage，下次打开别的任务还是这个高度，不用每次重新拖。
+  const [customHeight, setCustomHeightState] = useState<number | null>(() => (fill ? getSavedHeight(VIDEO_HEIGHT_KEY) : null));
+  const setCustomHeight = (h: number | null) => {
+    setCustomHeightState(h);
+    if (fill) saveHeight(VIDEO_HEIGHT_KEY, h);
+  };
 
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -327,19 +335,22 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     isProgrammatic.current = false;
   };
 
-  // 拖拽区域底边的把手改高度；双击把手恢复自动铺满
+  // 拖拽区域底边的把手改高度；双击把手恢复自动铺满。拖的过程只更新状态（不落盘，
+  // 不然每次 mousemove 都写 localStorage 太浪费），松手那一刻才存下来。
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
     const startHeight = rowRef.current?.getBoundingClientRect().height ?? 0;
     const maxHeight = Math.max(240, window.innerHeight - 260);
+    let latest = startHeight;
     const onMove = (ev: MouseEvent) => {
-      const next = startHeight + (ev.clientY - startY);
-      setCustomHeight(Math.min(maxHeight, Math.max(160, next)));
+      latest = Math.min(maxHeight, Math.max(160, startHeight + (ev.clientY - startY)));
+      setCustomHeightState(latest);
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (fill) saveHeight(VIDEO_HEIGHT_KEY, latest);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
