@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { InputNumber, Radio, Space, Typography } from "antd";
 import type { TimeBus } from "@/utils/timeBus";
 
@@ -13,6 +14,14 @@ interface Props {
   fps?: number | null;
   /** 撑满可用高度（标注工作台全屏时用），默认按 45vh 封顶（预览弹窗用） */
   fill?: boolean;
+  /** 传入后，播放速度/帧号那行控件改成 portal 到这个节点里（跟弹窗标题拼一行），不再占视频上方的位置 */
+  controlsPortalTarget?: HTMLElement | null;
+  /**
+   * 视频区宽度被外部 CSS 收窄时用（比如波形展开全部时），让视频区按算出来的
+   * 高度收缩，而不是占满整个可用高度——不然算出来的画面明明变矮了，
+   * 外层容器却还占着原来一整份 flex:1 的高度，中间露一大块空白。
+   */
+  shrinkToFit?: boolean;
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -29,9 +38,10 @@ interface ZoomState {
   ty: number;
 }
 
-export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
+export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit }: Props) {
   const refs = useRef<(HTMLVideoElement | null)[]>([]);
   const wrapperRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const isProgrammatic = useRef(false);
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
@@ -40,6 +50,20 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
   // 摄像头本来就不是同一个画幅，三等分要么裁掉画面要么留黑边。
   const [aspects, setAspects] = useState<Record<number, number>>({});
+  // 整行容器的实际像素尺寸，用来精确算出每路视频的像素宽高（而不是靠 flex/百分比
+  // 隐式推导）——CSS 那套在高度不确定的祖先链上会算不出正确的 max-height，
+  // 直接量像素、按算好的宽高铺，才能保证画面绝对完整，一点都不裁。
+  const [rowSize, setRowSize] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const update = () => setRowSize({ w: row.clientWidth, h: row.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, [fill]);
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
@@ -298,109 +322,122 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
     bus.seek(value / fps);
   };
 
+  // 按行容器的实际像素宽度 + 各路宽高比，算出一个所有列共用的高度。
+  // shrinkToFit（比如波形展开全部、外部把宽度收窄了）时只按宽度推算高度，
+  // 让视频区跟着变矮，把空出来的高度让给别的区域；否则再跟可用高度取较小值兜底，
+  // 保证不会超出容器——不会裁，最多某一侧留一点空隙。
+  const sumAspect = videos.reduce((sum, _v, i) => sum + (aspects[i] ?? 16 / 9), 0) || 1;
+  const rowHeight =
+    rowSize.w <= 0
+      ? 0
+      : shrinkToFit
+        ? rowSize.w / sumAspect
+        : rowSize.h > 0
+          ? Math.min(rowSize.h, rowSize.w / sumAspect)
+          : 0;
+
+  const speedControls = (
+    <Space wrap>
+      <Typography.Text type="secondary">播放速度：</Typography.Text>
+      <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
+        {SPEED_OPTIONS.map((s) => (
+          <Radio.Button key={s} value={s}>
+            {s}x
+          </Radio.Button>
+        ))}
+      </Radio.Group>
+      {!!fps && (
+        <>
+          <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+            帧：
+          </Typography.Text>
+          <InputNumber size="small" min={0} max={totalFrames ?? undefined} value={frame} onChange={handleFrameJump} />
+          <Typography.Text type="secondary">
+            of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放 / Shift+拖拽平移）
+          </Typography.Text>
+        </>
+      )}
+    </Space>
+  );
+
   return (
     <div
       className={fill ? "ws-videos" : undefined}
       style={
         fill
           ? // flex: 1 with minHeight: 0 让这个div占满剩余高度；display:flex + flexDirection:column
-            // 使内部子元素按竖向排列（播放速度控制条 + 视频组）
-            { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }
+            // 使内部子元素按竖向排列（播放速度控制条 + 视频组）。shrinkToFit 时改成
+            // flex:"0 0 auto"——按内容（算出来的画面高度）撑开，不抢占整份可用高度，
+            // 省下来的空间让给挤在旁边的波形图。
+            { display: "flex", flexDirection: "column", flex: shrinkToFit ? "0 0 auto" : 1, minHeight: 0 }
           : undefined
       }
     >
-      <Space style={{ marginBottom: 8 }} wrap>
-        <Typography.Text type="secondary">播放速度：</Typography.Text>
-        <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
-          {SPEED_OPTIONS.map((s) => (
-            <Radio.Button key={s} value={s}>
-              {s}x
-            </Radio.Button>
-          ))}
-        </Radio.Group>
-        {!!fps && (
-          <>
-            <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-              帧：
-            </Typography.Text>
-            <InputNumber
-              size="small"
-              min={0}
-              max={totalFrames ?? undefined}
-              value={frame}
-              onChange={handleFrameJump}
-            />
-            <Typography.Text type="secondary">
-              of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放 / Shift+拖拽平移）
-            </Typography.Text>
-          </>
-        )}
-      </Space>
+      {controlsPortalTarget ? createPortal(speedControls, controlsPortalTarget) : (
+        <div style={{ marginBottom: 8 }}>{speedControls}</div>
+      )}
       <div
+        ref={rowRef}
         className={fill ? "ws-videos-row" : undefined}
         style={
           fill
-            ? // 每列宽度按该路画面的宽高比分配（flexGrow: aspect），而不是死板三等分：
-              // 这样每路都等高、宽度正好占满整行，完整显示画面，不裁不留黑边。
-              // alignItems:center + overflow:hidden 只是兜底：极端宽高比时按算出来的高度
-              // 会超出可用空间，裁掉的是上下均匀的一圈，而不是把内容顶到看不见。
-              { display: "flex", gap: 0, flex: 1, minHeight: 0, overflow: "hidden", alignItems: "center" }
+            ? // justifyContent:center 把整排在水平方向居中：算出来的总宽度可能比容器窄
+              // （高度先顶到头的情况），留出来的空隙左右对半分，不会挤到一边。
+              {
+                display: "flex",
+                gap: 0,
+                flex: shrinkToFit ? "0 0 auto" : 1,
+                minHeight: 0,
+                justifyContent: "center",
+                alignItems: "center",
+              }
             : { display: "flex", gap: 12, flexWrap: "wrap" }
         }
       >
-        {videos.map((v, i) => (
-          <div
-            key={v.label}
-            style={
-              fill
-                ? {
-                    flexGrow: aspects[i] ?? 1,
-                    flexShrink: 1,
-                    flexBasis: 0,
-                    minWidth: 0,
-                    display: "flex",
-                    position: "relative",
-                  }
-                : { flex: "1 1 420px", minWidth: 380 }
-            }
-          >
-            {!fill && <Typography.Text type="secondary">{v.label}</Typography.Text>}
+        {videos.map((v, i) => {
+          // 用行容器的实际像素尺寸 + 这一路的宽高比算出精确像素宽高，不靠 CSS 百分比/
+          // flex 在不确定高度的祖先链上瞎推导——量出来多少就是多少，画面绝对不会被裁掉，
+          // rowHeight 算出来之前（还没测量到尺寸）先用 flex 等分兜底，避免出现 0x0。
+          const aspect = aspects[i] ?? 16 / 9;
+          const pixelSize = rowHeight > 0 ? { width: rowHeight * aspect, height: rowHeight } : null;
+          return (
             <div
-              ref={(el) => {
-                wrapperRefs.current[i] = el;
-              }}
+              key={v.label}
               style={
                 fill
-                  ? { flex: 1, minWidth: 0, display: "flex" }
-                  : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
+                  ? pixelSize
+                    ? { width: pixelSize.width, height: pixelSize.height, flex: "0 0 auto", display: "flex", position: "relative" }
+                    : { flex: "1 1 0", minWidth: 0, display: "flex", position: "relative" }
+                  : { flex: "1 1 420px", minWidth: 380 }
               }
             >
-              <video
+              {!fill && <Typography.Text type="secondary">{v.label}</Typography.Text>}
+              <div
                 ref={(el) => {
-                  refs.current[i] = el;
+                  wrapperRefs.current[i] = el;
                 }}
-                src={v.url}
-                controls
                 style={
                   fill
-                    ? {
-                        // width:100% + aspectRatio 算出高度：三路按各自比例分到的宽度不同，
-                        // 但算出来的高度相同，画面完整显示。maxHeight+objectFit:contain 只是
-                        // 兜底，避免极端比例时被 maxHeight 削到变形。
-                        width: "100%",
-                        height: "auto",
-                        aspectRatio: aspects[i],
-                        maxHeight: "100%",
-                        objectFit: "contain",
-                        display: "block",
-                        transformOrigin: "center",
-                      }
-                    : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
+                    ? { flex: 1, minWidth: 0, display: "flex" }
+                    : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
                 }
-              />
+              >
+                <video
+                  ref={(el) => {
+                    refs.current[i] = el;
+                  }}
+                  src={v.url}
+                  controls
+                  style={
+                    fill
+                      ? { width: "100%", height: "100%", display: "block", transformOrigin: "center" }
+                      : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
+                  }
+                />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

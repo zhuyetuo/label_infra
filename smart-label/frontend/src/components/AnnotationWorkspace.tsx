@@ -44,8 +44,10 @@ const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", 
 const HEARTBEAT_MS = 30_000;
 // 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
 const HOTKEYS = "1234567890qwertyasdfgh".split("");
-// 波形区默认露出的高度：约等于一条通道 + X轴，其余通道滚动查看
-const CHART_VIEWPORT_PX = 205;
+// 波形区默认露出的高度：单条波形模式下 ImuChart 本身只画一条通道（没有其余
+// 通道可滚），刚好卡住一条通道 + 顶部说明 + 底部日期行的高度即可，剩下的
+// 高度让给视频。
+const CHART_VIEWPORT_PX = 185;
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -73,6 +75,8 @@ export default function AnnotationWorkspace({
 
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
+  // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
+  const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
@@ -293,10 +297,12 @@ export default function AnnotationWorkspace({
   return (
     <Modal
       title={
-        <Space>
+        <Space wrap style={{ width: "100%" }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
           <Tag>样本 {sampleId}</Tag>
           {readOnly && <Tag color="orange">只读</Tag>}
+          {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
+          <span ref={setControlsHost} style={{ display: "inline-flex" }} />
         </Space>
       }
       open={taskId != null}
@@ -341,7 +347,14 @@ export default function AnnotationWorkspace({
       <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
         {videos.length > 0 ? (
-          <SyncedVideoGroup videos={videos} bus={bus} fps={fps} fill />
+          <SyncedVideoGroup
+            videos={videos}
+            bus={bus}
+            fps={fps}
+            fill
+            controlsPortalTarget={controlsHost}
+            shrinkToFit={chartExpanded}
+          />
         ) : (
           !loading && <Empty description="没有找到可播放的视频" />
         )}
@@ -445,6 +458,7 @@ export default function AnnotationWorkspace({
                     bus={bus}
                     rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
                     compact={chartExpanded}
+                    singleChannel={!chartExpanded}
                     segments={segments}
                     activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                     onCreateSegment={readOnly ? undefined : handleCreateFromChart}
