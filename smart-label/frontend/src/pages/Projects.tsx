@@ -12,19 +12,29 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { assignProject, createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
-import { bulkCreateTasks, createTask, listTasks } from "@/api/tasks";
+import {
+  bulkCreateTasks,
+  claimTask,
+  createTask,
+  deleteTask,
+  listTasks,
+  releaseTask,
+  reopenTask,
+} from "@/api/tasks";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
-import type { Project, Task, TaskStatus } from "@/types";
+import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
 interface FormValues {
   name: string;
@@ -34,6 +44,7 @@ interface FormValues {
 
 export default function Projects() {
   const qc = useQueryClient();
+  const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
   const isAdmin = role === "admin" || role === "super_admin";
 
@@ -56,6 +67,10 @@ export default function Projects() {
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [includeClaimed, setIncludeClaimed] = useState(false);
   const [assigning, setAssigning] = useState(false);
+
+  const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
+  const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
+  const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
   const [createForm] = Form.useForm();
@@ -198,6 +213,40 @@ export default function Projects() {
     }
   };
 
+  // 标注工作台的标签按钮要取任务所属项目的标签，不能把别的项目的混进来
+  const labelsOf = (projectId: number): LabelDefinition[] =>
+    allLabels?.filter((l) => l.project_id === projectId) ?? [];
+
+  const openWorkspace = (task: Task, readOnly: boolean, projectId: number) => {
+    setWorkspaceLabels(labelsOf(projectId));
+    setWorkspaceReadOnly(readOnly);
+    setWorkspaceTask(task);
+  };
+
+  const handleClaimTask = async (id: number) => {
+    await claimTask(id);
+    message.success("认领成功");
+    refresh();
+  };
+
+  const handleReleaseTask = async (id: number) => {
+    await releaseTask(id);
+    message.success("已放弃，任务退回公共池，草稿已保留");
+    refresh();
+  };
+
+  const handleReopenTask = async (id: number) => {
+    await reopenTask(id);
+    message.success("已退回重标，上一轮内容已带到新一轮");
+    refresh();
+  };
+
+  const handleDeleteTask = async (id: number) => {
+    await deleteTask(id);
+    message.success("任务已删除");
+    refresh();
+  };
+
   // 项目下任务按状态汇总，一眼看出进度
   const statusSummary = (projectId: number) => {
     const counts: Partial<Record<TaskStatus, number>> = {};
@@ -262,14 +311,86 @@ export default function Projects() {
                   {
                     title: "状态",
                     dataIndex: "status",
-                    width: 140,
-                    render: (s: TaskStatus) => <TaskStatusTag status={s} />,
+                    width: 190,
+                    render: (s: TaskStatus, task: Task) => (
+                      <Space size={4}>
+                        <TaskStatusTag status={s} />
+                        {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
+                        {s === "PENDING_ASSIGN" && task.has_draft && <Tag color="gold">有草稿</Tag>}
+                        {/* 被驳回时把审核意见带出来，不用另外去问审核员为什么 */}
+                        {s === "REJECTED" && task.review_comment && (
+                          <Tooltip title={task.review_comment}>
+                            <Tag color="red" style={{ cursor: "help" }}>
+                              审核意见
+                            </Tag>
+                          </Tooltip>
+                        )}
+                      </Space>
+                    ),
                   },
                   {
                     title: "指派给",
                     dataIndex: "assigned_to",
                     render: (id: number | null) =>
                       id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : userName(id),
+                  },
+                  {
+                    title: "操作",
+                    render: (_, task: Task) => {
+                      // 自己锁着的进行中任务才能改，其余情况（已提交/别人在标/管理员旁观）只读
+                      const editable = task.status === "IN_PROGRESS" && task.locked_by === userId;
+                      return (
+                        <Space>
+                          {task.status === "PENDING_ASSIGN" && (
+                            <Button size="small" onClick={() => handleClaimTask(task.id)}>
+                              认领
+                            </Button>
+                          )}
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => openWorkspace(task, !editable, p.id)}
+                          >
+                            {editable ? "编辑标注" : "查看标注"}
+                          </Button>
+                          {editable && (
+                            <Popconfirm
+                              title="放弃任务"
+                              description="退回公共池，别人可以接手；已经标的内容会保留成草稿，不会丢"
+                              onConfirm={() => handleReleaseTask(task.id)}
+                            >
+                              <Button size="small" type="link">
+                                放弃
+                              </Button>
+                            </Popconfirm>
+                          )}
+                          {(isAdmin || role === "reviewer" || task.assigned_to === userId) &&
+                            (task.status === "APPROVED" || task.status === "REJECTED") && (
+                              <Popconfirm
+                                title="退回重标"
+                                description="轮次+1，这一轮的标注内容会原样带到新一轮，任务回到待认领"
+                                onConfirm={() => handleReopenTask(task.id)}
+                              >
+                                <Button size="small" type="link">
+                                  退回重标
+                                </Button>
+                              </Popconfirm>
+                            )}
+                          {isAdmin && (
+                            <Popconfirm
+                              title="删除任务"
+                              description="会一并删掉该任务下的标注草稿和审核记录，不可恢复"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={() => handleDeleteTask(task.id)}
+                            >
+                              <Button size="small" danger type="link">
+                                删除
+                              </Button>
+                            </Popconfirm>
+                          )}
+                        </Space>
+                      );
+                    },
                   },
                 ]}
               />
@@ -601,6 +722,14 @@ export default function Projects() {
           })}
         />
       </Modal>
+
+      <AnnotationWorkspace
+        task={workspaceTask}
+        labels={workspaceLabels}
+        readOnly={workspaceReadOnly}
+        onClose={() => setWorkspaceTask(null)}
+        onSubmitted={refresh}
+      />
     </div>
   );
 }
