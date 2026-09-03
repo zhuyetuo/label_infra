@@ -3,7 +3,7 @@ import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, T
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
-import { ROLE_META } from "@/utils/taskStatus";
+import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
 
 const ROLE_OPTIONS = [
@@ -110,23 +110,12 @@ export default function Users() {
                 size="small"
                 value={r}
                 variant="borderless"
-                style={{ width: 116, color: ROLE_META[r]?.hex, fontWeight: 500 }}
+                style={{ width: 116 }}
                 options={ROLE_OPTIONS}
-                // 下拉列表里每个选项前面加个色点，跟表格里的颜色对上，一眼选对
-                optionRender={(opt) => (
-                  <Space>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: ROLE_META[opt.value as string]?.hex,
-                      }}
-                    />
-                    {opt.label}
-                  </Space>
-                )}
+                // 收起时显示的值、下拉列表里的每一项，都用跟表格其他地方一样的
+                // 色块（RoleTag），而不是纯文字——色块比文字颜色更抓眼，一眼分清角色
+                labelRender={() => <RoleTag role={r} />}
+                optionRender={(opt) => <RoleTag role={opt.value as string} />}
                 onChange={(role) => handleRoleChange(u, role)}
               />
             ),
