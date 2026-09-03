@@ -59,8 +59,8 @@ function formatMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(msPart, 3)}`;
 }
 
-// 标注工作台：视频 + IMU 波形 + 打标签。时间点不再靠手填毫秒，而是把视频/波形
-// 拖到位置后直接"设为开始/设为结束"，所见即所得。
+// 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
+// 时间点不用手填毫秒，所见即所得。
 export default function AnnotationWorkspace({
   task,
   labels,
@@ -88,26 +88,10 @@ export default function AnnotationWorkspace({
   const [chartBoxH, setChartBoxH] = useState(0);
 
   const [items, setItems] = useState<LabelItem[]>([]);
-  const [markStart, setMarkStart] = useState<number | null>(null);
-  const [markEnd, setMarkEnd] = useState<number | null>(null);
   const [labelId, setLabelId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   const bus = useMemo(() => new TimeBus(), [taskId]);
-  // 当前播放位置用 ref 存，避免每帧都 setState 触发整个工作台重渲染
-  const currentMsRef = useRef(0);
-  const [currentMsShown, setCurrentMsShown] = useState(0);
-
-  useEffect(() => {
-    const unsubscribe = bus.onTime((sec) => {
-      currentMsRef.current = sec * 1000;
-    });
-    const timer = setInterval(() => setCurrentMsShown(currentMsRef.current), 200);
-    return () => {
-      unsubscribe();
-      clearInterval(timer);
-    };
-  }, [bus]);
 
   useEffect(() => {
     if (taskId == null || sampleId == null) {
@@ -115,8 +99,6 @@ export default function AnnotationWorkspace({
       setHasCsv(false);
       setFps(null);
       setItems([]);
-      setMarkStart(null);
-      setMarkEnd(null);
       return;
     }
     setLoading(true);
@@ -184,19 +166,6 @@ export default function AnnotationWorkspace({
         created_by: null,
       },
     ]);
-  };
-
-  const addItem = () => {
-    if (labelId == null || markStart == null || markEnd == null) return;
-    const start = Math.min(markStart, markEnd);
-    const end = Math.max(markStart, markEnd);
-    if (end - start < 1) {
-      message.warning("时间段太短");
-      return;
-    }
-    appendItem(start, end, labelId);
-    setMarkStart(null);
-    setMarkEnd(null);
   };
 
   // 在波形上直接拖出来一段（参考工具的主要标注方式）
@@ -268,8 +237,6 @@ export default function AnnotationWorkspace({
     40,
     Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
   );
-
-  const canAdd = !readOnly && labelId != null && markStart != null && markEnd != null;
 
   // 数字/字母键快速切标签，跟参考工具一样，标注时手不用离开键盘
   useEffect(() => {
@@ -387,32 +354,6 @@ export default function AnnotationWorkspace({
               {labels.length === 0 && (
                 <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
               )}
-            </Space>
-            <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
-              选一个标签（或按快捷键），然后直接在下面的波形上按住左键拖出一段即可；已画出来的色块，
-              拖它的左右边缘可以改时间。再按一次同一个快捷键（或按 Esc）取消选中，拖动就恢复成平移。
-              也可以用下面的「设为开始/设为结束」按当前播放位置打点。
-            </div>
-            <Space wrap>
-            <Typography.Text strong>当前位置 {formatMs(currentMsShown)}</Typography.Text>
-            <Button size="small" onClick={() => setMarkStart(currentMsRef.current)}>
-              设为开始
-            </Button>
-            <Button size="small" onClick={() => setMarkEnd(currentMsRef.current)}>
-              设为结束
-            </Button>
-            <Button type="primary" size="small" disabled={!canAdd} onClick={addItem}>
-              添加这一段
-            </Button>
-            <Button
-              size="small"
-              onClick={() => {
-                setMarkStart(null);
-                setMarkEnd(null);
-              }}
-            >
-              清除
-            </Button>
             </Space>
           </div>
         )}
