@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Input, Modal, Space, Table, Tag, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimReview, decideReview, reviewQueue } from "@/api/reviews";
+import { claimReview, decideReview, releaseReview, reviewQueue } from "@/api/reviews";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
@@ -22,6 +22,12 @@ export default function Reviews() {
   const handleClaim = async (id: number) => {
     await claimReview(id);
     message.success("已认领待审核");
+    refresh();
+  };
+
+  const handleReleaseReview = async (id: number) => {
+    await releaseReview(id);
+    message.success("已放弃认领，任务退回待审核队列");
     refresh();
   };
 
@@ -75,6 +81,9 @@ export default function Reviews() {
                     </Button>
                     <Button size="small" danger onClick={() => setRejectTaskId(task.id)}>
                       驳回
+                    </Button>
+                    <Button size="small" type="link" onClick={() => handleReleaseReview(task.id)}>
+                      放弃认领
                     </Button>
                   </>
                 )}

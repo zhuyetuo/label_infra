@@ -29,7 +29,7 @@ from app.schemas.task import (
 )
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
-from app.services.task_service import TaskConflictError, claim_task, heartbeat, save_draft, submit_task
+from app.services.task_service import TaskConflictError, claim_task, heartbeat, release_task, save_draft, submit_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -164,7 +164,27 @@ async def list_tasks(
     query = query.order_by(Task.created_at.desc())
     result = await db.execute(query)
     tasks = result.scalars().all()
-    return ok([TaskOut.model_validate(t).model_dump() for t in tasks])
+
+    # 待认领但已经有人标过一部分（比如中途放弃）的任务，前端要标出来提示
+    # "有草稿"，不是从零开始
+    draft_task_ids: set[int] = set()
+    task_ids = [t.id for t in tasks]
+    if task_ids:
+        rows = await db.execute(
+            select(AnnotationRecord.task_id)
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .where(AnnotationRecord.round_no == Task.round_no, Task.id.in_(task_ids))
+            .distinct()
+        )
+        draft_task_ids = set(rows.scalars().all())
+
+    return ok(
+        [
+            {**TaskOut.model_validate(t).model_dump(), "has_draft": t.id in draft_task_ids}
+            for t in tasks
+        ]
+    )
 
 
 @router.get("/{task_id}")
@@ -181,6 +201,16 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db), user: User 
 async def claim(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         task = await claim_task(db, task_id, user)
+    except TaskConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/{task_id}/release")
+async def release(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """标注员主动放弃任务，退回公共池；草稿保留，换人接手能接着标。"""
+    try:
+        task = await release_task(db, task_id, user)
     except TaskConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())
