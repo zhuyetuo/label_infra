@@ -302,10 +302,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
       className={fill ? "ws-videos" : undefined}
       style={
         fill
-          ? // overflow:hidden 是关键：画面按宽度定高，遇到偏竖屏的素材算出来的高度
-            // 可能超过这块区域实际分到的空间。不裁掉的话，超出的部分不会把下面的
-            // 标签按钮推下去，而是直接盖在它们上面（就是"挤在一起"那个问题）。
-            { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }
+          ? // flex: 1 with minHeight: 0 让这个div占满剩余高度；display:flex + flexDirection:column
+            // 使内部子元素按竖向排列（播放速度控制条 + 视频组）
+            { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }
           : undefined
       }
     >
@@ -341,11 +340,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
         style={
           fill
             ? // 三路画面无缝挨在一起：不留间距，每路正好占三分之一宽度。
-              // 高度由宽高比推出来，不去拉伸容器——一旦用高度反过来限制宽度，
-              // 画面就会缩得比三分之一窄，中间露出白缝。
-              // alignItems:center 是为了配合外层的 overflow:hidden：万一算出来的
-              // 高度超出可用空间，裁掉的是上下均匀的一圈，而不是整段被顶到看不见。
-              { display: "flex", gap: 0, flex: "0 0 auto", alignItems: "center", margin: "auto 0" }
+              // flex: 1 + minHeight: 0 让这个容器占满剩余空间；overflow:auto 防止内容溢出
+              // 但允许必要时显示滚动条（实际上不会出现，因为内部视频会约束自己的高度）
+              { display: "flex", gap: 0, flex: 1, minHeight: 0, overflow: "hidden" }
             : { display: "flex", gap: 12, flexWrap: "wrap" }
         }
       >
@@ -382,7 +379,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
               }}
               style={
                 fill
-                  ? { flex: 1, minWidth: 0, display: "flex" }
+                  ? { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center" }
                   : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
               }
             >
@@ -395,11 +392,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 style={
                   fill
                     ? {
-                        // 定死宽高比 + 宽度占满：元素大小始终等于画面大小，
-                        // 既没有黑边，也不会比三分之一窄
+                        // 宽度占满父容器（三分之一宽度），高度由宽高比推出但受max-height限制
+                        // max-height: 100% 确保视频+控制条不会溢出父容器
                         aspectRatio: aspects[i],
                         width: "100%",
                         height: "auto",
+                        maxHeight: "100%",
                         display: "block",
                         transformOrigin: "center",
                       }
