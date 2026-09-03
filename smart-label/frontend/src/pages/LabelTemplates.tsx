@@ -63,9 +63,9 @@ export default function LabelTemplates() {
     setOpen(true);
   };
 
+  // 新增的行放最前面：模板动辄十几条标签，加在末尾的话每次都要滚到底部才能填，很烦
   const addRow = () =>
     setItems((prev) => [
-      ...prev,
       {
         key: Date.now(),
         code: "",
@@ -73,6 +73,7 @@ export default function LabelTemplates() {
         color: PRESET_COLORS[prev.length % PRESET_COLORS.length],
         sort_order: prev.length + 1,
       },
+      ...prev,
     ]);
 
   const patchRow = (key: number, patch: Partial<EditItem>) =>
