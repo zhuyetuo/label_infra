@@ -42,7 +42,7 @@ async def list_projects(db: AsyncSession = Depends(get_db), user: User = Depends
     return ok([ProjectOut.model_validate(p).model_dump() for p in result.scalars().all()])
 
 
-@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def create_project(
     body: ProjectCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)
 ):
@@ -56,7 +56,7 @@ async def create_project(
     return ok(ProjectOut.model_validate(project).model_dump())
 
 
-@router.patch("/{project_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.patch("/{project_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def update_project(project_id: int, body: ProjectUpdate, db: AsyncSession = Depends(get_db)):
     project = await db.get(Project, project_id)
     if project is None:
@@ -68,7 +68,7 @@ async def update_project(project_id: int, body: ProjectUpdate, db: AsyncSession 
     return ok(ProjectOut.model_validate(project).model_dump())
 
 
-@router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db)):
     """
     把整个项目的任务一次性指派给某人：一个项目往往就是一批要一起干的活儿，
@@ -113,7 +113,7 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
     return ok(ProjectAssignResult(assigned=assigned, skipped=total - assigned).model_dump())
 
 
-@router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     """
     删项目会把它下面的任务、标注结果、审核记录、标签一起删掉，不可恢复。

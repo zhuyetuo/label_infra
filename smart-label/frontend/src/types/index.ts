@@ -74,7 +74,7 @@ export interface AppUser {
   username: string;
   display_name: string;
   email: string | null;
-  role: "admin" | "annotator" | "reviewer";
+  role: "super_admin" | "admin" | "annotator" | "reviewer";
   is_outsourced: boolean;
   is_active: boolean;
   must_change_password: boolean;

@@ -34,7 +34,7 @@ from app.services.task_service import TaskConflictError, claim_task, heartbeat, 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)):
     project = await db.get(Project, body.project_id)
     if project is None:
@@ -58,7 +58,7 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     return ok(TaskOut.model_validate(task).model_dump())
 
 
-@router.post("/bulk", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("/bulk", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def bulk_create_tasks(
     body: BulkTaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)
 ):
@@ -113,7 +113,7 @@ async def bulk_create_tasks(
     )
 
 
-@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.reviewer))])
+@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin, UserRole.reviewer))])
 async def reopen(
     task_id: int,
     body: ReopenRequest,
@@ -128,7 +128,7 @@ async def reopen(
     return ok(TaskOut.model_validate(task).model_dump())
 
 
-@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
     """
     管理员删除任务。任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，

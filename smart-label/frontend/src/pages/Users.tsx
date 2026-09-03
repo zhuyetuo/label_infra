@@ -144,6 +144,7 @@ export default function Users() {
             <Form.Item name="role" label="角色" rules={[{ required: true }]} initialValue="annotator">
               <Select
                 options={[
+                  { value: "super_admin", label: "超级管理员" },
                   { value: "admin", label: "管理员" },
                   { value: "annotator", label: "标注员" },
                   { value: "reviewer", label: "审核员" },

@@ -7,7 +7,7 @@ from app.core.deps import require_role
 from app.models.user import UserRole
 from app.schemas.envelope import ok
 
-router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(require_role(UserRole.admin))])
+router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
 
 @router.get("/summary")

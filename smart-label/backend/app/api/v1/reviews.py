@@ -14,7 +14,7 @@ from app.schemas.task import TaskOut
 from app.services.review_service import ReviewConflictError, claim_review, decide_review
 
 router = APIRouter(
-    prefix="/reviews", tags=["reviews"], dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin))]
+    prefix="/reviews", tags=["reviews"], dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin, UserRole.super_admin))]
 )
 
 

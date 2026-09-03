@@ -30,7 +30,7 @@ from app.schemas.label_template import (
 router = APIRouter(
     prefix="/label-templates",
     tags=["label-templates"],
-    dependencies=[Depends(require_role(UserRole.admin))],
+    dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))],
 )
 
 
