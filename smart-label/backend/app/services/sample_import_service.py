@@ -5,6 +5,13 @@
     multicam_{date}_{time}_cam{N}_imu{N}_...raw.{mp4,csv}
 会话前缀 = 文件名去掉 "_cam{N}..." 之后的部分。
 
+一个会话（同一批固定摄像头）下可能有不止一个 IMU 的 CSV——比如同一空间、
+同一套三路摄像头，好几只狗依次背不同 IMU 设备录，摄像头只录一份，IMU CSV
+却有好几份。视频按 cam 编号分组、CSV 按 imu 编号分组，两者分开处理：一个
+会话有几个 IMU 就产出几个样本，都指向同一份视频；只有 1 个 IMU 时样本编号
+沿用会话前缀本身，超过 1 个才加 "_imu{N}" 后缀区分（文件名里的 cam 编号
+在 CSV 上只是模板带出来的，不代表跟哪个 IMU 强绑定，不能拿来做分组键）。
+
 扫描在后台异步跑（不阻塞请求线程），前端通过轮询状态接口显示进度条。
 
 性能设计（一万级session规模下验证过原版本会很慢，这里做了两处优化）：
@@ -100,12 +107,12 @@ async def run_scan(nas_root: str, admin_id: int) -> None:
             _progress.error_message = f"{type(exc).__name__}: {exc}"
 
 
-def _group_key_and_cam(filename: str) -> tuple[str, int] | None:
+def _parse_filename(filename: str) -> tuple[str, int, int] | None:
     stem = os.path.splitext(filename)[0]
     match = _CAM_RE.match(stem)
     if not match:
         return None
-    return match.group(1), int(match.group(2))
+    return match.group(1), int(match.group(2)), int(match.group(3))
 
 
 def _parse_session_date(session_key: str) -> date | None:
@@ -118,21 +125,37 @@ def _parse_session_date(session_key: str) -> date | None:
         return None
 
 
-def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[int, dict[str, str]]]:
-    """纯文件系统遍历，不涉及数据库/子进程，跑在线程池里避免阻塞事件循环。"""
-    groups: dict[str, dict[int, dict[str, str]]] = {}
+def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[str, dict[int, str]]]:
+    """
+    纯文件系统遍历，不涉及数据库/子进程，跑在线程池里避免阻塞事件循环。
+
+    视频按 cam 编号分组、CSV 按 imu 编号分组，两者分开——一个空间三路固定摄像头
+    可以被好几个不同的 IMU 设备共用同一批视频（多只狗依次在同一空间录，各自
+    背一个 IMU，摄像头只录了一份）。之前这里把视频和 CSV 混在同一个"按cam
+    编号"的字典里，同一个 cam 编号下如果有多个 imu 编号的 CSV（文件名里的
+    cam 编号只是巧合/模板带出来的，不代表跟哪个 IMU 强绑定），后写入的会直接
+    覆盖先写入的，其余 IMU 的 CSV 就这样丢了、一声不吭——只会生成一个样本，
+    而不是每个 IMU 各一个样本。
+    """
+    groups: dict[str, dict[str, dict[int, str]]] = {}
     for root, _dirs, files in os.walk(data_raw_dir):
         for fname in files:
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
             if ext not in ("mp4", "csv"):
                 continue
-            parsed = _group_key_and_cam(fname)
+            parsed = _parse_filename(fname)
             if parsed is None:
                 continue
-            session_key, cam_idx = parsed
+            session_key, cam_idx, imu_idx = parsed
             full_path = os.path.join(root, fname)
             rel_path = os.path.relpath(full_path, nas_root)
-            groups.setdefault(session_key, {}).setdefault(cam_idx, {})[ext] = rel_path
+            g = groups.setdefault(session_key, {"videos": {}, "csvs": {}})
+            if ext == "mp4":
+                # 同一路摄像头正常只有一份视频；万一撞了（不同 imu 编号的文件名
+                # 巧合落到同一个 cam 编号），保留先扫到的那份，不用后写的覆盖
+                g["videos"].setdefault(cam_idx, rel_path)
+            else:
+                g["csvs"].setdefault(imu_idx, rel_path)
     return groups
 
 
@@ -151,32 +174,37 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     data_raw_dir = os.path.join(nas_root, "data_raw")
     groups = await asyncio.to_thread(_scan_filesystem, data_raw_dir, nas_root)
+    # 先给个粗略估计（按 session 数），下面按 IMU 展开出实际样本数之后会再校正一次，
+    # 避免这中间 tick() 拿 0 做分母算出奇怪的剩余时间
     _progress.total_groups = len(groups)
 
-    # 先过滤出结构完整、且还没写文件级候选路径的候选session（不查库，纯内存判断）
+    # 先过滤出结构完整、且还没写文件级候选路径的候选样本（不查库，纯内存判断）。
+    # 一个 session（同一批固定摄像头视频）下每个 IMU 编号各产出一个样本，
+    # 都指向同一份视频；只有 1 个 IMU 的常规情况样本编号沿用 session_key
+    # 本身（兼容已经这么导入过的历史样本），有多个 IMU 时才加 _imu{N} 后缀区分。
     candidates: dict[str, dict] = {}
     all_candidate_paths: set[str] = set()
-    for session_key, cams in groups.items():
-        if not all(c in cams for c in (1, 2)):
+    for session_key, g in groups.items():
+        videos, csvs = g["videos"], g["csvs"]
+        if not all(c in videos for c in (1, 2)):
+            _progress.detail.append(f"跳过 {session_key}：缺少cam1/cam2视频")
             _progress.processed += 1
-            _progress.detail.append(f"跳过 {session_key}：缺少cam1/cam2")
             _progress.tick()
             continue
-        if any("mp4" not in cams[c] for c in (1, 2)) or (3 in cams and "mp4" not in cams[3]):
-            _progress.processed += 1
-            _progress.detail.append(f"跳过 {session_key}：缺少视频文件")
-            _progress.tick()
-            continue
-        csv_rel = cams[1].get("csv") or next((cams[c]["csv"] for c in (2, 3) if c in cams and "csv" in cams[c]), None)
-        if csv_rel is None:
-            _progress.processed += 1
+        if not csvs:
             _progress.detail.append(f"跳过 {session_key}：找不到IMU CSV")
+            _progress.processed += 1
             _progress.tick()
             continue
-        cam_paths = {c: cams[c]["mp4"] for c in (1, 2, 3) if c in cams and "mp4" in cams[c]}
-        candidates[session_key] = {"cam_paths": cam_paths, "csv_rel": csv_rel}
-        all_candidate_paths.update(cam_paths.values())
-        all_candidate_paths.add(csv_rel)
+        cam_paths = {c: videos[c] for c in (1, 2, 3) if c in videos}
+        imu_items = sorted(csvs.items())
+        for imu_idx, csv_rel in imu_items:
+            sample_code = session_key if len(imu_items) == 1 else f"{session_key}_imu{imu_idx}"
+            candidates[sample_code] = {"cam_paths": cam_paths, "csv_rel": csv_rel}
+            all_candidate_paths.update(cam_paths.values())
+            all_candidate_paths.add(csv_rel)
+
+    _progress.total_groups = len(candidates) + _progress.processed
 
     if not candidates:
         return
