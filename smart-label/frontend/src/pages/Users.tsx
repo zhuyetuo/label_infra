@@ -2,8 +2,14 @@ import { useState } from "react";
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
-import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
+
+const ROLE_OPTIONS = [
+  { value: "super_admin", label: "超级管理员" },
+  { value: "admin", label: "管理员" },
+  { value: "annotator", label: "标注员" },
+  { value: "reviewer", label: "审核员" },
+];
 
 export default function Users() {
   const qc = useQueryClient();
@@ -56,6 +62,20 @@ export default function Users() {
     refresh();
   };
 
+  const handleRoleChange = (u: AppUser, role: AppUser["role"]) => {
+    if (role === u.role) return;
+    const roleLabel = ROLE_OPTIONS.find((r) => r.value === role)?.label ?? role;
+    Modal.confirm({
+      title: "修改角色",
+      content: `确定把 ${u.username} 的角色改为「${roleLabel}」？`,
+      onOk: async () => {
+        await updateUser(u.id, { role });
+        message.success("角色已修改");
+        refresh();
+      },
+    });
+  };
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
@@ -71,7 +91,20 @@ export default function Users() {
           { title: "ID", dataIndex: "id", width: 60 },
           { title: "用户名", dataIndex: "username" },
           { title: "显示名", dataIndex: "display_name" },
-          { title: "角色", dataIndex: "role", render: (r: string) => <RoleTag role={r} /> },
+          {
+            title: "角色",
+            dataIndex: "role",
+            render: (r: AppUser["role"], u: AppUser) => (
+              <Select
+                size="small"
+                value={r}
+                variant="borderless"
+                style={{ width: 110 }}
+                options={ROLE_OPTIONS}
+                onChange={(role) => handleRoleChange(u, role)}
+              />
+            ),
+          },
           {
             title: "外包",
             dataIndex: "is_outsourced",
@@ -142,14 +175,7 @@ export default function Users() {
               <Input />
             </Form.Item>
             <Form.Item name="role" label="角色" rules={[{ required: true }]} initialValue="annotator">
-              <Select
-                options={[
-                  { value: "super_admin", label: "超级管理员" },
-                  { value: "admin", label: "管理员" },
-                  { value: "annotator", label: "标注员" },
-                  { value: "reviewer", label: "审核员" },
-                ]}
-              />
+              <Select options={ROLE_OPTIONS} />
             </Form.Item>
             <Form.Item name="is_outsourced" label="外包账号" valuePropName="checked" initialValue={false}>
               <Switch />
