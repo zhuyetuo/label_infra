@@ -29,6 +29,7 @@ export interface Sample {
   imu_csv_path: string;
   video_duration_sec: number | null;
   video_resolution: string | null;
+  imu_row_count: number | null;
   import_status: "pending" | "verified" | "error";
   import_error: string | null;
 }

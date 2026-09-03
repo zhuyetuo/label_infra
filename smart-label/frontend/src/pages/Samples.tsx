@@ -61,6 +61,7 @@ export default function Samples() {
     },
     { title: "时长(秒)", dataIndex: "video_duration_sec" },
     { title: "分辨率", dataIndex: "video_resolution" },
+    { title: "CSV行数", dataIndex: "imu_row_count", render: (n: number | null) => n ?? "-" },
     { title: "错误信息", dataIndex: "import_error" },
     {
       title: "操作",
