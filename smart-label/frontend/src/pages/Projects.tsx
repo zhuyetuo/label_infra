@@ -1,29 +1,60 @@
 import { useState } from "react";
-import { Button, Form, Input, Popconfirm, Space, Switch, Table, Tag, Typography, message } from "antd";
-import { Modal } from "antd";
+import {
+  Button,
+  Checkbox,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
+import { assignProject, createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
 import { listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
+import { listSamples } from "@/api/samples";
+import { listUsers } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
-import type { Project } from "@/types";
+import type { Project, Task, TaskStatus } from "@/types";
 
 interface FormValues {
   name: string;
   description?: string;
 }
 
+const statusColor: Record<TaskStatus, string> = {
+  PENDING_ASSIGN: "default",
+  IN_PROGRESS: "blue",
+  SUBMITTED: "orange",
+  APPROVED: "green",
+  REJECTED: "red",
+};
+
 export default function Projects() {
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.userInfo?.role);
+  const isAdmin = role === "admin";
+
   const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  // 列表里顺带显示每个项目下有多少任务/标签，方便判断能不能删
   const { data: allTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
+  const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
+  const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
+
+  const [assignTarget, setAssignTarget] = useState<Project | null>(null);
+  const [assignUserId, setAssignUserId] = useState<number | null>(null);
+  const [includeClaimed, setIncludeClaimed] = useState(false);
+  const [assigning, setAssigning] = useState(false);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["projects"] });
@@ -62,15 +93,54 @@ export default function Projects() {
     refresh();
   };
 
-  const countOf = (id: number) => ({
-    tasks: allTasks?.filter((t) => t.project_id === id).length ?? 0,
-    labels: allLabels?.filter((l) => l.project_id === id).length ?? 0,
-  });
+  const openAssign = (p: Project) => {
+    setAssignTarget(p);
+    setAssignUserId(null);
+    setIncludeClaimed(false);
+  };
+
+  const handleAssign = async () => {
+    if (!assignTarget) return;
+    setAssigning(true);
+    try {
+      const r = await assignProject(assignTarget.id, assignUserId, includeClaimed);
+      message.success(`已指派 ${r.assigned} 个任务${r.skipped ? `，跳过 ${r.skipped} 个` : ""}`);
+      setAssignTarget(null);
+      refresh();
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const tasksOf = (projectId: number) => allTasks?.filter((t) => t.project_id === projectId) ?? [];
+  const labelCount = (projectId: number) =>
+    allLabels?.filter((l) => l.project_id === projectId).length ?? 0;
+  const userName = (id: number | null) => {
+    if (id == null) return null;
+    const u = users?.find((x) => x.id === id);
+    return u ? u.display_name || u.username : `#${id}`;
+  };
+  const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
+
+  // 项目下任务按状态汇总，一眼看出进度
+  const statusSummary = (projectId: number) => {
+    const counts: Partial<Record<TaskStatus, number>> = {};
+    for (const t of tasksOf(projectId)) counts[t.status] = (counts[t.status] ?? 0) + 1;
+    return counts;
+  };
+
+  // 项目下这些任务都指派给谁了
+  const assigneeSummary = (projectId: number) => {
+    const ids = new Set(tasksOf(projectId).map((t) => t.assigned_to));
+    const named = [...ids].filter((i): i is number => i != null).map(userName);
+    const hasUnassigned = ids.has(null);
+    return { named, hasUnassigned };
+  };
 
   return (
     <div>
       <Space style={{ marginBottom: 8 }}>
-        {role === "admin" && (
+        {isAdmin && (
           <Button type="primary" onClick={openCreate}>
             新建项目
           </Button>
@@ -79,12 +149,50 @@ export default function Projects() {
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         同一批数据在不同业务下要标的东西不一样，所以先建项目，再在项目里建任务、配标签。
         项目之间的标签互不干扰，同一个样本可以同时出现在多个项目里。
+        点左侧箭头可以展开看项目下的任务；「指派」可以把整个项目的任务一次性分给某个人。
       </Typography.Paragraph>
 
       <Table
         rowKey="id"
         loading={isLoading}
         dataSource={data}
+        expandable={{
+          // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
+          expandedRowRender: (p: Project) => {
+            const rows = tasksOf(p.id);
+            return (
+              <Table
+                size="small"
+                rowKey="id"
+                dataSource={rows}
+                pagination={rows.length > 10 ? { pageSize: 10 } : false}
+                locale={{ emptyText: "这个项目下还没有任务" }}
+                columns={[
+                  { title: "任务ID", dataIndex: "id", width: 80 },
+                  {
+                    title: "样本",
+                    dataIndex: "sample_id",
+                    render: (id: number) => sampleCode(id),
+                  },
+                  { title: "类型", dataIndex: "task_type", width: 120 },
+                  { title: "轮次", dataIndex: "round_no", width: 60 },
+                  {
+                    title: "状态",
+                    dataIndex: "status",
+                    width: 140,
+                    render: (s: TaskStatus) => <Tag color={statusColor[s]}>{s}</Tag>,
+                  },
+                  {
+                    title: "指派给",
+                    dataIndex: "assigned_to",
+                    render: (id: number | null) =>
+                      id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : userName(id),
+                  },
+                ]}
+              />
+            );
+          },
+        }}
         columns={[
           { title: "ID", dataIndex: "id", width: 60 },
           {
@@ -98,21 +206,52 @@ export default function Projects() {
           },
           { title: "说明", dataIndex: "description", render: (d: string | null) => d || "-" },
           {
-            title: "任务数",
-            width: 90,
-            render: (_, p: Project) => countOf(p.id).tasks,
+            title: "任务",
+            width: 240,
+            render: (_, p: Project) => {
+              const counts = statusSummary(p.id);
+              const total = tasksOf(p.id).length;
+              if (!total) return <Typography.Text type="secondary">0</Typography.Text>;
+              return (
+                <Space size={4} wrap>
+                  <span>共 {total}</span>
+                  {(Object.keys(counts) as TaskStatus[]).map((s) => (
+                    <Tag key={s} color={statusColor[s]}>
+                      {s} {counts[s]}
+                    </Tag>
+                  ))}
+                </Space>
+              );
+            },
           },
           {
-            title: "标签数",
-            width: 90,
-            render: (_, p: Project) => countOf(p.id).labels,
+            title: "指派给",
+            width: 180,
+            render: (_, p: Project) => {
+              const { named, hasUnassigned } = assigneeSummary(p.id);
+              if (!named.length && !hasUnassigned) return "-";
+              return (
+                <Space size={4} wrap>
+                  {named.map((n) => (
+                    <Tag key={n} color="blue">
+                      {n}
+                    </Tag>
+                  ))}
+                  {hasUnassigned && <Tag>有未指派</Tag>}
+                </Space>
+              );
+            },
           },
+          { title: "标签数", width: 80, render: (_, p: Project) => labelCount(p.id) },
           {
             title: "操作",
-            width: 220,
+            width: 260,
             render: (_, p: Project) =>
-              role === "admin" && (
+              isAdmin && (
                 <Space>
+                  <Button size="small" type="link" onClick={() => openAssign(p)}>
+                    指派
+                  </Button>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -172,6 +311,47 @@ export default function Projects() {
             {editing ? "保存" : "创建"}
           </Button>
         </Form>
+      </Modal>
+
+      <Modal
+        title={`指派项目 - ${assignTarget?.name ?? ""}`}
+        open={assignTarget != null}
+        onCancel={() => setAssignTarget(null)}
+        onOk={handleAssign}
+        okText="指派"
+        confirmLoading={assigning}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          把这个项目下的任务一次性分给一个人，不用一个一个点。默认只改还没被认领的任务，
+          已经有人在标或已提交的不动，免得把别人做了一半的活儿抢走。
+        </Typography.Paragraph>
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Select
+            style={{ width: "100%" }}
+            placeholder="选择标注员（留空 = 收回指派，回到公共池）"
+            allowClear
+            value={assignUserId ?? undefined}
+            onChange={(v) => setAssignUserId(v ?? null)}
+            options={users
+              ?.filter((u) => u.is_active && u.role !== "reviewer")
+              .map((u) => ({
+                value: u.id,
+                label: `${u.display_name || u.username}（${u.role}）`,
+              }))}
+            showSearch
+            optionFilterProp="label"
+          />
+          <Checkbox checked={includeClaimed} onChange={(e) => setIncludeClaimed(e.target.checked)}>
+            连已被认领/已提交的任务一起改派（会退回待认领状态，已通过的不受影响）
+          </Checkbox>
+          {assignTarget && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              该项目共 {tasksOf(assignTarget.id).length} 个任务，其中待认领{" "}
+              {tasksOf(assignTarget.id).filter((t: Task) => t.status === "PENDING_ASSIGN").length} 个
+            </Typography.Text>
+          )}
+        </Space>
       </Modal>
     </div>
   );
