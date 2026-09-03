@@ -248,6 +248,8 @@ export default function Tasks() {
           defaultExpandedRowKeys: visibleProjects.length === 1 ? [visibleProjects[0].id] : [],
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
+          // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
+          rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
         }}
         columns={[
           { title: "项目ID", dataIndex: "id", width: 80 },
