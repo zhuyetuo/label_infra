@@ -299,6 +299,8 @@ export default function Tasks() {
           expandedRowRender: renderTaskTable,
           // 只有一个项目时默认展开，省一次点击
           defaultExpandedRowKeys: visibleProjects.length === 1 ? [visibleProjects[0].id] : [],
+          // 点行内空白处就能展开，不用非得点最左边那个小箭头
+          expandRowByClick: true,
         }}
         columns={[
           { title: "项目ID", dataIndex: "id", width: 80 },
@@ -336,7 +338,8 @@ export default function Tasks() {
             width: 200,
             render: (_, p: Project) =>
               isAdmin && (
-                <Space>
+                // 整行点击展开后，操作按钮得挡住这个冒泡，不然点按钮会连带把行展开/收起
+                <Space onClick={(e) => e.stopPropagation()}>
                   <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
                     新建任务
                   </Button>

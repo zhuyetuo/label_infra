@@ -163,6 +163,8 @@ export default function Projects() {
         loading={isLoading}
         dataSource={data}
         expandable={{
+          // 点行内空白处就能展开，不用非得点最左边那个小箭头
+          expandRowByClick: true,
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
           expandedRowRender: (p: Project) => {
             const rows = tasksOf(p.id);
@@ -267,7 +269,9 @@ export default function Projects() {
             width: 260,
             render: (_, p: Project) =>
               isAdmin && (
-                <Space>
+                // 整行点击展开后，操作按钮得挡住这个冒泡，不然点"编辑"之类的
+                // 按钮会连带把行展开/收起，体验很怪
+                <Space onClick={(e) => e.stopPropagation()}>
                   <Button size="small" type="link" onClick={() => openAssign(p)}>
                     指派
                   </Button>
