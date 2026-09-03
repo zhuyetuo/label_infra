@@ -12,11 +12,11 @@ from app.models.user import User, UserRole
 
 def apply_task_scope(query: Select, user: User) -> Select:
     """
-    - admin：不过滤，看全部任务
+    - admin/super_admin：不过滤，看全部任务
     - annotator：只能看分配给自己的任务（assigned_to = 自己）
     - reviewer：只能看待审核/自己在审的任务（reviewer_id = 自己，或状态为SUBMITTED且未指派审核人）
     """
-    if user.role == UserRole.admin:
+    if user.role in (UserRole.admin, UserRole.super_admin):
         return query
     if user.role == UserRole.annotator:
         return query.where(Task.assigned_to == user.id)
@@ -36,13 +36,13 @@ def apply_task_scope(query: Select, user: User) -> Select:
 
 async def visible_project_ids(db: AsyncSession, user: User) -> set[int] | None:
     """
-    这个人能看到哪些项目。返回 None 表示不受限（admin）。
+    这个人能看到哪些项目。返回 None 表示不受限（admin/super_admin）。
 
     非管理员不该看到跟自己无关的项目：项目名/说明本身就是业务信息，
     项目列表还会暴露有多少活儿、都派给了谁。所以统一由"他能看到哪些任务"
     反推——还是走 apply_task_scope 这一个口子，不另立规则。
     """
-    if user.role == UserRole.admin:
+    if user.role in (UserRole.admin, UserRole.super_admin):
         return None
     rows = await db.execute(apply_task_scope(select(Task.project_id).distinct(), user))
     return {pid for pid in rows.scalars().all() if pid is not None}

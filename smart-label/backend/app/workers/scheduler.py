@@ -35,7 +35,12 @@ async def _sweep_once() -> None:
 async def _auto_scan_samples() -> None:
     async with SessionLocal() as db:
         admin = (
-            await db.execute(select(User).where(User.role == UserRole.admin).order_by(User.id).limit(1))
+            await db.execute(
+                select(User)
+                .where(User.role.in_((UserRole.admin, UserRole.super_admin)))
+                .order_by(User.id)
+                .limit(1)
+            )
         ).scalar_one_or_none()
     if admin is None:
         logger.warning("自动扫描跳过：还没有任何管理员账号，无法归属created_by")
