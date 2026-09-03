@@ -19,3 +19,16 @@ class ImuSeries(BaseModel):
     gyro_x: list[float | None]
     gyro_y: list[float | None]
     gyro_z: list[float | None]
+
+
+class ImuRows(BaseModel):
+    """逐行原始记录（不降采样），表格页要看真实数据用这个，不是曲线图那份降采样数据。"""
+
+    total: int
+    t: list[int]
+    acc_x: list[float | None]
+    acc_y: list[float | None]
+    acc_z: list[float | None]
+    gyro_x: list[float | None]
+    gyro_y: list[float | None]
+    gyro_z: list[float | None]
