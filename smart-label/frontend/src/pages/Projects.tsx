@@ -18,6 +18,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { assignProject, createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
 import { listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
+import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
@@ -27,6 +28,7 @@ import type { Project, Task, TaskStatus } from "@/types";
 interface FormValues {
   name: string;
   description?: string;
+  templateId?: number;
 }
 
 export default function Projects() {
@@ -39,6 +41,11 @@ export default function Projects() {
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
+  const { data: templates } = useQuery({
+    queryKey: ["label-templates"],
+    queryFn: listLabelTemplates,
+    enabled: isAdmin,
+  });
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
@@ -57,23 +64,29 @@ export default function Projects() {
 
   const openCreate = () => {
     setEditing(null);
-    form.setFieldsValue({ name: "", description: "" });
+    form.setFieldsValue({ name: "", description: "", templateId: undefined });
     setOpen(true);
   };
 
   const openEdit = (p: Project) => {
     setEditing(p);
-    form.setFieldsValue({ name: p.name, description: p.description ?? "" });
+    form.setFieldsValue({ name: p.name, description: p.description ?? "", templateId: undefined });
     setOpen(true);
   };
 
-  const handleSubmit = async (values: FormValues) => {
+  const handleSubmit = async ({ templateId, ...values }: FormValues) => {
+    let projectId = editing?.id;
     if (editing) {
       await updateProject(editing.id, values);
       message.success("已保存");
     } else {
-      await createProject(values);
+      const created = await createProject(values);
+      projectId = created.id;
       message.success("项目已创建");
+    }
+    if (templateId != null && projectId != null) {
+      const r = await applyLabelTemplate(templateId, projectId);
+      message.success(`已套用模板，添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}`);
     }
     setOpen(false);
     form.resetFields();
@@ -298,6 +311,26 @@ export default function Projects() {
           </Form.Item>
           <Form.Item name="description" label="说明">
             <Input.TextArea rows={3} placeholder="这个项目要标什么、给谁用" />
+          </Form.Item>
+          <Form.Item
+            name="templateId"
+            label="标签模板（可选）"
+            extra={
+              editing
+                ? "套用会把模板里的标签添加进来，已有同 code 的会跳过，不会覆盖"
+                : "创建后立即套用该模板的标签，不用另外去标签管理页配一遍"
+            }
+          >
+            <Select
+              allowClear
+              placeholder="不选则不套用，之后可以去「标签管理」页再套"
+              options={templates?.map((t) => ({
+                value: t.id,
+                label: `${t.name}（${t.items.length} 个标签）`,
+              }))}
+              showSearch
+              optionFilterProp="label"
+            />
           </Form.Item>
           {editing && (
             <Form.Item label="启用">

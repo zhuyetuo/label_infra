@@ -17,12 +17,14 @@ export function TaskStatusTag({ status }: { status: TaskStatus }) {
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }
 
-// 角色和标注模式也一并中文化，页面上不该出现 annotator / from_scratch 这种原始值
-export const ROLE_META: Record<string, { label: string; color: string }> = {
-  super_admin: { label: "超级管理员", color: "volcano" },
-  admin: { label: "管理员", color: "red" },
-  annotator: { label: "标注员", color: "blue" },
-  reviewer: { label: "审核员", color: "green" },
+// 角色和标注模式也一并中文化，页面上不该出现 annotator / from_scratch 这种原始值。
+// hex 跟 color 是同一套配色，只是 color 是给 antd Tag 用的预设色名，hex 是给
+// 不经过 Tag（比如账号管理页那个可以直接改的 Select）的地方直接当 CSS 颜色用。
+export const ROLE_META: Record<string, { label: string; color: string; hex: string }> = {
+  super_admin: { label: "超级管理员", color: "volcano", hex: "#fa541c" },
+  admin: { label: "管理员", color: "red", hex: "#f5222d" },
+  annotator: { label: "标注员", color: "blue", hex: "#1677ff" },
+  reviewer: { label: "审核员", color: "green", hex: "#52c41a" },
 };
 
 export function RoleTag({ role }: { role: string }) {

@@ -9,10 +9,13 @@ export const createUser = (body: {
   email?: string;
   role: AppUser["role"];
   is_outsourced?: boolean;
+  remark?: string;
 }) => request.post<never, { user: AppUser; temp_password: string }>("/users", body);
 
-export const updateUser = (id: number, body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced">>) =>
-  request.patch<never, AppUser>(`/users/${id}`, body);
+export const updateUser = (
+  id: number,
+  body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced" | "remark">>
+) => request.patch<never, AppUser>(`/users/${id}`, body);
 
 export const deleteUser = (id: number) => request.delete<never, null>(`/users/${id}`);
 

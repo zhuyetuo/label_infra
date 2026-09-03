@@ -120,6 +120,7 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
         email=body.email,
         role=body.role,
         is_outsourced=body.is_outsourced,
+        remark=body.remark,
         password_hash=hash_password(temp_password),
         must_change_password=True,
     )
