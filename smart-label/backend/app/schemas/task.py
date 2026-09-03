@@ -22,9 +22,11 @@ class TaskOut(BaseModel):
     locked_by: int | None
     lock_expires_at: datetime | None
     created_at: datetime
-    # 只有 GET /tasks 列表接口会算这个（有人标过一部分又放弃了），
-    # 单条任务接口懒得为了这一个字段多查一次，一律 False
+    # 下面两个都只有 GET /tasks 列表接口会算，单条任务接口懒得为了这一两个
+    # 字段多查一次
     has_draft: bool = False
+    # 被驳回时审核员写的意见，方便标注员知道要改什么
+    review_comment: str | None = None
 
 
 class LabelItemIn(BaseModel):
