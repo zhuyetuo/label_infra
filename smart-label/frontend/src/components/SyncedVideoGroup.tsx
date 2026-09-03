@@ -54,6 +54,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 隐式推导）——CSS 那套在高度不确定的祖先链上会算不出正确的 max-height，
   // 直接量像素、按算好的宽高铺，才能保证画面绝对完整，一点都不裁。
   const [rowSize, setRowSize] = useState({ w: 0, h: 0 });
+  // 三路视频是一个整体区域，手动拖高度就在这块区域里调整，三路视频跟着自适应
+  // （靠上面 rowSize 的 ResizeObserver 自动重算宽高，不用额外写联动逻辑）。
+  // null = 沿用默认的自动铺满高度，拖过一次之后才切换成固定高度。
+  const [customHeight, setCustomHeight] = useState<number | null>(null);
 
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -323,6 +327,24 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     isProgrammatic.current = false;
   };
 
+  // 拖拽区域底边的把手改高度；双击把手恢复自动铺满
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = rowRef.current?.getBoundingClientRect().height ?? 0;
+    const maxHeight = Math.max(240, window.innerHeight - 260);
+    const onMove = (ev: MouseEvent) => {
+      const next = startHeight + (ev.clientY - startY);
+      setCustomHeight(Math.min(maxHeight, Math.max(160, next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   const handleFrameJump = (value: number | null) => {
     if (value == null || !fps) return;
     setFrame(value);
@@ -395,10 +417,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       style={
         fill
           ? // flex: 1 with minHeight: 0 让这个div占满剩余高度；display:flex + flexDirection:column
-            // 使内部子元素按竖向排列（播放速度控制条 + 视频组）。shrinkToFit 时改成
-            // flex:"0 0 auto"——按内容（算出来的画面高度）撑开，不抢占整份可用高度，
-            // 省下来的空间让给挤在旁边的波形图。
-            { display: "flex", flexDirection: "column", flex: shrinkToFit ? "0 0 auto" : 1, minHeight: 0 }
+            // 使内部子元素按竖向排列（播放速度控制条 + 视频组）。shrinkToFit 或拖过高度
+            // 之后改成 flex:"0 0 auto"——按内容（算出来的画面高度）撑开，不抢占整份可用
+            // 高度，省下来的空间让给挤在旁边的波形图（或者干脆就是用户想要的高度）。
+            {
+              display: "flex",
+              flexDirection: "column",
+              flex: shrinkToFit || customHeight != null ? "0 0 auto" : 1,
+              minHeight: 0,
+            }
           : undefined
       }
     >
@@ -412,10 +439,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           fill
             ? // justifyContent:center 把整排在水平方向居中：算出来的总宽度可能比容器窄
               // （高度先顶到头的情况），留出来的空隙左右对半分，不会挤到一边。
+              // 拖过把手之后 customHeight 生效，三路视频靠 rowSize 的 ResizeObserver
+              // 自动重新算宽高，不用额外写联动逻辑。
               {
                 display: "flex",
                 gap: 0,
-                flex: shrinkToFit ? "0 0 auto" : 1,
+                flex: customHeight != null ? "0 0 auto" : shrinkToFit ? "0 0 auto" : 1,
+                height: customHeight ?? undefined,
                 minHeight: 0,
                 justifyContent: "center",
                 alignItems: "center",
@@ -472,6 +502,26 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           );
         })}
       </div>
+      {fill && (
+        // 三路视频是一整块区域，拖这个把手改这块区域的高度，视频跟着自适应铺满；
+        // 双击恢复自动铺满可用高度
+        <div
+          onMouseDown={handleResizeStart}
+          onDoubleClick={() => setCustomHeight(null)}
+          title="拖拽调整视频区域高度，双击恢复自动"
+          style={{
+            flex: "0 0 auto",
+            height: 8,
+            margin: "2px 0",
+            cursor: "row-resize",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div style={{ width: 40, height: 3, borderRadius: 2, background: "#d9d9d9" }} />
+        </div>
+      )}
     </div>
   );
 }
