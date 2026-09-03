@@ -11,6 +11,7 @@ const ALL_ITEMS = [
   { key: "/reviews", label: "审核", roles: ["admin", "reviewer"] },
   { key: "/samples", label: "样本", roles: ["admin"] },
   { key: "/label-definitions", label: "标签管理", roles: ["admin"] },
+  { key: "/label-templates", label: "标签模板", roles: ["admin"] },
   { key: "/users", label: "账号管理", roles: ["admin"] },
 ];
 

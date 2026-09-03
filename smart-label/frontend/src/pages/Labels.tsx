@@ -1,8 +1,13 @@
 import { useState } from "react";
-import { Button, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLabel, deleteLabel, listLabels, updateLabel } from "@/api/labels";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
+import {
+  applyLabelTemplate,
+  listLabelTemplates,
+  saveProjectLabelsAsTemplate,
+} from "@/api/labelTemplates";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
 import type { LabelDefinition } from "@/types";
@@ -23,11 +28,46 @@ export default function Labels() {
     queryFn: () => listLabels(projectId ?? undefined, true),
     enabled: projectId != null,
   });
+  const { data: templates } = useQuery({ queryKey: ["label-templates"], queryFn: listLabelTemplates });
   const [editing, setEditing] = useState<LabelDefinition | null>(null);
   const [open, setOpen] = useState(false);
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [applyTemplateId, setApplyTemplateId] = useState<number | null>(null);
+  const [saveTplOpen, setSaveTplOpen] = useState(false);
+  const [tplName, setTplName] = useState("");
   const [form] = Form.useForm<FormValues>();
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["labels"] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["labels"] });
+    qc.invalidateQueries({ queryKey: ["label-templates"] });
+  };
+
+  const handleApplyTemplate = async () => {
+    if (projectId == null || applyTemplateId == null) return;
+    const r = await applyLabelTemplate(applyTemplateId, projectId);
+    if (r.created === 0 && r.skipped > 0) {
+      message.warning(`本项目已有这些标签，全部跳过：${r.skipped_codes.join("、")}`);
+    } else {
+      message.success(
+        `已添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}`
+      );
+    }
+    setApplyOpen(false);
+    setApplyTemplateId(null);
+    refresh();
+  };
+
+  const handleSaveAsTemplate = async () => {
+    if (projectId == null || !tplName.trim()) {
+      message.warning("请填模板名");
+      return;
+    }
+    await saveProjectLabelsAsTemplate({ project_id: projectId, name: tplName.trim() });
+    message.success("已存为模板，之后新建项目可以直接套用");
+    setSaveTplOpen(false);
+    setTplName("");
+    refresh();
+  };
 
   const handleDelete = async (id: number) => {
     await deleteLabel(id);
@@ -92,6 +132,12 @@ export default function Labels() {
         <ProjectPicker value={projectId} onChange={setProjectId} />
         <Button type="primary" disabled={projectId == null} onClick={openCreate}>
           新建标签
+        </Button>
+        <Button disabled={projectId == null} onClick={() => setApplyOpen(true)}>
+          套用模板
+        </Button>
+        <Button disabled={projectId == null || !data?.length} onClick={() => setSaveTplOpen(true)}>
+          存为模板
         </Button>
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
@@ -165,6 +211,47 @@ export default function Labels() {
           },
         ]}
       />
+      <Modal
+        title="套用标签模板"
+        open={applyOpen}
+        onCancel={() => setApplyOpen(false)}
+        onOk={handleApplyTemplate}
+        okText="套用"
+        okButtonProps={{ disabled: applyTemplateId == null }}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          把模板里的标签添加到当前项目；已经有同 code 的会跳过，不会覆盖。
+        </Typography.Paragraph>
+        <Select
+          style={{ width: "100%" }}
+          placeholder="选择模板"
+          value={applyTemplateId ?? undefined}
+          onChange={setApplyTemplateId}
+          options={templates?.map((t) => ({
+            value: t.id,
+            label: `${t.name}（${t.items.length} 个标签）`,
+          }))}
+          showSearch
+          optionFilterProp="label"
+        />
+      </Modal>
+
+      <Modal
+        title="把当前项目的标签存为模板"
+        open={saveTplOpen}
+        onCancel={() => setSaveTplOpen(false)}
+        onOk={handleSaveAsTemplate}
+        okText="保存"
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          会把当前项目里启用中的 {data?.filter((l) => l.is_active).length ?? 0} 个标签存成一个模板，
+          之后新建项目可以直接套用。
+        </Typography.Paragraph>
+        <Input placeholder="模板名" value={tplName} onChange={(e) => setTplName(e.target.value)} />
+      </Modal>
+
       <Modal
         title={editing ? `编辑标签 - ${editing.display_name}` : "新建标签"}
         open={open}

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Button, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createUser, listUsers, updateUser } from "@/api/users";
+import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
 import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
 
@@ -29,6 +29,30 @@ export default function Users() {
   const toggleActive = async (u: AppUser) => {
     await updateUser(u.id, { is_active: !u.is_active });
     message.success(u.is_active ? "已禁用" : "已启用");
+    refresh();
+  };
+
+  const handleReset = async (u: AppUser) => {
+    const r = await resetUserPassword(u.id);
+    Modal.success({
+      title: `已重置 ${r.username} 的密码`,
+      content: (
+        <div>
+          <p>
+            临时密码：<Typography.Text copyable strong>{r.temp_password}</Typography.Text>
+          </p>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            请把它交给本人，登录后会强制修改。系统只保存密码的哈希值，
+            所以任何人都看不到已有账号的原密码，只能这样重置。
+          </Typography.Text>
+        </div>
+      ),
+    });
+  };
+
+  const handleDelete = async (u: AppUser) => {
+    await deleteUser(u.id);
+    message.success("账号已删除");
     refresh();
   };
 
@@ -60,10 +84,28 @@ export default function Users() {
           },
           {
             title: "操作",
+            width: 260,
             render: (_, u: AppUser) => (
-              <Button size="small" onClick={() => toggleActive(u)}>
-                {u.is_active ? "禁用" : "启用"}
-              </Button>
+              <Space>
+                <Button size="small" onClick={() => toggleActive(u)}>
+                  {u.is_active ? "禁用" : "启用"}
+                </Button>
+                <Popconfirm title="重置密码" description="会生成一个临时密码，原密码立即失效" onConfirm={() => handleReset(u)}>
+                  <Button size="small" type="link">
+                    重置密码
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title="删除账号"
+                  description="已经产生过工作记录的账号删不掉，那种情况请用「禁用」"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => handleDelete(u)}
+                >
+                  <Button size="small" danger type="link">
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
             ),
           },
         ]}
