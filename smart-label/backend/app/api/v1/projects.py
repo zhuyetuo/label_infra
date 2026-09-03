@@ -5,17 +5,23 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.label import LabelDefinition
 from app.models.project import Project
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate
+from app.schemas.project import (
+    ProjectAssignRequest,
+    ProjectAssignResult,
+    ProjectCreate,
+    ProjectOut,
+    ProjectUpdate,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -50,6 +56,51 @@ async def update_project(project_id: int, body: ProjectUpdate, db: AsyncSession 
     await db.commit()
     await db.refresh(project)
     return ok(ProjectOut.model_validate(project).model_dump())
+
+
+@router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin))])
+async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db)):
+    """
+    把整个项目的任务一次性指派给某人：一个项目往往就是一批要一起干的活儿，
+    逐个任务点太麻烦。
+
+    默认只改还没被认领的任务（PENDING_ASSIGN）——已经有人在标或已提交的
+    不动，免得把别人做了一半的活儿抢走。确实要整体换人时传 include_claimed。
+    已审核通过的任务任何情况下都不动，那是归档数据。
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+
+    if body.user_id is not None:
+        target = await db.get(User, body.user_id)
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
+        if not target.is_active:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "该账号已停用，不能指派任务")
+        if target.role == UserRole.reviewer:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "审核员不承担标注任务，请选标注员或管理员")
+
+    movable = (
+        [TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS, TaskStatus.SUBMITTED, TaskStatus.REJECTED]
+        if body.include_claimed
+        else [TaskStatus.PENDING_ASSIGN]
+    )
+    total = (
+        await db.execute(select(func.count()).select_from(Task).where(Task.project_id == project_id))
+    ).scalar_one()
+
+    values: dict = {"assigned_to": body.user_id}
+    if body.include_claimed:
+        # 换人就得把旧的软锁一起清掉，否则新人认领不了（claim 要求 PENDING_ASSIGN）
+        values.update({"status": TaskStatus.PENDING_ASSIGN, "locked_by": None, "lock_expires_at": None})
+
+    result = await db.execute(
+        update(Task).where(Task.project_id == project_id, Task.status.in_(movable)).values(**values)
+    )
+    await db.commit()
+    assigned = result.rowcount or 0
+    return ok(ProjectAssignResult(assigned=assigned, skipped=total - assigned).model_dump())
 
 
 @router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin))])

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
+import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
@@ -29,6 +30,8 @@ export default function Tasks() {
     queryFn: () => listTasks(projectId ?? undefined),
   });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
+  // /users 只对管理员开放，其他角色拿不到就退回显示ID
+  const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: role === "admin" });
   // 标注工作台里的标签按钮要按任务所属项目取，不能把别的项目的标签混进来
   const { data: labels } = useQuery({
     queryKey: ["labels", projectId],
@@ -111,7 +114,15 @@ export default function Tasks() {
             dataIndex: "status",
             render: (s: TaskStatus) => <Tag color={statusColor[s]}>{s}</Tag>,
           },
-          { title: "认领人ID", dataIndex: "assigned_to" },
+          {
+            title: "指派给",
+            dataIndex: "assigned_to",
+            render: (id: number | null) => {
+              if (id == null) return <span style={{ color: "#999" }}>未指派</span>;
+              const u = users?.find((x) => x.id === id);
+              return u ? u.display_name || u.username : `#${id}`;
+            },
+          },
           {
             title: "操作",
             render: (_, task: Task) => {
