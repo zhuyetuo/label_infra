@@ -36,9 +36,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
-  // 每路画面的宽高比，元数据加载后才知道。用它给容器定死比例，
-  // 画面就能等比缩放到刚好填满位置，既不会留黑边也不会被裁切。
-  const [aspects, setAspects] = useState<Record<number, number>>({});
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
@@ -169,26 +166,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
       if (trailing) clearTimeout(trailing);
     };
   }, [bus, fps]);
-
-  useEffect(() => {
-    const cleanups: (() => void)[] = [];
-    refs.current.forEach((video, i) => {
-      if (!video) return;
-      const update = () => {
-        if (video.videoWidth && video.videoHeight) {
-          setAspects((prev) =>
-            prev[i] === video.videoWidth / video.videoHeight
-              ? prev
-              : { ...prev, [i]: video.videoWidth / video.videoHeight }
-          );
-        }
-      };
-      update();
-      video.addEventListener("loadedmetadata", update);
-      cleanups.push(() => video.removeEventListener("loadedmetadata", update));
-    });
-    return () => cleanups.forEach((fn) => fn());
-  }, [videos]);
 
   // 总帧数从视频元数据的 duration 算出来（duration*fps 四舍五入），不是瞎写的
   useEffect(() => {
@@ -355,31 +332,14 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 : { flex: "1 1 420px", minWidth: 380 }
             }
           >
-            {fill ? (
-              <span
-                style={{
-                  position: "absolute",
-                  top: 2,
-                  left: 4,
-                  zIndex: 2,
-                  fontSize: 12,
-                  color: "#fff",
-                  textShadow: "0 0 3px rgba(0,0,0,0.9)",
-                  pointerEvents: "none",
-                }}
-              >
-                {v.label}
-              </span>
-            ) : (
-              <Typography.Text type="secondary">{v.label}</Typography.Text>
-            )}
+            {!fill && <Typography.Text type="secondary">{v.label}</Typography.Text>}
             <div
               ref={(el) => {
                 wrapperRefs.current[i] = el;
               }}
               style={
                 fill
-                  ? { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center" }
+                  ? { flex: 1, minWidth: 0, display: "flex" }
                   : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
               }
             >
@@ -391,13 +351,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 controls
                 style={
                   fill
-                    ? {
-                        // 宽度占满父容器（三分之一宽度），高度由宽高比推出但受max-height限制
-                        // max-height: 100% 确保视频+控制条不会溢出父容器
-                        aspectRatio: aspects[i],
+                    ? // objectFit:cover 让画面填满整格，比例不同的素材会裁掉多余部分而不是留黑边——
+                      // 三路摄像头画幅本来就不一样，留黑边比裁一点边缘更浪费屏幕空间。
+                      {
                         width: "100%",
-                        height: "auto",
-                        maxHeight: "100%",
+                        height: "100%",
+                        objectFit: "cover",
                         display: "block",
                         transformOrigin: "center",
                       }
