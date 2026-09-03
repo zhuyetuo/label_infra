@@ -398,15 +398,9 @@ export default function AnnotationWorkspace({
             <Button size="small" onClick={() => setMarkStart(currentMsRef.current)}>
               设为开始
             </Button>
-            <Typography.Text type={markStart == null ? "secondary" : undefined}>
-              开始 {markStart == null ? "--" : formatMs(markStart)}
-            </Typography.Text>
             <Button size="small" onClick={() => setMarkEnd(currentMsRef.current)}>
               设为结束
             </Button>
-            <Typography.Text type={markEnd == null ? "secondary" : undefined}>
-              结束 {markEnd == null ? "--" : formatMs(markEnd)}
-            </Typography.Text>
             <Button type="primary" size="small" disabled={!canAdd} onClick={addItem}>
               添加这一段
             </Button>
