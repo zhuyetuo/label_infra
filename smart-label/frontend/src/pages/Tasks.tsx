@@ -1,7 +1,22 @@
 import { useMemo, useState } from "react";
-import { Button, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
+import {
+  Button,
+  Checkbox,
+  Collapse,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
+import { bulkCreateTasks, claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -33,6 +48,11 @@ export default function Tasks() {
   const [onlyMine, setOnlyMine] = useState(false);
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
   const [createForm] = Form.useForm();
+  const [bulkForProject, setBulkForProject] = useState<Project | null>(null);
+  const [bulkSelected, setBulkSelected] = useState<Set<number>>(new Set());
+  const [bulkTaskType, setBulkTaskType] = useState<"from_scratch" | "ai_assisted">("from_scratch");
+  const [bulkAssignee, setBulkAssignee] = useState<number | null>(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   // 打开工作台时把该任务所属项目的标签带进去
@@ -91,6 +111,58 @@ export default function Tasks() {
   // 标注工作台的标签按钮要取任务所属项目的标签，不能把别的项目的混进来
   const labelsOf = (projectId: number): LabelDefinition[] =>
     labels?.filter((l) => l.project_id === projectId) ?? [];
+
+  // 样本按日期分组，导入任务时按天批量选，跟样本页的分组方式保持一致
+  const samplesByDate = useMemo(() => {
+    const groups = new Map<string, typeof samples>();
+    for (const s of samples ?? []) {
+      const key = s.session_date ?? "未知日期";
+      (groups.get(key) ?? groups.set(key, []).get(key)!)!.push(s);
+    }
+    return [...groups.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [samples]);
+
+  const alreadyImportedIds = useMemo(
+    () => new Set(bulkForProject ? tasksOf(bulkForProject.id).map((t) => t.sample_id) : []),
+    [bulkForProject, tasks]
+  );
+
+  const openBulkImport = (p: Project) => {
+    setBulkForProject(p);
+    setBulkSelected(new Set());
+    setBulkTaskType("from_scratch");
+    setBulkAssignee(null);
+  };
+
+  const toggleDate = (dateSamples: typeof samples, checked: boolean) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      for (const s of dateSamples ?? []) {
+        if (alreadyImportedIds.has(s.id)) continue;
+        if (checked) next.add(s.id);
+        else next.delete(s.id);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkImport = async () => {
+    if (!bulkForProject || bulkSelected.size === 0) return;
+    setBulkSubmitting(true);
+    try {
+      const r = await bulkCreateTasks({
+        project_id: bulkForProject.id,
+        sample_ids: [...bulkSelected],
+        task_type: bulkTaskType,
+        assigned_to: bulkAssignee ?? undefined,
+      });
+      message.success(`已导入 ${r.created} 个任务${r.skipped ? `，跳过已导入过的 ${r.skipped} 个` : ""}`);
+      setBulkForProject(null);
+      refresh();
+    } finally {
+      setBulkSubmitting(false);
+    }
+  };
 
   const visibleProjects = useMemo(() => {
     let list = projects ?? [];
@@ -261,12 +333,17 @@ export default function Tasks() {
           },
           {
             title: "操作",
-            width: 110,
+            width: 200,
             render: (_, p: Project) =>
               isAdmin && (
-                <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
-                  新建任务
-                </Button>
+                <Space>
+                  <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
+                    新建任务
+                  </Button>
+                  <Button size="small" type="link" onClick={() => openBulkImport(p)}>
+                    批量导入
+                  </Button>
+                </Space>
               ),
           },
         ]}
@@ -299,6 +376,100 @@ export default function Tasks() {
             创建
           </Button>
         </Form>
+      </Modal>
+
+      <Modal
+        title={`批量导入样本到任务 - ${bulkForProject?.name ?? ""}`}
+        open={bulkForProject != null}
+        onCancel={() => setBulkForProject(null)}
+        onOk={handleBulkImport}
+        okText={`导入选中的 ${bulkSelected.size} 个`}
+        okButtonProps={{ disabled: bulkSelected.size === 0 }}
+        confirmLoading={bulkSubmitting}
+        width={640}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          按天勾选整批样本，一次性各建一个覆盖整个样本的任务，不用一个个点「新建任务」。
+          已经在这个项目下建过任务的样本会自动跳过（灰色，勾不了）。
+        </Typography.Paragraph>
+        <Space style={{ marginBottom: 12 }}>
+          <Typography.Text>标注模式</Typography.Text>
+          <Select
+            style={{ width: 200 }}
+            value={bulkTaskType}
+            onChange={setBulkTaskType}
+            options={[
+              { value: "from_scratch", label: "从零标注" },
+              { value: "ai_assisted", label: "AI预标注+人工修改" },
+            ]}
+          />
+          <Typography.Text>指派给</Typography.Text>
+          <Select
+            style={{ width: 160 }}
+            allowClear
+            placeholder="不指派（进公共池）"
+            value={bulkAssignee ?? undefined}
+            onChange={(v) => setBulkAssignee(v ?? null)}
+            options={users
+              ?.filter((u) => u.is_active && u.role !== "reviewer")
+              .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
+          />
+        </Space>
+        <Collapse
+          size="small"
+          items={samplesByDate.map(([date, dateSamples]) => {
+            const selectable = (dateSamples ?? []).filter((s) => !alreadyImportedIds.has(s.id));
+            const selectedCount = selectable.filter((s) => bulkSelected.has(s.id)).length;
+            const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+            return {
+              key: date,
+              label: (
+                <Space onClick={(e) => e.stopPropagation()}>
+                  <Checkbox
+                    indeterminate={selectedCount > 0 && !allSelected}
+                    checked={allSelected}
+                    disabled={selectable.length === 0}
+                    onChange={(e) => toggleDate(dateSamples, e.target.checked)}
+                  />
+                  <span>
+                    {date}（{dateSamples?.length ?? 0} 个样本
+                    {selectable.length < (dateSamples?.length ?? 0) && `，${selectable.length} 个可导入`}）
+                  </span>
+                </Space>
+              ),
+              children: (
+                <Space direction="vertical" size={2}>
+                  {(dateSamples ?? []).map((s) => {
+                    const imported = alreadyImportedIds.has(s.id);
+                    return (
+                      <Checkbox
+                        key={s.id}
+                        disabled={imported}
+                        checked={bulkSelected.has(s.id)}
+                        onChange={(e) =>
+                          setBulkSelected((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(s.id);
+                            else next.delete(s.id);
+                            return next;
+                          })
+                        }
+                      >
+                        {s.sample_code}
+                        {imported && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
+                            （已导入）
+                          </Typography.Text>
+                        )}
+                      </Checkbox>
+                    );
+                  })}
+                </Space>
+              ),
+            };
+          })}
+        />
       </Modal>
 
       <AnnotationWorkspace

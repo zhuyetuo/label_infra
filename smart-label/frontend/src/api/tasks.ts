@@ -35,3 +35,15 @@ export const saveDraft = (
 ) => request.put<never, null>(`/tasks/${id}/draft`, { items });
 
 export const submitTask = (id: number) => request.post<never, Task>(`/tasks/${id}/submit`);
+
+/** 批量给一批样本各建一个长任务，不用逐个点；已经建过任务的样本会跳过 */
+export const bulkCreateTasks = (body: {
+  project_id: number;
+  sample_ids: number[];
+  task_type: TaskType;
+  assigned_to?: number;
+}) =>
+  request.post<never, { created: number; skipped: number; skipped_sample_ids: number[] }>(
+    "/tasks/bulk",
+    body
+  );
