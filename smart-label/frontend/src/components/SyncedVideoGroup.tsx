@@ -357,8 +357,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           按钮点不出来的精细速度用这个 */}
       <InputNumber
         size="small"
-        min={0.1}
-        max={8}
+        min={0.25}
+        max={10}
         step={0.05}
         precision={2}
         value={speed}
