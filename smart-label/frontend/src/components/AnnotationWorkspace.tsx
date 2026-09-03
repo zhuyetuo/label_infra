@@ -10,9 +10,11 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
+import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleMedia } from "@/api/samples";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
@@ -20,7 +22,7 @@ import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
-import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
+import { getSavedBool, getSavedHeight, saveBool, saveHeight } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -50,6 +52,7 @@ const HOTKEYS = "1234567890qwertyasdfgh".split("");
 // 才看得到，不占视频的地盘。
 const CHART_VIEWPORT_PX = 185;
 const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
+const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -91,6 +94,9 @@ export default function AnnotationWorkspace({
   // 单条波形模式下这块区域的高度，可以拖底边把手调整；跟视频区一样记到
   // localStorage，下次打开别的任务不用重新拖
   const [chartHeight, setChartHeight] = useState(() => getSavedHeight(CHART_HEIGHT_KEY) ?? CHART_VIEWPORT_PX);
+  // 单条波形模式下滚轮很容易不小心把波形区滚到别的通道去，锁住之后波形区不响应
+  // 滚动，想看别的通道再解锁。是否锁定记住成用户的习惯，下次打开别的任务沿用。
+  const [chartScrollLocked, setChartScrollLocked] = useState(() => getSavedBool(CHART_SCROLL_LOCK_KEY, false));
 
   const [items, setItems] = useState<LabelItem[]>([]);
   const [labelId, setLabelId] = useState<number | null>(null);
@@ -402,6 +408,20 @@ export default function AnnotationWorkspace({
                     onChange={(v) => setChartExpanded(v === "展开全部")}
                   />
                 )}
+                {imuView === "曲线图" && !chartExpanded && (
+                  <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
+                    <Button
+                      size="small"
+                      type={chartScrollLocked ? "primary" : "default"}
+                      icon={chartScrollLocked ? <LockOutlined /> : <UnlockOutlined />}
+                      onClick={() => {
+                        const next = !chartScrollLocked;
+                        setChartScrollLocked(next);
+                        saveBool(CHART_SCROLL_LOCK_KEY, next);
+                      }}
+                    />
+                  </Tooltip>
+                )}
               </Space>
               {imuView === "曲线图" ? (
                 // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
@@ -415,7 +435,12 @@ export default function AnnotationWorkspace({
                     style={
                       chartExpanded
                         ? { flex: 1, minHeight: 0 }
-                        : { flex: "0 0 auto", height: chartHeight }
+                        : {
+                            flex: "0 0 auto",
+                            height: chartHeight,
+                            // 锁定时不响应滚动，停在当前看到的通道，不会被无意的滚轮带走
+                            overflowY: chartScrollLocked ? "hidden" : "auto",
+                          }
                     }
                   >
                     <ImuChart
