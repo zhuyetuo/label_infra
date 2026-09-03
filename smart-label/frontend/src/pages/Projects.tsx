@@ -284,6 +284,8 @@ export default function Projects() {
         expandable={{
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
+          // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
+          rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
           expandedRowRender: (p: Project) => {
             const rows = tasksOf(p.id);
