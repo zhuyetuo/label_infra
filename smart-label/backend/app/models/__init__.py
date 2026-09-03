@@ -5,6 +5,7 @@ from app.models.audit_log import AuditLog
 from app.models.background_job import BackgroundJob
 from app.models.clip import ClipJob
 from app.models.label import LabelDefinition
+from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.media_file import MediaFile
 from app.models.project import Project
 from app.models.review import ReviewRecord
@@ -18,6 +19,8 @@ __all__ = [
     "Sample",
     "Task",
     "LabelDefinition",
+    "LabelTemplate",
+    "LabelTemplateItem",
     "MediaFile",
     "AnnotationRecord",
     "AnnotationLabelItem",
