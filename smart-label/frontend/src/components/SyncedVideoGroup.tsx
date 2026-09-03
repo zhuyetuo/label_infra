@@ -32,6 +32,10 @@ interface Props {
 // 程序化设置 currentTime/play/pause 时触发的事件又反过来引发同步死循环。
 const DRIFT_TOLERANCE_SEC = 0.1;
 const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4];
+// 实测三路 720p 同播在 10x 时丢帧率 ~24%（getVideoPlaybackQuality 量出来的），
+// 是浏览器解码吞吐跟不上，不是代码问题，前端修不了。先把上限收到解码顶得住的
+// 范围，比瞎放开到卡顿强。
+const MAX_SPEED = 5;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
 
@@ -395,7 +399,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           按钮点不出来的精细速度用这个，两者数值实时联动 */}
       <Slider
         min={0.25}
-        max={10}
+        max={MAX_SPEED}
         step={0.05}
         value={speed}
         onChange={handleSpeedChange}
@@ -405,7 +409,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       <InputNumber
         size="small"
         min={0.25}
-        max={10}
+        max={MAX_SPEED}
         step={0.05}
         precision={2}
         value={speed}
