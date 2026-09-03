@@ -9,6 +9,7 @@ from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services.task_scope import visible_project_ids
 from app.schemas.label import LabelCreate, LabelOut, LabelUpdate
 
 router = APIRouter(prefix="/label-definitions", tags=["labels"])
@@ -19,7 +20,7 @@ async def list_labels(
     project_id: int | None = None,
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     所有登录用户都可读（标注UI需要），仅 admin 可写。project_id 不传则返回全部项目的标签。
@@ -29,6 +30,12 @@ async def list_labels(
     query = select(LabelDefinition)
     if not include_inactive:
         query = query.where(LabelDefinition.is_active.is_(True))
+    # 非管理员只能看到自己有任务的那些项目的标签，别的项目标签也是业务信息
+    allowed = await visible_project_ids(db, user)
+    if allowed is not None:
+        if not allowed:
+            return ok([])
+        query = query.where(LabelDefinition.project_id.in_(allowed))
     if project_id is not None:
         query = query.where(LabelDefinition.project_id == project_id)
     result = await db.execute(query.order_by(LabelDefinition.sort_order))

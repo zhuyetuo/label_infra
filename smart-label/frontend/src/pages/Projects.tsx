@@ -21,20 +21,13 @@ import { listLabels } from "@/api/labels";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
+import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { Project, Task, TaskStatus } from "@/types";
 
 interface FormValues {
   name: string;
   description?: string;
 }
-
-const statusColor: Record<TaskStatus, string> = {
-  PENDING_ASSIGN: "default",
-  IN_PROGRESS: "blue",
-  SUBMITTED: "orange",
-  APPROVED: "green",
-  REJECTED: "red",
-};
 
 export default function Projects() {
   const qc = useQueryClient();
@@ -89,7 +82,7 @@ export default function Projects() {
 
   const handleDelete = async (id: number) => {
     await deleteProject(id);
-    message.success("项目已删除");
+    message.success("项目及其任务、标签已删除");
     refresh();
   };
 
@@ -174,13 +167,18 @@ export default function Projects() {
                     dataIndex: "sample_id",
                     render: (id: number) => sampleCode(id),
                   },
-                  { title: "类型", dataIndex: "task_type", width: 120 },
+                  {
+                    title: "类型",
+                    dataIndex: "task_type",
+                    width: 150,
+                    render: (t: string) => TASK_TYPE_LABEL[t] ?? t,
+                  },
                   { title: "轮次", dataIndex: "round_no", width: 60 },
                   {
                     title: "状态",
                     dataIndex: "status",
                     width: 140,
-                    render: (s: TaskStatus) => <Tag color={statusColor[s]}>{s}</Tag>,
+                    render: (s: TaskStatus) => <TaskStatusTag status={s} />,
                   },
                   {
                     title: "指派给",
@@ -216,8 +214,8 @@ export default function Projects() {
                 <Space size={4} wrap>
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
-                    <Tag key={s} color={statusColor[s]}>
-                      {s} {counts[s]}
+                    <Tag key={s} color={TASK_STATUS_META[s]?.color}>
+                      {TASK_STATUS_META[s]?.label ?? s} {counts[s]}
                     </Tag>
                   ))}
                 </Space>
@@ -267,7 +265,13 @@ export default function Projects() {
                   </Button>
                   <Popconfirm
                     title="删除项目"
-                    description="项目下还有任务或标签时不能删，需要先清空"
+                    description={
+                      <div style={{ maxWidth: 320 }}>
+                        会连同该项目下的 <b>{tasksOf(p.id).length}</b> 个任务（含它们的标注结果和审核记录）
+                        和 <b>{labelCount(p.id)}</b> 个标签一起删掉，不可恢复。
+                        只是暂时不用的话建议改成「停用」。
+                      </div>
+                    }
                     okButtonProps={{ danger: true }}
                     onConfirm={() => handleDelete(p.id)}
                   >
@@ -337,7 +341,7 @@ export default function Projects() {
               ?.filter((u) => u.is_active && u.role !== "reviewer")
               .map((u) => ({
                 value: u.id,
-                label: `${u.display_name || u.username}（${u.role}）`,
+                label: `${u.display_name || u.username}（${ROLE_META[u.role]?.label ?? u.role}）`,
               }))}
             showSearch
             optionFilterProp="label"

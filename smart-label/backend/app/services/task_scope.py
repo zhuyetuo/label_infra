@@ -3,7 +3,8 @@
 不允许在各个路由里各自写 WHERE 条件——避免漏掉隔离导致标注员看到别人的任务。
 """
 
-from sqlalchemy import Select, or_
+from sqlalchemy import Select, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
@@ -31,3 +32,17 @@ def apply_task_scope(query: Select, user: User) -> Select:
         )
     # 未知角色一律拒绝，返回恒假条件
     return query.where(Task.id.is_(None))
+
+
+async def visible_project_ids(db: AsyncSession, user: User) -> set[int] | None:
+    """
+    这个人能看到哪些项目。返回 None 表示不受限（admin）。
+
+    非管理员不该看到跟自己无关的项目：项目名/说明本身就是业务信息，
+    项目列表还会暴露有多少活儿、都派给了谁。所以统一由"他能看到哪些任务"
+    反推——还是走 apply_task_scope 这一个口子，不另立规则。
+    """
+    if user.role == UserRole.admin:
+        return None
+    rows = await db.execute(apply_task_scope(select(Task.project_id).distinct(), user))
+    return {pid for pid in rows.scalars().all() if pid is not None}

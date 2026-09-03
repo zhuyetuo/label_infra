@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createUser, listUsers, updateUser } from "@/api/users";
+import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
 
 export default function Users() {
@@ -46,7 +47,7 @@ export default function Users() {
           { title: "ID", dataIndex: "id", width: 60 },
           { title: "用户名", dataIndex: "username" },
           { title: "显示名", dataIndex: "display_name" },
-          { title: "角色", dataIndex: "role" },
+          { title: "角色", dataIndex: "role", render: (r: string) => <RoleTag role={r} /> },
           {
             title: "外包",
             dataIndex: "is_outsourced",
