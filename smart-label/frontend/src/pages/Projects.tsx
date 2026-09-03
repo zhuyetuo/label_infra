@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
+  Collapse,
   Form,
   Input,
   Modal,
@@ -16,7 +17,7 @@ import {
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { assignProject, createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
-import { listTasks } from "@/api/tasks";
+import { bulkCreateTasks, createTask, listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
@@ -55,6 +56,14 @@ export default function Projects() {
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [includeClaimed, setIncludeClaimed] = useState(false);
   const [assigning, setAssigning] = useState(false);
+
+  const [createForProject, setCreateForProject] = useState<Project | null>(null);
+  const [createForm] = Form.useForm();
+  const [bulkForProject, setBulkForProject] = useState<Project | null>(null);
+  const [bulkSelected, setBulkSelected] = useState<Set<number>>(new Set());
+  const [bulkTaskType, setBulkTaskType] = useState<"from_scratch" | "ai_assisted">("from_scratch");
+  const [bulkAssignee, setBulkAssignee] = useState<number | null>(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["projects"] });
@@ -127,6 +136,67 @@ export default function Projects() {
     return u ? u.display_name || u.username : `#${id}`;
   };
   const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
+
+  const handleCreateTask = async (values: { sample_id: number; task_type: "from_scratch" | "ai_assisted" }) => {
+    if (!createForProject) return;
+    await createTask({ ...values, project_id: createForProject.id });
+    message.success("任务已创建");
+    setCreateForProject(null);
+    createForm.resetFields();
+    refresh();
+  };
+
+  // 样本按日期分组，导入任务时按天批量选，跟样本页的分组方式保持一致
+  const samplesByDate = useMemo(() => {
+    const groups = new Map<string, typeof samples>();
+    for (const s of samples ?? []) {
+      const key = s.session_date ?? "未知日期";
+      (groups.get(key) ?? groups.set(key, []).get(key)!)!.push(s);
+    }
+    return [...groups.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [samples]);
+
+  const alreadyImportedIds = useMemo(
+    () => new Set(bulkForProject ? tasksOf(bulkForProject.id).map((t) => t.sample_id) : []),
+    [bulkForProject, allTasks]
+  );
+
+  const openBulkImport = (p: Project) => {
+    setBulkForProject(p);
+    setBulkSelected(new Set());
+    setBulkTaskType("from_scratch");
+    setBulkAssignee(null);
+  };
+
+  const toggleDate = (dateSamples: typeof samples, checked: boolean) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      for (const s of dateSamples ?? []) {
+        if (alreadyImportedIds.has(s.id)) continue;
+        if (checked) next.add(s.id);
+        else next.delete(s.id);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkImport = async () => {
+    if (!bulkForProject || bulkSelected.size === 0) return;
+    setBulkSubmitting(true);
+    try {
+      const r = await bulkCreateTasks({
+        project_id: bulkForProject.id,
+        sample_ids: [...bulkSelected],
+        task_type: bulkTaskType,
+        assigned_to: bulkAssignee ?? undefined,
+      });
+      message.success(`已导入 ${r.created} 个任务${r.skipped ? `，跳过已导入过的 ${r.skipped} 个` : ""}`);
+      setBulkForProject(null);
+      refresh();
+    } finally {
+      setBulkSubmitting(false);
+    }
+  };
 
   // 项目下任务按状态汇总，一眼看出进度
   const statusSummary = (projectId: number) => {
@@ -266,12 +336,18 @@ export default function Projects() {
           { title: "标签数", width: 80, render: (_, p: Project) => labelCount(p.id) },
           {
             title: "操作",
-            width: 260,
+            width: 360,
             render: (_, p: Project) =>
               isAdmin && (
                 // 整行点击展开后，操作按钮得挡住这个冒泡，不然点"编辑"之类的
                 // 按钮会连带把行展开/收起，体验很怪
-                <Space onClick={(e) => e.stopPropagation()}>
+                <Space wrap onClick={(e) => e.stopPropagation()}>
+                  <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
+                    新建任务
+                  </Button>
+                  <Button size="small" type="link" onClick={() => openBulkImport(p)}>
+                    批量导入
+                  </Button>
                   <Button size="small" type="link" onClick={() => openAssign(p)}>
                     指派
                   </Button>
@@ -401,6 +477,129 @@ export default function Projects() {
             </Typography.Text>
           )}
         </Space>
+      </Modal>
+
+      <Modal
+        title={`新建任务 - ${createForProject?.name ?? ""}`}
+        open={createForProject != null}
+        onCancel={() => setCreateForProject(null)}
+        footer={null}
+        destroyOnClose
+      >
+        <Form form={createForm} layout="vertical" onFinish={handleCreateTask}>
+          <Form.Item name="sample_id" label="样本" rules={[{ required: true }]}>
+            <Select
+              options={samples?.map((s) => ({ value: s.id, label: `#${s.id} ${s.sample_code}` }))}
+              showSearch
+              optionFilterProp="label"
+            />
+          </Form.Item>
+          <Form.Item name="task_type" label="标注模式" rules={[{ required: true }]} initialValue="from_scratch">
+            <Select
+              options={[
+                { value: "from_scratch", label: "从零标注" },
+                { value: "ai_assisted", label: "AI预标注+人工修改" },
+              ]}
+            />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block>
+            创建
+          </Button>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`批量导入样本到任务 - ${bulkForProject?.name ?? ""}`}
+        open={bulkForProject != null}
+        onCancel={() => setBulkForProject(null)}
+        onOk={handleBulkImport}
+        okText={`导入选中的 ${bulkSelected.size} 个`}
+        okButtonProps={{ disabled: bulkSelected.size === 0 }}
+        confirmLoading={bulkSubmitting}
+        width={640}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          按天勾选整批样本，一次性各建一个覆盖整个样本的任务，不用一个个点「新建任务」。
+          已经在这个项目下建过任务的样本会自动跳过（灰色，勾不了）。
+        </Typography.Paragraph>
+        <Space style={{ marginBottom: 12 }}>
+          <Typography.Text>标注模式</Typography.Text>
+          <Select
+            style={{ width: 200 }}
+            value={bulkTaskType}
+            onChange={setBulkTaskType}
+            options={[
+              { value: "from_scratch", label: "从零标注" },
+              { value: "ai_assisted", label: "AI预标注+人工修改" },
+            ]}
+          />
+          <Typography.Text>指派给</Typography.Text>
+          <Select
+            style={{ width: 160 }}
+            allowClear
+            placeholder="不指派（进公共池）"
+            value={bulkAssignee ?? undefined}
+            onChange={(v) => setBulkAssignee(v ?? null)}
+            options={users
+              ?.filter((u) => u.is_active && u.role !== "reviewer")
+              .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
+          />
+        </Space>
+        <Collapse
+          size="small"
+          items={samplesByDate.map(([date, dateSamples]) => {
+            const selectable = (dateSamples ?? []).filter((s) => !alreadyImportedIds.has(s.id));
+            const selectedCount = selectable.filter((s) => bulkSelected.has(s.id)).length;
+            const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+            return {
+              key: date,
+              label: (
+                <Space onClick={(e) => e.stopPropagation()}>
+                  <Checkbox
+                    indeterminate={selectedCount > 0 && !allSelected}
+                    checked={allSelected}
+                    disabled={selectable.length === 0}
+                    onChange={(e) => toggleDate(dateSamples, e.target.checked)}
+                  />
+                  <span>
+                    {date}（{dateSamples?.length ?? 0} 个样本
+                    {selectable.length < (dateSamples?.length ?? 0) && `，${selectable.length} 个可导入`}）
+                  </span>
+                </Space>
+              ),
+              children: (
+                <Space direction="vertical" size={2}>
+                  {(dateSamples ?? []).map((s) => {
+                    const imported = alreadyImportedIds.has(s.id);
+                    return (
+                      <Checkbox
+                        key={s.id}
+                        disabled={imported}
+                        checked={bulkSelected.has(s.id)}
+                        onChange={(e) =>
+                          setBulkSelected((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(s.id);
+                            else next.delete(s.id);
+                            return next;
+                          })
+                        }
+                      >
+                        {s.sample_code}
+                        {imported && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
+                            （已导入）
+                          </Typography.Text>
+                        )}
+                      </Checkbox>
+                    );
+                  })}
+                </Space>
+              ),
+            };
+          })}
+        />
       </Modal>
     </div>
   );
