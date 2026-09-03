@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { InputNumber, Radio, Space, Typography } from "antd";
+import { InputNumber, Radio, Slider, Space, Typography } from "antd";
 import type { TimeBus } from "@/utils/timeBus";
 
 interface VideoSrc {
@@ -353,8 +353,17 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           </Radio.Button>
         ))}
       </Radio.Group>
-      {/* 上面几档是常用速度，这个用来微调到中间值（比如 0.75x、1.2x），
-          按钮点不出来的精细速度用这个 */}
+      {/* 上面几档是常用速度，拖动条+输入框用来微调到中间值（比如 0.75x、1.2x），
+          按钮点不出来的精细速度用这个，两者数值实时联动 */}
+      <Slider
+        min={0.25}
+        max={10}
+        step={0.05}
+        value={speed}
+        onChange={handleSpeedChange}
+        style={{ width: 140 }}
+        tooltip={{ formatter: (v) => `${v}x` }}
+      />
       <InputNumber
         size="small"
         min={0.25}
