@@ -1,61 +1,56 @@
-import { useState } from "react";
-import { Button, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from "antd";
+import { useMemo, useState } from "react";
+import { Button, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimTask, createTask, deleteTask, listTasks, reopenTask } from "@/api/tasks";
+import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
-import ProjectPicker from "@/components/ProjectPicker";
-import { useProjectStore } from "@/stores/projectStore";
 import { useAuthStore } from "@/stores/authStore";
-import type { Task, TaskStatus } from "@/types";
+import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
+import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
-const statusColor: Record<TaskStatus, string> = {
-  PENDING_ASSIGN: "default",
-  IN_PROGRESS: "blue",
-  SUBMITTED: "orange",
-  APPROVED: "green",
-  REJECTED: "red",
-};
-
+// 任务按项目分组展示：项目多起来之后，用一个下拉一次只能看一个项目太难用，
+// 这里跟项目页一样列出项目、展开看它下面的任务，再配一个按名字搜索的框。
 export default function Tasks() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
-  const projectId = useProjectStore((s) => s.currentProjectId);
-  const setProjectId = useProjectStore((s) => s.setCurrentProjectId);
-  const { data: tasks, isLoading } = useQuery({
-    queryKey: ["tasks", projectId],
-    queryFn: () => listTasks(projectId ?? undefined),
-  });
-  const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
-  // /users 只对管理员开放，其他角色拿不到就退回显示ID
-  const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: role === "admin" });
-  // 标注工作台里的标签按钮要按任务所属项目取，不能把别的项目的标签混进来
-  const { data: labels } = useQuery({
-    queryKey: ["labels", projectId],
-    queryFn: () => listLabels(projectId ?? undefined),
-  });
+  const isAdmin = role === "admin";
 
-  const [createOpen, setCreateOpen] = useState(false);
+  const { data: projects, isLoading: loadingProjects } = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+  });
+  const { data: tasks, isLoading } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
+  const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
+  // /users 只对管理员开放，其他角色拿不到就退回显示ID
+  const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
+  const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
+
+  const [keyword, setKeyword] = useState("");
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [createForProject, setCreateForProject] = useState<Project | null>(null);
   const [createForm] = Form.useForm();
   const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
+  // 打开工作台时把该任务所属项目的标签带进去
+  const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["tasks"] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["tasks"] });
+    qc.invalidateQueries({ queryKey: ["projects"] });
+  };
 
   const handleCreateTask = async (values: {
     sample_id: number;
     task_type: "from_scratch" | "ai_assisted";
   }) => {
-    if (projectId == null) {
-      message.warning("请先选择项目");
-      return;
-    }
-    await createTask({ ...values, project_id: projectId });
+    if (!createForProject) return;
+    await createTask({ ...values, project_id: createForProject.id });
     message.success("任务已创建");
-    setCreateOpen(false);
+    setCreateForProject(null);
     createForm.resetFields();
     refresh();
   };
@@ -83,45 +78,67 @@ export default function Tasks() {
     setWorkspaceTask(task);
   };
 
-  const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code;
+  const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
+  const userName = (id: number) => {
+    const u = users?.find((x) => x.id === id);
+    return u ? u.display_name || u.username : `#${id}`;
+  };
 
-  return (
-    <div>
-      <Space style={{ marginBottom: 16 }}>
-        <ProjectPicker value={projectId} onChange={setProjectId} />
-        {role === "admin" && (
-          <Button type="primary" disabled={projectId == null} onClick={() => setCreateOpen(true)}>
-            新建任务
-          </Button>
-        )}
-      </Space>
+  const tasksOf = (projectId: number) => {
+    const rows = tasks?.filter((t) => t.project_id === projectId) ?? [];
+    return onlyMine ? rows.filter((t) => t.assigned_to === userId) : rows;
+  };
+  // 标注工作台的标签按钮要取任务所属项目的标签，不能把别的项目的混进来
+  const labelsOf = (projectId: number): LabelDefinition[] =>
+    labels?.filter((l) => l.project_id === projectId) ?? [];
 
+  const visibleProjects = useMemo(() => {
+    let list = projects ?? [];
+    const kw = keyword.trim().toLowerCase();
+    if (kw) list = list.filter((p) => p.name.toLowerCase().includes(kw));
+    // 勾了"只看我的"就把没有我的任务的项目整个收起来
+    if (onlyMine) list = list.filter((p) => tasksOf(p.id).length > 0);
+    return list;
+  }, [projects, keyword, onlyMine, tasks, userId]);
+
+  const statusSummary = (projectId: number) => {
+    const counts: Partial<Record<TaskStatus, number>> = {};
+    for (const t of tasksOf(projectId)) counts[t.status] = (counts[t.status] ?? 0) + 1;
+    return counts;
+  };
+
+  const renderTaskTable = (p: Project) => {
+    const rows = tasksOf(p.id);
+    const projLabels = labelsOf(p.id);
+    return (
       <Table
+        size="small"
         rowKey="id"
-        loading={isLoading}
-        dataSource={tasks}
+        dataSource={rows}
+        pagination={rows.length > 10 ? { pageSize: 10 } : false}
+        locale={{ emptyText: onlyMine ? "这个项目下没有指派给你的任务" : "这个项目下还没有任务" }}
         columns={[
-          { title: "ID", dataIndex: "id", width: 60 },
+          { title: "任务ID", dataIndex: "id", width: 80 },
+          { title: "样本", dataIndex: "sample_id", render: (id: number) => sampleCode(id) },
           {
-            title: "样本",
-            dataIndex: "sample_id",
-            render: (id: number) => sampleCode(id) ?? id,
+            title: "类型",
+            dataIndex: "task_type",
+            width: 150,
+            render: (t: string) => TASK_TYPE_LABEL[t] ?? t,
           },
-          { title: "类型", dataIndex: "task_type" },
           { title: "轮次", dataIndex: "round_no", width: 60 },
           {
             title: "状态",
             dataIndex: "status",
-            render: (s: TaskStatus) => <Tag color={statusColor[s]}>{s}</Tag>,
+            width: 110,
+            render: (s: TaskStatus) => <TaskStatusTag status={s} />,
           },
           {
             title: "指派给",
             dataIndex: "assigned_to",
-            render: (id: number | null) => {
-              if (id == null) return <span style={{ color: "#999" }}>未指派</span>;
-              const u = users?.find((x) => x.id === id);
-              return u ? u.display_name || u.username : `#${id}`;
-            },
+            width: 130,
+            render: (id: number | null) =>
+              id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : userName(id),
           },
           {
             title: "操作",
@@ -135,10 +152,17 @@ export default function Tasks() {
                       认领
                     </Button>
                   )}
-                  <Button size="small" type="link" onClick={() => openWorkspace(task, !editable)}>
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => {
+                      setWorkspaceLabels(projLabels);
+                      openWorkspace(task, !editable);
+                    }}
+                  >
                     {editable ? "编辑标注" : "查看标注"}
                   </Button>
-                  {(role === "admin" || role === "reviewer") &&
+                  {(isAdmin || role === "reviewer") &&
                     (task.status === "APPROVED" || task.status === "REJECTED") && (
                       <Popconfirm
                         title="退回重标"
@@ -150,7 +174,7 @@ export default function Tasks() {
                         </Button>
                       </Popconfirm>
                     )}
-                  {role === "admin" && (
+                  {isAdmin && (
                     <Popconfirm
                       title="删除任务"
                       description="会一并删掉该任务下的标注草稿和审核记录，不可恢复"
@@ -168,8 +192,93 @@ export default function Tasks() {
           },
         ]}
       />
+    );
+  };
 
-      <Modal title="新建任务" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null} destroyOnClose>
+  return (
+    <div>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search
+          placeholder="按项目名搜索"
+          allowClear
+          style={{ width: 240 }}
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        <Button type={onlyMine ? "primary" : "default"} onClick={() => setOnlyMine((v) => !v)}>
+          只看指派给我的
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          展开项目就能看到它下面的任务；项目多的时候用上面的搜索框找。
+        </Typography.Text>
+      </Space>
+
+      <Table
+        rowKey="id"
+        loading={loadingProjects || isLoading}
+        dataSource={visibleProjects}
+        pagination={visibleProjects.length > 20 ? { pageSize: 20 } : false}
+        locale={{
+          emptyText: (
+            <Empty description={onlyMine ? "没有指派给你的任务" : keyword ? "没有匹配的项目" : "还没有项目"} />
+          ),
+        }}
+        expandable={{
+          expandedRowRender: renderTaskTable,
+          // 只有一个项目时默认展开，省一次点击
+          defaultExpandedRowKeys: visibleProjects.length === 1 ? [visibleProjects[0].id] : [],
+        }}
+        columns={[
+          { title: "项目ID", dataIndex: "id", width: 80 },
+          {
+            title: "项目",
+            render: (_, p: Project) => (
+              <Space>
+                <strong>{p.name}</strong>
+                {!p.is_active && <Tag>已停用</Tag>}
+              </Space>
+            ),
+          },
+          { title: "说明", dataIndex: "description", render: (d: string | null) => d || "-" },
+          {
+            title: "任务",
+            width: 300,
+            render: (_, p: Project) => {
+              const counts = statusSummary(p.id);
+              const total = tasksOf(p.id).length;
+              if (!total) return <Typography.Text type="secondary">0</Typography.Text>;
+              return (
+                <Space size={4} wrap>
+                  <span>共 {total}</span>
+                  {(Object.keys(counts) as TaskStatus[]).map((s) => (
+                    <Tag key={s} color={TASK_STATUS_META[s]?.color}>
+                      {TASK_STATUS_META[s]?.label ?? s} {counts[s]}
+                    </Tag>
+                  ))}
+                </Space>
+              );
+            },
+          },
+          {
+            title: "操作",
+            width: 110,
+            render: (_, p: Project) =>
+              isAdmin && (
+                <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
+                  新建任务
+                </Button>
+              ),
+          },
+        ]}
+      />
+
+      <Modal
+        title={`新建任务 - ${createForProject?.name ?? ""}`}
+        open={createForProject != null}
+        onCancel={() => setCreateForProject(null)}
+        footer={null}
+        destroyOnClose
+      >
         <Form form={createForm} layout="vertical" onFinish={handleCreateTask}>
           <Form.Item name="sample_id" label="样本" rules={[{ required: true }]}>
             <Select
@@ -194,7 +303,7 @@ export default function Tasks() {
 
       <AnnotationWorkspace
         task={workspaceTask}
-        labels={labels ?? []}
+        labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         onClose={() => setWorkspaceTask(null)}
         onSubmitted={refresh}

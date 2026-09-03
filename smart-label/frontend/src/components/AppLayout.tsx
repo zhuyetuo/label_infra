@@ -1,6 +1,7 @@
 import { Layout, Menu, Space, Tag, Typography } from "antd";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
+import { RoleTag } from "@/utils/taskStatus";
 
 const { Header, Content, Sider } = Layout;
 
@@ -29,7 +30,7 @@ export default function AppLayout() {
           smart-label
         </Typography.Text>
         <Space>
-          <Tag color="blue">{userInfo?.role}</Tag>
+          {userInfo && <RoleTag role={userInfo.role} />}
           <Typography.Text style={{ color: "#fff" }}>{userInfo?.display_name}</Typography.Text>
           <a
             style={{ color: "#fff" }}

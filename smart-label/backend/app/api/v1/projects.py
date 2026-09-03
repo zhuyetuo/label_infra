@@ -5,16 +5,19 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.label import LabelDefinition
+from app.models.review import ReviewRecord
 from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services.task_scope import visible_project_ids
 from app.schemas.project import (
     ProjectAssignRequest,
     ProjectAssignResult,
@@ -27,8 +30,15 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.get("")
-async def list_projects(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
-    result = await db.execute(select(Project).order_by(Project.created_at.desc()))
+async def list_projects(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """管理员看全部；标注员/审核员只看得到有自己任务的项目。"""
+    query = select(Project)
+    allowed = await visible_project_ids(db, user)
+    if allowed is not None:
+        if not allowed:
+            return ok([])
+        query = query.where(Project.id.in_(allowed))
+    result = await db.execute(query.order_by(Project.created_at.desc()))
     return ok([ProjectOut.model_validate(p).model_dump() for p in result.scalars().all()])
 
 
@@ -106,27 +116,38 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
 @router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin))])
 async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     """
-    项目下面还有任务或标签时不给删——那些数据连着标注结果和审核记录，
-    静默级联删掉风险太大。要删先把任务删干净，或者直接把项目停用。
+    删项目会把它下面的任务、标注结果、审核记录、标签一起删掉，不可恢复。
+    外键都指向上一层，所以顺序是：标签条目 -> 标注记录 -> 审核记录 -> 任务
+    -> 标签定义 -> 项目，不能直接删项目。
     """
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
 
-    task_count = (
-        await db.execute(select(func.count()).select_from(Task).where(Task.project_id == project_id))
-    ).scalar_one()
-    label_count = (
+    task_ids = (
+        (await db.execute(select(Task.id).where(Task.project_id == project_id))).scalars().all()
+    )
+    record_ids: list[int] = []
+    if task_ids:
+        record_ids = (
+            (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids))))
+            .scalars()
+            .all()
+        )
+    if record_ids:
         await db.execute(
-            select(func.count()).select_from(LabelDefinition).where(LabelDefinition.project_id == project_id)
+            delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids))
         )
-    ).scalar_one()
-    if task_count or label_count:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"项目下还有 {task_count} 个任务、{label_count} 个标签，先清空或直接停用项目",
-        )
+    if task_ids:
+        await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
+        await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
+        # 子任务的 parent 指向本项目内的任务，先断开再删，避免自引用外键挡住
+        await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
+        await db.execute(delete(Task).where(Task.project_id == project_id))
+    label_count = (
+        await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == project_id))
+    ).rowcount or 0
 
     await db.delete(project)
     await db.commit()
-    return ok(msg="项目已删除")
+    return ok(msg=f"项目已删除（连带 {len(task_ids)} 个任务、{label_count} 个标签）")
