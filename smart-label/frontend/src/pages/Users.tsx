@@ -110,7 +110,10 @@ export default function Users() {
                 size="small"
                 value={r}
                 variant="borderless"
-                style={{ width: 116 }}
+                // 不写死宽度：「超级管理员」比其他角色名长，写死会挤得跟下拉箭头叠在一起。
+                // 交给内容自己撑开，最小留够放下箭头的空间即可。
+                style={{ minWidth: 128 }}
+                popupMatchSelectWidth={false}
                 options={ROLE_OPTIONS}
                 // 收起时显示的值、下拉列表里的每一项，都用跟表格其他地方一样的
                 // 色块（RoleTag），而不是纯文字——色块比文字颜色更抓眼，一眼分清角色
