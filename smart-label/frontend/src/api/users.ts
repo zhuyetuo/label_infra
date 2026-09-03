@@ -7,7 +7,7 @@ export const createUser = (body: {
   username: string;
   display_name: string;
   email?: string;
-  role: "admin" | "annotator" | "reviewer";
+  role: AppUser["role"];
   is_outsourced?: boolean;
 }) => request.post<never, { user: AppUser; temp_password: string }>("/users", body);
 

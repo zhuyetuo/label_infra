@@ -6,13 +6,13 @@ import { RoleTag } from "@/utils/taskStatus";
 const { Header, Content, Sider } = Layout;
 
 const ALL_ITEMS = [
-  { key: "/projects", label: "项目", roles: ["admin", "annotator", "reviewer"] },
-  { key: "/tasks", label: "任务", roles: ["admin", "annotator", "reviewer"] },
-  { key: "/reviews", label: "审核", roles: ["admin", "reviewer"] },
-  { key: "/samples", label: "样本", roles: ["admin"] },
-  { key: "/label-definitions", label: "标签管理", roles: ["admin"] },
-  { key: "/label-templates", label: "标签模板", roles: ["admin"] },
-  { key: "/users", label: "账号管理", roles: ["admin"] },
+  { key: "/projects", label: "项目", roles: ["super_admin", "admin", "annotator", "reviewer"] },
+  { key: "/tasks", label: "任务", roles: ["super_admin", "admin", "annotator", "reviewer"] },
+  { key: "/reviews", label: "审核", roles: ["super_admin", "admin", "reviewer"] },
+  { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
+  { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
+  { key: "/label-templates", label: "标签模板", roles: ["super_admin", "admin"] },
+  { key: "/users", label: "账号管理", roles: ["super_admin", "admin"] },
 ];
 
 export default function AppLayout() {
