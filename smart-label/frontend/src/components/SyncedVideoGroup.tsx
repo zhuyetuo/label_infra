@@ -36,6 +36,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
+  // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
+  // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
+  // 摄像头本来就不是同一个画幅，三等分要么裁掉画面要么留黑边。
+  const [aspects, setAspects] = useState<Record<number, number>>({});
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
@@ -166,6 +170,26 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
       if (trailing) clearTimeout(trailing);
     };
   }, [bus, fps]);
+
+  useEffect(() => {
+    const cleanups: (() => void)[] = [];
+    refs.current.forEach((video, i) => {
+      if (!video) return;
+      const update = () => {
+        if (video.videoWidth && video.videoHeight) {
+          setAspects((prev) =>
+            prev[i] === video.videoWidth / video.videoHeight
+              ? prev
+              : { ...prev, [i]: video.videoWidth / video.videoHeight }
+          );
+        }
+      };
+      update();
+      video.addEventListener("loadedmetadata", update);
+      cleanups.push(() => video.removeEventListener("loadedmetadata", update));
+    });
+    return () => cleanups.forEach((fn) => fn());
+  }, [videos]);
 
   // 总帧数从视频元数据的 duration 算出来（duration*fps 四舍五入），不是瞎写的
   useEffect(() => {
@@ -316,10 +340,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
         className={fill ? "ws-videos-row" : undefined}
         style={
           fill
-            ? // 三路画面无缝挨在一起：不留间距，每路正好占三分之一宽度。
-              // flex: 1 + minHeight: 0 让这个容器占满剩余空间；overflow:auto 防止内容溢出
-              // 但允许必要时显示滚动条（实际上不会出现，因为内部视频会约束自己的高度）
-              { display: "flex", gap: 0, flex: 1, minHeight: 0, overflow: "hidden" }
+            ? // 每列宽度按该路画面的宽高比分配（flexGrow: aspect），而不是死板三等分：
+              // 这样每路都等高、宽度正好占满整行，完整显示画面，不裁不留黑边。
+              // alignItems:center + overflow:hidden 只是兜底：极端宽高比时按算出来的高度
+              // 会超出可用空间，裁掉的是上下均匀的一圈，而不是把内容顶到看不见。
+              { display: "flex", gap: 0, flex: 1, minHeight: 0, overflow: "hidden", alignItems: "center" }
             : { display: "flex", gap: 12, flexWrap: "wrap" }
         }
       >
@@ -328,7 +353,14 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
             key={v.label}
             style={
               fill
-                ? { flex: "1 1 0", minWidth: 0, display: "flex", position: "relative" }
+                ? {
+                    flexGrow: aspects[i] ?? 1,
+                    flexShrink: 1,
+                    flexBasis: 0,
+                    minWidth: 0,
+                    display: "flex",
+                    position: "relative",
+                  }
                 : { flex: "1 1 420px", minWidth: 380 }
             }
           >
@@ -351,12 +383,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 controls
                 style={
                   fill
-                    ? // objectFit:cover 让画面填满整格，比例不同的素材会裁掉多余部分而不是留黑边——
-                      // 三路摄像头画幅本来就不一样，留黑边比裁一点边缘更浪费屏幕空间。
-                      {
+                    ? {
+                        // width:100% + aspectRatio 算出高度：三路按各自比例分到的宽度不同，
+                        // 但算出来的高度相同，画面完整显示。maxHeight+objectFit:contain 只是
+                        // 兜底，避免极端比例时被 maxHeight 削到变形。
                         width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
+                        height: "auto",
+                        aspectRatio: aspects[i],
+                        maxHeight: "100%",
+                        objectFit: "contain",
                         display: "block",
                         transformOrigin: "center",
                       }
