@@ -310,8 +310,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const handleSpeedChange = (rate: number) => {
     setSpeed(rate);
     isProgrammatic.current = true;
+    const wasPlaying = refs.current.some((v) => v && !v.paused);
     for (const v of refs.current) {
       if (v) v.playbackRate = rate;
+    }
+    // 播放中途改速率，Chrome 的音画同步管线经常从这一刻开始卡顿，得暂停再播放
+    // 才能重新同步——用户手动暂停/播放能验证不卡，这里就直接把这个动作自动做一遍。
+    if (wasPlaying) {
+      for (const v of refs.current) v?.pause();
+      for (const v of refs.current) v?.play().catch(() => {});
     }
     isProgrammatic.current = false;
   };
@@ -438,6 +445,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                 <video
                   ref={(el) => {
                     refs.current[i] = el;
+                    // preservesPitch 默认开着会让浏览器在变速时对音频做变调处理，
+                    // 这个处理本身就是常见的"改速率后卡顿，暂停重播才顺畅"的元凶之一
+                    if (el) el.preservesPitch = false;
                   }}
                   src={v.url}
                   controls
