@@ -43,7 +43,7 @@ async def list_labels(
     return ok([LabelOut.model_validate(item).model_dump() for item in labels])
 
 
-@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def create_label(
     body: LabelCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)
 ):
@@ -65,7 +65,7 @@ async def create_label(
     return ok(LabelOut.model_validate(label).model_dump())
 
 
-@router.delete("/{label_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.delete("/{label_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_label(label_id: int, db: AsyncSession = Depends(get_db)):
     """
     删除标签。已经被标注结果引用的标签不能删——那些标注条目指着它，删了会变成
@@ -92,7 +92,7 @@ async def delete_label(label_id: int, db: AsyncSession = Depends(get_db)):
     return ok(msg="标签已删除")
 
 
-@router.patch("/{label_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.patch("/{label_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def update_label(label_id: int, body: LabelUpdate, db: AsyncSession = Depends(get_db)):
     label = await db.get(LabelDefinition, label_id)
     if label is None:

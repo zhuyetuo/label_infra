@@ -19,6 +19,7 @@ export function TaskStatusTag({ status }: { status: TaskStatus }) {
 
 // 角色和标注模式也一并中文化，页面上不该出现 annotator / from_scratch 这种原始值
 export const ROLE_META: Record<string, { label: string; color: string }> = {
+  super_admin: { label: "超级管理员", color: "volcano" },
   admin: { label: "管理员", color: "red" },
   annotator: { label: "标注员", color: "blue" },
   reviewer: { label: "审核员", color: "green" },

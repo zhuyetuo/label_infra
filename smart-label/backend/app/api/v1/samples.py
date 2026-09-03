@@ -20,7 +20,7 @@ from app.schemas.sample import SampleMediaOut, SampleOut, ScanProgressOut, ScanS
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
-router = APIRouter(prefix="/samples", tags=["samples"], dependencies=[Depends(require_role(UserRole.admin))])
+router = APIRouter(prefix="/samples", tags=["samples"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
 # 样本管理本身是管理员的事，但"取某个样本的媒体文件id"标注员/审核员也要用
 # （标注工作台和审核查看都要放视频），所以这一个端点单独挂在不限角色的

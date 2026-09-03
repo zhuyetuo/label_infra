@@ -62,6 +62,24 @@ class TaskCreate(BaseModel):
     assigned_to: int | None = None  # 预指派给某标注员；留空 = 开放任务池
 
 
+class BulkTaskCreate(BaseModel):
+    """
+    批量建任务：给一批样本一次性各建一个长任务（覆盖整个样本），不用逐个点。
+    典型用法是把某一天的样本一次性导进项目里（样本页按日期分组，一天一批）。
+    """
+
+    project_id: int
+    sample_ids: list[int]
+    task_type: TaskType
+    assigned_to: int | None = None
+
+
+class BulkTaskCreateResult(BaseModel):
+    created: int
+    skipped: int
+    skipped_sample_ids: list[int]
+
+
 class ReopenRequest(BaseModel):
     """退回重标时可以附一句原因，记进 audit_logs 方便追溯。"""
 

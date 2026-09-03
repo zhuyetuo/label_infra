@@ -17,7 +17,16 @@ from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.task import DraftOut, DraftSaveRequest, LabelItemOut, ReopenRequest, TaskCreate, TaskOut
+from app.schemas.task import (
+    BulkTaskCreate,
+    BulkTaskCreateResult,
+    DraftOut,
+    DraftSaveRequest,
+    LabelItemOut,
+    ReopenRequest,
+    TaskCreate,
+    TaskOut,
+)
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
 from app.services.task_service import TaskConflictError, claim_task, heartbeat, save_draft, submit_task
@@ -25,7 +34,7 @@ from app.services.task_service import TaskConflictError, claim_task, heartbeat, 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)):
     project = await db.get(Project, body.project_id)
     if project is None:
@@ -49,7 +58,62 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     return ok(TaskOut.model_validate(task).model_dump())
 
 
-@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.reviewer))])
+@router.post("/bulk", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def bulk_create_tasks(
+    body: BulkTaskCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_user)
+):
+    """
+    批量建任务：样本页是按日期分组的，一天几十个样本很常见，一个个点「新建任务」
+    太麻烦，这里一次性把整批样本各建一个长任务（覆盖整个样本，不切片段）。
+
+    已经在这个项目下建过任务的样本会跳过，不重复建（比如同一天导入了两次）。
+    """
+    project = await db.get(Project, body.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    if not body.sample_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
+
+    existing_ids = set((await db.execute(select(Sample.id).where(Sample.id.in_(body.sample_ids)))).scalars().all())
+    missing = set(body.sample_ids) - existing_ids
+    if missing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"样本不存在: {sorted(missing)}")
+
+    already_has_task = set(
+        (
+            await db.execute(
+                select(Task.sample_id).where(
+                    Task.project_id == body.project_id, Task.sample_id.in_(body.sample_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    created = 0
+    for sample_id in body.sample_ids:
+        if sample_id in already_has_task:
+            continue
+        db.add(
+            Task(
+                project_id=body.project_id,
+                sample_id=sample_id,
+                task_type=body.task_type,
+                assigned_to=body.assigned_to,
+                created_by=admin.id,
+            )
+        )
+        created += 1
+    await db.commit()
+
+    skipped = sorted(already_has_task)
+    return ok(
+        BulkTaskCreateResult(created=created, skipped=len(skipped), skipped_sample_ids=skipped).model_dump()
+    )
+
+
+@router.post("/{task_id}/reopen", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin, UserRole.reviewer))])
 async def reopen(
     task_id: int,
     body: ReopenRequest,
@@ -64,7 +128,7 @@ async def reopen(
     return ok(TaskOut.model_validate(task).model_dump())
 
 
-@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
     """
     管理员删除任务。任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，

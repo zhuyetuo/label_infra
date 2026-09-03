@@ -22,14 +22,14 @@ router = APIRouter(prefix="/users", tags=["users"])
 # 不提供任何公开的 /register 接口。账号只能由 admin 在这里创建（决策⑥）。
 
 
-@router.get("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.get("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def list_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.created_at.desc()))
     users = result.scalars().all()
     return ok([UserOut.model_validate(u).model_dump() for u in users])
 
 
-@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
     """
     重置密码，返回一次性临时密码交给本人。
@@ -52,7 +52,7 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
     return ok({"username": user.username, "temp_password": temp_password})
 
 
-@router.delete("/{user_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.delete("/{user_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User = Depends(get_current_user)):
     """
     删除账号。已经产生过工作记录的账号不能真删——任务、标注、审核记录里都记着
@@ -65,6 +65,10 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "账号不存在")
+
+    # Super admin can delete admin, but admin cannot delete super admin
+    if user.role == UserRole.super_admin and me.role != UserRole.super_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权删除超级管理员")
 
     if user.role == UserRole.admin:
         admin_count = (
@@ -101,7 +105,7 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User
     return ok(msg="账号已删除")
 
 
-@router.post("", dependencies=[Depends(require_role(UserRole.admin))])
+@router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     if body.is_outsourced and body.role != UserRole.annotator:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "外包账号只能是 annotator 角色")
@@ -130,7 +134,7 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.patch("/{user_id}", dependencies=[Depends(require_role(UserRole.admin))])
+@router.patch("/{user_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends(get_db)):
     user = await db.get(User, user_id)
     if user is None:
