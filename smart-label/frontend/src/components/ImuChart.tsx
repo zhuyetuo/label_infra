@@ -120,6 +120,8 @@ export default function ImuChart({
   const draggingRef = useRef(false);
   // 标注色块走 ref 而不是进 effect 依赖，否则每加一条标注就要把6张图全部重建
   const segmentsRef = useRef<ChartSegment[]>(segments ?? []);
+  // 双击选中的那一段（用于核对起止位置），同样走 ref：不需要因为它变化就重建图表
+  const highlightRef = useRef<ChartSegment | null>(null);
   // 最底下那条轴除了时间刻度，再补一个"哪一天 + 上午/下午"，
   // 时间刻度本身只有时分秒，光看刻度不知道是哪天的上午还是下午
   const [rangeCaption, setRangeCaption] = useState("");
@@ -137,6 +139,11 @@ export default function ImuChart({
 
   useEffect(() => {
     segmentsRef.current = segments ?? [];
+    // 高亮的那段被删掉/改了时间之后就不在新列表里了，跟着清掉，不然会一直显示旧的高亮
+    const cur = highlightRef.current;
+    if (cur && !segmentsRef.current.some((s) => s.start_time_ms === cur.start_time_ms && s.end_time_ms === cur.end_time_ms)) {
+      highlightRef.current = null;
+    }
     plotRefs.current.forEach((p) => p?.redraw());
   }, [segments]);
 
@@ -259,7 +266,7 @@ export default function ImuChart({
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
             ...(compact ? [channelLabelPlugin(c.label, c.color)] : []),
-            segmentBandPlugin(segmentsRef, annotateRef, () => startEpochRef.current, i === 0),
+            segmentBandPlugin(segmentsRef, annotateRef, () => startEpochRef.current, i === 0, highlightRef),
             dragPanPlugin(
               onClickSeek,
               playheadState,
@@ -270,6 +277,7 @@ export default function ImuChart({
               () => startEpochRef.current
             ),
             wheelZoomPlugin(),
+            segmentHighlightPlugin(segmentsRef, highlightRef, annotateRef, () => startEpochRef.current, getFullRange),
             playheadPlugin(playheadState, i === 0),
           ],
         };
@@ -365,7 +373,8 @@ function segmentBandPlugin(
   segmentsRef: { current: ChartSegment[] },
   annotateRef: { current: AnnotateCtx },
   getStartEpoch: () => number,
-  showLabel: boolean
+  showLabel: boolean,
+  highlightRef: { current: ChartSegment | null }
 ) {
   return {
     hooks: {
@@ -385,6 +394,7 @@ function segmentBandPlugin(
           : segmentsRef.current;
         if (!segs.length) return;
         const startEpoch = getStartEpoch();
+        const highlight = highlightRef.current;
         const ctx = u.ctx;
         const left = u.bbox.left;
         const right = u.bbox.left + u.bbox.width;
@@ -398,12 +408,15 @@ function segmentBandPlugin(
           const x0 = u.valToPos(startEpoch + seg.start_time_ms / 1000, "x", true);
           const x1 = u.valToPos(startEpoch + seg.end_time_ms / 1000, "x", true);
           if (x1 < left || x0 > right) continue;
+          const isHighlighted =
+            !!highlight && highlight.start_time_ms === seg.start_time_ms && highlight.end_time_ms === seg.end_time_ms;
+
           ctx.fillStyle = seg.color;
-          ctx.globalAlpha = 0.22;
+          ctx.globalAlpha = isHighlighted ? 0.4 : 0.22;
           ctx.fillRect(x0, u.bbox.top, Math.max(1, x1 - x0), u.bbox.height);
           ctx.globalAlpha = 1;
           ctx.strokeStyle = seg.color;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = isHighlighted ? 2.5 : 1;
           ctx.beginPath();
           ctx.moveTo(x0, u.bbox.top);
           ctx.lineTo(x0, u.bbox.top + u.bbox.height);
@@ -416,6 +429,17 @@ function segmentBandPlugin(
             ctx.font = "11px sans-serif";
             ctx.textBaseline = "top";
             ctx.fillText(seg.label, x0 + 3, u.bbox.top + 2);
+          }
+
+          // 双击高亮的这一段，在左右边缘各标一个精确到毫秒的时间，方便核对起止对不对
+          if (showLabel && isHighlighted) {
+            ctx.font = "11px sans-serif";
+            ctx.textBaseline = "top";
+            const startLabel = formatTimestamp(startEpoch + seg.start_time_ms / 1000);
+            const endLabel = formatTimestamp(startEpoch + seg.end_time_ms / 1000);
+            ctx.fillText(startLabel, Math.max(left, x0) + 3, u.bbox.top + u.bbox.height - 14);
+            const endWidth = ctx.measureText(endLabel).width;
+            ctx.fillText(endLabel, Math.min(right, x1) - endWidth - 3, u.bbox.top + u.bbox.height - 14);
           }
         }
         ctx.restore();
@@ -471,10 +495,6 @@ function wheelZoomPlugin() {
         xMax = u.scales.x.max!;
         const over = u.over;
 
-        over.addEventListener("dblclick", () => {
-          u.setScale("x", { min: xMin, max: xMax });
-        });
-
         over.addEventListener(
           "wheel",
           (e: WheelEvent) => {
@@ -495,6 +515,40 @@ function wheelZoomPlugin() {
           },
           { passive: false }
         );
+      },
+    },
+  };
+}
+
+// 双击已标注的色块：高亮这一段（色块变深、边框加粗，两端标出精确的起止时间），
+// 方便核对起止位置对不对；双击回同一段/双击空白处则取消高亮，并恢复整体视图
+// （这里接管了原来"双击恢复整体视图"的操作，两者共用一个双击手势，不会冲突）。
+function segmentHighlightPlugin(
+  segmentsRef: { current: ChartSegment[] },
+  highlightRef: { current: ChartSegment | null },
+  annotateRef: { current: AnnotateCtx },
+  getStartEpoch: () => number,
+  getFullRange: () => { min: number; max: number }
+) {
+  return {
+    hooks: {
+      ready: (u: uPlot) => {
+        u.over.addEventListener("dblclick", (e: MouseEvent) => {
+          const startEpoch = getStartEpoch();
+          const val = u.posToVal(e.offsetX, "x");
+          const hit = segmentsRef.current.find(
+            (seg) =>
+              val >= startEpoch + seg.start_time_ms / 1000 && val <= startEpoch + seg.end_time_ms / 1000
+          );
+          const cur = highlightRef.current;
+          const isSame = hit && cur && cur.start_time_ms === hit.start_time_ms && cur.end_time_ms === hit.end_time_ms;
+          highlightRef.current = hit && !isSame ? hit : null;
+          annotateRef.current.redrawAll();
+          if (!hit) {
+            const full = getFullRange();
+            u.setScale("x", { min: full.min, max: full.max });
+          }
+        });
       },
     },
   };
