@@ -32,7 +32,7 @@ export default function Tasks() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
-  const isAdmin = role === "admin";
+  const isAdmin = role === "admin" || role === "super_admin";
 
   const { data: projects, isLoading: loadingProjects } = useQuery({
     queryKey: ["projects"],

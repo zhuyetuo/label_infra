@@ -5,7 +5,7 @@ export interface UserInfo {
   id: number;
   username: string;
   display_name: string;
-  role: "admin" | "annotator" | "reviewer";
+  role: "super_admin" | "admin" | "annotator" | "reviewer";
   must_change_password: boolean;
 }
 

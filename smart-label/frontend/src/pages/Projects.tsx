@@ -32,7 +32,7 @@ interface FormValues {
 export default function Projects() {
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.userInfo?.role);
-  const isAdmin = role === "admin";
+  const isAdmin = role === "admin" || role === "super_admin";
 
   const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: allTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
