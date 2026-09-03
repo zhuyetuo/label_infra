@@ -50,7 +50,7 @@ async def get_sample_media(
     if sample is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
 
-    if user.role != UserRole.admin:
+    if user.role not in (UserRole.admin, UserRole.super_admin):
         visible = (
             await db.execute(apply_task_scope(select(Task.id).where(Task.sample_id == sample_id), user).limit(1))
         ).scalar_one_or_none()
