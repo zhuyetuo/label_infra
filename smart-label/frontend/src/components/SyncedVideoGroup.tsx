@@ -330,10 +330,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
         )}
       </Space>
       <div
+        className={fill ? "ws-videos-row" : undefined}
         style={
           fill
-            ? // 三路画面无缝挨在一起：不留间距，标题浮在画面上不占额外的行
-              { display: "flex", gap: 0, flex: 1, minHeight: 0, alignItems: "stretch" }
+            ? // 三路画面无缝挨在一起：不留间距，每路正好占三分之一宽度。
+              // 高度由宽高比推出来，不去拉伸容器——一旦用高度反过来限制宽度，
+              // 画面就会缩得比三分之一窄，中间露出白缝。
+              { display: "flex", gap: 0, flex: "0 0 auto", alignItems: "flex-start" }
             : { display: "flex", gap: 12, flexWrap: "wrap" }
         }
       >
@@ -342,7 +345,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
             key={v.label}
             style={
               fill
-                ? { flex: "1 1 0", minWidth: 0, display: "flex", minHeight: 0, position: "relative" }
+                ? { flex: "1 1 0", minWidth: 0, display: "flex", position: "relative" }
                 : { flex: "1 1 420px", minWidth: 380 }
             }
           >
@@ -370,17 +373,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
               }}
               style={
                 fill
-                  ? // 不给底色，容器只是裁切用；video 元素本身按比例缩放到刚好放得下，
-                    // 元素大小就等于画面大小，所以不会出现上下黑边
-                    {
-                      overflow: "hidden",
-                      flex: 1,
-                      minWidth: 0,
-                      minHeight: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }
+                  ? { flex: 1, minWidth: 0, display: "flex" }
                   : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
               }
             >
@@ -393,12 +386,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill }: Props) {
                 style={
                   fill
                     ? {
-                        // 定死宽高比 + 宽度占满，高度就按比例算出来；超过可用高度时
-                        // 浏览器会连宽带高一起缩，元素大小始终等于画面大小 -> 没有黑边
+                        // 定死宽高比 + 宽度占满：元素大小始终等于画面大小，
+                        // 既没有黑边，也不会比三分之一窄
                         aspectRatio: aspects[i],
                         width: "100%",
                         height: "auto",
-                        maxHeight: "100%",
                         display: "block",
                         transformOrigin: "center",
                       }
