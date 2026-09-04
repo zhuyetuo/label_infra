@@ -150,6 +150,9 @@ export default function ImuChart({
   useEffect(() => {
     let disposed = false;
     const playheadState: { current: number | null } = { current: null };
+    // 鼠标靠近播放头可拖拽范围内时置 true，画播放头的地方据此高亮，让人一眼
+    // 看出"这条线能拖"，不用先按下去试
+    const playheadHoverRef: { current: boolean } = { current: false };
 
     (async () => {
       const meta = await getMeta(sampleId);
@@ -274,11 +277,12 @@ export default function ImuChart({
               getFullRange,
               annotateRef,
               segmentsRef,
-              () => startEpochRef.current
+              () => startEpochRef.current,
+              playheadHoverRef
             ),
             wheelZoomPlugin(),
             segmentHighlightPlugin(segmentsRef, highlightRef, annotateRef, () => startEpochRef.current, getFullRange),
-            playheadPlugin(playheadState, i === 0),
+            playheadPlugin(playheadState, i === 0, playheadHoverRef),
           ],
         };
 
@@ -451,21 +455,35 @@ function segmentBandPlugin(
 // 画一条跟随视频播放位置的竖线，跟鼠标悬停的十字线是两码事（互不干扰）；
 // 不再用 uPlot 默认的居中图例展示当前时间/数值，改成直接标注在竖线旁边，
 // 只在第一张图（showLabel）画文字，避免6张图都重复显示同样的时间。
-function playheadPlugin(stateRef: { current: number | null }, showLabel: boolean) {
+function playheadPlugin(
+  stateRef: { current: number | null },
+  showLabel: boolean,
+  hoverRef: { current: boolean }
+) {
   return {
     hooks: {
       draw: (u: uPlot) => {
         if (stateRef.current == null) return;
         const x = u.valToPos(stateRef.current, "x", true);
         if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+        const hovered = hoverRef.current;
         const ctx = u.ctx;
         ctx.save();
-        ctx.strokeStyle = "#000000";
-        ctx.lineWidth = 3;
+        // 鼠标移到可拖拽范围内时线变色变粗、顶端加一个手柄圆点，一眼就能看出
+        // "这条线能拖"，不用先按下去试才知道
+        ctx.strokeStyle = hovered ? "#1677ff" : "#000000";
+        ctx.lineWidth = hovered ? 4 : 3;
         ctx.beginPath();
         ctx.moveTo(x, u.bbox.top);
         ctx.lineTo(x, u.bbox.top + u.bbox.height);
         ctx.stroke();
+
+        if (hovered) {
+          ctx.beginPath();
+          ctx.arc(x, u.bbox.top + 7, 5, 0, Math.PI * 2);
+          ctx.fillStyle = "#1677ff";
+          ctx.fill();
+        }
 
         if (showLabel) {
           const label = formatTimestamp(stateRef.current);
@@ -572,7 +590,8 @@ function dragPanPlugin(
   getFullRange: () => { min: number; max: number },
   annotateRef: { current: AnnotateCtx },
   segmentsRef: { current: ChartSegment[] },
-  getStartEpoch: () => number
+  getStartEpoch: () => number,
+  playheadHoverRef: { current: boolean }
 ) {
   let dragging = false;
   let seekDragging = false;
@@ -739,8 +758,30 @@ function dragPanPlugin(
 
         const onMouseMove = (e: MouseEvent) => {
           lastClientX = e.clientX;
+          // 没按下过鼠标之前 overRectLeft 还是初始值 0（只在 mousedown 里更新），
+          // 悬浮检测在按下之前就要用，这里顺手刷新一次，也顺带修正了这个陈旧值
+          if (!dragging && !seekDragging && !bandDragging) {
+            overRectLeft = over.getBoundingClientRect().left;
+          }
           const relX = e.clientX - overRectLeft;
-          if (!dragging && !seekDragging && !bandDragging) refreshCursor();
+          if (!dragging && !seekDragging && !bandDragging) {
+            // 靠近播放头（还没按下去）时先给个提示：光标变成可拖拽样式，
+            // 播放头本身也高亮，不用真按下去试才知道这条线能拖
+            let nearPlayhead = false;
+            if (playheadState.current != null) {
+              const playheadX = u.valToPos(playheadState.current, "x", false);
+              nearPlayhead = Math.abs(playheadX - relX) <= PLAYHEAD_GRAB_PX;
+            }
+            if (nearPlayhead !== playheadHoverRef.current) {
+              playheadHoverRef.current = nearPlayhead;
+              annotateRef.current.redrawAll();
+            }
+            if (nearPlayhead) {
+              over.style.cursor = "ew-resize";
+            } else {
+              refreshCursor();
+            }
+          }
 
           if (bandDragging) {
             const cur = toMs(relX);
