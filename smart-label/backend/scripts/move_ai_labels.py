@@ -3,9 +3,9 @@
 samples.ai_label_path。以前 AI 预标注结果跟原始数据混在一个目录，现在分开了
 （见 ai_prelabel_service.ai_label_relpath）。可以重复跑，已经挪过的跳过。
 
-用法：
-    cd smart-label/backend
-    python -m scripts.move_ai_labels          # 只打印会怎么挪，不动文件
+用法（后端跑在 docker 里，宿主机的 python 没装 asyncmy 等依赖，要在 api 容器里跑）：
+    cd smart-label/deploy
+    docker compose exec api python -m scripts.move_ai_labels          # 只打印会怎么挪，不动文件
     python -m scripts.move_ai_labels --apply  # 真的挪
 """
 
