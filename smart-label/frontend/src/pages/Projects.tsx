@@ -87,10 +87,14 @@ export default function Projects() {
   // 每个项目展开后的任务筛选（按状态 / 按样本名搜索），一个项目上百个任务时靠翻页找
   // "标注中"的那几个太费劲。展开状态自己管，这样点汇总里的状态 Tag 能直接展开并筛选。
   type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
-  const [taskFilters, setTaskFilters] = useState<Record<number, { status: StatusFilter; q: string }>>({});
+  // labels：只看含这些类别片段的任务；aiPending：只看还有 AI 待确认片段的任务——
+  // 批量预标注完想专门审某一类（比如抓挠），靠这两个直接挑出要看的任务
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean };
+  const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
-  const filterOf = (projectId: number) => taskFilters[projectId] ?? { status: "ALL" as const, q: "" };
-  const setFilter = (projectId: number, patch: Partial<{ status: StatusFilter; q: string }>) =>
+  const filterOf = (projectId: number): TaskFilter =>
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false };
+  const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
@@ -449,9 +453,32 @@ export default function Projects() {
             };
             const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
             const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
+            const matchLabels = (t: Task) => {
+              const lc = t.label_counts ?? {};
+              if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
+              if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
+              return true;
+            };
             const rows = all.filter(
-              (t) => matchStatus(t) && (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
+              (t) =>
+                matchStatus(t) &&
+                matchLabels(t) &&
+                (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
             );
+            // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
+            const projLabels = labelsOf(p.id);
+            const labelTotals = projLabels
+              .map((l) => {
+                let n = 0, pending = 0, tasksN = 0;
+                for (const t of all) {
+                  const c = t.label_counts?.[l.id];
+                  if (!c?.n) continue;
+                  n += c.n; pending += c.ai_pending; tasksN += 1;
+                }
+                return { label: l, n, pending, tasksN };
+              })
+              .filter((x) => x.n > 0);
+            const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
             return (
               <>
               <Space wrap style={{ marginBottom: 8 }}>
@@ -494,12 +521,50 @@ export default function Projects() {
                   value={f.q}
                   onChange={(e) => setFilter(p.id, { q: e.target.value })}
                 />
-                {(f.status !== "ALL" || q) && (
+                <Select
+                  size="small"
+                  mode="multiple"
+                  allowClear
+                  placeholder="含类别…"
+                  style={{ minWidth: 160 }}
+                  value={f.labels}
+                  onChange={(v) => setFilter(p.id, { labels: v })}
+                  options={projLabels.map((l) => ({ value: l.id, label: l.display_name }))}
+                />
+                <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
+                  只看有 AI 待确认
+                </Checkbox>
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
                 )}
               </Space>
+              {labelTotals.length > 0 && (
+                // 各类别在这个项目里总共有多少段/在几个任务里，点一个 Tag 就只看含这个类别的任务
+                <Space wrap size={4} style={{ marginBottom: 8 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
+                  </Typography.Text>
+                  {labelTotals.map(({ label, n, pending, tasksN }) => (
+                    <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}；点击只看含「${label.display_name}」的任务`}>
+                      <Tag
+                        color={label.color ?? undefined}
+                        style={{ cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined }}
+                        onClick={() =>
+                          setFilter(p.id, {
+                            labels: f.labels.includes(label.id) ? f.labels.filter((x) => x !== label.id) : [...f.labels, label.id],
+                          })
+                        }
+                      >
+                        {label.display_name} {n}
+                        {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
+                        <span style={{ opacity: 0.6 }}> · {tasksN} 任务</span>
+                      </Tag>
+                    </Tooltip>
+                  ))}
+                </Space>
+              )}
               <Table
                 size="small"
                 rowKey="id"
@@ -548,6 +613,30 @@ export default function Projects() {
                         )}
                       </Space>
                     ),
+                  },
+                  {
+                    title: "片段",
+                    width: 260,
+                    render: (_, task: Task) => {
+                      const lc = task.label_counts ?? {};
+                      const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
+                      if (!entries.length) return <Typography.Text type="secondary">-</Typography.Text>;
+                      return (
+                        <Space size={2} wrap>
+                          {entries.map((l) => {
+                            const c = lc[l.id];
+                            return (
+                              <Tooltip key={l.id} title={c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}>
+                                <Tag color={l.color ?? undefined} style={{ marginRight: 0 }}>
+                                  {l.display_name} {c.n}
+                                  {c.ai_pending ? <span style={{ opacity: 0.7 }}>/{c.ai_pending}待确认</span> : null}
+                                </Tag>
+                              </Tooltip>
+                            );
+                          })}
+                        </Space>
+                      );
+                    },
                   },
                   {
                     title: "指派给",

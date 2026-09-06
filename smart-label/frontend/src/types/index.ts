@@ -55,6 +55,8 @@ export interface Task {
   has_draft?: boolean;
   /** 当前轮草稿里已有多少段，0 = 认领了还没动手 */
   draft_item_count?: number;
+  /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
+  label_counts?: Record<number, { n: number; ai_pending: number }>;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
 }

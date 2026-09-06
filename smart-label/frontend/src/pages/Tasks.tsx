@@ -151,6 +151,30 @@ export default function Tasks() {
             ),
           },
           {
+            title: "片段",
+            width: 260,
+            render: (_, task: Task) => {
+              const lc = task.label_counts ?? {};
+              const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
+              if (!entries.length) return <Typography.Text type="secondary">-</Typography.Text>;
+              return (
+                <Space size={2} wrap>
+                  {entries.map((l) => {
+                    const c = lc[l.id];
+                    return (
+                      <Tooltip key={l.id} title={c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}>
+                        <Tag color={l.color ?? undefined} style={{ marginRight: 0 }}>
+                          {l.display_name} {c.n}
+                          {c.ai_pending ? <span style={{ opacity: 0.7 }}>/{c.ai_pending}待确认</span> : null}
+                        </Tag>
+                      </Tooltip>
+                    );
+                  })}
+                </Space>
+              );
+            },
+          },
+          {
             title: "指派给",
             dataIndex: "assigned_to",
             width: 130,
