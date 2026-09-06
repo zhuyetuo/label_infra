@@ -12,6 +12,7 @@ from app.models.annotation import (
 )
 from app.models.task import Task, TaskStatus, TaskType
 from app.models.user import User
+from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
 from app.services.annotation_validation import find_first_overlap
 
@@ -44,6 +45,8 @@ async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
             lock_expires_at=lock_expires,
         )
     )
+    # 敏感样本上的任务非管理员不能领（列表里本来就看不到，这里是防直接调接口）
+    stmt = exclude_sensitive(stmt, user)
     result = await db.execute(stmt)
     if result.rowcount != 1:
         await db.rollback()
@@ -100,6 +103,7 @@ async def claim_all_in_project(db: AsyncSession, project_id: int, user: User) ->
             lock_expires_at=lock_expires,
         )
     )
+    stmt = exclude_sensitive(stmt, user)
     result = await db.execute(stmt)
     await db.commit()
     return result.rowcount

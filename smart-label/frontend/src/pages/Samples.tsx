@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Collapse, Progress, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Collapse, Input, Modal, Popconfirm, Progress, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
+import { LockOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getImportScanStatus, startImportScan, listSamples, updateSample, type ScanProgress } from "@/api/samples";
+import {
+  getImportScanStatus,
+  startImportScan,
+  listSamples,
+  setSamplesSensitive,
+  updateSample,
+  type ScanProgress,
+} from "@/api/samples";
 import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
@@ -59,9 +67,63 @@ export default function Samples() {
     qc.invalidateQueries({ queryKey: ["samples"] });
   };
 
+  // 敏感隐私：标了之后标注员/审核员在任何地方都看不到这些样本和上面的任务，
+  // 只有管理员/超级管理员能看能标；确认不敏感了可以解除。支持勾选一批一起标。
+  const [sensitiveFilter, setSensitiveFilter] = useState<"全部" | "仅敏感" | "仅非敏感">("全部");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [markOpen, setMarkOpen] = useState(false);
+  const [markNote, setMarkNote] = useState("");
+  const [marking, setMarking] = useState(false);
+
+  const handleToggleSensitive = async (sample: Sample, on: boolean) => {
+    await updateSample(sample.id, { is_sensitive: on });
+    message.success(on ? "已标记为敏感，仅管理员可见" : "已解除敏感标记");
+    qc.invalidateQueries({ queryKey: ["samples"] });
+  };
+
+  const applyBulk = async (on: boolean) => {
+    if (selected.size === 0) return;
+    setMarking(true);
+    try {
+      const r = await setSamplesSensitive([...selected], on, on ? markNote.trim() || null : null);
+      message.success(on ? `已把 ${r.updated} 个样本标记为敏感` : `已解除 ${r.updated} 个样本的敏感标记`);
+      setSelected(new Set());
+      setMarkOpen(false);
+      setMarkNote("");
+      qc.invalidateQueries({ queryKey: ["samples"] });
+    } finally {
+      setMarking(false);
+    }
+  };
+
   const columns = [
     { title: "ID", dataIndex: "id", width: 60 },
-    { title: "样本编号", dataIndex: "sample_code" },
+    {
+      title: "样本编号",
+      dataIndex: "sample_code",
+      render: (code: string, r: Sample) => (
+        <Space size={4}>
+          <span>{code}</span>
+          {r.is_sensitive && (
+            <Tooltip title={`含敏感隐私信息，仅管理员可见${r.sensitive_note ? `：${r.sensitive_note}` : ""}`}>
+              <Tag color="red" icon={<LockOutlined />} style={{ marginRight: 0 }}>
+                敏感
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: "隐私",
+      dataIndex: "is_sensitive",
+      width: 90,
+      render: (on: boolean, r: Sample) => (
+        <Tooltip title={on ? "点击解除：其他人重新可见" : "点击标记：只有管理员/超级管理员能看能标"}>
+          <Switch size="small" checked={on} onChange={(v) => handleToggleSensitive(r, v)} checkedChildren="敏感" unCheckedChildren="公开" />
+        </Tooltip>
+      ),
+    },
     {
       title: "状态",
       dataIndex: "import_status",
@@ -101,15 +163,19 @@ export default function Samples() {
     },
   ];
 
+  const sensitiveCount = useMemo(() => (data ?? []).filter((s) => s.is_sensitive).length, [data]);
+
   const groups = useMemo(() => {
     const map = new Map<string, Sample[]>();
     for (const s of data ?? []) {
+      if (sensitiveFilter === "仅敏感" && !s.is_sensitive) continue;
+      if (sensitiveFilter === "仅非敏感" && s.is_sensitive) continue;
       const key = s.session_date ?? "未知日期";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(s);
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
-  }, [data]);
+  }, [data, sensitiveFilter]);
 
   const handleScan = async () => {
     const result = await startImportScan();
@@ -129,6 +195,33 @@ export default function Samples() {
         </Button>
         <Button onClick={() => refetch()}>刷新列表</Button>
         <Typography.Text type="secondary">系统每 10 分钟自动扫描一次新数据，通常不用手动点</Typography.Text>
+      </Space>
+
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Segmented
+          options={["全部", "仅敏感", "仅非敏感"]}
+          value={sensitiveFilter}
+          onChange={(v) => setSensitiveFilter(v as typeof sensitiveFilter)}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          敏感样本 {sensitiveCount} 个：仅管理员/超级管理员可见可标，其他人在项目、任务、审核里都看不到
+        </Typography.Text>
+        {selected.size > 0 && (
+          <>
+            <Tag>已勾选 {selected.size}</Tag>
+            <Button size="small" danger icon={<LockOutlined />} onClick={() => setMarkOpen(true)}>
+              标记为敏感
+            </Button>
+            <Popconfirm title={`解除这 ${selected.size} 个样本的敏感标记？其他人将重新可见`} onConfirm={() => applyBulk(false)}>
+              <Button size="small" loading={marking}>
+                解除敏感
+              </Button>
+            </Popconfirm>
+            <Button size="small" type="link" onClick={() => setSelected(new Set())}>
+              取消勾选
+            </Button>
+          </>
+        )}
       </Space>
 
       {progress && (progress.status === "running" || progress.status === "error") && (
@@ -169,11 +262,45 @@ export default function Samples() {
                 dataSource={samples}
                 pagination={samples.length > 20 ? { pageSize: 20 } : false}
                 columns={columns}
+                // 勾选跨日期分组共用一个集合，可以在几天里各挑几个一起标
+                rowSelection={{
+                  selectedRowKeys: samples.filter((s) => selected.has(s.id)).map((s) => s.id),
+                  onChange: (_, rows) => {
+                    setSelected((prev) => {
+                      const next = new Set(prev);
+                      samples.forEach((s) => next.delete(s.id));
+                      rows.forEach((s) => next.add(s.id));
+                      return next;
+                    });
+                  },
+                }}
               />
             ),
           }))}
         />
       )}
+
+      <Modal
+        title={`标记 ${selected.size} 个样本为敏感`}
+        open={markOpen}
+        onCancel={() => setMarkOpen(false)}
+        onOk={() => applyBulk(true)}
+        okText="标记"
+        okButtonProps={{ danger: true }}
+        confirmLoading={marking}
+        destroyOnClose
+      >
+        <Typography.Paragraph>
+          标记后标注员/审核员在项目、任务、审核、视频、IMU 任何入口都看不到这些样本；已经认领的任务也会从他们列表里消失。
+          只有管理员/超级管理员能看能标。之后确认不敏感可以随时解除。
+        </Typography.Paragraph>
+        <Input
+          placeholder="备注（可选）：为什么敏感，比如「画面里有人脸」"
+          maxLength={200}
+          value={markNote}
+          onChange={(e) => setMarkNote(e.target.value)}
+        />
+      </Modal>
 
       <SamplePreviewModal
         sampleId={preview?.id ?? null}

@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.review import ReviewDecision, ReviewRecord
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
+from app.services.task_scope import exclude_sensitive
 
 
 class ReviewConflictError(Exception):
@@ -28,6 +29,8 @@ async def claim_review(db: AsyncSession, task_id: int, reviewer: User) -> Task:
         )
         .values(reviewer_id=reviewer.id, locked_by=reviewer.id, lock_expires_at=lock_expires)
     )
+    # 敏感样本上的任务只有管理员能审
+    stmt = exclude_sensitive(stmt, reviewer)
     result = await db.execute(stmt)
     if result.rowcount != 1:
         await db.rollback()

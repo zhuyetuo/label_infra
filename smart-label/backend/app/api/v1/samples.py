@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -18,7 +18,14 @@ from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import PrelabelResult
-from app.schemas.sample import SampleMediaOut, SampleOut, SampleUpdate, ScanProgressOut, ScanStartResult
+from app.schemas.sample import (
+    SampleMediaOut,
+    SampleOut,
+    SampleSensitiveBulk,
+    SampleUpdate,
+    ScanProgressOut,
+    ScanStartResult,
+)
 from app.services.ai_prelabel_service import PrelabelError, infer_sample
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
@@ -38,9 +45,27 @@ async def list_samples(db: AsyncSession = Depends(get_db)):
     return ok([SampleOut.model_validate(s).model_dump() for s in samples])
 
 
+@router.patch("/sensitive")
+async def set_sensitive_bulk(body: SampleSensitiveBulk, db: AsyncSession = Depends(get_db)):
+    """
+    一批样本一起标记/解除"含敏感隐私信息"。标了之后标注员/审核员在任何地方都
+    看不到这些样本和它们上面的任务（列表、认领、视频、IMU 全挡），只有管理员能看能标。
+    """
+    if not body.sample_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
+    values: dict = {"is_sensitive": body.is_sensitive}
+    if body.is_sensitive:
+        values["sensitive_note"] = body.sensitive_note
+    else:
+        values["sensitive_note"] = None
+    result = await db.execute(update(Sample).where(Sample.id.in_(body.sample_ids)).values(**values))
+    await db.commit()
+    return ok({"updated": result.rowcount or 0})
+
+
 @router.patch("/{sample_id}")
 async def update_sample(sample_id: int, body: SampleUpdate, db: AsyncSession = Depends(get_db)):
-    """现在只用来手动关联到哪只狗，采集端文件名还没带 dog 编号之前只能这样补。"""
+    """手动关联到哪只狗；单个样本标记/解除敏感。"""
     sample = await db.get(Sample, sample_id)
     if sample is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
@@ -49,6 +74,8 @@ async def update_sample(sample_id: int, body: SampleUpdate, db: AsyncSession = D
         dog = await db.get(Dog, updates["dog_id"])
         if dog is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "狗不存在")
+    if updates.get("is_sensitive") is False:
+        updates["sensitive_note"] = None
     for field, value in updates.items():
         setattr(sample, field, value)
     await db.commit()

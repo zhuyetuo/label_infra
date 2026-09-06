@@ -26,14 +26,25 @@ class SampleOut(BaseModel):
     import_status: ImportStatus
     import_error: str | None
     remark: str | None
+    is_sensitive: bool = False
+    sensitive_note: str | None = None
     created_at: datetime
 
 
 class SampleUpdate(BaseModel):
-    """现在只用来手动关联/改关联到哪只狗——采集端文件名带上 dog 编号之前，
-    没法自动识别，得靠这个手动补。"""
+    """手动关联/改关联到哪只狗；标记/解除"含敏感隐私信息"。"""
 
     dog_id: int | None = None
+    is_sensitive: bool | None = None
+    sensitive_note: str | None = None
+
+
+class SampleSensitiveBulk(BaseModel):
+    """一批样本一起标记/解除敏感。"""
+
+    sample_ids: list[int]
+    is_sensitive: bool
+    sensitive_note: str | None = None
 
 
 class SampleMediaOut(BaseModel):
