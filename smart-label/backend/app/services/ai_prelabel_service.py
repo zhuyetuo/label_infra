@@ -1,14 +1,15 @@
 """
-AI 预标注：调 imu_train/label_service 的 /infer，把结果换算成标注工作台用的
+AI 预标注：调 imu_train/label_service，把结果换算成标注工作台用的
 "相对 CSV 起点毫秒"片段。
 
 两个入口共用同一套换算：
-- 单个样本（标注工作台里点"AI预标注"按钮）：infer_sample()，结果直接返回给前端
+- 单个样本（标注工作台里点"AI预标注"按钮）：infer_sample()，走 /infer，结果直接返回给前端
 - 整个项目批量（项目页"AI预标注"按钮 / 建"AI预标注+人工修改"类型任务时自动）：
-  start_project_prelabel() 后台跑，逐个任务把片段直接写进该任务当前轮的草稿，
+  start_project_prelabel() 后台跑，一批任务一次发给 /infer_batch（AI 服务那边用
+  进程池按文件并行，一个请求就能把 CPU 吃满），拿到结果逐个写进任务当前轮的草稿，
   标注员打开任务就已经有 AI 框了；前端轮询 get_progress() 画进度条
 
-批量跑是串行的：AI 服务那边一次只跑一个推理（内部加锁），并发发过去也只是排队。
+批量分块发（每块 algo_infer_batch_size 个）：块太小并行度上不去，太大进度条半天不动。
 """
 
 import asyncio
@@ -110,15 +111,10 @@ class SampleInference:
     ai_label_path: str
 
 
-async def infer_sample(sample: Sample) -> SampleInference:
-    """
-    对一个样本跑一次推理：读 CSV 起点时间 -> 调 /infer -> 原始 JSON 落盘 NAS
-    （跟 imu_csv_path 同目录，加 _ai_label.json 后缀）-> 摊平换算成相对毫秒。
-    不碰数据库；调用方自己决定怎么存（sample.ai_label_path / 草稿条目）。
-    """
+async def _csv_start_of(sample: Sample) -> datetime:
+    """读 CSV 第一行的时间，AI 片段的绝对时间要减掉它才是工作台用的相对毫秒。"""
     if not sample.imu_csv_path:
         raise PrelabelError("该样本没有 IMU CSV，无法做 AI 预标注")
-
     try:
         csv_abs = resolve_nas_path(sample.imu_csv_path)
         meta = await asyncio.to_thread(get_meta, csv_abs)
@@ -129,12 +125,11 @@ async def infer_sample(sample: Sample) -> SampleInference:
     csv_start = parse_ts(meta.get("start_timestamp"))
     if csv_start is None:
         raise PrelabelError("IMU CSV 没有可用的时间戳列，无法换算 AI 片段时间")
+    return csv_start
 
-    try:
-        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id)
-    except algo_client.AlgoServiceError as e:
-        raise PrelabelError(str(e)) from e
 
+async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime) -> SampleInference:
+    """原始 JSON 落盘 NAS（跟 imu_csv_path 同目录，加 _ai_label.json 后缀），再摊平换算。"""
     relpath = os.path.splitext(sample.imu_csv_path)[0] + "_ai_label.json"
     full_path = os.path.join(settings.nas_root, relpath)
 
@@ -144,9 +139,18 @@ async def infer_sample(sample: Sample) -> SampleInference:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
     await asyncio.to_thread(_write)
-
     items, skipped = flatten_segments(result.get("segments") or {}, csv_start)
     return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0), ai_label_path=relpath)
+
+
+async def infer_sample(sample: Sample) -> SampleInference:
+    """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。"""
+    csv_start = await _csv_start_of(sample)
+    try:
+        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id)
+    except algo_client.AlgoServiceError as e:
+        raise PrelabelError(str(e)) from e
+    return await _store_and_normalize(sample, result, csv_start)
 
 
 # ---------------------------------------------------------------- 项目批量 ----
@@ -231,7 +235,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool) 
     try:
         while True:
             async with SessionLocal() as db:
-                await _run_batch(db, project_id, task_ids, overwrite_ai, progress)
+                await _run_project(db, project_id, task_ids, overwrite_ai, progress)
             nxt = _queued.pop(project_id, None)
             if not nxt:
                 break
@@ -248,7 +252,18 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool) 
         _running.discard(project_id)
 
 
-async def _run_batch(
+@dataclass
+class _Prepared:
+    """通过了资格检查、等着发给 AI 的一个任务。"""
+
+    task: Task
+    sample: Sample
+    record: AnnotationRecord | None
+    old_ai_items: list[AnnotationLabelItem]
+    csv_start: datetime
+
+
+async def _run_project(
     db: AsyncSession, project_id: int, task_ids: list[int] | None, overwrite_ai: bool, progress: PrelabelProgress
 ) -> None:
     # 只处理还在标注员手里之前的任务：待认领 / 标注中。已提交、已通过、被驳回的
@@ -281,40 +296,82 @@ async def _run_batch(
     progress.total += len(tasks)
     unmatched: set[str] = set(progress.unmatched_labels)
 
-    for task in tasks:
-        sample = await db.get(Sample, task.sample_id)
-        code = sample.sample_code if sample else f"sample#{task.sample_id}"
-        progress.current_task_id = task.id
-        progress.current_sample_code = code
-        try:
-            outcome = await _prelabel_task(db, task, sample, by_name, overwrite_ai, unmatched)
-            if outcome is None:
-                progress.succeeded += 1
-            else:
+    size = max(1, settings.algo_infer_batch_size)
+    chunks = [tasks[i : i + size] for i in range(0, len(tasks), size)]
+    for ci, chunk in enumerate(chunks):
+        progress.current_task_id = None
+        progress.current_sample_code = f"第 {ci + 1}/{len(chunks)} 批（{len(chunk)} 个并行）"
+
+        # 1) 资格检查 + 读 CSV 起点时间（本地磁盘 IO，几个一起读）
+        prepared: list[_Prepared] = []
+        for task in chunk:
+            sample = await db.get(Sample, task.sample_id)
+            code = sample.sample_code if sample else f"sample#{task.sample_id}"
+            try:
+                p = await _prepare(db, task, sample, overwrite_ai)
+            except PrelabelError as e:
+                progress.failed += 1
+                progress.processed += 1
+                progress.log(f"任务 #{task.id} {code}：失败 {e}")
+                continue
+            if isinstance(p, str):
                 progress.skipped += 1
-                progress.log(f"任务 #{task.id} {code}：跳过（{outcome}）")
-        except PrelabelError as e:
-            await db.rollback()
-            progress.failed += 1
-            progress.log(f"任务 #{task.id} {code}：失败 {e}")
-        except Exception as e:  # noqa: BLE001 单个任务出错不影响后面的
-            await db.rollback()
-            progress.failed += 1
-            progress.log(f"任务 #{task.id} {code}：失败 {type(e).__name__}: {e}")
-        progress.processed += 1
-        progress.unmatched_labels = sorted(unmatched)
+                progress.processed += 1
+                progress.log(f"任务 #{task.id} {code}：跳过（{p}）")
+                continue
+            prepared.append(p)
         progress.tick()
+        if not prepared:
+            continue
+
+        # 2) 一整批发给 AI 服务并行跑
+        try:
+            results = await algo_client.infer_batch(
+                [{"path": p.sample.imu_csv_path, "sample_id": p.sample.id} for p in prepared]
+            )
+        except algo_client.AlgoServiceError as e:
+            for p in prepared:
+                progress.failed += 1
+                progress.processed += 1
+                progress.log(f"任务 #{p.task.id} {p.sample.sample_code}：失败 {e}")
+            progress.tick()
+            continue
+        by_sample: dict[int, dict] = {}
+        for r in results:
+            if isinstance(r, dict) and r.get("sample_id") is not None:
+                by_sample[int(r["sample_id"])] = r
+
+        # 3) 逐个写库
+        for p in prepared:
+            code = p.sample.sample_code
+            r = by_sample.get(p.sample.id)
+            try:
+                if r is None:
+                    raise PrelabelError("AI 服务没有返回这个样本的结果")
+                if not r.get("ok"):
+                    raise PrelabelError(str(r.get("error") or "AI 服务处理失败"))
+                inf = await _store_and_normalize(p.sample, r.get("result") or {}, p.csv_start)
+                outcome = await _apply(db, p, inf, by_name, unmatched)
+                if outcome is None:
+                    progress.succeeded += 1
+                else:
+                    progress.skipped += 1
+                    progress.log(f"任务 #{p.task.id} {code}：跳过（{outcome}）")
+            except PrelabelError as e:
+                await db.rollback()
+                progress.failed += 1
+                progress.log(f"任务 #{p.task.id} {code}：失败 {e}")
+            except Exception as e:  # noqa: BLE001 单个任务出错不影响后面的
+                await db.rollback()
+                progress.failed += 1
+                progress.log(f"任务 #{p.task.id} {code}：失败 {type(e).__name__}: {e}")
+            progress.processed += 1
+            progress.unmatched_labels = sorted(unmatched)
+            progress.tick()
 
 
-async def _prelabel_task(
-    db: AsyncSession,
-    task: Task,
-    sample: Sample | None,
-    by_name: dict[str, int],
-    overwrite_ai: bool,
-    unmatched: set[str],
-) -> str | None:
-    """处理一个任务。返回 None = 成功写入；返回字符串 = 跳过原因。"""
+async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrite_ai: bool) -> _Prepared | str:
+    """资格检查。返回 _Prepared = 可以跑；返回字符串 = 跳过原因。"""
     if sample is None:
         raise PrelabelError("样本不存在")
 
@@ -335,15 +392,22 @@ async def _prelabel_task(
     if existing and not overwrite_ai:
         return "已有 AI 片段"
 
-    inf = await infer_sample(sample)
+    csv_start = await _csv_start_of(sample)
+    return _Prepared(task=task, sample=sample, record=record, old_ai_items=existing, csv_start=csv_start)
 
+
+async def _apply(
+    db: AsyncSession, p: _Prepared, inf: SampleInference, by_name: dict[str, int], unmatched: set[str]
+) -> str | None:
+    """把一个样本的推理结果写进任务草稿。返回 None = 成功；字符串 = 跳过原因。"""
+    record = p.record
     if record is None:
-        record = AnnotationRecord(task_id=task.id, round_no=task.round_no, source_type=RecordSourceType.ai_revised)
+        record = AnnotationRecord(task_id=p.task.id, round_no=p.task.round_no, source_type=RecordSourceType.ai_revised)
         db.add(record)
         await db.flush()
     else:
-        # 只有纯 AI 的旧片段才会走到这里（上面已经把有人工痕迹的都拦住了），整批换新
-        for i in existing:
+        # 只有纯 AI 的旧片段才会走到这里（_prepare 已经把有人工痕迹的都拦住了），整批换新
+        for i in p.old_ai_items:
             await db.delete(i)
         await db.flush()
 
@@ -368,11 +432,11 @@ async def _prelabel_task(
         )
         written += 1
 
-    sample.ai_label_path = inf.ai_label_path
+    p.sample.ai_label_path = inf.ai_label_path
     # 建任务时选的是"从零标注"，批量跑完 AI 之后实际上就是 AI 预标注+人工修改了，
     # 类型跟着改过来，导出时才会落到 ai_revised 那个目录
-    if task.task_type != TaskType.ai_assisted:
-        task.task_type = TaskType.ai_assisted
+    if p.task.task_type != TaskType.ai_assisted:
+        p.task.task_type = TaskType.ai_assisted
     await db.commit()
     if written == 0 and inf.items:
         return "AI 类别名跟项目标签全对不上，一段都没写入"
