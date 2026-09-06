@@ -191,6 +191,10 @@ class PrelabelProgress:
             del self.detail[: len(self.detail) - 60]
 
     def to_dict(self) -> dict:
+        # 前端轮询时刷新一下已用时长——tick() 只在一个任务处理完才调，批量走
+        # /infer_batch 一次几十个、一分钟才回一批，中间读到的 elapsed_sec 会卡住不动
+        if self.status == "running" and self.started_at is not None:
+            self.elapsed_sec = time.time() - self.started_at
         return asdict(self)
 
 
