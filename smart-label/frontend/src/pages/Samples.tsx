@@ -273,6 +273,9 @@ export default function Samples() {
                 dataSource={samples}
                 pagination={samples.length > 20 ? { pageSize: 20 } : false}
                 columns={columns}
+                // antd 默认点三下是 升序 -> 降序 -> 取消排序（回到原始顺序），第三种
+                // 看着像乱序；这里只在升/降之间切
+                sortDirections={["ascend", "descend", "ascend"]}
                 // 勾选跨日期分组共用一个集合，可以在几天里各挑几个一起标
                 rowSelection={{
                   selectedRowKeys: samples.filter((s) => selected.has(s.id)).map((s) => s.id),
