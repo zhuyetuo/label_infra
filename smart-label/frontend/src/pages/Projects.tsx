@@ -104,6 +104,15 @@ export default function Projects() {
   const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
+
+  // 秒数 → "约 3 分钟" / "约 1 小时 20 分钟" / "不到 1 分钟"，进度条旁边和弹窗里都用
+  const fmtEta = (sec: number | null | undefined) => {
+    if (sec == null) return null;
+    const m = Math.ceil(sec / 60);
+    if (m < 1) return "不到 1 分钟";
+    if (m < 60) return `约 ${m} 分钟`;
+    return `约 ${Math.floor(m / 60)} 小时 ${m % 60} 分钟`;
+  };
   const prevStatusRef = useRef<Record<number, string>>({});
 
   const refresh = () => {
@@ -605,6 +614,12 @@ export default function Projects() {
                           percent={pp.total ? Math.round((pp.processed / pp.total) * 100) : 0}
                           format={() => `AI ${pp.processed}/${pp.total}`}
                         />
+                        {/* 耗时预估直接摆出来，不用悬停才看得到；后端按已完成的速率算，
+                            第一批还没回来之前没有数据，先显示"预估中" */}
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          已用 {fmtEta(pp.elapsed_sec) ?? "-"} ·{" "}
+                          {pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "预估中…"}
+                        </Typography.Text>
                       </div>
                     </Tooltip>
                   )}
@@ -732,8 +747,8 @@ export default function Projects() {
               连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
             </Checkbox>
             <Typography.Text>
-              本次将处理 <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite)}</b> 个任务。AI 服务一次只跑一个，
-              一个样本几十秒，整个过程在后台进行，项目行里能看到进度。
+              本次将处理 <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite)}</b> 个任务。AI 服务按文件多进程并行跑，
+              整个过程在后台进行，项目行里能看到进度和预计剩余时间。
             </Typography.Text>
             {(() => {
               const pp = prelabelProgress[prelabelTarget.id];
@@ -742,7 +757,10 @@ export default function Projects() {
                 <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     上一次/当前：{pp.status === "running" ? "进行中" : pp.status === "done" ? "已完成" : "出错"}，
-                    {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}
+                    {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}，已用 {fmtEta(pp.elapsed_sec) ?? "-"}
+                    {pp.status === "running" && (
+                      <>，{pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "剩余时间预估中…"}</>
+                    )}
                   </Typography.Text>
                   {pp.unmatched_labels.length > 0 && (
                     <Alert
