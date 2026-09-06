@@ -28,6 +28,8 @@ class TaskOut(BaseModel):
     has_draft: bool = False
     # 当前轮草稿里已经有多少段，0 = 认领了但还没动手
     draft_item_count: int = 0
+    # 当前轮各类别的段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的
+    label_counts: dict[int, dict[str, int]] = {}
     # 被驳回时审核员写的意见，方便标注员知道要改什么
     review_comment: str | None = None
 

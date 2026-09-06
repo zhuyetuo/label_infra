@@ -5,12 +5,12 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
-from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.review import ReviewRecord
 from app.models.project import Project
 from app.models.sample import Sample
@@ -203,6 +203,34 @@ async def list_tasks(
         )
         draft_counts = {task_id: int(n) for task_id, n in rows.all()}
 
+    # 每个任务当前轮各类别有几段、其中多少是 AI 给的还没人确认的——列表里直接
+    # 显示"抓挠 5 / 睡觉 3"，想专门审抓挠的一眼就能挑出哪些任务去看，不用逐个点开
+    label_counts: dict[int, dict[int, dict[str, int]]] = {}
+    if task_ids:
+        ai_pending = case(
+            (
+                (AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
+                & (AnnotationLabelItem.ai_confirmed.is_(False))
+                & (AnnotationLabelItem.is_modified.is_(False)),
+                1,
+            ),
+            else_=0,
+        )
+        rows = await db.execute(
+            select(
+                AnnotationRecord.task_id,
+                AnnotationLabelItem.label_id,
+                func.count(AnnotationLabelItem.id),
+                func.sum(ai_pending),
+            )
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .where(AnnotationRecord.round_no == Task.round_no, Task.id.in_(task_ids))
+            .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
+        )
+        for task_id, label_id, n, n_pending in rows.all():
+            label_counts.setdefault(task_id, {})[label_id] = {"n": int(n), "ai_pending": int(n_pending or 0)}
+
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
     review_comments: dict[int, str | None] = {}
@@ -220,6 +248,7 @@ async def list_tasks(
                 **TaskOut.model_validate(t).model_dump(),
                 "has_draft": draft_counts.get(t.id, 0) > 0,
                 "draft_item_count": draft_counts.get(t.id, 0),
+                "label_counts": label_counts.get(t.id, {}),
                 "review_comment": review_comments.get(t.id),
             }
             for t in tasks
