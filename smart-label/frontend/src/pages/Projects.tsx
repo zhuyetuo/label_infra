@@ -399,6 +399,13 @@ export default function Projects() {
     );
   };
 
+  // 某个任务在指定类别（不传=全部类别）上一共有多少段，"片段"列排序用
+  const segCount = (t: Task, labelIds: number[]) => {
+    const lc = t.label_counts ?? {};
+    const ids = labelIds.length ? labelIds : Object.keys(lc).map(Number);
+    return ids.reduce((sum, id) => sum + (lc[id]?.n ?? 0), 0);
+  };
+
   const statusSummary = (projectId: number) => {
     const counts: Partial<Record<TaskStatus, number>> = {};
     for (const t of tasksOf(projectId)) counts[t.status] = (counts[t.status] ?? 0) + 1;
@@ -615,8 +622,14 @@ export default function Projects() {
                     ),
                   },
                   {
-                    title: "片段",
+                    // 选了"含类别"就按选中类别的段数排（想看抓挠最多/最少的任务），
+                    // 没选就按总段数排；点表头切换升序/降序
+                    title: f.labels.length
+                      ? `片段（按${f.labels.map((id) => projLabels.find((l) => l.id === id)?.display_name ?? id).join("+")}排序）`
+                      : "片段",
                     width: 260,
+                    sorter: (a: Task, b: Task) => segCount(a, f.labels) - segCount(b, f.labels),
+                    sortDirections: ["descend", "ascend"],
                     render: (_, task: Task) => {
                       const lc = task.label_counts ?? {};
                       const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
