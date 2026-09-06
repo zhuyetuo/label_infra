@@ -97,10 +97,13 @@ export default function Samples() {
   };
 
   const columns = [
-    { title: "ID", dataIndex: "id", width: 60 },
+    { title: "ID", dataIndex: "id", width: 80, sorter: (a: Sample, b: Sample) => a.id - b.id },
     {
       title: "样本编号",
       dataIndex: "sample_code",
+      // 编号里带采集时间（multicam_日期_时分秒_imuN），按字符串排就是按采集时间排
+      sorter: (a: Sample, b: Sample) => a.sample_code.localeCompare(b.sample_code),
+      defaultSortOrder: "ascend" as const,
       render: (code: string, r: Sample) => (
         <Space size={4}>
           <span>{code}</span>
@@ -118,6 +121,7 @@ export default function Samples() {
       title: "隐私",
       dataIndex: "is_sensitive",
       width: 90,
+      sorter: (a: Sample, b: Sample) => Number(a.is_sensitive) - Number(b.is_sensitive),
       render: (on: boolean, r: Sample) => (
         <Tooltip title={on ? "点击解除：其他人重新可见" : "点击标记：只有管理员/超级管理员能看能标"}>
           <Switch size="small" checked={on} onChange={(v) => handleToggleSensitive(r, v)} checkedChildren="敏感" unCheckedChildren="公开" />
@@ -127,12 +131,19 @@ export default function Samples() {
     {
       title: "状态",
       dataIndex: "import_status",
+      sorter: (a: Sample, b: Sample) => a.import_status.localeCompare(b.import_status),
       render: (s: Sample["import_status"]) => <Tag color={statusColor[s]}>{s}</Tag>,
     },
     {
       title: "所属狗",
       dataIndex: "dog_id",
       width: 160,
+      // 没关联的排最后，关联了的按狗编号
+      sorter: (a: Sample, b: Sample) => {
+        const na = dogs?.find((d) => d.id === a.dog_id)?.dog_code ?? "￿";
+        const nb = dogs?.find((d) => d.id === b.dog_id)?.dog_code ?? "￿";
+        return na.localeCompare(nb, undefined, { numeric: true });
+      },
       // 采集端文件名还没带 dog 编号之前，只能靠这里手动关联；等以后文件名
       // 自动带出来了，这里照样能用来改关联
       render: (dogId: number | null, record: Sample) => (
