@@ -382,7 +382,10 @@ export default function AnnotationWorkspace({
       // 标注要看细节，占满整个屏幕，别把空间浪费在弹窗留白上
       width="100vw"
       style={{ top: 0, paddingBottom: 0, maxWidth: "100vw" }}
-      styles={{ body: { height: "calc(100vh - 108px)", overflow: "hidden", paddingTop: 8 } }}
+      // body 高度卡死在一屏，视频/波形按这一屏分配；片段列表展开后超出的部分
+      // 让 body 自己滚（overflow:auto），不再裁掉——外层页面滚动条是 antd 弹窗
+      // 容器的，被视频/波形区域的滚轮事件拦住滚不动，靠它没用。
+      styles={{ body: { height: "calc(100vh - 108px)", overflowY: "auto", overflowX: "hidden", paddingTop: 8 } }}
       destroyOnClose
       footer={
         readOnly ? (
@@ -588,10 +591,8 @@ export default function AnnotationWorkspace({
         <Collapse
           size="small"
           className="ws-segs"
-          // 视频区不会自己缩到比画面还小，所以剩余高度不够时由这块吸收：能压缩、
-          // 内部自己滚（见 .ws-segs 样式），弹窗 body 是 overflow:hidden，不这样做
-          // 表格下半截会被直接裁掉，连滚动条都没有
-          style={{ marginTop: 8, flex: "0 1 auto", minHeight: 0 }}
+          // 按内容撑开、不压缩：一屏放不下就整体往下溢出，由弹窗 body 滚动查看
+          style={{ marginTop: 8, flex: "0 0 auto" }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           defaultActiveKey={readOnly ? ["segs"] : []}

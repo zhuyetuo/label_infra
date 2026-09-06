@@ -1,11 +1,17 @@
 /* 标注工作台走全屏：弹窗body撑满视口高度，内部用flex分配空间，
    视频区占大头，波形区固定一小条自己滚动。 */
 .ws-body {
+  /* 视频/波形按一屏高度分配；片段列表展开后允许超出这一屏，弹窗 body 滚动 */
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+}
+/* 片段列表展开时视频区会被压缩让位，但别压到看不清；再往下放不下的部分
+   溢出到 body 里滚动查看（中间没有任何 overflow:hidden 的层，溢出能传到 body） */
+.ws-body .ws-videos {
+  min-height: 200px;
 }
 
 /* antd Spin 会包两层 div，不撑高的话里面的 flex 布局就塌了 */
@@ -32,29 +38,6 @@
 .ws-body--charts-expanded .ws-videos-row {
   width: 42%;
   margin: 0 auto;
-}
-
-/* 片段列表：整块可被压缩，表头（Collapse 标题+筛选栏）固定，超出的部分在
-   面板内部滚动，而不是被弹窗 body 的 overflow:hidden 裁掉 */
-.ws-segs,
-.ws-segs > .ant-collapse-item,
-.ws-segs > .ant-collapse-item > .ant-collapse-content {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.ws-segs > .ant-collapse-item > .ant-collapse-header {
-  flex: 0 0 auto;
-}
-.ws-segs > .ant-collapse-item > .ant-collapse-content {
-  flex: 0 1 auto;
-  overflow-y: auto;
-}
-.ws-segs > .ant-collapse-item > .ant-collapse-content.ant-collapse-content-hidden {
-  display: none;
-}
-.ws-segs > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
-  min-height: 0;
 }
 
 /* AI 预测还没人确认的片段行：淡橙底，扫一眼就知道哪些还没看过 */
