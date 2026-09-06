@@ -20,7 +20,9 @@ from app.models.user import User, UserRole
 from app.services.reclaim_service import reclaim_expired_reviews, reclaim_expired_tasks
 from app.services.sample_import_service import get_progress, run_scan
 
-logging.basicConfig(level=logging.INFO)
+from app.core.logging_setup import setup_logging  # noqa: E402
+
+setup_logging("scheduler")
 logger = logging.getLogger("smart-label.scheduler")
 
 
