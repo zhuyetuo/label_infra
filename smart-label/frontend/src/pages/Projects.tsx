@@ -601,7 +601,19 @@ export default function Projects() {
                   {
                     title: "样本",
                     dataIndex: "sample_id",
-                    render: (id: number) => sampleCode(id),
+                    render: (id: number) => {
+                      const s = samples?.find((x) => x.id === id);
+                      return (
+                        <Space size={4}>
+                          <span>{s?.sample_code ?? id}</span>
+                          {s?.is_sensitive && (
+                            <Tooltip title={`含敏感隐私信息，只有管理员能看能标${s.sensitive_note ? `：${s.sensitive_note}` : ""}`}>
+                              <Tag color="red" style={{ marginRight: 0 }}>敏感</Tag>
+                            </Tooltip>
+                          )}
+                        </Space>
+                      );
+                    },
                   },
                   {
                     title: "类型",

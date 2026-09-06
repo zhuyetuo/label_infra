@@ -32,6 +32,9 @@ export interface Sample {
   imu_row_count: number | null;
   import_status: "pending" | "verified" | "error";
   import_error: string | null;
+  /** 含敏感隐私信息：只有管理员/超级管理员能看能标 */
+  is_sensitive: boolean;
+  sensitive_note: string | null;
 }
 
 export type TaskStatus = "PENDING_ASSIGN" | "IN_PROGRESS" | "SUBMITTED" | "APPROVED" | "REJECTED";
