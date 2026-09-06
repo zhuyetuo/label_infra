@@ -18,7 +18,8 @@ interface EditItem extends Omit<LabelTemplateItem, "id"> {
 }
 
 // 标签模板：常用的一套标签存下来，新项目直接套用，不用每次重新配。
-// 套用是"拷贝"：之后改模板不影响已套用的项目，改项目标签也不会回写模板。
+// 显示名/排序是"拷贝"：套用后各自演进，互不影响。颜色例外：改这里的颜色会
+// 同步到套用过它、且没在项目里被手动改过颜色的那些标签（后端 _replace_items）。
 export default function LabelTemplates() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["label-templates"], queryFn: listLabelTemplates });
@@ -135,8 +136,10 @@ export default function LabelTemplates() {
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         把常用的一套标签存成模板，新建项目时直接套用，不用每次重新配一遍。
-        套用是「拷贝」：之后改模板不会影响已经套用过的项目，改项目里的标签也不会回写模板。
-        也可以在「标签管理」页把某个项目现有的标签一键存成模板。
+        显示名/排序这些是「拷贝」：套用之后各项目自己改不会影响模板，改项目标签也不会回写模板。
+        颜色是例外——这里改了某个标签的颜色，会自动同步到所有套用过这个模板、且还没在项目里
+        手动改过这个标签颜色的地方；项目自己手动改过颜色的会断开跟随，不再受这里影响。
+        也可以在「标签管理」页把某个项目现有的标签一键存成模板（存的时候也会建立跟随关系）。
       </Typography.Paragraph>
 
       <Table

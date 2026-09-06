@@ -97,7 +97,12 @@ async def update_label(label_id: int, body: LabelUpdate, db: AsyncSession = Depe
     label = await db.get(LabelDefinition, label_id)
     if label is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    # 手动改过颜色就断开跟模板的关联：改模板颜色以后不会再影响这条，这是
+    # 用户自己接管这个颜色的信号，不能等模板一改又给覆盖回去
+    if "color" in updates and label.template_item_id is not None:
+        label.template_item_id = None
+    for field, value in updates.items():
         setattr(label, field, value)
     await db.commit()
     await db.refresh(label)
