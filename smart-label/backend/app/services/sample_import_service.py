@@ -48,6 +48,7 @@ from app.models.dog import Dog
 from app.models.media_file import MediaFile, MediaFileType
 from app.models.sample import ImportStatus, Sample
 from app.models.user import User
+from app.services.sample_dedupe_service import merge_duplicate_samples
 from app.utils.ffprobe import count_csv_rows, probe_video
 
 # 第4段 dog 编号是可选的，现在的采集端还没带这个，得兼容没有这一段的旧文件名
@@ -111,6 +112,11 @@ async def run_scan(nas_root: str, admin_id: int) -> None:
                 if admin is None:
                     raise RuntimeError("admin user not found")
                 await _do_scan(db, nas_root, admin)
+                # 扫完顺手把历史 bug 留下的重复样本（不带 _imu 后缀的旧行）并掉，
+                # 幂等，没重复就什么都不做；两边都有任务的会留在 detail 里提示人工处理
+                merged, kept = await merge_duplicate_samples(db, apply=True, log=_progress.detail.append)
+                if merged or kept:
+                    _progress.detail.append(f"重复样本清理：合并删除 {merged} 个，保留待人工处理 {kept} 个")
             _progress.status = "done"
         except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩，记录状态即可
             _progress.status = "error"
