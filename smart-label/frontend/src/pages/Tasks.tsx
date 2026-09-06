@@ -153,6 +153,11 @@ export default function Tasks() {
           {
             title: "片段",
             width: 260,
+            // 按总段数排，点表头切换升序/降序
+            sorter: (a: Task, b: Task) =>
+              Object.values(a.label_counts ?? {}).reduce((s, c) => s + c.n, 0) -
+              Object.values(b.label_counts ?? {}).reduce((s, c) => s + c.n, 0),
+            sortDirections: ["descend", "ascend"],
             render: (_, task: Task) => {
               const lc = task.label_counts ?? {};
               const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
