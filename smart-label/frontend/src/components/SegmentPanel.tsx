@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Button, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { BarChartOutlined, CheckOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CheckOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
@@ -74,6 +74,9 @@ interface Props {
   colorOf: (labelId: number) => string;
   nameOf: (labelId: number) => string;
   onSeek: (ms: number) => void;
+  /** 区间循环播放某段（反复看起止对不对）；传 null 停止。当前循环的区间用 loopRange 传回来高亮 */
+  onLoop?: (range: { startMs: number; endMs: number } | null) => void;
+  loopRange?: { startMs: number; endMs: number } | null;
   /** 改类别/起止/确认状态。改类别或起止时调用方负责把 AI 片段标成"已纠正"并清掉确认 */
   onUpdate: (ids: number[], patch: Partial<Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed">>) => void;
   onDelete: (id: number) => void;
@@ -89,10 +92,29 @@ export default function SegmentPanel({
   colorOf,
   nameOf,
   onSeek,
+  onLoop,
+  loopRange,
   onUpdate,
   onDelete,
   onCreate,
 }: Props) {
+  const isLooping = (startMs: number, endMs: number) =>
+    loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
+  // 每行的"循环"按钮：正在循环这一段时变成"停止"
+  const loopButton = (startMs: number, endMs: number) =>
+    onLoop ? (
+      isLooping(startMs, endMs) ? (
+        <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
+          停止
+        </Button>
+      ) : (
+        <Tooltip title="只循环播放这一段，反复看起止对不对">
+          <Button size="small" type="link" icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
+            循环
+          </Button>
+        </Tooltip>
+      )
+    ) : null;
   const [filterLabels, setFilterLabels] = useState<number[]>([]);
   // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注
   const [viewGaps, setViewGaps] = useState(false);
@@ -327,6 +349,7 @@ export default function SegmentPanel({
                   <Button size="small" type="link" onClick={() => onSeek(g.start)}>
                     跳转
                   </Button>
+                  {loopButton(g.start, g.end)}
                   {!readOnly && onCreate && (
                     <Select<number | null>
                       size="small"
@@ -423,7 +446,7 @@ export default function SegmentPanel({
           },
           {
             title: "操作",
-            width: 170,
+            width: 230,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
               return (
@@ -431,6 +454,7 @@ export default function SegmentPanel({
                   <Button size="small" type="link" onClick={() => onSeek(i.start_time_ms)}>
                     跳转
                   </Button>
+                  {loopButton(i.start_time_ms, i.end_time_ms)}
                   {!readOnly && st === "pending" && (
                     <Tooltip title="AI 预测正确，确认通过">
                       <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => onUpdate([i.id], { ai_confirmed: true })}>
