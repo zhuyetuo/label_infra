@@ -166,10 +166,28 @@ export default function SegmentPanel({
     setEditing(null);
   };
 
+  // 改类别/补标用：项目下全部标签
   const labelOptions = labels.map((l) => ({
     value: l.id,
     label: <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 0 }}>{l.display_name}</Tag>,
   }));
+  // 筛选用：只列当前片段里实际出现过的类别（带数量），项目里配了但一段都没有的不出现
+  const usedCounts = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const i of items) m.set(i.label_id, (m.get(i.label_id) ?? 0) + 1);
+    return m;
+  }, [items]);
+  const filterLabelOptions = labels
+    .filter((l) => usedCounts.has(l.id))
+    .map((l) => ({
+      value: l.id,
+      label: (
+        <span>
+          <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 4 }}>{l.display_name}</Tag>
+          <span style={{ fontSize: 12, color: "#999" }}>{usedCounts.get(l.id)}</span>
+        </span>
+      ),
+    }));
 
   return (
     <div>
@@ -183,7 +201,7 @@ export default function SegmentPanel({
           maxTagCount="responsive"
           value={filterLabels}
           onChange={setFilterLabels}
-          options={labelOptions}
+          options={filterLabelOptions}
           optionFilterProp="value"
         />
         <Select size="small" style={{ width: 120 }} value={filterSource} onChange={setFilterSource} options={SOURCE_OPTIONS} />

@@ -7,6 +7,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -69,6 +70,13 @@ export default function Projects() {
   const [assigning, setAssigning] = useState(false);
 
   const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
+  // 每个项目展开后的任务筛选（按状态 / 按样本名搜索），一个项目上百个任务时靠翻页找
+  // "标注中"的那几个太费劲。展开状态自己管，这样点汇总里的状态 Tag 能直接展开并筛选。
+  const [taskFilters, setTaskFilters] = useState<Record<number, { status: TaskStatus | "ALL"; q: string }>>({});
+  const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
+  const filterOf = (projectId: number) => taskFilters[projectId] ?? { status: "ALL" as const, q: "" };
+  const setFilter = (projectId: number, patch: Partial<{ status: TaskStatus | "ALL"; q: string }>) =>
+    setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
@@ -284,18 +292,58 @@ export default function Projects() {
         expandable={{
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
+          expandedRowKeys: expandedKeys,
+          onExpandedRowsChange: (keys) => setExpandedKeys(keys as number[]),
           // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
           rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
           expandedRowRender: (p: Project) => {
-            const rows = tasksOf(p.id);
+            const all = tasksOf(p.id);
+            const f = filterOf(p.id);
+            const counts = statusSummary(p.id);
+            const q = f.q.trim().toLowerCase();
+            const rows = all.filter(
+              (t) =>
+                (f.status === "ALL" || t.status === f.status) &&
+                (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
+            );
             return (
+              <>
+              <Space wrap style={{ marginBottom: 8 }}>
+                <Radio.Group
+                  size="small"
+                  optionType="button"
+                  value={f.status}
+                  onChange={(e) => setFilter(p.id, { status: e.target.value })}
+                  options={[
+                    { label: `全部 ${all.length}`, value: "ALL" },
+                    ...(Object.keys(TASK_STATUS_META) as TaskStatus[]).map((s) => ({
+                      label: `${TASK_STATUS_META[s].label} ${counts[s] ?? 0}`,
+                      value: s,
+                      disabled: !counts[s],
+                    })),
+                  ]}
+                />
+                <Input.Search
+                  size="small"
+                  allowClear
+                  placeholder="搜样本名 / 任务ID"
+                  style={{ width: 240 }}
+                  value={f.q}
+                  onChange={(e) => setFilter(p.id, { q: e.target.value })}
+                />
+                {(f.status !== "ALL" || q) && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    筛出 {rows.length} 个
+                  </Typography.Text>
+                )}
+              </Space>
               <Table
                 size="small"
                 rowKey="id"
                 dataSource={rows}
-                pagination={rows.length > 10 ? { pageSize: 10 } : false}
-                locale={{ emptyText: "这个项目下还没有任务" }}
+                pagination={rows.length > 10 ? { pageSize: 10, showSizeChanger: true } : false}
+                locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
                 columns={[
                   { title: "任务ID", dataIndex: "id", width: 80 },
                   {
@@ -396,6 +444,7 @@ export default function Projects() {
                   },
                 ]}
               />
+              </>
             );
           },
         }}
@@ -430,7 +479,18 @@ export default function Projects() {
                 <Space size={4} wrap>
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
-                    <Tag key={s} color={TASK_STATUS_META[s]?.color}>
+                    <Tag
+                      key={s}
+                      color={TASK_STATUS_META[s]?.color}
+                      style={{ cursor: "pointer" }}
+                      title={`只看${TASK_STATUS_META[s]?.label ?? s}的任务`}
+                      onClick={(e) => {
+                        // 点状态 Tag = 展开这个项目并只看这个状态；别触发行本身的展开/收起切换
+                        e.stopPropagation();
+                        setFilter(p.id, { status: s });
+                        setExpandedKeys((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                      }}
+                    >
                       {TASK_STATUS_META[s]?.label ?? s} {counts[s]}
                     </Tag>
                   ))}
