@@ -18,6 +18,7 @@ from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services.ai_prelabel_service import get_progress as get_prelabel_progress
+from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.task_scope import visible_project_ids
 from app.schemas.project import (
@@ -134,6 +135,12 @@ async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: A
 @router.get("/{project_id}/ai-prelabel/status")
 async def ai_prelabel_status(project_id: int):
     return ok(get_prelabel_progress(project_id).to_dict())
+
+
+@router.get("/{project_id}/ai-prelabel/history")
+async def ai_prelabel_history(project_id: int, db: AsyncSession = Depends(get_db)):
+    """最近几次批量预标注的耗时/数量记录（存在 audit_logs 里，重启不丢）。"""
+    return ok(await list_prelabel_history(db, project_id))
 
 
 @router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])

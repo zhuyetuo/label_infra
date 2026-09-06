@@ -26,6 +26,9 @@ export interface PrelabelProgress {
   error_message: string | null;
   elapsed_sec: number;
   estimated_remaining_sec: number | null;
+  ai_wait_sec: number;
+  batches_done: number;
+  finished_at: number | null;
 }
 
 /** 项目下待认领/标注中且没人动过的任务批量跑 AI 预标注（后台），用 status 轮询进度 */
@@ -36,6 +39,27 @@ export const startProjectPrelabel = (id: number, overwriteAi = false) =>
 
 export const getProjectPrelabelStatus = (id: number) =>
   request.get<never, PrelabelProgress>(`/projects/${id}/ai-prelabel/status`);
+
+/** 跑完一次记一条：总耗时、AI 等待耗时、数量，慢了好拿数字去反馈 */
+export interface PrelabelRun {
+  id: number;
+  finished_at: string | null;
+  status: string;
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  elapsed_sec: number;
+  ai_wait_sec: number;
+  batches: number;
+  batch_size: number;
+  avg_sec_per_task: number | null;
+  unmatched_labels: string[];
+  error_message: string | null;
+}
+
+export const getProjectPrelabelHistory = (id: number) =>
+  request.get<never, PrelabelRun[]>(`/projects/${id}/ai-prelabel/history`);
 
 /** 把项目下的任务一次性指派给某人；user_id 传 null 表示收回指派 */
 export const assignProject = (id: number, userId: number | null, includeClaimed = false) =>

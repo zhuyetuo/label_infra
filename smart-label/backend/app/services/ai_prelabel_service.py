@@ -14,6 +14,7 @@ AI 预标注：调 imu_train/label_service，把结果换算成标注工作台�
 
 import asyncio
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass, field
@@ -25,6 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource, RecordSourceType
+from app.models.audit_log import AuditLog
+
+_logger = logging.getLogger("smart-label.ai_prelabel")
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
@@ -185,8 +189,12 @@ class PrelabelProgress:
     unmatched_labels: list[str] = field(default_factory=list)
     error_message: str | None = None
     started_at: float | None = None
+    finished_at: float | None = None
     elapsed_sec: float = 0.0
     estimated_remaining_sec: float | None = None
+    # 光等 AI 服务回结果花了多久（不含资格检查/落盘/写库），慢了好判断是哪边的问题
+    ai_wait_sec: float = 0.0
+    batches_done: int = 0
 
     def tick(self) -> None:
         if self.started_at is None:
@@ -263,9 +271,66 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool) 
         progress.error_message = f"{type(exc).__name__}: {exc}"
     finally:
         progress.tick()
+        progress.finished_at = time.time()
         progress.current_task_id = None
         progress.current_sample_code = None
         _running.discard(project_id)
+        await _record_run(progress)
+
+
+async def _record_run(progress: PrelabelProgress) -> None:
+    """
+    跑完把这一次的总耗时/数量记进 audit_logs（重启也不丢），项目页能查历史，
+    以后觉得慢了可以拿着具体数字去看是 AI 服务慢还是这边写库慢。
+    """
+    summary = {
+        "status": progress.status,
+        "total": progress.total,
+        "succeeded": progress.succeeded,
+        "skipped": progress.skipped,
+        "failed": progress.failed,
+        "elapsed_sec": round(progress.elapsed_sec, 1),
+        "ai_wait_sec": round(progress.ai_wait_sec, 1),
+        "batches": progress.batches_done,
+        "batch_size": settings.algo_infer_batch_size,
+        "avg_sec_per_task": round(progress.elapsed_sec / progress.succeeded, 2) if progress.succeeded else None,
+        "unmatched_labels": progress.unmatched_labels,
+        "error_message": progress.error_message,
+    }
+    _logger.info("project %s ai_prelabel finished: %s", progress.project_id, json.dumps(summary, ensure_ascii=False))
+    try:
+        async with SessionLocal() as db:
+            db.add(
+                AuditLog(
+                    user_id=None,
+                    action="project.ai_prelabel",
+                    target_type="project",
+                    target_id=progress.project_id,
+                    detail=json.dumps(summary, ensure_ascii=False),
+                )
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001 记录失败不影响主流程
+        _logger.exception("failed to record ai_prelabel run for project %s", progress.project_id)
+
+
+async def list_run_history(db: AsyncSession, project_id: int, limit: int = 10) -> list[dict]:
+    rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(AuditLog.action == "project.ai_prelabel", AuditLog.target_id == project_id)
+            .order_by(AuditLog.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            detail = json.loads(r.detail or "{}")
+        except ValueError:
+            detail = {}
+        out.append({"id": r.id, "finished_at": r.created_at.isoformat() if r.created_at else None, **detail})
+    return out
 
 
 @dataclass
@@ -342,10 +407,14 @@ async def _run_project(
 
         # 2) 一整批发给 AI 服务并行跑
         try:
+            t0 = time.time()
             results = await algo_client.infer_batch(
                 [{"path": p.sample.imu_csv_path, "sample_id": p.sample.id} for p in prepared]
             )
+            progress.ai_wait_sec += time.time() - t0
+            progress.batches_done += 1
         except algo_client.AlgoServiceError as e:
+            progress.ai_wait_sec += time.time() - t0
             for p in prepared:
                 progress.failed += 1
                 progress.processed += 1
