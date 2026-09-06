@@ -26,6 +26,8 @@ class TaskOut(BaseModel):
     # 下面两个都只有 GET /tasks 列表接口会算，单条任务接口懒得为了这一两个
     # 字段多查一次
     has_draft: bool = False
+    # 当前轮草稿里已经有多少段，0 = 认领了但还没动手
+    draft_item_count: int = 0
     # 被驳回时审核员写的意见，方便标注员知道要改什么
     review_comment: str | None = None
 

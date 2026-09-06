@@ -53,6 +53,8 @@ export interface Task {
   created_at: string;
   /** 待认领状态下有没有上一个人留下的草稿（只有 GET /tasks 列表接口会算这个） */
   has_draft?: boolean;
+  /** 当前轮草稿里已有多少段，0 = 认领了还没动手 */
+  draft_item_count?: number;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
 }
