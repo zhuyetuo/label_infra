@@ -7,6 +7,11 @@ export class TimeBus {
   private seekHandler: ((sec: number) => void) | null = null;
   private pendingSec: number | null = null;
   private rafId: number | null = null;
+  // 区间循环：设了之后视频播到 end 就跳回 start 接着播（片段列表"循环"按钮用，
+  // 反复看一段抓挠的起止）。存在这里而不是 React state，跟 currentTime 一样
+  // 是视频 timeupdate 里高频读的东西，不该走渲染循环。
+  private loop: { start: number; end: number } | null = null;
+  private loopListeners: ((loop: { start: number; end: number } | null) => void)[] = [];
 
   onTime(cb: (sec: number) => void): () => void {
     this.timeListeners.push(cb);
@@ -35,5 +40,23 @@ export class TimeBus {
 
   seek(sec: number): void {
     this.seekHandler?.(sec);
+  }
+
+  getLoop(): { start: number; end: number } | null {
+    return this.loop;
+  }
+
+  /** 设区间循环并跳到起点开始播；传 null 取消循环（不动播放状态） */
+  setLoop(loop: { start: number; end: number } | null): void {
+    this.loop = loop;
+    for (const cb of this.loopListeners) cb(loop);
+    if (loop) this.seek(loop.start);
+  }
+
+  onLoopChange(cb: (loop: { start: number; end: number } | null) => void): () => void {
+    this.loopListeners.push(cb);
+    return () => {
+      this.loopListeners = this.loopListeners.filter((c) => c !== cb);
+    };
   }
 }

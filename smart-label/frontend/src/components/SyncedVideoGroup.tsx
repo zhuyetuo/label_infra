@@ -86,7 +86,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
     const cleanups: (() => void)[] = [];
 
-    all().forEach((self) => {
+    all().forEach((self, idx) => {
       const others = () => all().filter((v) => v !== self);
 
       const syncOthers = (action: "play" | "pause" | "seek") => {
@@ -113,6 +113,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       };
       const onTimeUpdate = () => {
         if (isProgrammatic.current) return;
+        // 区间循环：播过终点就跳回起点。只让第一路来判断，其它路会被同步过去，
+        // 不然三路各自触发会来回抢着 seek
+        const loop = bus.getLoop();
+        if (loop && idx === 0 && self.currentTime >= loop.end) {
+          bus.seek(loop.start);
+          return;
+        }
         bus.reportTime(self.currentTime);
       };
       const onRateChange = () => {
@@ -161,6 +168,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       pendingSeek = sec;
       applyPendingSeek();
     });
+
+    // 设了循环就自动开始播，不然点"循环"只是跳过去停在起点，还得再点播放
+    const offLoop = bus.onLoopChange((loop) => {
+      if (!loop) return;
+      for (const v of all()) if (v.paused) v.play().catch(() => {});
+    });
+    cleanups.push(offLoop);
 
     const lead = all()[0];
     const onLeadSeeked = () => applyPendingSeek();

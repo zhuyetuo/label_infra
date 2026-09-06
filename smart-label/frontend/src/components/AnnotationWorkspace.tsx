@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Button,
   Empty,
   Modal,
@@ -17,7 +18,7 @@ import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/i
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getSampleMedia } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
-import SegmentPanel from "@/components/SegmentPanel";
+import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -46,6 +47,8 @@ interface VideoSrc {
 
 const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", "#13c2c2"];
 const HEARTBEAT_MS = 30_000;
+// 片段循环播放时前后各多放这么多毫秒，让人看得到"起止前后是什么动作"
+const LOOP_PAD_MS = 500;
 // 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
 const HOTKEYS = "1234567890qwertyasdfgh".split("");
 // 波形区（单条波形模式）默认露出的高度：六条通道全都渲染在里面，这个盒子只
@@ -97,6 +100,12 @@ export default function AnnotationWorkspace({
   const [saving, setSaving] = useState(false);
 
   const bus = useMemo(() => new TimeBus(), [taskId]);
+  // 片段区间循环：真正的循环逻辑在 bus/视频组件里跑，这里只留一份给按钮高亮/顶部提示用
+  const [loopRange, setLoopRange] = useState<{ startMs: number; endMs: number } | null>(null);
+  useEffect(() => bus.onLoopChange((l) => setLoopRange(l ? { startMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) } : null)), [bus]);
+  // 前后各留 LOOP_PAD_MS 的余量，不然 0.5s 的片段循环起来一闪一闪，看不清起止前后是什么动作
+  const setLoop = (r: { startMs: number; endMs: number } | null) =>
+    bus.setLoop(r ? { start: Math.max(0, r.startMs - LOOP_PAD_MS) / 1000, end: (r.endMs + LOOP_PAD_MS) / 1000 } : null);
 
   useEffect(() => {
     if (taskId == null || sampleId == null) {
@@ -424,6 +433,19 @@ export default function AnnotationWorkspace({
     >
       <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
+        {loopRange && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 6 }}
+            message={`正在循环播放 ${formatMs(loopRange.startMs + LOOP_PAD_MS)} ~ ${formatMs(loopRange.endMs - LOOP_PAD_MS)}（前后各多放 ${LOOP_PAD_MS / 1000}s）`}
+            action={
+              <Button size="small" onClick={() => setLoop(null)}>
+                停止循环
+              </Button>
+            }
+          />
+        )}
         {videos.length > 0 ? (
           <SyncedVideoGroup
             videos={videos}
@@ -612,6 +634,12 @@ export default function AnnotationWorkspace({
                   colorOf={colorOf}
                   nameOf={nameOf}
                   onSeek={(ms) => bus.seek(ms / 1000)}
+                  onLoop={setLoop}
+                  loopRange={
+                    loopRange
+                      ? { startMs: loopRange.startMs + LOOP_PAD_MS, endMs: loopRange.endMs - LOOP_PAD_MS }
+                      : null
+                  }
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
                   onCreate={readOnly ? undefined : appendItem}
