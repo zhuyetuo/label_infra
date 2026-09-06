@@ -6,7 +6,7 @@ CSV/MP4/人工标注导出都不动。测试完想从头来一遍的时候用。
 用法（后端跑在 docker 里，宿主机的 python 没装 asyncmy 等依赖，要在 api 容器里跑）：
     cd smart-label/deploy
     docker compose exec api python -m scripts.clear_ai_labels          # 只列出会删哪些，不动
-    python -m scripts.clear_ai_labels --apply  # 真的删
+    docker compose exec api python -m scripts.clear_ai_labels --apply  # 真的删
 """
 
 import asyncio

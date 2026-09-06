@@ -6,7 +6,7 @@ samples.ai_label_path。以前 AI 预标注结果跟原始数据混在一个目�
 用法（后端跑在 docker 里，宿主机的 python 没装 asyncmy 等依赖，要在 api 容器里跑）：
     cd smart-label/deploy
     docker compose exec api python -m scripts.move_ai_labels          # 只打印会怎么挪，不动文件
-    python -m scripts.move_ai_labels --apply  # 真的挪
+    docker compose exec api python -m scripts.move_ai_labels --apply  # 真的挪
 """
 
 import asyncio
