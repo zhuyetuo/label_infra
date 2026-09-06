@@ -587,7 +587,11 @@ export default function AnnotationWorkspace({
 
         <Collapse
           size="small"
-          style={{ marginTop: 8, flex: "0 0 auto" }}
+          className="ws-segs"
+          // 视频区不会自己缩到比画面还小，所以剩余高度不够时由这块吸收：能压缩、
+          // 内部自己滚（见 .ws-segs 样式），弹窗 body 是 overflow:hidden，不这样做
+          // 表格下半截会被直接裁掉，连滚动条都没有
+          style={{ marginTop: 8, flex: "0 1 auto", minHeight: 0 }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           defaultActiveKey={readOnly ? ["segs"] : []}
