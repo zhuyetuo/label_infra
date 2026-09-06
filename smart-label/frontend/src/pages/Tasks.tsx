@@ -114,11 +114,18 @@ export default function Tasks() {
         size="small"
         rowKey="id"
         dataSource={rows}
+        sortDirections={["ascend", "descend", "ascend"]}
         pagination={rows.length > 10 ? { pageSize: 10 } : false}
         locale={{ emptyText: onlyMine ? "这个项目下没有指派给你的任务" : "这个项目下还没有任务" }}
         columns={[
-          { title: "任务ID", dataIndex: "id", width: 80 },
-          { title: "样本", dataIndex: "sample_id", render: (id: number) => sampleCode(id) },
+          { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
+          {
+            title: "样本",
+            dataIndex: "sample_id",
+            sorter: (a: Task, b: Task) => String(sampleCode(a.sample_id)).localeCompare(String(sampleCode(b.sample_id))),
+            defaultSortOrder: "ascend" as const,
+            render: (id: number) => sampleCode(id),
+          },
           {
             title: "类型",
             dataIndex: "task_type",
