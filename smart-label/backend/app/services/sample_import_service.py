@@ -42,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.dog import Dog
 from app.models.media_file import MediaFile, MediaFileType
@@ -183,7 +184,7 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
 
 
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
-    data_raw_dir = os.path.join(nas_root, "data_raw")
+    data_raw_dir = os.path.join(nas_root, settings.data_raw_dir)
     groups = await asyncio.to_thread(_scan_filesystem, data_raw_dir, nas_root)
     # 先给个粗略估计（按 session 数），下面按 IMU 展开出实际样本数之后会再校正一次，
     # 避免这中间 tick() 拿 0 做分母算出奇怪的剩余时间

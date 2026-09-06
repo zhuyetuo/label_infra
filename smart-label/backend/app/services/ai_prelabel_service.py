@@ -128,9 +128,21 @@ async def _csv_start_of(sample: Sample) -> datetime:
     return csv_start
 
 
+def ai_label_relpath(imu_csv_path: str) -> str:
+    """AI 预标注 JSON 的 NAS 相对路径：放 data_labeled_ai/ 下，目录结构照搬
+    data_raw/ 下面的层级（去掉 data_raw/ 前缀），文件名 = CSV 名 + _ai_label.json。
+    不跟原始数据混在一个目录——原始数据只读，标注产物另起一棵树，误删/清理
+    标注结果不会碰到原始文件。跟 docs/architecture-proposal.md 里
+    ai_label_path 的约定一致。"""
+    rel = imu_csv_path.replace("\\", "/")
+    if rel.startswith(settings.data_raw_dir + "/"):
+        rel = rel[len(settings.data_raw_dir) + 1:]
+    return os.path.join(settings.ai_label_dir, os.path.splitext(rel)[0] + "_ai_label.json")
+
+
 async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime) -> SampleInference:
-    """原始 JSON 落盘 NAS（跟 imu_csv_path 同目录，加 _ai_label.json 后缀），再摊平换算。"""
-    relpath = os.path.splitext(sample.imu_csv_path)[0] + "_ai_label.json"
+    """原始 JSON 落盘 NAS（data_labeled_ai/ 下，见 ai_label_relpath），再摊平换算。"""
+    relpath = ai_label_relpath(sample.imu_csv_path)
     full_path = os.path.join(settings.nas_root, relpath)
 
     def _write() -> None:

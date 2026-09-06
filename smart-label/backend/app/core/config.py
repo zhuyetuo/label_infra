@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # --- NAS ---
     # 所有原始/标注/切片文件的根目录，数据库里只存相对这个根目录的相对路径
     nas_root: str = "/home/toky/ai_data"
+    # nas_root 下的子目录名：原始数据只读；AI 预标注 JSON 单独放一棵树，不跟原始数据混
+    data_raw_dir: str = "data_raw"
+    ai_label_dir: str = "data_labeled_ai"
 
     # --- JWT ---
     jwt_secret: str = "CHANGE_ME_IN_PRODUCTION"
