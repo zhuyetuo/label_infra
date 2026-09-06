@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # --- algo_service（独立部署，通过HTTP调用，不合并进本仓库）---
     # docker-compose 里跟连 MySQL 用服务名当 hostname 是一回事；algo_service
     # 和这个后端共享同一份 nas_root，接口里只传相对路径，不传文件内容
-    algo_service_url: str = "http://algo-service:8000"
+    algo_service_url: str = "http://algo-service:8383"
     algo_service_timeout_sec: int = 30
 
     # --- CORS ---
