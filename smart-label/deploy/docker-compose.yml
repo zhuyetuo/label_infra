@@ -44,6 +44,9 @@ services:
     env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
+      # imu_train/label_service（AI 推理/训练服务），跟本服务在同一台机器上，
+      # 容器内不能用 localhost，所以写宿主机内网 IP。.env 里设了会覆盖这里。
+      ALGO_SERVICE_URL: ${ALGO_SERVICE_URL:-http://192.168.2.140:8383}
     ports:
       - "${BACKEND_PORT:-8283}:8283"
     volumes:
