@@ -36,22 +36,30 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
     setLoading(true);
     setImuView("曲线图");
     (async () => {
-      const media = await getSampleMedia(sampleId);
-      const entries: [string, number | null][] = [
-        ["视角1", media.video1_id],
-        ["视角2", media.video2_id],
-        ["视角3", media.video3_id],
-      ];
-      const vids: VideoSrc[] = [];
-      for (const [label, id] of entries) {
-        if (id == null) continue;
-        const { token } = await getMediaToken(id);
-        vids.push({ label, url: mediaStreamUrl(id, token) });
+      try {
+        const media = await getSampleMedia(sampleId);
+        const entries: [string, number | null][] = [
+          ["视角1", media.video1_id],
+          ["视角2", media.video2_id],
+          ["视角3", media.video3_id],
+        ];
+        // 三路 token 一起要，不用一个等一个
+        const vids = (
+          await Promise.all(
+            entries.map(async ([label, id]) => {
+              if (id == null) return null;
+              const { token } = await getMediaToken(id);
+              return { label, url: mediaStreamUrl(id, token) } as VideoSrc;
+            })
+          )
+        ).filter((v): v is VideoSrc => v != null);
+        setVideos(vids);
+        setHasCsv(media.csv_id != null);
+        setFps(media.video_fps);
+      } finally {
+        // 任何一步失败（超时/403）也要把转圈收掉，不然弹窗一直卡在 loading
+        setLoading(false);
       }
-      setVideos(vids);
-      setHasCsv(media.csv_id != null);
-      setFps(media.video_fps);
-      setLoading(false);
     })();
   }, [sampleId]);
 
