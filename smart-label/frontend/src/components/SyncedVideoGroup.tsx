@@ -219,6 +219,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     const offLoop = bus.onLoopChange((loop) => {
       stopLoopRaf();
       if (!loop) {
+        // 循环刚跳回起点那一下是"暂停 -> seek -> 等三路 ready -> 再播"，如果正好
+        // 在等 ready 的窗口里点了停止，这里 pause 完，那个延后的"再播"还会把视频
+        // 重新放起来。把那一轮作废、pending 的 seek 也丢掉，停止就是真的停。
+        resumeToken++;
+        pendingSeek = null;
+        markProgrammatic();
         for (const v of all()) if (!v.paused) v.pause();
         return;
       }
