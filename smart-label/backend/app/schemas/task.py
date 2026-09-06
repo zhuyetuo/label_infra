@@ -99,3 +99,9 @@ class ReopenRequest(BaseModel):
     """退回重标时可以附一句原因，记进 audit_logs 方便追溯。"""
 
     comment: str | None = None
+
+
+class ProjectScopeRequest(BaseModel):
+    """全部认领 / 全部放弃：只要一个项目 id"""
+
+    project_id: int

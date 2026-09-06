@@ -32,10 +32,12 @@ import {
 } from "@/api/projects";
 import {
   bulkCreateTasks,
+  claimAllTasks,
   claimTask,
   createTask,
   deleteTask,
   listTasks,
+  releaseAllTasks,
   releaseTask,
   reopenTask,
 } from "@/api/tasks";
@@ -345,6 +347,47 @@ export default function Projects() {
   };
 
   // 项目下任务按状态汇总，一眼看出进度
+  const renderBulkClaim = (p: Project) => {
+    // 一个人要领几百个/不干了要退几百个，一个个点太折磨，这里按项目一次搞定。
+    // 数字按当前列表算（能领的=待认领且没预指派给别人；能退的=我名下标注中的），
+    // 真正以后端 UPDATE...WHERE 的结果为准，有人同时在抢也不会重复
+    const claimable = tasksOf(p.id).filter(
+      (t) => t.status === "PENDING_ASSIGN" && (t.assigned_to == null || t.assigned_to === userId)
+    ).length;
+    const releasable = tasksOf(p.id).filter((t) => t.status === "IN_PROGRESS" && t.locked_by === userId).length;
+    return (
+      <Space size={0} onClick={(e) => e.stopPropagation()}>
+        <Popconfirm
+          title={`一次认领这 ${claimable} 个待认领任务？`}
+          disabled={!claimable}
+          onConfirm={async () => {
+            const r = await claimAllTasks(p.id);
+            message.success(`已认领 ${r.count} 个任务`);
+            refresh();
+          }}
+        >
+          <Button size="small" type="link" disabled={!claimable}>
+            全部认领{claimable ? ` (${claimable})` : ""}
+          </Button>
+        </Popconfirm>
+        <Popconfirm
+          title={`放弃你名下这 ${releasable} 个标注中的任务？草稿会保留，任务退回公共池`}
+          disabled={!releasable}
+          okButtonProps={{ danger: true }}
+          onConfirm={async () => {
+            const r = await releaseAllTasks(p.id);
+            message.success(`已放弃 ${r.count} 个任务，草稿已保留`);
+            refresh();
+          }}
+        >
+          <Button size="small" type="link" danger disabled={!releasable}>
+            全部放弃{releasable ? ` (${releasable})` : ""}
+          </Button>
+        </Popconfirm>
+      </Space>
+    );
+  };
+
   const statusSummary = (projectId: number) => {
     const counts: Partial<Record<TaskStatus, number>> = {};
     for (const t of tasksOf(projectId)) counts[t.status] = (counts[t.status] ?? 0) + 1;
@@ -680,6 +723,7 @@ export default function Projects() {
                   <Button size="small" type="link" onClick={() => openAssign(p)}>
                     指派
                   </Button>
+                  {renderBulkClaim(p)}
                   <Button
                     size="small"
                     type="link"

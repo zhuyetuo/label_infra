@@ -80,6 +80,44 @@ async def release_task(db: AsyncSession, task_id: int, user: User) -> Task:
     return task
 
 
+async def claim_all_in_project(db: AsyncSession, project_id: int, user: User) -> int:
+    """一个人把项目里所有能领的任务一次领完（几百个一个个点太折磨人）。
+    条件跟 claim_task 完全一样，只是不限定 task_id：待认领、且没预指派给
+    别人的；同样是单条 UPDATE...WHERE，有人同时在抢的话各领各的、不会重复。
+    返回实际领到的数量。"""
+    lock_expires = datetime.now(UTC) + timedelta(hours=settings.annotation_timeout_hours)
+    stmt = (
+        update(Task)
+        .where(
+            Task.project_id == project_id,
+            Task.status == TaskStatus.PENDING_ASSIGN,
+            (Task.assigned_to.is_(None)) | (Task.assigned_to == user.id),
+        )
+        .values(
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=user.id,
+            locked_by=user.id,
+            lock_expires_at=lock_expires,
+        )
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount
+
+
+async def release_all_in_project(db: AsyncSession, project_id: int, user: User) -> int:
+    """把项目里自己名下所有标注中的任务一次全放弃（不干了）。条件跟
+    release_task 一样，草稿照样保留。返回实际放弃的数量。"""
+    stmt = (
+        update(Task)
+        .where(Task.project_id == project_id, Task.locked_by == user.id, Task.status == TaskStatus.IN_PROGRESS)
+        .values(status=TaskStatus.PENDING_ASSIGN, assigned_to=None, locked_by=None, lock_expires_at=None)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount
+
+
 async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     """只有当前锁定人能续期，推迟 lock_expires_at。"""
     ttl_hours = settings.annotation_timeout_hours

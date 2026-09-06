@@ -23,6 +23,7 @@ from app.schemas.task import (
     DraftOut,
     DraftSaveRequest,
     LabelItemOut,
+    ProjectScopeRequest,
     ReopenRequest,
     TaskCreate,
     TaskOut,
@@ -30,7 +31,16 @@ from app.schemas.task import (
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
-from app.services.task_service import TaskConflictError, claim_task, heartbeat, release_task, save_draft, submit_task
+from app.services.task_service import (
+    TaskConflictError,
+    claim_all_in_project,
+    claim_task,
+    heartbeat,
+    release_all_in_project,
+    release_task,
+    save_draft,
+    submit_task,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -225,6 +235,20 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db), user: User 
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在或无权访问")
     return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/claim-all")
+async def claim_all(body: ProjectScopeRequest, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """一次领完项目里所有待认领（且没预指派给别人）的任务，返回领到几个。"""
+    n = await claim_all_in_project(db, body.project_id, user)
+    return ok({"count": n})
+
+
+@router.post("/release-all")
+async def release_all(body: ProjectScopeRequest, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """一次放弃项目里自己名下所有标注中的任务，草稿保留，返回放弃了几个。"""
+    n = await release_all_in_project(db, body.project_id, user)
+    return ok({"count": n})
 
 
 @router.post("/{task_id}/claim")
