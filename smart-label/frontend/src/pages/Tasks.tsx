@@ -127,7 +127,11 @@ export default function Tasks() {
               <Space size={4}>
                 <TaskStatusTag status={s} />
                 {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
-                {s === "PENDING_ASSIGN" && task.has_draft && <Tag color="gold">有草稿</Tag>}
+                {s === "PENDING_ASSIGN" && task.has_draft && (
+                  <Tag color="gold">有草稿 {task.draft_item_count ?? ""}段</Tag>
+                )}
+                {s === "IN_PROGRESS" &&
+                  (task.draft_item_count ? <Tag color="geekblue">已标 {task.draft_item_count} 段</Tag> : <Tag>还没动手</Tag>)}
                 {/* 被驳回时把审核意见带出来，不用另外去问审核员为什么 */}
                 {s === "REJECTED" && task.review_comment && (
                   <Tooltip title={task.review_comment}>

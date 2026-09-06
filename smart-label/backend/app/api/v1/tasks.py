@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -171,17 +171,19 @@ async def list_tasks(
 
     # 待认领但已经有人标过一部分（比如中途放弃）的任务，前端要标出来提示
     # "有草稿"，不是从零开始
-    draft_task_ids: set[int] = set()
+    # 同时带上当前轮已经存了多少段：标注中的任务光看状态分不出"只是认领了进去
+    # 看了一眼"和"已经标了一堆"，列表里要靠这个数区分
+    draft_counts: dict[int, int] = {}
     task_ids = [t.id for t in tasks]
     if task_ids:
         rows = await db.execute(
-            select(AnnotationRecord.task_id)
+            select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
             .where(AnnotationRecord.round_no == Task.round_no, Task.id.in_(task_ids))
-            .distinct()
+            .group_by(AnnotationRecord.task_id)
         )
-        draft_task_ids = set(rows.scalars().all())
+        draft_counts = {task_id: int(n) for task_id, n in rows.all()}
 
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
@@ -198,7 +200,8 @@ async def list_tasks(
         [
             {
                 **TaskOut.model_validate(t).model_dump(),
-                "has_draft": t.id in draft_task_ids,
+                "has_draft": draft_counts.get(t.id, 0) > 0,
+                "draft_item_count": draft_counts.get(t.id, 0),
                 "review_comment": review_comments.get(t.id),
             }
             for t in tasks

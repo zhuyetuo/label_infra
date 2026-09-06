@@ -72,10 +72,11 @@ export default function Projects() {
   const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
   // 每个项目展开后的任务筛选（按状态 / 按样本名搜索），一个项目上百个任务时靠翻页找
   // "标注中"的那几个太费劲。展开状态自己管，这样点汇总里的状态 Tag 能直接展开并筛选。
-  const [taskFilters, setTaskFilters] = useState<Record<number, { status: TaskStatus | "ALL"; q: string }>>({});
+  type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
+  const [taskFilters, setTaskFilters] = useState<Record<number, { status: StatusFilter; q: string }>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number) => taskFilters[projectId] ?? { status: "ALL" as const, q: "" };
-  const setFilter = (projectId: number, patch: Partial<{ status: TaskStatus | "ALL"; q: string }>) =>
+  const setFilter = (projectId: number, patch: Partial<{ status: StatusFilter; q: string }>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
@@ -302,10 +303,16 @@ export default function Projects() {
             const f = filterOf(p.id);
             const counts = statusSummary(p.id);
             const q = f.q.trim().toLowerCase();
+            const matchStatus = (t: Task) => {
+              if (f.status === "ALL") return true;
+              if (f.status === "IN_PROGRESS_STARTED") return t.status === "IN_PROGRESS" && (t.draft_item_count ?? 0) > 0;
+              if (f.status === "IN_PROGRESS_EMPTY") return t.status === "IN_PROGRESS" && !(t.draft_item_count ?? 0);
+              return t.status === f.status;
+            };
+            const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
+            const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
             const rows = all.filter(
-              (t) =>
-                (f.status === "ALL" || t.status === f.status) &&
-                (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
+              (t) => matchStatus(t) && (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
             );
             return (
               <>
@@ -317,11 +324,20 @@ export default function Projects() {
                   onChange={(e) => setFilter(p.id, { status: e.target.value })}
                   options={[
                     { label: `全部 ${all.length}`, value: "ALL" },
-                    ...(Object.keys(TASK_STATUS_META) as TaskStatus[]).map((s) => ({
-                      label: `${TASK_STATUS_META[s].label} ${counts[s] ?? 0}`,
-                      value: s,
-                      disabled: !counts[s],
-                    })),
+                    ...(Object.keys(TASK_STATUS_META) as TaskStatus[]).flatMap((s) => {
+                      const base = { label: `${TASK_STATUS_META[s].label} ${counts[s] ?? 0}`, value: s as StatusFilter, disabled: !counts[s] };
+                      if (s !== "IN_PROGRESS" || !counts[s]) return [base];
+                      // 标注中再拆成"已有内容 / 还没动手"，找到底哪几个是真的在标
+                      return [
+                        base,
+                        { label: `└ 已有内容 ${startedCount}`, value: "IN_PROGRESS_STARTED" as StatusFilter, disabled: !startedCount },
+                        {
+                          label: `└ 还没动手 ${inProgress.length - startedCount}`,
+                          value: "IN_PROGRESS_EMPTY" as StatusFilter,
+                          disabled: inProgress.length === startedCount,
+                        },
+                      ];
+                    }),
                   ]}
                 />
                 <Input.Search
@@ -366,7 +382,16 @@ export default function Projects() {
                       <Space size={4}>
                         <TaskStatusTag status={s} />
                         {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
-                        {s === "PENDING_ASSIGN" && task.has_draft && <Tag color="gold">有草稿</Tag>}
+                        {s === "PENDING_ASSIGN" && task.has_draft && (
+                          <Tag color="gold">有草稿 {task.draft_item_count ?? ""}段</Tag>
+                        )}
+                        {/* 标注中的分两种：只是认领了进去看了一眼，和已经标了一堆，列表里要能一眼分开 */}
+                        {s === "IN_PROGRESS" &&
+                          (task.draft_item_count ? (
+                            <Tag color="geekblue">已标 {task.draft_item_count} 段</Tag>
+                          ) : (
+                            <Tag>还没动手</Tag>
+                          ))}
                         {/* 被驳回时把审核意见带出来，不用另外去问审核员为什么 */}
                         {s === "REJECTED" && task.review_comment && (
                           <Tooltip title={task.review_comment}>
