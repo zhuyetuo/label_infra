@@ -5,6 +5,7 @@ import { claimReview, decideReview, releaseReview, reviewQueue } from "@/api/rev
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
+import { useUrlTask } from "@/utils/urlTask";
 import type { Task } from "@/types";
 
 export default function Reviews() {
@@ -16,6 +17,8 @@ export default function Reviews() {
   const [rejectTaskId, setRejectTaskId] = useState<number | null>(null);
   const [comment, setComment] = useState("");
   const [viewTask, setViewTask] = useState<Task | null>(null);
+  // 刷新页面还能回到打开着的任务（?task=ID）
+  useUrlTask(data, viewTask?.id ?? null, setViewTask);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["review-queue"] });
 

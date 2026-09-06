@@ -47,6 +47,7 @@ import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
+import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
@@ -321,6 +322,12 @@ export default function Projects() {
     setWorkspaceReadOnly(readOnly);
     setWorkspaceTask(task);
   };
+
+  // 刷新页面还能回到打开着的任务（?task=ID），顺便把它所在的项目行展开
+  useUrlTask(allTasks, workspaceTask?.id ?? null, (task) => {
+    setExpandedKeys((prev) => (prev.includes(task.project_id) ? prev : [...prev, task.project_id]));
+    openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), task.project_id);
+  });
 
   const handleClaimTask = async (id: number) => {
     await claimTask(id);

@@ -8,6 +8,7 @@ import { listLabels } from "@/api/labels";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
+import { useUrlTask } from "@/utils/urlTask";
 import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
@@ -69,6 +70,12 @@ export default function Tasks() {
     setWorkspaceReadOnly(readOnly);
     setWorkspaceTask(task);
   };
+
+  // 刷新页面还能回到打开着的任务（?task=ID）
+  useUrlTask(tasks, workspaceTask?.id ?? null, (task) => {
+    setWorkspaceLabels(labelsOf(task.project_id));
+    openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId));
+  });
 
   const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
   const userName = (id: number) => {
