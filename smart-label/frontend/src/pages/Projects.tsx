@@ -915,10 +915,11 @@ export default function Projects() {
                       </div>
                     </Tooltip>
                   )}
-                  {pp?.status === "done" && pp.finished_at != null && Date.now() / 1000 - pp.finished_at < 3600 && (
-                    // 刚跑完的一小时内把总耗时留在这里，不用点开弹窗找
+                  {pp?.status === "done" && pp.total > 0 && (
+                    // 上一次的总耗时一直留在这里（后端重启后从 audit_logs 取），不用点开弹窗找
                     <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
-                      AI 预标注完成：{pp.succeeded} 个，总耗时 {fmtClock(pp.elapsed_sec)}
+                      上次 AI 预标注：{pp.succeeded} 个，总耗时 {fmtClock(pp.elapsed_sec)}
+                      {pp.finished_at != null && `（${new Date(pp.finished_at * 1000).toLocaleString("zh-CN", { hour12: false })}）`}
                     </Typography.Text>
                   )}
                 <Space size={4} wrap>

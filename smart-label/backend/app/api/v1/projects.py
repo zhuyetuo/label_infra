@@ -4,6 +4,8 @@
 只有管理员能增删改。
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,8 +135,33 @@ async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: A
 
 
 @router.get("/{project_id}/ai-prelabel/status")
-async def ai_prelabel_status(project_id: int):
-    return ok(get_prelabel_progress(project_id).to_dict())
+async def ai_prelabel_status(project_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    进度在内存里，服务重启（git pull && bash up.sh）就没了；没有在跑的时候
+    退回到 audit_logs 里最近一次的记录，项目行里"上次 AI 预标注 N 个，总耗时 x:xx"
+    重启后也还在。
+    """
+    progress = get_prelabel_progress(project_id).to_dict()
+    if progress["status"] == "idle":
+        history = await list_prelabel_history(db, project_id, limit=1)
+        if history:
+            last = history[0]
+            finished = datetime.fromisoformat(last["finished_at"]).timestamp() if last.get("finished_at") else None
+            progress.update(
+                status=last.get("status", "done"),
+                total=last.get("total", 0),
+                processed=last.get("total", 0),
+                succeeded=last.get("succeeded", 0),
+                skipped=last.get("skipped", 0),
+                failed=last.get("failed", 0),
+                elapsed_sec=last.get("elapsed_sec", 0.0),
+                ai_wait_sec=last.get("ai_wait_sec", 0.0),
+                batches_done=last.get("batches", 0),
+                unmatched_labels=last.get("unmatched_labels", []),
+                error_message=last.get("error_message"),
+                finished_at=finished,
+            )
+    return ok(progress)
 
 
 @router.get("/{project_id}/ai-prelabel/history")
