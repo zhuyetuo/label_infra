@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Button, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { BarChartOutlined, CheckOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CheckOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
@@ -77,6 +77,8 @@ interface Props {
   /** 改类别/起止/确认状态。改类别或起止时调用方负责把 AI 片段标成"已纠正"并清掉确认 */
   onUpdate: (ids: number[], patch: Partial<Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed">>) => void;
   onDelete: (id: number) => void;
+  /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
+  onCreate?: (startMs: number, endMs: number, labelId: number) => void;
 }
 
 export default function SegmentPanel({
@@ -89,8 +91,11 @@ export default function SegmentPanel({
   onSeek,
   onUpdate,
   onDelete,
+  onCreate,
 }: Props) {
   const [filterLabels, setFilterLabels] = useState<number[]>([]);
+  // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注
+  const [viewGaps, setViewGaps] = useState(false);
   const [filterSource, setFilterSource] = useState<SourceFilter>("all");
   const [minConf, setMinConf] = useState<number | null>(null);
   const [maxConf, setMaxConf] = useState<number | null>(null);
@@ -191,9 +196,28 @@ export default function SegmentPanel({
         <Button size="small" icon={<BarChartOutlined />} type={showStats ? "primary" : "default"} onClick={() => setShowStats((v) => !v)}>
           统计
         </Button>
+        {cov.gaps.length > 0 && (
+          <Tooltip title={`还有 ${cov.gaps.length} 段 ≥${GAP_MIN_MS / 1000}s 的时间既没有 AI 预测也没有人工标注，点开单独查看`}>
+            <Button
+              size="small"
+              icon={<WarningOutlined />}
+              type={viewGaps ? "primary" : "default"}
+              danger={!viewGaps}
+              onClick={() => setViewGaps((v) => !v)}
+            >
+              未预测片段 {cov.gaps.length}
+            </Button>
+          </Tooltip>
+        )}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          显示 {filtered.length} / 共 {items.length}
-          {pendingTotal > 0 && <>，AI 待确认 {pendingTotal}</>}
+          {viewGaps ? (
+            <>未预测空白 {cov.gaps.length} 段，合计 {fmtDur(cov.gaps.reduce((a, g) => a + (g.end - g.start), 0))}</>
+          ) : (
+            <>
+              显示 {filtered.length} / 共 {items.length}
+              {pendingTotal > 0 && <>，AI 待确认 {pendingTotal}</>}
+            </>
+          )}
         </Typography.Text>
         {!readOnly && pendingInView.length > 0 && (
           <Popconfirm
@@ -217,24 +241,13 @@ export default function SegmentPanel({
                 {fmtDur(durationMs)}（{((cov.covered / durationMs) * 100).toFixed(1)}%）
               </>
             )}
-            ，未预测/未标注空白 {cov.gaps.length} 段（≥{GAP_MIN_MS / 1000}s）
-            {cov.gaps.length > 0 && (
-              <div style={{ marginTop: 4 }}>
-                {[...cov.gaps]
-                  .sort((a, b) => b.end - b.start - (a.end - a.start))
-                  .slice(0, 12)
-                  .map((g) => (
-                    <Tag
-                      key={g.start}
-                      style={{ cursor: "pointer", marginBottom: 4 }}
-                      onClick={() => onSeek(g.start)}
-                      title="点击跳转到这段空白的开头"
-                    >
-                      {formatMs(g.start)} → {formatMs(g.end)}（{fmtDur(g.end - g.start)}）
-                    </Tag>
-                  ))}
-                {cov.gaps.length > 12 && <span style={{ fontSize: 12, color: "#999" }}>…只列最长的 12 段</span>}
-              </div>
+            {cov.gaps.length > 0 ? (
+              <>
+                ，未预测空白 {cov.gaps.length} 段（≥{GAP_MIN_MS / 1000}s），
+                <a onClick={() => setViewGaps(true)}>查看</a>
+              </>
+            ) : (
+              <>，没有 ≥{GAP_MIN_MS / 1000}s 的未预测空白</>
             )}
           </div>
           <Table
@@ -270,6 +283,48 @@ export default function SegmentPanel({
         </div>
       )}
 
+      {viewGaps ? (
+        <Table
+          size="small"
+          rowKey="start"
+          dataSource={cov.gaps}
+          pagination={false}
+          virtual
+          scroll={{ x: 700, y: 220 }}
+          locale={{ emptyText: "没有未预测的空白段" }}
+          columns={[
+            { title: "开始", width: 130, render: (_, g) => formatMs(g.start) },
+            { title: "结束", width: 130, render: (_, g) => formatMs(g.end) },
+            {
+              title: "时长",
+              width: 100,
+              defaultSortOrder: "descend",
+              sorter: (a, b) => a.end - a.start - (b.end - b.start),
+              render: (_, g) => fmtDur(g.end - g.start),
+            },
+            {
+              title: "操作",
+              render: (_, g) => (
+                <Space size={4}>
+                  <Button size="small" type="link" onClick={() => onSeek(g.start)}>
+                    跳转
+                  </Button>
+                  {!readOnly && onCreate && (
+                    <Select<number | null>
+                      size="small"
+                      placeholder="补标为…"
+                      style={{ width: 130 }}
+                      value={null}
+                      options={labelOptions}
+                      onChange={(v) => v != null && onCreate(g.start, g.end, v)}
+                    />
+                  )}
+                </Space>
+              ),
+            },
+          ]}
+        />
+      ) : (
       <Table
         size="small"
         rowKey="id"
@@ -381,6 +436,8 @@ export default function SegmentPanel({
           },
         ]}
       />
+
+      )}
 
       <Modal
         title="调整起止时间"
