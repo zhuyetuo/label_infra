@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Button,
   Checkbox,
   Collapse,
@@ -7,6 +8,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Progress,
   Radio,
   Select,
   Space,
@@ -18,7 +20,16 @@ import {
   message,
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { assignProject, createProject, deleteProject, listProjects, updateProject } from "@/api/projects";
+import {
+  assignProject,
+  createProject,
+  deleteProject,
+  getProjectPrelabelStatus,
+  listProjects,
+  startProjectPrelabel,
+  updateProject,
+  type PrelabelProgress,
+} from "@/api/projects";
 import {
   bulkCreateTasks,
   claimTask,
@@ -88,11 +99,79 @@ export default function Projects() {
   const [bulkTaskType, setBulkTaskType] = useState<"from_scratch" | "ai_assisted">("from_scratch");
   const [bulkAssignee, setBulkAssignee] = useState<number | null>(null);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
+  const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
+  const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
+  const [prelabelStarting, setPrelabelStarting] = useState(false);
+  const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
+  const prevStatusRef = useRef<Record<number, string>>({});
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["labels"] });
+  };
+
+  const pollPrelabel = async (ids: number[]) => {
+    const results = await Promise.all(ids.map((id) => getProjectPrelabelStatus(id).catch(() => null)));
+    setPrelabelProgress((prev) => {
+      const next = { ...prev };
+      results.forEach((p, i) => {
+        if (p) next[ids[i]] = p;
+      });
+      return next;
+    });
+    results.forEach((p, i) => {
+      if (!p) return;
+      const id = ids[i];
+      const was = prevStatusRef.current[id];
+      prevStatusRef.current[id] = p.status;
+      // 从"跑着"变成"跑完"的那一刻提示一次并刷新任务列表（草稿段数变了）
+      if (was === "running" && p.status !== "running") {
+        if (p.status === "done") {
+          message.success(`AI 预标注完成：成功 ${p.succeeded}，跳过 ${p.skipped}，失败 ${p.failed}`, 6);
+        } else if (p.status === "error") {
+          message.error(`AI 预标注出错：${p.error_message}`);
+        }
+        refresh();
+      }
+    });
+  };
+
+  // 页面打开先各查一次（刷新页面时正在跑的还能接着看进度），之后只轮询在跑的
+  const projectIds = (data ?? []).map((p) => p.id).join(",");
+  useEffect(() => {
+    if (!projectIds) return;
+    pollPrelabel(projectIds.split(",").map(Number));
+  }, [projectIds]);
+  const runningIds = Object.values(prelabelProgress)
+    .filter((p) => p.status === "running")
+    .map((p) => p.project_id)
+    .join(",");
+  useEffect(() => {
+    if (!runningIds) return;
+    const timer = setInterval(() => pollPrelabel(runningIds.split(",").map(Number)), 2000);
+    return () => clearInterval(timer);
+  }, [runningIds]);
+
+  // 项目里哪些任务会被批量预标注碰到：待认领/标注中，且还没存过任何片段
+  const prelabelEligible = (projectId: number, overwrite: boolean) =>
+    tasksOf(projectId).filter(
+      (t) =>
+        (t.status === "PENDING_ASSIGN" || t.status === "IN_PROGRESS") && (overwrite || !(t.draft_item_count ?? 0))
+    ).length;
+
+  const handleStartPrelabel = async () => {
+    if (!prelabelTarget) return;
+    setPrelabelStarting(true);
+    try {
+      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite);
+      message.info(r.queued ? "这个项目已经有一批在跑，本次请求已排在后面" : "已开始，进度在项目行里看");
+      await pollPrelabel([prelabelTarget.id]);
+      setPrelabelTarget(null);
+    } finally {
+      setPrelabelStarting(false);
+    }
   };
 
   const openCreate = () => {
@@ -508,8 +587,27 @@ export default function Projects() {
               const counts = statusSummary(p.id);
               const total = tasksOf(p.id).length;
               if (!total) return <Typography.Text type="secondary">0</Typography.Text>;
+              const pp = prelabelProgress[p.id];
               return (
                 <Space size={4} wrap>
+                  {pp?.status === "running" && (
+                    // 批量 AI 预标注进行中：总共多少个、跑到第几个、正在跑哪个样本
+                    <Tooltip
+                      title={`正在跑：${pp.current_sample_code ?? ""}（任务 #${pp.current_task_id ?? ""}）
+成功 ${pp.succeeded} · 跳过 ${pp.skipped} · 失败 ${pp.failed}${
+                        pp.estimated_remaining_sec != null ? ` · 预计还需 ${Math.ceil(pp.estimated_remaining_sec / 60)} 分钟` : ""
+                      }`}
+                    >
+                      <div style={{ width: "100%", minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
+                        <Progress
+                          size="small"
+                          status="active"
+                          percent={pp.total ? Math.round((pp.processed / pp.total) * 100) : 0}
+                          format={() => `AI ${pp.processed}/${pp.total}`}
+                        />
+                      </div>
+                    </Tooltip>
+                  )}
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
                     <Tag
@@ -567,6 +665,17 @@ export default function Projects() {
                   <Button size="small" type="link" onClick={() => openAssign(p)}>
                     指派
                   </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={prelabelProgress[p.id]?.status === "running"}
+                    onClick={() => {
+                      setPrelabelOverwrite(false);
+                      setPrelabelTarget(p);
+                    }}
+                  >
+                    AI预标注
+                  </Button>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -601,6 +710,61 @@ export default function Projects() {
           },
         ]}
       />
+
+      <Modal
+        title={`批量 AI 预标注 - ${prelabelTarget?.name ?? ""}`}
+        open={prelabelTarget != null}
+        onCancel={() => setPrelabelTarget(null)}
+        onOk={handleStartPrelabel}
+        okText="开始"
+        confirmLoading={prelabelStarting}
+        okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite) === 0 }}
+        destroyOnClose
+      >
+        {prelabelTarget && (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              会对这个项目里 <b>待认领 / 标注中</b> 且还没有人动过的任务逐个调用 AI 模型，把预测出来的行为片段
+              直接写进任务草稿。标注员打开任务时就已经有 AI 框了，只需要确认或纠正。
+              已提交、已通过、被驳回、以及已经有人工标注的任务不会被碰。
+            </Typography.Paragraph>
+            <Checkbox checked={prelabelOverwrite} onChange={(e) => setPrelabelOverwrite(e.target.checked)}>
+              连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
+            </Checkbox>
+            <Typography.Text>
+              本次将处理 <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite)}</b> 个任务。AI 服务一次只跑一个，
+              一个样本几十秒，整个过程在后台进行，项目行里能看到进度。
+            </Typography.Text>
+            {(() => {
+              const pp = prelabelProgress[prelabelTarget.id];
+              if (!pp || pp.status === "idle") return null;
+              return (
+                <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    上一次/当前：{pp.status === "running" ? "进行中" : pp.status === "done" ? "已完成" : "出错"}，
+                    {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}
+                  </Typography.Text>
+                  {pp.unmatched_labels.length > 0 && (
+                    <Alert
+                      style={{ marginTop: 6 }}
+                      type="warning"
+                      showIcon
+                      message={`AI 类别「${pp.unmatched_labels.join("、")}」在项目标签里没有同名标签，这些片段被丢弃了；去「标签管理」补上后重新跑`}
+                    />
+                  )}
+                  {pp.detail.length > 0 && (
+                    <div style={{ maxHeight: 160, overflow: "auto", marginTop: 6, fontSize: 12, color: "#666" }}>
+                      {pp.detail.slice(-30).map((line, i) => (
+                        <div key={i}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </Space>
+        )}
+      </Modal>
 
       <Modal
         title={editing ? `编辑项目 - ${editing.name}` : "新建项目"}
@@ -747,7 +911,7 @@ export default function Projects() {
             onChange={setBulkTaskType}
             options={[
               { value: "from_scratch", label: "从零标注" },
-              { value: "ai_assisted", label: "AI预标注+人工修改" },
+              { value: "ai_assisted", label: "AI预标注+人工修改（建好后自动跑 AI）" },
             ]}
           />
           <Typography.Text>指派给</Typography.Text>

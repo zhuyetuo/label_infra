@@ -37,3 +37,11 @@ class ProjectAssignRequest(BaseModel):
 class ProjectAssignResult(BaseModel):
     assigned: int
     skipped: int
+
+
+class ProjectPrelabelRequest(BaseModel):
+    """项目级批量 AI 预标注。task_ids 留空 = 项目下全部符合条件的任务。"""
+
+    task_ids: list[int] | None = None
+    # 连已经有 AI 片段（但没人改过/确认过）的任务也重新跑，比如换了模型想刷新
+    overwrite_ai: bool = False
