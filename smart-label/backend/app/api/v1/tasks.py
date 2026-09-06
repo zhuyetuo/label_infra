@@ -14,7 +14,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.review import ReviewRecord
 from app.models.project import Project
 from app.models.sample import Sample
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskStatus, TaskType
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.task import (
@@ -27,6 +27,7 @@ from app.schemas.task import (
     TaskCreate,
     TaskOut,
 )
+from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
 from app.services.task_service import TaskConflictError, claim_task, heartbeat, release_task, save_draft, submit_task
@@ -55,6 +56,9 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), admi
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    # 选了"AI预标注+人工修改"就直接把 AI 跑上，不用人再一个个认领进去点
+    if task.task_type == TaskType.ai_assisted:
+        await start_project_prelabel(task.project_id, task_ids=[task.id])
     return ok(TaskOut.model_validate(task).model_dump())
 
 
@@ -92,20 +96,24 @@ async def bulk_create_tasks(
     )
 
     created = 0
+    new_tasks: list[Task] = []
     for sample_id in body.sample_ids:
         if sample_id in already_has_task:
             continue
-        db.add(
-            Task(
-                project_id=body.project_id,
-                sample_id=sample_id,
-                task_type=body.task_type,
-                assigned_to=body.assigned_to,
-                created_by=admin.id,
-            )
+        t = Task(
+            project_id=body.project_id,
+            sample_id=sample_id,
+            task_type=body.task_type,
+            assigned_to=body.assigned_to,
+            created_by=admin.id,
         )
+        db.add(t)
+        new_tasks.append(t)
         created += 1
     await db.commit()
+    # "AI预标注+人工修改"类型：建完直接后台批量跑 AI，项目页能看到进度
+    if body.task_type == TaskType.ai_assisted and new_tasks:
+        await start_project_prelabel(body.project_id, task_ids=[t.id for t in new_tasks])
 
     skipped = sorted(already_has_task)
     return ok(

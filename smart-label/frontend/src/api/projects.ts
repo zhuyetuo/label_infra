@@ -11,6 +11,32 @@ export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "
 
 export const deleteProject = (id: number) => request.delete<never, null>(`/projects/${id}`);
 
+export interface PrelabelProgress {
+  status: "idle" | "running" | "done" | "error";
+  project_id: number;
+  total: number;
+  processed: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  current_task_id: number | null;
+  current_sample_code: string | null;
+  detail: string[];
+  unmatched_labels: string[];
+  error_message: string | null;
+  elapsed_sec: number;
+  estimated_remaining_sec: number | null;
+}
+
+/** 项目下待认领/标注中且没人动过的任务批量跑 AI 预标注（后台），用 status 轮询进度 */
+export const startProjectPrelabel = (id: number, overwriteAi = false) =>
+  request.post<never, { started: boolean; queued: boolean }>(`/projects/${id}/ai-prelabel`, {
+    overwrite_ai: overwriteAi,
+  });
+
+export const getProjectPrelabelStatus = (id: number) =>
+  request.get<never, PrelabelProgress>(`/projects/${id}/ai-prelabel/status`);
+
 /** 把项目下的任务一次性指派给某人；user_id 传 null 表示收回指派 */
 export const assignProject = (id: number, userId: number | null, includeClaimed = false) =>
   request.post<never, { assigned: number; skipped: number }>(`/projects/${id}/assign`, {

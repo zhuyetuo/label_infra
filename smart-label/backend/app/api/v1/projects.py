@@ -17,12 +17,15 @@ from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services.ai_prelabel_service import get_progress as get_prelabel_progress
+from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.task_scope import visible_project_ids
 from app.schemas.project import (
     ProjectAssignRequest,
     ProjectAssignResult,
     ProjectCreate,
     ProjectOut,
+    ProjectPrelabelRequest,
     ProjectUpdate,
 )
 
@@ -111,6 +114,26 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
     await db.commit()
     assigned = result.rowcount or 0
     return ok(ProjectAssignResult(assigned=assigned, skipped=total - assigned).model_dump())
+
+
+@router.post("/{project_id}/ai-prelabel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: AsyncSession = Depends(get_db)):
+    """
+    给项目下的任务批量做 AI 预标注（后台跑，用 GET .../ai-prelabel/status 轮询进度）。
+    一个个认领再进去点"AI预标注"太慢，这里一次把整个项目还没人动过的任务都跑掉。
+    只碰待认领/标注中且没有人工痕迹的任务；overwrite_ai=true 时连已经有 AI 片段
+    （但没人改过/确认过）的也重新跑一遍，比如换了模型想刷新。
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    started = await start_project_prelabel(project_id, task_ids=body.task_ids, overwrite_ai=body.overwrite_ai)
+    return ok({"started": started, "queued": not started})
+
+
+@router.get("/{project_id}/ai-prelabel/status")
+async def ai_prelabel_status(project_id: int):
+    return ok(get_prelabel_progress(project_id).to_dict())
 
 
 @router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
