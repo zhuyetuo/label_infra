@@ -28,9 +28,18 @@ interface Props {
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
-// 都会同步给另外两路，并联动 IMU 曲线的竖线标记。用 isProgrammatic 防止
-// 程序化设置 currentTime/play/pause 时触发的事件又反过来引发同步死循环。
+// 都会同步给另外两路，并联动 IMU 曲线的竖线标记。
+//
+// 防"同步死循环"用的是一个时间窗口而不是布尔开关：程序化 seek/play/pause 之后，
+// 浏览器的 seeked/play/pause 事件是异步补发的，等事件到的时候同步布尔早已经
+// 复位，三路各自把对方的程序化动作当成"用户操作"再同步回去，一次跳转会引发
+// 好几轮互相 seek——每次 seek 都要重新解码一小段，表现就是跳转/循环之后
+// 三路视频播一下停一下来回抖。改成"程序化动作之后 SUPPRESS_MS 内到的事件
+// 一律当作程序化的"就没有这个问题。
 const DRIFT_TOLERANCE_SEC = 0.1;
+// 漂移超过这个值才硬 seek；以内用临时微调倍速追上去，画面不会顿
+const DRIFT_HARD_SEEK_SEC = 0.6;
+const SUPPRESS_MS = 400;
 const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4];
 // 实测三路 720p 同播在 10x 时丢帧率 ~24%（getVideoPlaybackQuality 量出来的），
 // 是浏览器解码吞吐跟不上，不是代码问题，前端修不了。先把上限收到解码顶得住的
@@ -49,7 +58,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const refs = useRef<(HTMLVideoElement | null)[]>([]);
   const wrapperRefs = useRef<(HTMLDivElement | null)[]>([]);
   const rowRef = useRef<HTMLDivElement | null>(null);
-  const isProgrammatic = useRef(false);
+  // 程序化操作的抑制截止时间（performance.now()），见文件顶部说明
+  const suppressUntil = useRef(0);
+  const markProgrammatic = (ms = SUPPRESS_MS) => {
+    suppressUntil.current = Math.max(suppressUntil.current, performance.now() + ms);
+  };
+  const isSuppressed = () => performance.now() < suppressUntil.current;
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
@@ -90,29 +104,31 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       const others = () => all().filter((v) => v !== self);
 
       const syncOthers = (action: "play" | "pause" | "seek") => {
-        isProgrammatic.current = true;
+        markProgrammatic();
         for (const o of others()) {
-          if (Math.abs(o.currentTime - self.currentTime) > 0.02) o.currentTime = self.currentTime;
+          // 只有用户真的拖了进度条才把别人也拖过去；play/pause 不碰 currentTime——
+          // 三路的 currentTime 本来就按各自帧对齐，天然差零点几帧，按这个差去
+          // seek 就是无意义的来回抖，漂移交给下面的定时校正
+          if (action === "seek" && Math.abs(o.currentTime - self.currentTime) > 0.15) o.currentTime = self.currentTime;
           if (action === "play") o.play().catch(() => {});
           if (action === "pause") o.pause();
         }
-        isProgrammatic.current = false;
       };
 
       const onPlay = () => {
-        if (isProgrammatic.current) return;
+        if (isSuppressed()) return;
         syncOthers("play");
       };
       const onPause = () => {
-        if (isProgrammatic.current) return;
+        if (isSuppressed()) return;
         syncOthers("pause");
       };
       const onSeeked = () => {
-        if (isProgrammatic.current) return;
+        if (isSuppressed()) return;
         syncOthers("seek");
       };
       const onTimeUpdate = () => {
-        if (isProgrammatic.current) return;
+        if (isSuppressed()) return;
         // 区间循环：播过终点就跳回起点。只让第一路来判断，其它路会被同步过去，
         // 不然三路各自触发会来回抢着 seek
         const loop = bus.getLoop();
@@ -123,10 +139,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         bus.reportTime(self.currentTime);
       };
       const onRateChange = () => {
-        if (isProgrammatic.current) return;
-        isProgrammatic.current = true;
+        if (isSuppressed()) return;
+        markProgrammatic();
         for (const o of others()) o.playbackRate = self.playbackRate;
-        isProgrammatic.current = false;
         setSpeed(self.playbackRate);
       };
 
@@ -151,6 +166,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     // 等 seeked 回来立刻跳到最新目标，尽可能快地刷出每一帧。
     let pendingSeek: number | null = null;
 
+    // 程序化跳转走"先暂停 → 三路一起 seek → 等三路都解码好了 → 一起恢复播放"：
+    // 直接在播放中 seek，三路各自解码完成的时机不一样，先好的先跑，后面
+    // 漂移校正又把它拉回来，肉眼看就是播一下停一下。等齐了再一起播就平了。
+    let resumeToken = 0;
     const applyPendingSeek = () => {
       if (pendingSeek == null) return;
       const vids = all();
@@ -158,10 +177,29 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       if (!lead || lead.seeking) return;
       const target = pendingSeek;
       pendingSeek = null;
-      isProgrammatic.current = true;
-      for (const v of vids) v.currentTime = target;
-      isProgrammatic.current = false;
+      const wasPlaying = !lead.paused;
+      markProgrammatic();
+      for (const v of vids) {
+        if (wasPlaying) v.pause();
+        v.currentTime = target;
+      }
       bus.reportTime(target);
+      if (!wasPlaying) return;
+
+      const token = ++resumeToken;
+      const started = performance.now();
+      const tryResume = () => {
+        if (token !== resumeToken) return; // 又来了新的 seek，这一轮作废
+        const ready = vids.every((v) => !v.seeking && v.readyState >= 3);
+        // 最多等 1.5s，某一路一直不 ready（比如坏帧）也别永远卡在暂停
+        if (!ready && performance.now() - started < 1500) {
+          requestAnimationFrame(tryResume);
+          return;
+        }
+        markProgrammatic();
+        for (const v of vids) v.play().catch(() => {});
+      };
+      requestAnimationFrame(tryResume);
     };
 
     bus.setSeekHandler((sec) => {
@@ -186,17 +224,30 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     // 里视频时间流逝得越快，天然抖动换算成视频时间也跟着放大，用固定容差会导致
     // 高倍速时几乎每秒都触发一次强制 seek（这本身就是很明显的卡顿），而不是真的
     // 不同步了。按倍速放大容差，只在真正能感知到的不同步时才纠偏。
+    // 校正方式分两档：漂移不大（< DRIFT_HARD_SEEK_SEC）就让落后/超前的那路临时
+    // 快/慢 15% 一秒追上去，画面连续不打断；真的差得远才硬 seek。任何一路还在
+    // seeking/没解码好的时候不校正——那不是漂移，是还没准备好，这时候去 seek
+    // 只会越搞越乱。
+    const nudged = new Set<HTMLVideoElement>();
     const driftTimer = setInterval(() => {
       const [lead, ...rest] = all();
-      if (!lead || lead.paused || isProgrammatic.current) return;
-      const tolerance = DRIFT_TOLERANCE_SEC * Math.max(1, lead.playbackRate);
-      isProgrammatic.current = true;
+      if (!lead || lead.paused || isSuppressed()) return;
+      if ([lead, ...rest].some((v) => v.seeking || v.readyState < 3)) return;
+      const base = lead.playbackRate;
+      const tolerance = DRIFT_TOLERANCE_SEC * Math.max(1, base);
+      markProgrammatic();
       for (const v of rest) {
-        if (Math.abs(v.currentTime - lead.currentTime) > tolerance) {
+        const drift = v.currentTime - lead.currentTime; // >0 超前，<0 落后
+        if (Math.abs(drift) > DRIFT_HARD_SEEK_SEC) {
           v.currentTime = lead.currentTime;
+          if (nudged.delete(v)) v.playbackRate = base;
+        } else if (Math.abs(drift) > tolerance) {
+          v.playbackRate = base * (drift > 0 ? 0.85 : 1.15);
+          nudged.add(v);
+        } else if (nudged.delete(v)) {
+          v.playbackRate = base;
         }
       }
-      isProgrammatic.current = false;
     }, 1000);
 
     return () => {
@@ -344,7 +395,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   const handleSpeedChange = (rate: number) => {
     setSpeed(rate);
-    isProgrammatic.current = true;
+    markProgrammatic();
     const wasPlaying = refs.current.some((v) => v && !v.paused);
     for (const v of refs.current) {
       if (v) v.playbackRate = rate;
@@ -355,7 +406,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       for (const v of refs.current) v?.pause();
       for (const v of refs.current) v?.play().catch(() => {});
     }
-    isProgrammatic.current = false;
   };
 
   // 拖拽区域底边的把手改高度；双击把手恢复自动铺满。拖的过程只更新状态（不落盘，
