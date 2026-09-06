@@ -3,12 +3,13 @@ import type { TaskStatus } from "@/types";
 
 // 状态在任务页、项目页、审核页都要显示，中文名和配色统一放这儿，
 // 免得各页面各写一份、颜色还对不上。
-export const TASK_STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
-  PENDING_ASSIGN: { label: "待认领", color: "gold" },
-  IN_PROGRESS: { label: "标注中", color: "blue" },
-  SUBMITTED: { label: "待审核", color: "purple" },
-  APPROVED: { label: "已通过", color: "green" },
-  REJECTED: { label: "已驳回", color: "red" },
+// hex 跟 color 是同一套配色：color 给 antd Tag 用，hex 给不经过 Tag 的地方（筛选按钮的色点）直接当 CSS 颜色用
+export const TASK_STATUS_META: Record<TaskStatus, { label: string; color: string; hex: string }> = {
+  PENDING_ASSIGN: { label: "待认领", color: "gold", hex: "#d48806" },
+  IN_PROGRESS: { label: "标注中", color: "blue", hex: "#1677ff" },
+  SUBMITTED: { label: "待审核", color: "purple", hex: "#722ed1" },
+  APPROVED: { label: "已通过", color: "green", hex: "#389e0d" },
+  REJECTED: { label: "已驳回", color: "red", hex: "#cf1322" },
 };
 
 export function TaskStatusTag({ status }: { status: TaskStatus }) {

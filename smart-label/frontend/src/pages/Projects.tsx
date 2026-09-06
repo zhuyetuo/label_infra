@@ -325,17 +325,25 @@ export default function Projects() {
                   options={[
                     { label: `全部 ${all.length}`, value: "ALL" },
                     ...(Object.keys(TASK_STATUS_META) as TaskStatus[]).flatMap((s) => {
-                      const base = { label: `${TASK_STATUS_META[s].label} ${counts[s] ?? 0}`, value: s as StatusFilter, disabled: !counts[s] };
+                      const meta = TASK_STATUS_META[s];
+                      // 每个状态前面一个跟 Tag 同色的色点，一排灰字看着吃力
+                      const opt = (text: string, n: number, value: StatusFilter, disabled: boolean) => ({
+                        value,
+                        disabled,
+                        label: (
+                          <span style={disabled ? undefined : { color: meta.hex, fontWeight: 500 }}>
+                            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: meta.hex, marginRight: 5, opacity: disabled ? 0.3 : 1 }} />
+                            {text} {n}
+                          </span>
+                        ),
+                      });
+                      const base = opt(meta.label, counts[s] ?? 0, s, !counts[s]);
                       if (s !== "IN_PROGRESS" || !counts[s]) return [base];
                       // 标注中再拆成"已有内容 / 还没动手"，找到底哪几个是真的在标
                       return [
                         base,
-                        { label: `└ 已有内容 ${startedCount}`, value: "IN_PROGRESS_STARTED" as StatusFilter, disabled: !startedCount },
-                        {
-                          label: `└ 还没动手 ${inProgress.length - startedCount}`,
-                          value: "IN_PROGRESS_EMPTY" as StatusFilter,
-                          disabled: inProgress.length === startedCount,
-                        },
+                        opt("标注中·已有内容", startedCount, "IN_PROGRESS_STARTED", !startedCount),
+                        opt("标注中·还没动手", inProgress.length - startedCount, "IN_PROGRESS_EMPTY", inProgress.length === startedCount),
                       ];
                     }),
                   ]}
