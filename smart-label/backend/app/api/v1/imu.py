@@ -1,4 +1,10 @@
-"""IMU 六轴曲线：元信息 + 窗口化LTTB降采样。"""
+"""IMU 六轴曲线：元信息 + 窗口化LTTB降采样。
+
+CSV 解析是同步吃 CPU 的活，一律丢到线程池里跑（asyncio.to_thread），不然一份
+十几万行的 CSV 解析那一两秒会把整个事件循环卡死，视频 token、列表接口全部跟着超时。
+"""
+
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +42,7 @@ async def get_imu_meta(
 ):
     path = await _resolve_csv_path(sample_id, db, user)
     try:
-        meta = get_meta(path)
+        meta = await asyncio.to_thread(get_meta, path)
     except ImuReadError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return ok(ImuMeta(**meta).model_dump())
@@ -53,7 +59,7 @@ async def get_imu_rows(
     """逐行原始记录，分页返回，不做降采样——表格页想看真实数据用这个。"""
     path = await _resolve_csv_path(sample_id, db, user)
     try:
-        rows = get_rows(path, offset, limit)
+        rows = await asyncio.to_thread(get_rows, path, offset, limit)
     except ImuReadError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return ok(ImuRows(**rows).model_dump())
@@ -72,7 +78,7 @@ async def get_imu_series(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "end_ms 不能小于 start_ms")
     path = await _resolve_csv_path(sample_id, db, user)
     try:
-        series = get_series(path, start_ms, end_ms, max_points)
+        series = await asyncio.to_thread(get_series, path, start_ms, end_ms, max_points)
     except ImuReadError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return ok(ImuSeries(**series).model_dump())

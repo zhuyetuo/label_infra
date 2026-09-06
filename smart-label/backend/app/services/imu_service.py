@@ -13,12 +13,18 @@ IMU CSV 读取 + 窗口化 + LTTB 降采样。列名约定（跟公司现有IMU�
 外面只认 ImuReadError，所以这里必须保证不漏出别的异常类型，
 否则接口会变成一个没有任何信息的 500（之前线上就是报 ValueError）。
 
-当前实现每次请求都重新读CSV（MVP版本，够用；量大后按架构文档规划升级成
-Parquet缓存+预计算概览金字塔，见 imu_ingest_worker 的TODO）。
+解析好的 DataFrame 在进程内按文件缓存几份（见 _load_dataframe），同一个样本
+连着来的 meta/series/rows 只解析一次；量大后按架构文档规划升级成
+Parquet缓存+预计算概览金字塔，见 imu_ingest_worker 的TODO。
+这里的函数都是同步、吃 CPU 的，接口层必须用 asyncio.to_thread 调，
+否则一份大 CSV 解析的一两秒会把整个事件循环卡住，别的请求全部超时。
 """
 
 import math
+import os
 import re
+import threading
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -117,7 +123,35 @@ def _parse_timestamp(ts_raw: pd.Series) -> pd.Series:
     return pd.to_datetime(ts_raw, errors="coerce", format="mixed")
 
 
+# 解析好的 DataFrame 按 (路径, mtime, 大小) 缓存几份：打开一个样本会连着来
+# meta / series / rows 三个请求，AI 预标注也要读起点时间，一份 18 万行的 CSV
+# 解析一次要一两秒，重复解析三四遍纯浪费。文件变了（mtime/大小变）自动失效。
+_DF_CACHE_MAX = 8
+_df_cache: "OrderedDict[tuple[str, float, int], pd.DataFrame]" = OrderedDict()
+_df_cache_lock = threading.Lock()
+
+
 def _load_dataframe(csv_path: str) -> pd.DataFrame:
+    try:
+        st = os.stat(csv_path)
+    except OSError as exc:
+        raise ImuReadError(f"读取CSV失败: {exc}") from exc
+    key = (csv_path, st.st_mtime, st.st_size)
+    with _df_cache_lock:
+        df = _df_cache.get(key)
+        if df is not None:
+            _df_cache.move_to_end(key)
+            return df
+    df = _load_dataframe_uncached(csv_path)
+    with _df_cache_lock:
+        _df_cache[key] = df
+        _df_cache.move_to_end(key)
+        while len(_df_cache) > _DF_CACHE_MAX:
+            _df_cache.popitem(last=False)
+    return df
+
+
+def _load_dataframe_uncached(csv_path: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(csv_path)
     except Exception as exc:  # noqa: BLE001
