@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # 前端 axios 给这个请求 180s、nginx proxy_read_timeout 300s，这里要比前端略短，
     # 这样超时是后端报出清楚的 502 而不是前端先断掉。
     algo_infer_timeout_sec: int = 170
+    # 项目批量预标注走 /infer_batch：每次发多少个样本、等多久。AI 服务按文件多进程
+    # 并行（22 个 worker 左右），一块 40 个 ≈ 两轮，单文件十几秒，正常一分钟内回；
+    # 超时给足余量，机器被别的东西占满时也别误判失败
+    algo_infer_batch_size: int = 40
+    algo_infer_batch_timeout_sec: int = 1800
 
     # --- CORS ---
     cors_allow_origins: list[str] = ["http://localhost:8284"]
