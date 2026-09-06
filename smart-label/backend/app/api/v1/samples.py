@@ -4,6 +4,9 @@
 "不想等，立刻扫一次"的快捷方式，不是唯一入口。
 """
 
+import json
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +20,9 @@ from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.schemas.model_version import PrelabelResult
 from app.schemas.sample import SampleMediaOut, SampleOut, SampleUpdate, ScanProgressOut, ScanStartResult
+from app.services import algo_client
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
@@ -93,6 +98,53 @@ async def get_sample_media(
             video_fps=sample.video_fps,
         ).model_dump()
     )
+
+
+@scoped_router.post("/{sample_id}/ai-prelabel")
+async def ai_prelabel(
+    sample_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """
+    标注员点"AI预标注"时调这个接口：同步调用 algo_service /infer 拿到预测的
+    行为片段，写一份 JSON 落到 NAS（跟 imu_csv_path 同目录，文件名加
+    _ai_label.json 后缀），更新 sample.ai_label_path，同时把片段直接返回给
+    前端——不用再多等一轮"写盘→前端再读盘"，标注界面可以立刻拿这次返回的
+    结果预填标注框。
+
+    访问权限跟 get_sample_media 一样：管理员任意样本都能点，标注员/审核员
+    只有在这个样本上有自己能看的任务时才行。
+    """
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+
+    if user.role not in (UserRole.admin, UserRole.super_admin):
+        visible = (
+            await db.execute(apply_task_scope(select(Task.id).where(Task.sample_id == sample_id), user).limit(1))
+        ).scalar_one_or_none()
+        if visible is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该样本")
+
+    try:
+        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id)
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+
+    ai_label_relpath = os.path.splitext(sample.imu_csv_path)[0] + "_ai_label.json"
+    full_path = os.path.join(settings.nas_root, ai_label_relpath)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    sample.ai_label_path = ai_label_relpath
+    await db.commit()
+
+    return ok(PrelabelResult(
+        sample_id=sample.id,
+        ai_label_path=ai_label_relpath,
+        events=result["events"],
+        scratch_count=result["scratch_count"],
+    ).model_dump())
 
 
 @router.post("/import-scan")

@@ -8,6 +8,7 @@ from app.models.dog import Dog
 from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.media_file import MediaFile
+from app.models.model_version import ModelVersion
 from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
@@ -30,4 +31,5 @@ __all__ = [
     "ClipJob",
     "BackgroundJob",
     "AuditLog",
+    "ModelVersion",
 ]
