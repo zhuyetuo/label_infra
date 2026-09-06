@@ -10,6 +10,7 @@ const ALL_ITEMS = [
   { key: "/tasks", label: "任务", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/reviews", label: "审核", roles: ["super_admin", "admin", "reviewer"] },
   { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
+  { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"] },
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
   { key: "/users", label: "账号管理", roles: ["super_admin", "admin"] },
 ];

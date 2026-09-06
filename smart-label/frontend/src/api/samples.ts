@@ -3,6 +3,10 @@ import type { Sample } from "@/types";
 
 export const listSamples = () => request.get<never, Sample[]>("/samples");
 
+/** 现在只用来手动关联到哪只狗（采集端文件名还没带 dog 编号之前只能这样补） */
+export const updateSample = (id: number, body: { dog_id: number | null }) =>
+  request.patch<never, Sample>(`/samples/${id}`, body);
+
 export interface SampleMedia {
   video1_id: number | null;
   video2_id: number | null;

@@ -11,12 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.dog import Dog
 from app.models.media_file import MediaFile
 from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.sample import SampleMediaOut, SampleOut, ScanProgressOut, ScanStartResult
+from app.schemas.sample import SampleMediaOut, SampleOut, SampleUpdate, ScanProgressOut, ScanStartResult
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
@@ -33,6 +34,24 @@ async def list_samples(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Sample).order_by(Sample.created_at.desc()))
     samples = result.scalars().all()
     return ok([SampleOut.model_validate(s).model_dump() for s in samples])
+
+
+@router.patch("/{sample_id}")
+async def update_sample(sample_id: int, body: SampleUpdate, db: AsyncSession = Depends(get_db)):
+    """现在只用来手动关联到哪只狗，采集端文件名还没带 dog 编号之前只能这样补。"""
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    updates = body.model_dump(exclude_unset=True)
+    if "dog_id" in updates and updates["dog_id"] is not None:
+        dog = await db.get(Dog, updates["dog_id"])
+        if dog is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "狗不存在")
+    for field, value in updates.items():
+        setattr(sample, field, value)
+    await db.commit()
+    await db.refresh(sample)
+    return ok(SampleOut.model_validate(sample).model_dump())
 
 
 @scoped_router.get("/{sample_id}/media")

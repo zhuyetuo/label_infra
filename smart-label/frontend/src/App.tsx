@@ -4,6 +4,7 @@ import Login from "@/pages/Login";
 import Tasks from "@/pages/Tasks";
 import Reviews from "@/pages/Reviews";
 import Samples from "@/pages/Samples";
+import Dogs from "@/pages/Dogs";
 import Labels from "@/pages/Labels";
 import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/reviews" element={<Reviews />} />
         <Route path="/samples" element={<Samples />} />
+        <Route path="/dogs" element={<Dogs />} />
         <Route path="/label-definitions" element={<Labels />} />
         {/* 标签模板并到「标签管理」页里做成一个 Tab 了，旧链接跳过去 */}
         <Route path="/label-templates" element={<Navigate to="/label-definitions" replace />} />

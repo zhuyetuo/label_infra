@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Collapse, Progress, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Collapse, Progress, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getImportScanStatus, startImportScan, listSamples, type ScanProgress } from "@/api/samples";
+import { getImportScanStatus, startImportScan, listSamples, updateSample, type ScanProgress } from "@/api/samples";
+import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
 
@@ -21,6 +22,7 @@ function formatDuration(sec: number): string {
 export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
+  const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [preview, setPreview] = useState<Sample | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -51,6 +53,12 @@ export default function Samples() {
 
   useEffect(() => stopPolling, []);
 
+  const handleAssignDog = async (sample: Sample, dogId: number | null) => {
+    await updateSample(sample.id, { dog_id: dogId });
+    message.success(dogId == null ? "已取消关联" : "已关联");
+    qc.invalidateQueries({ queryKey: ["samples"] });
+  };
+
   const columns = [
     { title: "ID", dataIndex: "id", width: 60 },
     { title: "样本编号", dataIndex: "sample_code" },
@@ -58,6 +66,26 @@ export default function Samples() {
       title: "状态",
       dataIndex: "import_status",
       render: (s: Sample["import_status"]) => <Tag color={statusColor[s]}>{s}</Tag>,
+    },
+    {
+      title: "所属狗",
+      dataIndex: "dog_id",
+      width: 160,
+      // 采集端文件名还没带 dog 编号之前，只能靠这里手动关联；等以后文件名
+      // 自动带出来了，这里照样能用来改关联
+      render: (dogId: number | null, record: Sample) => (
+        <Select
+          size="small"
+          allowClear
+          placeholder="未关联"
+          style={{ width: 140 }}
+          value={dogId ?? undefined}
+          options={dogs?.map((d) => ({ value: d.id, label: d.name ? `${d.dog_code}（${d.name}）` : d.dog_code }))}
+          onChange={(v) => handleAssignDog(record, v ?? null)}
+          showSearch
+          optionFilterProp="label"
+        />
+      ),
     },
     { title: "时长(秒)", dataIndex: "video_duration_sec" },
     { title: "分辨率", dataIndex: "video_resolution" },
