@@ -149,16 +149,30 @@ export default function SegmentPanel({
   const stats = useMemo(() => {
     const by = new Map<
       number,
-      { label_id: number; count: number; totalMs: number; confs: number[]; pending: number; confirmed: number; modified: number; human: number }
+      {
+        label_id: number;
+        count: number;
+        totalMs: number;
+        minMs: number;
+        maxMs: number;
+        confs: number[];
+        pending: number;
+        confirmed: number;
+        modified: number;
+        human: number;
+      }
     >();
     for (const i of items) {
       let s = by.get(i.label_id);
       if (!s) {
-        s = { label_id: i.label_id, count: 0, totalMs: 0, confs: [], pending: 0, confirmed: 0, modified: 0, human: 0 };
+        s = { label_id: i.label_id, count: 0, totalMs: 0, minMs: Infinity, maxMs: 0, confs: [], pending: 0, confirmed: 0, modified: 0, human: 0 };
         by.set(i.label_id, s);
       }
+      const dur = Math.max(0, i.end_time_ms - i.start_time_ms);
       s.count += 1;
-      s.totalMs += Math.max(0, i.end_time_ms - i.start_time_ms);
+      s.totalMs += dur;
+      s.minMs = Math.min(s.minMs, dur);
+      s.maxMs = Math.max(s.maxMs, dur);
       if (i.ai_confidence != null) s.confs.push(i.ai_confidence);
       const st = aiState(i);
       if (st === "pending") s.pending += 1;
@@ -301,14 +315,23 @@ export default function SegmentPanel({
             })}
             columns={[
               { title: "类别", render: (_, s) => <Tag color={colorOf(s.label_id)}>{nameOf(s.label_id)}</Tag> },
-              { title: "片段数", dataIndex: "count", width: 80 },
-              { title: "总时长", render: (_, s) => fmtDur(s.totalMs), width: 100 },
+              { title: "片段数", dataIndex: "count", width: 70, sorter: (a, b) => a.count - b.count },
+              { title: "总时长", width: 90, sorter: (a, b) => a.totalMs - b.totalMs, render: (_, s) => fmtDur(s.totalMs) },
               {
-                title: "置信度 均值 / 最低",
-                width: 150,
+                title: "单段时长 最短 / 平均 / 最长",
+                width: 200,
+                render: (_, s) =>
+                  s.count ? `${fmtDur(s.minMs)} / ${fmtDur(s.totalMs / s.count)} / ${fmtDur(s.maxMs)}` : "—",
+              },
+              {
+                title: "置信度 最低 / 均值 / 最高",
+                width: 190,
+                sorter: (a, b) =>
+                  (a.confs.length ? a.confs.reduce((x, y) => x + y, 0) / a.confs.length : -1) -
+                  (b.confs.length ? b.confs.reduce((x, y) => x + y, 0) / b.confs.length : -1),
                 render: (_, s) =>
                   s.confs.length
-                    ? `${((s.confs.reduce((a, b) => a + b, 0) / s.confs.length) * 100).toFixed(0)}% / ${(Math.min(...s.confs) * 100).toFixed(0)}%`
+                    ? `${(Math.min(...s.confs) * 100).toFixed(0)}% / ${((s.confs.reduce((a, b) => a + b, 0) / s.confs.length) * 100).toFixed(0)}% / ${(Math.max(...s.confs) * 100).toFixed(0)}%`
                     : "—",
               },
               { title: "待确认", dataIndex: "pending", width: 80, render: (v: number) => (v ? <span style={{ color: "#fa8c16" }}>{v}</span> : 0) },
