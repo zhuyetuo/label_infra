@@ -701,12 +701,17 @@ export default function Projects() {
                 rowKey="id"
                 dataSource={rows}
                 pagination={rows.length > 10 ? { pageSize: 10, showSizeChanger: true } : false}
+                // 只在升/降之间切，不要 antd 默认第三档"取消排序"（看着像乱序）
+                sortDirections={["ascend", "descend", "ascend"]}
                 locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
                 columns={[
-                  { title: "任务ID", dataIndex: "id", width: 80 },
+                  { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
                   {
                     title: "样本",
                     dataIndex: "sample_id",
+                    // 样本编号里带采集时间，按字符串排就是按采集时间排；默认升序
+                    sorter: (a: Task, b: Task) => String(sampleCode(a.sample_id)).localeCompare(String(sampleCode(b.sample_id))),
+                    defaultSortOrder: "ascend" as const,
                     render: (id: number) => {
                       const s = samples?.find((x) => x.id === id);
                       return (
