@@ -69,21 +69,35 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 之前先记一笔，等它的 play/pause 事件来了对得上就吞掉；对不上的才是用户点了原生
   // 控制条，这时才去带动其它两路。时间窗口那套要么漏（漂移校正一直在刷窗口，用户的
   // 暂停被吞）要么多（seek 后的自动续播和用户暂停互相触发，三路来回播放/暂停停不下来）。
-  const expectedRef = useRef(new WeakMap<HTMLVideoElement, "play" | "pause">());
+  // 每路一个先进先出的队列，而不是单个槽位：seek 续播是"pause 紧接着 play"，事件
+  // 是异步到的，单槽位会被后一次覆盖，前一个事件到了对不上就被当成用户操作，
+  // 三路就开始互相带着播放/暂停。
+  const expectedRef = useRef(new WeakMap<HTMLVideoElement, ("play" | "pause")[]>());
+  const pushExpected = (v: HTMLVideoElement, kind: "play" | "pause") => {
+    const q = expectedRef.current.get(v) ?? [];
+    q.push(kind);
+    expectedRef.current.set(v, q);
+  };
   const progPlay = (v: HTMLVideoElement) => {
     if (!v.paused) return;
-    expectedRef.current.set(v, "play");
-    v.play().catch(() => expectedRef.current.delete(v));
+    pushExpected(v, "play");
+    v.play().catch(() => {
+      // play() 被打断（比如紧接着 pause 了）就不会有 play 事件，把这条预期撤掉
+      const q = expectedRef.current.get(v);
+      const i = q?.indexOf("play") ?? -1;
+      if (q && i >= 0) q.splice(i, 1);
+    });
   };
   const progPause = (v: HTMLVideoElement) => {
     if (v.paused) return;
-    expectedRef.current.set(v, "pause");
+    pushExpected(v, "pause");
     v.pause();
   };
   /** 事件是不是我们自己触发的：是就消费掉并返回 true */
   const consumeExpected = (v: HTMLVideoElement, kind: "play" | "pause") => {
-    if (expectedRef.current.get(v) !== kind) return false;
-    expectedRef.current.delete(v);
+    const q = expectedRef.current.get(v);
+    if (!q || q[0] !== kind) return false;
+    q.shift();
     return true;
   };
   const [speed, setSpeed] = useState(1);
@@ -255,6 +269,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         pendingSeek = null;
         markProgrammatic();
         for (const v of all()) progPause(v);
+        // 保险：某一路的 play() 还在路上、这一刻 paused 还是 true 的话上面会漏掉它，
+        // 等它真播起来再补一刀
+        setTimeout(() => {
+          if (bus.getLoop()) return;
+          for (const v of all()) progPause(v);
+        }, 300);
         return;
       }
       for (const v of all()) progPlay(v);
@@ -262,7 +282,14 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         const cur = bus.getLoop();
         if (!cur) return;
         const lead0 = all()[0];
-        if (lead0 && !lead0.seeking && lead0.currentTime >= cur.end) bus.seek(cur.start);
+        if (lead0 && !lead0.seeking && lead0.currentTime >= cur.end) {
+          // 跳回起点不走 bus.seek：那条路是"暂停 -> seek -> 等 ready -> 再播"，
+          // 一两秒的片段每圈都要暂停一次再播，看着就是三路来回闪。播放中直接改
+          // currentTime 不会打断播放状态，三路一起改完接着播就行。
+          markProgrammatic();
+          for (const v of all()) v.currentTime = cur.start;
+          bus.reportTime(cur.start);
+        }
         loopRaf = requestAnimationFrame(tick);
       };
       loopRaf = requestAnimationFrame(tick);
@@ -542,6 +569,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     for (const v of vids) {
       if (anyPlaying) progPause(v);
       else progPlay(v);
+    }
+    if (anyPlaying) {
+      // 同上：play() 还在路上的那一路这一刻 paused 仍是 true，稍后补一次
+      setTimeout(() => {
+        for (const v of vids) progPause(v);
+      }, 300);
     }
     setPlaying(!anyPlaying);
   };
