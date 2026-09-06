@@ -34,6 +34,11 @@
   margin: 0 auto;
 }
 
+/* AI 预测还没人确认的片段行：淡橙底，扫一眼就知道哪些还没看过 */
+.seg-row--pending > td {
+  background: #fffbf0 !important;
+}
+
 /* 展开时通道标题压扁一点，六行才塞得下 */
 .ws-body--charts-expanded .ws-charts .u-title {
   font-size: 12px;

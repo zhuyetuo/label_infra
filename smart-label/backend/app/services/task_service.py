@@ -148,6 +148,10 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             if changed:
                 origin.is_modified = True
                 origin.created_by = user.id
+                # 改过之后原来的"确认正确"不再成立，除非这次请求明确再确认
+                origin.ai_confirmed = bool(incoming.ai_confirmed)
+            elif incoming.ai_confirmed is not None:
+                origin.ai_confirmed = incoming.ai_confirmed
         else:
             new_item = AnnotationLabelItem(
                 annotation_record_id=record.id,
@@ -159,6 +163,7 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 ai_confidence=incoming.ai_confidence
                 if incoming.source_type == LabelItemSource.ai_generated
                 else None,
+                ai_confirmed=bool(incoming.ai_confirmed) and incoming.source_type == LabelItemSource.ai_generated,
                 created_by=user.id,
             )
             db.add(new_item)

@@ -73,6 +73,10 @@ class AnnotationLabelItem(Base):
         Boolean, nullable=False, default=False, comment="AI标签是否被人工修改过"
     )
     ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # AI 标签被人看过并确认正确。改过类别/起止会自动清掉，需要再确认一次
+    ai_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment="AI标签是否已被人工确认为正确"
+    )
 
     # 实际标注这一条的用户；AI生成的为 NULL；任务被中途转手也能按人追溯
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)

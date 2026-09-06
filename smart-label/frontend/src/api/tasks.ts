@@ -41,6 +41,7 @@ export const saveDraft = (
     origin_item_id?: number;
     source_type?: "ai_generated" | "human_added";
     ai_confidence?: number | null;
+    ai_confirmed?: boolean;
   }[]
 ) => request.put<never, null>(`/tasks/${id}/draft`, { items });
 
