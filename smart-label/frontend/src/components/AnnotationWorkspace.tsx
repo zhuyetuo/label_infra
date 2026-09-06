@@ -8,7 +8,6 @@ import {
   Segmented,
   Space,
   Spin,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -17,6 +16,8 @@ import {
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getSampleMedia } from "@/api/samples";
+import { getImuMeta } from "@/api/imu";
+import SegmentPanel from "@/components/SegmentPanel";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -54,16 +55,6 @@ const CHART_VIEWPORT_PX = 185;
 const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 
-function formatMs(ms: number): string {
-  const total = Math.max(0, Math.round(ms));
-  const h = Math.floor(total / 3_600_000);
-  const m = Math.floor((total % 3_600_000) / 60_000);
-  const s = Math.floor((total % 60_000) / 1000);
-  const msPart = total % 1000;
-  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(msPart, 3)}`;
-}
-
 // 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
 // 时间点不用手填毫秒，所见即所得。
 export default function AnnotationWorkspace({
@@ -84,6 +75,8 @@ export default function AnnotationWorkspace({
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
   const [prelabeling, setPrelabeling] = useState(false);
+  // IMU 总时长，片段列表算"预测覆盖了多少、哪里是空白"要用
+  const [durationMs, setDurationMs] = useState<number | null>(null);
   const [fps, setFps] = useState<number | null>(null);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
   // 默认只露一条波形把高度让给视频；想通盘看六轴时切到"展开全部"，
@@ -111,6 +104,7 @@ export default function AnnotationWorkspace({
       setHasCsv(false);
       setFps(null);
       setItems([]);
+      setDurationMs(null);
       return;
     }
     setLoading(true);
@@ -131,6 +125,13 @@ export default function AnnotationWorkspace({
       setVideos(vids);
       setHasCsv(media.csv_id != null);
       setFps(media.video_fps);
+      if (media.csv_id != null) {
+        getImuMeta(sampleId)
+          .then((m) => setDurationMs(m.duration_ms))
+          .catch(() => setDurationMs(null));
+      } else {
+        setDurationMs(null);
+      }
 
       const draft = await getDraft(taskId);
       setItems(draft.items);
@@ -175,9 +176,30 @@ export default function AnnotationWorkspace({
         source_type: "human_added",
         is_modified: false,
         ai_confidence: null,
+        ai_confirmed: false,
         created_by: null,
       },
     ]);
+  };
+
+  // 人工改了 AI 片段的类别/起止：本地立刻标成"已纠正"并清掉确认，跟后端
+  // save_draft 的判定一致，不用等保存后重新拉一遍才变
+  const touchItem = (it: LabelItem, patch: Partial<LabelItem>): LabelItem => {
+    const changed =
+      (patch.label_id != null && patch.label_id !== it.label_id) ||
+      (patch.start_time_ms != null && patch.start_time_ms !== it.start_time_ms) ||
+      (patch.end_time_ms != null && patch.end_time_ms !== it.end_time_ms);
+    const next = { ...it, ...patch };
+    if (changed && it.source_type === "ai_generated") {
+      next.is_modified = true;
+      next.ai_confirmed = false;
+    }
+    return next;
+  };
+
+  const updateItems = (ids: number[], patch: Partial<LabelItem>) => {
+    const set = new Set(ids);
+    setItems((prev) => prev.map((it) => (set.has(it.id) ? touchItem(it, patch) : it)));
   };
 
   // 在波形上直接拖出来一段（参考工具的主要标注方式）
@@ -191,7 +213,7 @@ export default function AnnotationWorkspace({
     setItems((prev) =>
       prev.map((it, i) =>
         i === index
-          ? { ...it, start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)) }
+          ? touchItem(it, { start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)) })
           : it
       )
     );
@@ -209,6 +231,7 @@ export default function AnnotationWorkspace({
         // 新增条目要带上来源，AI 预标注出来的才能在库里记成 ai_generated
         source_type: i.origin_item_id == null ? i.source_type : undefined,
         ai_confidence: i.origin_item_id == null ? i.ai_confidence : undefined,
+        ai_confirmed: i.ai_confirmed,
       }))
     );
   };
@@ -243,6 +266,7 @@ export default function AnnotationWorkspace({
           source_type: "ai_generated",
           is_modified: false,
           ai_confidence: it.confidence,
+          ai_confirmed: false,
           created_by: null,
         });
       });
@@ -453,7 +477,17 @@ export default function AnnotationWorkspace({
         )}
 
         <div
-          style={{ marginTop: 4, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+          // 单条波形模式下波形区本身是固定高度，这个外层不能再 flex:1——它和视频区
+          // 都是 flex:1 的话，下面片段列表一展开，两者一起被压，波形区被压到比内容
+          // 还矮，内容就溢出来跟片段列表叠在一起。改成按内容撑开、不可压缩，
+          // 让会自适应量尺寸的视频区独自让出高度。
+          style={{
+            marginTop: 4,
+            flex: chartExpanded ? 1 : "0 0 auto",
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+          }}
         >
           {hasCsv && sampleId != null ? (
             <>
@@ -553,7 +587,7 @@ export default function AnnotationWorkspace({
 
         <Collapse
           size="small"
-          style={{ marginTop: 8 }}
+          style={{ marginTop: 8, flex: "0 0 auto" }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           defaultActiveKey={readOnly ? ["segs"] : []}
@@ -562,48 +596,17 @@ export default function AnnotationWorkspace({
               key: "segs",
               label: `已标注片段（${items.length}）`,
               children: (
-        <Table
-          size="small"
-          rowKey="id"
-          dataSource={items}
-          pagination={false}
-          scroll={{ y: 220 }}
-          locale={{ emptyText: "还没有标注片段" }}
-          columns={[
-            {
-              title: "标签",
-              render: (_, i: LabelItem) => <Tag color={colorOf(i.label_id)}>{nameOf(i.label_id)}</Tag>,
-            },
-            { title: "开始", render: (_, i: LabelItem) => formatMs(i.start_time_ms) },
-            { title: "结束", render: (_, i: LabelItem) => formatMs(i.end_time_ms) },
-            {
-              title: "时长",
-              render: (_, i: LabelItem) => `${((i.end_time_ms - i.start_time_ms) / 1000).toFixed(2)}s`,
-            },
-            { title: "来源", dataIndex: "source_type", width: 110 },
-            {
-              title: "操作",
-              width: 140,
-              render: (_, i: LabelItem) => (
-                <Space>
-                  <Button size="small" type="link" onClick={() => bus.seek(i.start_time_ms / 1000)}>
-                    跳转
-                  </Button>
-                  {!readOnly && (
-                    <Button
-                      size="small"
-                      danger
-                      type="link"
-                      onClick={() => setItems((prev) => prev.filter((x) => x.id !== i.id))}
-                    >
-                      删除
-                    </Button>
-                  )}
-                </Space>
-              ),
-            },
-          ]}
-        />
+                <SegmentPanel
+                  items={items}
+                  labels={labels}
+                  readOnly={readOnly}
+                  durationMs={durationMs}
+                  colorOf={colorOf}
+                  nameOf={nameOf}
+                  onSeek={(ms) => bus.seek(ms / 1000)}
+                  onUpdate={updateItems}
+                  onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+                />
               ),
             },
           ]}

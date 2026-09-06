@@ -66,6 +66,8 @@ export interface LabelItem {
   source_type: "ai_generated" | "human_added";
   is_modified: boolean;
   ai_confidence: number | null;
+  /** AI 片段是否已被人工确认为正确；人工画的恒为 false */
+  ai_confirmed: boolean;
   created_by: number | null;
 }
 

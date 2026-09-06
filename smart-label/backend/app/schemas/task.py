@@ -41,6 +41,8 @@ class LabelItemIn(BaseModel):
     # 人手画的不传。只对新增条目生效，已存在条目的来源不会被改写。
     source_type: LabelItemSource | None = None
     ai_confidence: float | None = None
+    # AI 片段人工确认状态。不传 = 保持库里原值（但类别/起止被改动时会自动清成 False）
+    ai_confirmed: bool | None = None
 
 
 class LabelItemOut(LabelItemIn):
@@ -50,6 +52,7 @@ class LabelItemOut(LabelItemIn):
     source_type: str
     is_modified: bool
     ai_confidence: float | None
+    ai_confirmed: bool
     created_by: int | None
 
 
