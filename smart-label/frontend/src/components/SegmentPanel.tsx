@@ -275,7 +275,9 @@ export default function SegmentPanel({
         rowKey="id"
         dataSource={filtered}
         pagination={false}
-        scroll={{ y: 220 }}
+        // 上千行时只渲染可视区那十来行（每行还带一个 Select），否则整页都跟着卡
+        virtual
+        scroll={{ x: 900, y: 220 }}
         locale={{ emptyText: items.length ? "没有符合筛选条件的片段" : "还没有标注片段" }}
         rowClassName={(i) => (aiState(i) === "pending" ? "seg-row--pending" : "")}
         columns={[

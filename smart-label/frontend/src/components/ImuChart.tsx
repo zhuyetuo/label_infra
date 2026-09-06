@@ -135,7 +135,7 @@ export default function ImuChart({
   annotateRef.current.activeColor = activeColor ?? null;
   annotateRef.current.onCreate = onCreateSegment ?? null;
   annotateRef.current.onResize = onResizeSegment ?? null;
-  annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw());
+  annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw(false));
 
   useEffect(() => {
     segmentsRef.current = segments ?? [];
@@ -144,7 +144,7 @@ export default function ImuChart({
     if (cur && !segmentsRef.current.some((s) => s.start_time_ms === cur.start_time_ms && s.end_time_ms === cur.end_time_ms)) {
       highlightRef.current = null;
     }
-    plotRefs.current.forEach((p) => p?.redraw());
+    plotRefs.current.forEach((p) => p?.redraw(false));
   }, [segments]);
 
   useEffect(() => {
@@ -314,7 +314,7 @@ export default function ImuChart({
       const unsubscribe = bus.onTime((sec) => {
         playheadState.current = startEpochRef.current + sec;
         followPlayhead(playheadState.current);
-        plotRefs.current.forEach((p) => p?.redraw());
+        plotRefs.current.forEach((p) => p?.redraw(false));
       });
 
       return unsubscribe;
@@ -408,42 +408,99 @@ function segmentBandPlugin(
         ctx.rect(left, u.bbox.top, u.bbox.width, u.bbox.height);
         ctx.clip();
 
-        for (const seg of segs) {
-          const x0 = u.valToPos(startEpoch + seg.start_time_ms / 1000, "x", true);
-          const x1 = u.valToPos(startEpoch + seg.end_time_ms / 1000, "x", true);
-          if (x1 < left || x0 > right) continue;
-          const isHighlighted =
-            !!highlight && highlight.start_time_ms === seg.start_time_ms && highlight.end_time_ms === seg.end_time_ms;
+        // 上千段 × 6 张图 × 播放时每帧重画，逐段 beginPath/stroke/fillText 会把主线程
+        // 吃满。这里按颜色把色块和边线各攒成一条路径，最后每种颜色只 fill/stroke 一次；
+        // 屏幕上不到 3px 宽的段连边线都省掉（肉眼看不出差别）。高亮那段单独画。
+        const top = u.bbox.top;
+        const h = u.bbox.height;
+        const fills = new Map<string, Path2D>();
+        const edges = new Map<string, Path2D>();
+        const labels: { x: number; text: string; color: string }[] = [];
+        let highlighted: { x0: number; x1: number; seg: ChartSegment } | null = null;
 
+        // x 轴是线性时间轴，自己按比例算像素比每段调两次 valToPos 便宜
+        const scaleMin = u.scales.x.min ?? 0;
+        const scaleMax = u.scales.x.max ?? 1;
+        const pxPerSec = u.bbox.width / Math.max(1e-9, scaleMax - scaleMin);
+        const toX = (ms: number) => left + (startEpoch + ms / 1000 - scaleMin) * pxPerSec;
+
+        for (const seg of segs) {
+          const x0 = toX(seg.start_time_ms);
+          const x1 = toX(seg.end_time_ms);
+          if (x1 < left || x0 > right) continue;
+          if (
+            highlight &&
+            highlight.start_time_ms === seg.start_time_ms &&
+            highlight.end_time_ms === seg.end_time_ms
+          ) {
+            highlighted = { x0, x1, seg };
+            continue;
+          }
+          const w = Math.max(1, x1 - x0);
+          let fp = fills.get(seg.color);
+          if (!fp) {
+            fp = new Path2D();
+            fills.set(seg.color, fp);
+          }
+          fp.rect(x0, top, w, h);
+          if (w >= 3) {
+            let ep = edges.get(seg.color);
+            if (!ep) {
+              ep = new Path2D();
+              edges.set(seg.color, ep);
+            }
+            ep.moveTo(x0, top);
+            ep.lineTo(x0, top + h);
+            ep.moveTo(x1, top);
+            ep.lineTo(x1, top + h);
+          }
+          if (showLabel && w > 24 && seg.label) labels.push({ x: x0 + 3, text: seg.label, color: seg.color });
+        }
+
+        ctx.globalAlpha = 0.22;
+        for (const [color, p] of fills) {
+          ctx.fillStyle = color;
+          ctx.fill(p);
+        }
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1;
+        for (const [color, p] of edges) {
+          ctx.strokeStyle = color;
+          ctx.stroke(p);
+        }
+        if (labels.length) {
+          ctx.font = "11px sans-serif";
+          ctx.textBaseline = "top";
+          for (const l of labels) {
+            ctx.fillStyle = l.color;
+            ctx.fillText(l.text, l.x, top + 2);
+          }
+        }
+
+        if (highlighted) {
+          const { x0, x1, seg } = highlighted;
           ctx.fillStyle = seg.color;
-          ctx.globalAlpha = isHighlighted ? 0.4 : 0.22;
-          ctx.fillRect(x0, u.bbox.top, Math.max(1, x1 - x0), u.bbox.height);
+          ctx.globalAlpha = 0.4;
+          ctx.fillRect(x0, top, Math.max(1, x1 - x0), h);
           ctx.globalAlpha = 1;
           ctx.strokeStyle = seg.color;
-          ctx.lineWidth = isHighlighted ? 2.5 : 1;
+          ctx.lineWidth = 2.5;
           ctx.beginPath();
-          ctx.moveTo(x0, u.bbox.top);
-          ctx.lineTo(x0, u.bbox.top + u.bbox.height);
-          ctx.moveTo(x1, u.bbox.top);
-          ctx.lineTo(x1, u.bbox.top + u.bbox.height);
+          ctx.moveTo(x0, top);
+          ctx.lineTo(x0, top + h);
+          ctx.moveTo(x1, top);
+          ctx.lineTo(x1, top + h);
           ctx.stroke();
-
-          if (showLabel && x1 - x0 > 24) {
-            ctx.fillStyle = seg.color;
+          if (showLabel) {
             ctx.font = "11px sans-serif";
             ctx.textBaseline = "top";
-            ctx.fillText(seg.label, x0 + 3, u.bbox.top + 2);
-          }
-
-          // 双击高亮的这一段，在左右边缘各标一个精确到毫秒的时间，方便核对起止对不对
-          if (showLabel && isHighlighted) {
-            ctx.font = "11px sans-serif";
-            ctx.textBaseline = "top";
+            if (x1 - x0 > 24) ctx.fillText(seg.label, x0 + 3, top + 2);
+            // 双击高亮的这一段，在左右边缘各标一个精确到毫秒的时间，方便核对起止对不对
             const startLabel = formatTimestamp(startEpoch + seg.start_time_ms / 1000);
             const endLabel = formatTimestamp(startEpoch + seg.end_time_ms / 1000);
-            ctx.fillText(startLabel, Math.max(left, x0) + 3, u.bbox.top + u.bbox.height - 14);
+            ctx.fillText(startLabel, Math.max(left, x0) + 3, top + h - 14);
             const endWidth = ctx.measureText(endLabel).width;
-            ctx.fillText(endLabel, Math.min(right, x1) - endWidth - 3, u.bbox.top + u.bbox.height - 14);
+            ctx.fillText(endLabel, Math.min(right, x1) - endWidth - 3, top + h - 14);
           }
         }
         ctx.restore();
