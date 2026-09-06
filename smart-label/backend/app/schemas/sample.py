@@ -29,6 +29,13 @@ class SampleOut(BaseModel):
     created_at: datetime
 
 
+class SampleUpdate(BaseModel):
+    """现在只用来手动关联/改关联到哪只狗——采集端文件名带上 dog 编号之前，
+    没法自动识别，得靠这个手动补。"""
+
+    dog_id: int | None = None
+
+
 class SampleMediaOut(BaseModel):
     video1_id: int | None
     video2_id: int | None
