@@ -611,6 +611,7 @@ export default function AnnotationWorkspace({
                   onSeek={(ms) => bus.seek(ms / 1000)}
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+                  onCreate={readOnly ? undefined : appendItem}
                 />
               ),
             },
