@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # --- 同步引擎 ---
     video_sync_tolerance_ms: int = 100
 
+    # --- 日志 ---
+    # 日志文件目录（容器里 /app/logs，docker-compose 挂到仓库根目录 logs/smart-label/），见 core/logging_setup.py
+    log_dir: str = "logs"
+
     # --- 服务端口 ---
     backend_port: int = 8283
     frontend_port: int = 8284

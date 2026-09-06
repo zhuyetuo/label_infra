@@ -51,6 +51,8 @@ services:
       - "${BACKEND_PORT:-8283}:8283"
     volumes:
       - ${NAS_ROOT_HOST:-/home/toky/ai_data}:${NAS_ROOT:-/home/toky/ai_data}
+      # 日志落到宿主机仓库根目录 logs/smart-label/（api.log / access.log），不用进容器看
+      - ../../logs/smart-label:/app/logs
     command: uvicorn app.main:app --host 0.0.0.0 --port 8283
     networks: [smart-label]
 
@@ -66,6 +68,8 @@ services:
     env_file: .env
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
+    volumes:
+      - ../../logs/smart-label:/app/logs
     # 超时回收定时任务必须只跑一个实例，不要 scale 这个 service
     command: python -m app.workers.scheduler
     networks: [smart-label]
