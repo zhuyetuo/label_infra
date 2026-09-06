@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import BigInteger, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_role
@@ -23,7 +23,9 @@ router = APIRouter(
 
 @router.get("")
 async def list_dogs(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Dog).order_by(Dog.dog_code))
+    # dog_code 是字符串列，直接按它排会得到 1,10,2,3…；先按数值排、再按文本排，
+    # 纯数字编号就是自然顺序，带字母的编号（CAST 成 0）会归到最前面并按文本排
+    result = await db.execute(select(Dog).order_by(cast(Dog.dog_code, BigInteger), Dog.dog_code))
     dogs = result.scalars().all()
     return ok([DogOut.model_validate(d).model_dump() for d in dogs])
 
