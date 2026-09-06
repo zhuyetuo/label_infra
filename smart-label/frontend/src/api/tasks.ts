@@ -28,6 +28,14 @@ export const claimTask = (id: number) => request.post<never, Task>(`/tasks/${id}
 /** 标注中途主动放弃任务：退回公共池，草稿保留，换人接手能接着标 */
 export const releaseTask = (id: number) => request.post<never, Task>(`/tasks/${id}/release`);
 
+/** 一次领完项目里所有待认领（且没预指派给别人）的任务 */
+export const claimAllTasks = (projectId: number) =>
+  request.post<never, { count: number }>(`/tasks/claim-all`, { project_id: projectId });
+
+/** 一次放弃项目里自己名下所有标注中的任务，草稿保留 */
+export const releaseAllTasks = (projectId: number) =>
+  request.post<never, { count: number }>(`/tasks/release-all`, { project_id: projectId });
+
 export const heartbeat = (id: number) => request.patch<never, null>(`/tasks/${id}/heartbeat`);
 
 export const getDraft = (id: number) => request.get<never, Draft>(`/tasks/${id}/draft`);
