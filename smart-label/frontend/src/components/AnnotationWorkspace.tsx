@@ -381,6 +381,9 @@ export default function AnnotationWorkspace({
       onCancel={onClose}
       // 标注要看细节，占满整个屏幕，别把空间浪费在弹窗留白上
       width="100vw"
+      // 弹窗本身已经占满一屏并且 body 自己滚，外层 antd 的 wrap 层再出一根滚动条
+      // 就是两根挤在一起；wrap 的滚动禁掉（见 .ws-modal-wrap）
+      wrapClassName="ws-modal-wrap"
       style={{ top: 0, paddingBottom: 0, maxWidth: "100vw" }}
       // body 高度卡死在一屏，视频/波形按这一屏分配；片段列表展开后超出的部分
       // 让 body 自己滚（overflow:auto），不再裁掉——外层页面滚动条是 antd 弹窗

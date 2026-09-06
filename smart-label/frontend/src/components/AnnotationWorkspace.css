@@ -40,6 +40,21 @@
   margin: 0 auto;
 }
 
+/* 外层只留 body 这一根滚动条，antd Modal 的 wrap 层不再滚 */
+.ws-modal-wrap {
+  overflow: hidden !important;
+}
+.ws-modal-wrap .ant-modal {
+  max-height: 100vh;
+}
+
+/* 片段表格自己的滚动条滚到头之后，滚轮不要"接着"把外面的 body 带着一起滚；
+   鼠标在表格里就只滚表格，想滚外面把鼠标移出去 */
+.ws-segs .ant-table-body,
+.ws-segs .ant-table-tbody-virtual-holder {
+  overscroll-behavior: contain;
+}
+
 /* AI 预测还没人确认的片段行：淡橙底，扫一眼就知道哪些还没看过 */
 .seg-row--pending > td {
   background: #fffbf0 !important;
