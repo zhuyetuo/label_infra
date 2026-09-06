@@ -208,10 +208,38 @@ export default function Projects() {
     }
   };
 
+  // 新建项目一步到位：选样本 -> 建项目 -> 套标签模板 -> 批量建任务（可选 AI 预标注、
+  // 指派）。项目名默认用选中样本的日期目录名，改过就不再自动覆盖。
+  const [createSelected, setCreateSelected] = useState<Set<number>>(new Set());
+  const [createTaskType, setCreateTaskType] = useState<"from_scratch" | "ai_assisted">("ai_assisted");
+  const [createAssignee, setCreateAssignee] = useState<number | null>(null);
+  const [nameAuto, setNameAuto] = useState(true);
+  const [creating, setCreating] = useState(false);
+
   const openCreate = () => {
     setEditing(null);
-    form.setFieldsValue({ name: "", description: "", templateId: undefined });
+    form.setFieldsValue({ name: "", description: "", templateId: templates?.[0]?.id });
+    setCreateSelected(new Set());
+    setCreateTaskType("ai_assisted");
+    setCreateAssignee(null);
+    setNameAuto(true);
     setOpen(true);
+  };
+
+  // 选中的样本落在哪些日期目录里 -> 默认项目名
+  const defaultNameFor = (ids: Set<number>) => {
+    const dates = [...new Set((samples ?? []).filter((s) => ids.has(s.id)).map((s) => s.session_date ?? "未知日期"))].sort();
+    if (dates.length === 0) return "";
+    if (dates.length === 1) return dates[0];
+    if (dates.length === 2) return `${dates[0]}、${dates[1]}`;
+    return `${dates[0]}~${dates[dates.length - 1]}（${dates.length}天）`;
+  };
+  const updateCreateSelected = (updater: (prev: Set<number>) => Set<number>) => {
+    setCreateSelected((prev) => {
+      const next = updater(prev);
+      if (nameAuto) form.setFieldsValue({ name: defaultNameFor(next) });
+      return next;
+    });
   };
 
   const openEdit = (p: Project) => {
@@ -221,23 +249,113 @@ export default function Projects() {
   };
 
   const handleSubmit = async ({ templateId, ...values }: FormValues) => {
-    let projectId = editing?.id;
-    if (editing) {
-      await updateProject(editing.id, values);
-      message.success("已保存");
-    } else {
-      const created = await createProject(values);
-      projectId = created.id;
-      message.success("项目已创建");
+    setCreating(true);
+    try {
+      let projectId = editing?.id;
+      if (editing) {
+        await updateProject(editing.id, values);
+        message.success("已保存");
+      } else {
+        const created = await createProject(values);
+        projectId = created.id;
+        message.success("项目已创建");
+      }
+      if (templateId != null && projectId != null) {
+        const r = await applyLabelTemplate(templateId, projectId);
+        message.success(`已套用模板，添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}`);
+      }
+      if (!editing && projectId != null && createSelected.size > 0) {
+        const r = await bulkCreateTasks({
+          project_id: projectId,
+          sample_ids: [...createSelected],
+          task_type: createTaskType,
+          assigned_to: createAssignee ?? undefined,
+        });
+        message.success(
+          `已导入 ${r.created} 个任务${createTaskType === "ai_assisted" ? "，AI 预标注已在后台开始，进度在项目行里看" : ""}`,
+          6
+        );
+        if (createTaskType === "ai_assisted") setTimeout(() => pollPrelabel([projectId!]), 800);
+      }
+      setOpen(false);
+      form.resetFields();
+      refresh();
+    } finally {
+      setCreating(false);
     }
-    if (templateId != null && projectId != null) {
-      const r = await applyLabelTemplate(templateId, projectId);
-      message.success(`已套用模板，添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}`);
-    }
-    setOpen(false);
-    form.resetFields();
-    refresh();
   };
+
+  // 按日期分组的样本勾选器：新建项目和批量导入共用一套
+  const renderSamplePicker = (
+    selected: Set<number>,
+    setSelected: (updater: (prev: Set<number>) => Set<number>) => void,
+    importedIds: Set<number>
+  ) => (
+    <Collapse
+      size="small"
+      items={samplesByDate.map(([date, dateSamples]) => {
+        const selectable = (dateSamples ?? []).filter((s) => !importedIds.has(s.id));
+        const selectedCount = selectable.filter((s) => selected.has(s.id)).length;
+        const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+        return {
+          key: date,
+          label: (
+            <Space onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                indeterminate={selectedCount > 0 && !allSelected}
+                checked={allSelected}
+                disabled={selectable.length === 0}
+                onChange={(e) =>
+                  setSelected((prev) => {
+                    const next = new Set(prev);
+                    for (const s of selectable) {
+                      if (e.target.checked) next.add(s.id);
+                      else next.delete(s.id);
+                    }
+                    return next;
+                  })
+                }
+              />
+              <span>
+                {date}（{dateSamples?.length ?? 0} 个样本
+                {selectable.length < (dateSamples?.length ?? 0) && `，${selectable.length} 个可导入`}）
+              </span>
+            </Space>
+          ),
+          children: (
+            <Space direction="vertical" size={2}>
+              {(dateSamples ?? []).map((s) => {
+                const imported = importedIds.has(s.id);
+                return (
+                  <Checkbox
+                    key={s.id}
+                    disabled={imported}
+                    checked={selected.has(s.id)}
+                    onChange={(e) =>
+                      setSelected((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(s.id);
+                        else next.delete(s.id);
+                        return next;
+                      })
+                    }
+                  >
+                    {s.sample_code}
+                    {s.is_sensitive && <Tag color="red" style={{ marginLeft: 6 }}>敏感</Tag>}
+                    {imported && (
+                      <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
+                        （已导入）
+                      </Typography.Text>
+                    )}
+                  </Checkbox>
+                );
+              })}
+            </Space>
+          ),
+        };
+      })}
+    />
+  );
 
   const handleDelete = async (id: number) => {
     await deleteProject(id);
@@ -303,18 +421,6 @@ export default function Projects() {
     setBulkSelected(new Set());
     setBulkTaskType("from_scratch");
     setBulkAssignee(null);
-  };
-
-  const toggleDate = (dateSamples: typeof samples, checked: boolean) => {
-    setBulkSelected((prev) => {
-      const next = new Set(prev);
-      for (const s of dateSamples ?? []) {
-        if (alreadyImportedIds.has(s.id)) continue;
-        if (checked) next.add(s.id);
-        else next.delete(s.id);
-      }
-      return next;
-    });
   };
 
   const handleBulkImport = async () => {
@@ -1026,12 +1132,64 @@ export default function Projects() {
         open={open}
         onCancel={() => setOpen(false)}
         footer={null}
+        width={editing ? 520 : 680}
         destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Form.Item name="name" label="项目名" rules={[{ required: true }]}>
-            <Input placeholder="如：狗行为标注 / 项圈佩戴检测" />
+          {!editing && (
+            <Form.Item
+              label={
+                <Space>
+                  <span>要标的样本</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    已选 {createSelected.size} 个；不选也能建空项目，之后再「批量导入」
+                  </Typography.Text>
+                </Space>
+              }
+            >
+              <div style={{ maxHeight: 260, overflow: "auto" }}>
+                {renderSamplePicker(createSelected, updateCreateSelected, new Set())}
+              </div>
+            </Form.Item>
+          )}
+          <Form.Item
+            name="name"
+            label="项目名"
+            rules={[{ required: true }]}
+            extra={!editing && nameAuto ? "默认用选中样本的日期目录名，可以改" : undefined}
+          >
+            <Input
+              placeholder={editing ? undefined : "先勾样本会自动填成日期，或自己起名"}
+              onChange={() => setNameAuto(false)}
+            />
           </Form.Item>
+          {!editing && (
+            <Form.Item label="标注模式 / 指派">
+              <Space wrap>
+                <Select
+                  style={{ width: 300 }}
+                  value={createTaskType}
+                  onChange={setCreateTaskType}
+                  options={[
+                    { value: "ai_assisted", label: "AI预标注+人工修改（建好后自动跑 AI）" },
+                    { value: "from_scratch", label: "从零标注" },
+                  ]}
+                />
+                <Select
+                  style={{ width: 200 }}
+                  allowClear
+                  placeholder="指派给（留空进公共池）"
+                  value={createAssignee ?? undefined}
+                  onChange={(v) => setCreateAssignee(v ?? null)}
+                  options={users
+                    ?.filter((u) => u.is_active && u.role !== "reviewer")
+                    .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
+                  showSearch
+                  optionFilterProp="label"
+                />
+              </Space>
+            </Form.Item>
+          )}
           <Form.Item name="description" label="说明">
             <Input.TextArea rows={3} placeholder="这个项目要标什么、给谁用" />
           </Form.Item>
@@ -1067,8 +1225,12 @@ export default function Projects() {
               />
             </Form.Item>
           )}
-          <Button type="primary" htmlType="submit" block>
-            {editing ? "保存" : "创建"}
+          <Button type="primary" htmlType="submit" block loading={creating}>
+            {editing
+              ? "保存"
+              : createSelected.size > 0
+                ? `创建项目并导入 ${createSelected.size} 个任务${createTaskType === "ai_assisted" ? "（自动 AI 预标注）" : ""}`
+                : "创建空项目"}
           </Button>
         </Form>
       </Modal>
@@ -1181,60 +1343,7 @@ export default function Projects() {
               .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
           />
         </Space>
-        <Collapse
-          size="small"
-          items={samplesByDate.map(([date, dateSamples]) => {
-            const selectable = (dateSamples ?? []).filter((s) => !alreadyImportedIds.has(s.id));
-            const selectedCount = selectable.filter((s) => bulkSelected.has(s.id)).length;
-            const allSelected = selectable.length > 0 && selectedCount === selectable.length;
-            return {
-              key: date,
-              label: (
-                <Space onClick={(e) => e.stopPropagation()}>
-                  <Checkbox
-                    indeterminate={selectedCount > 0 && !allSelected}
-                    checked={allSelected}
-                    disabled={selectable.length === 0}
-                    onChange={(e) => toggleDate(dateSamples, e.target.checked)}
-                  />
-                  <span>
-                    {date}（{dateSamples?.length ?? 0} 个样本
-                    {selectable.length < (dateSamples?.length ?? 0) && `，${selectable.length} 个可导入`}）
-                  </span>
-                </Space>
-              ),
-              children: (
-                <Space direction="vertical" size={2}>
-                  {(dateSamples ?? []).map((s) => {
-                    const imported = alreadyImportedIds.has(s.id);
-                    return (
-                      <Checkbox
-                        key={s.id}
-                        disabled={imported}
-                        checked={bulkSelected.has(s.id)}
-                        onChange={(e) =>
-                          setBulkSelected((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(s.id);
-                            else next.delete(s.id);
-                            return next;
-                          })
-                        }
-                      >
-                        {s.sample_code}
-                        {imported && (
-                          <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
-                            （已导入）
-                          </Typography.Text>
-                        )}
-                      </Checkbox>
-                    );
-                  })}
-                </Space>
-              ),
-            };
-          })}
-        />
+        {renderSamplePicker(bulkSelected, setBulkSelected, alreadyImportedIds)}
       </Modal>
 
       <AnnotationWorkspace
