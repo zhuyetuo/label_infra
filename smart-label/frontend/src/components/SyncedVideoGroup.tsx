@@ -207,12 +207,35 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       applyPendingSeek();
     });
 
-    // 设了循环就自动开始播，不然点"循环"只是跳过去停在起点，还得再点播放
+    // 设了循环就自动开始播，不然点"循环"只是跳过去停在起点，还得再点播放；
+    // 停止循环则把视频暂停——循环是拿来核对这一段的，停了还往后播就跑出这段了。
+    // 终点判断不能只靠 timeupdate（一秒只来四次，0.5s 的片段能冲出去 200ms），
+    // 循环期间再用 rAF 逐帧盯着第一路，到点立刻跳回起点。
+    let loopRaf: number | null = null;
+    const stopLoopRaf = () => {
+      if (loopRaf != null) cancelAnimationFrame(loopRaf);
+      loopRaf = null;
+    };
     const offLoop = bus.onLoopChange((loop) => {
-      if (!loop) return;
+      stopLoopRaf();
+      if (!loop) {
+        for (const v of all()) if (!v.paused) v.pause();
+        return;
+      }
       for (const v of all()) if (v.paused) v.play().catch(() => {});
+      const tick = () => {
+        const cur = bus.getLoop();
+        if (!cur) return;
+        const lead0 = all()[0];
+        if (lead0 && !lead0.seeking && lead0.currentTime >= cur.end) bus.seek(cur.start);
+        loopRaf = requestAnimationFrame(tick);
+      };
+      loopRaf = requestAnimationFrame(tick);
     });
-    cleanups.push(offLoop);
+    cleanups.push(() => {
+      stopLoopRaf();
+      offLoop();
+    });
 
     const lead = all()[0];
     const onLeadSeeked = () => applyPendingSeek();
