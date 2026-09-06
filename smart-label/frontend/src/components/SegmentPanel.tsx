@@ -417,7 +417,8 @@ export default function SegmentPanel({
           },
           {
             title: "时长",
-            width: 80,
+            width: 90,
+            sorter: (a: LabelItem, b: LabelItem) => a.end_time_ms - a.start_time_ms - (b.end_time_ms - b.start_time_ms),
             render: (_, i: LabelItem) => `${((i.end_time_ms - i.start_time_ms) / 1000).toFixed(2)}s`,
           },
           {

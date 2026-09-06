@@ -87,9 +87,9 @@ export default function Samples() {
         />
       ),
     },
-    { title: "时长(秒)", dataIndex: "video_duration_sec" },
+    { title: "时长(秒)", dataIndex: "video_duration_sec", sorter: (a: Sample, b: Sample) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0) },
+    { title: "CSV行数", dataIndex: "imu_row_count", sorter: (a: Sample, b: Sample) => (a.imu_row_count ?? 0) - (b.imu_row_count ?? 0), render: (n: number | null) => n ?? "-" },
     { title: "分辨率", dataIndex: "video_resolution" },
-    { title: "CSV行数", dataIndex: "imu_row_count", render: (n: number | null) => n ?? "-" },
     { title: "错误信息", dataIndex: "import_error" },
     {
       title: "操作",

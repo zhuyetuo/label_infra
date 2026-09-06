@@ -9,7 +9,7 @@
 同一套三路摄像头，好几只狗依次背不同 IMU 设备录，摄像头只录一份，IMU CSV
 却有好几份。视频按 cam 编号分组、CSV 按 imu 编号分组，两者分开处理：一个
 会话有几个 IMU 就产出几个样本，都指向同一份视频；只有 1 个 IMU 时样本编号
-沿用会话前缀本身，超过 1 个才加 "_imu{N}" 后缀区分（文件名里的 cam 编号
+一律带 "_imu{N}" 后缀（不管这个会话有几个 IMU；文件名里的 cam 编号
 在 CSV 上只是模板带出来的，不代表跟哪个 IMU 强绑定，不能拿来做分组键）。
 
 文件名里可以再带一段可选的 "_dog{编号}"（比如 ..._imu1_dog7_raw.csv），
@@ -191,8 +191,11 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
 
     # 先过滤出结构完整、且还没写文件级候选路径的候选样本（不查库，纯内存判断）。
     # 一个 session（同一批固定摄像头视频）下每个 IMU 编号各产出一个样本，
-    # 都指向同一份视频；只有 1 个 IMU 的常规情况样本编号沿用 session_key
-    # 本身（兼容已经这么导入过的历史样本），有多个 IMU 时才加 _imu{N} 后缀区分。
+    # 都指向同一份视频，样本编号一律带 _imu{N} 后缀。之前是"只有 1 个 IMU 时
+    # 沿用 session_key 本身"，结果编号取决于扫描那一刻目录里有几份 CSV——
+    # 文件还在往 NAS 拷的时候扫到 1 份就叫 multicam_xxx，等其它 IMU 的 CSV
+    # 到了再扫又叫 multicam_xxx_imu2/3/4，同一批数据两套命名，看着像脏数据。
+    # 历史上没后缀的样本由 alembic 迁移 c7e2f1a9b3d4 统一改名。
     candidates: dict[str, dict] = {}
     all_candidate_paths: set[str] = set()
     for session_key, g in groups.items():
@@ -211,7 +214,7 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         imu_items = sorted(csvs.items())
         for imu_idx, csv_info in imu_items:
             csv_rel = csv_info["path"]
-            sample_code = session_key if len(imu_items) == 1 else f"{session_key}_imu{imu_idx}"
+            sample_code = f"{session_key}_imu{imu_idx}"
             candidates[sample_code] = {
                 "cam_paths": cam_paths,
                 "csv_rel": csv_rel,
