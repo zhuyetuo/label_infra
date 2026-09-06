@@ -65,6 +65,27 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     suppressUntil.current = Math.max(suppressUntil.current, performance.now() + ms);
   };
   const isSuppressed = () => performance.now() < suppressUntil.current;
+  // 播放/暂停的同步不用时间窗口，改成"逐个登记预期"：我们自己对某一路调 play()/pause()
+  // 之前先记一笔，等它的 play/pause 事件来了对得上就吞掉；对不上的才是用户点了原生
+  // 控制条，这时才去带动其它两路。时间窗口那套要么漏（漂移校正一直在刷窗口，用户的
+  // 暂停被吞）要么多（seek 后的自动续播和用户暂停互相触发，三路来回播放/暂停停不下来）。
+  const expectedRef = useRef(new WeakMap<HTMLVideoElement, "play" | "pause">());
+  const progPlay = (v: HTMLVideoElement) => {
+    if (!v.paused) return;
+    expectedRef.current.set(v, "play");
+    v.play().catch(() => expectedRef.current.delete(v));
+  };
+  const progPause = (v: HTMLVideoElement) => {
+    if (v.paused) return;
+    expectedRef.current.set(v, "pause");
+    v.pause();
+  };
+  /** 事件是不是我们自己触发的：是就消费掉并返回 true */
+  const consumeExpected = (v: HTMLVideoElement, kind: "play" | "pause") => {
+    if (expectedRef.current.get(v) !== kind) return false;
+    expectedRef.current.delete(v);
+    return true;
+  };
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
   // 总的播放状态（以第一路为准），给总播放/暂停按钮显示用
@@ -113,20 +134,22 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           // 三路的 currentTime 本来就按各自帧对齐，天然差零点几帧，按这个差去
           // seek 就是无意义的来回抖，漂移交给下面的定时校正
           if (action === "seek" && Math.abs(o.currentTime - self.currentTime) > 0.15) o.currentTime = self.currentTime;
-          if (action === "play") o.play().catch(() => {});
-          if (action === "pause") o.pause();
+          if (action === "play") progPlay(o);
+          if (action === "pause") progPause(o);
         }
       };
 
-      // 播放/暂停不看 isSuppressed：漂移校正、循环跳转都会 markProgrammatic，播放中
-      // 几乎总在抑制窗口里，用户点某一路的暂停别的路就跟不上。play/pause 本身是幂等
-      // 的（已暂停的再 pause 不会再触发事件），直接同步不会来回打架。
       const onPlay = () => {
         if (idx === 0) setPlaying(true);
+        if (consumeExpected(self, "play")) return; // 我们自己让它播的，不再往外传
         syncOthers("play");
       };
       const onPause = () => {
         if (idx === 0) setPlaying(false);
+        if (consumeExpected(self, "pause")) return;
+        // 用户亲手暂停：seek 之后排着的"等 ready 再续播"作废，不然过一会儿又自己播起来
+        resumeToken++;
+        pendingSeek = null;
         syncOthers("pause");
       };
       const onSeeked = () => {
@@ -186,7 +209,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       const wasPlaying = !lead.paused;
       markProgrammatic();
       for (const v of vids) {
-        if (wasPlaying) v.pause();
+        if (wasPlaying) progPause(v);
         v.currentTime = target;
       }
       bus.reportTime(target);
@@ -203,7 +226,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           return;
         }
         markProgrammatic();
-        for (const v of vids) v.play().catch(() => {});
+        for (const v of vids) progPlay(v);
       };
       requestAnimationFrame(tryResume);
     };
@@ -231,10 +254,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         resumeToken++;
         pendingSeek = null;
         markProgrammatic();
-        for (const v of all()) if (!v.paused) v.pause();
+        for (const v of all()) progPause(v);
         return;
       }
-      for (const v of all()) if (v.paused) v.play().catch(() => {});
+      for (const v of all()) progPlay(v);
       const tick = () => {
         const cur = bus.getLoop();
         if (!cur) return;
@@ -464,8 +487,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     // 播放中途改速率，Chrome 的音画同步管线经常从这一刻开始卡顿，得暂停再播放
     // 才能重新同步——用户手动暂停/播放能验证不卡，这里就直接把这个动作自动做一遍。
     if (wasPlaying) {
-      for (const v of refs.current) v?.pause();
-      for (const v of refs.current) v?.play().catch(() => {});
+      for (const v of refs.current) if (v) progPause(v);
+      for (const v of refs.current) if (v) progPlay(v);
     }
   };
 
@@ -517,8 +540,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     const anyPlaying = vids.some((v) => !v.paused);
     markProgrammatic();
     for (const v of vids) {
-      if (anyPlaying) v.pause();
-      else v.play().catch(() => {});
+      if (anyPlaying) progPause(v);
+      else progPlay(v);
     }
     setPlaying(!anyPlaying);
   };
