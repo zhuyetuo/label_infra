@@ -12,6 +12,13 @@
 沿用会话前缀本身，超过 1 个才加 "_imu{N}" 后缀区分（文件名里的 cam 编号
 在 CSV 上只是模板带出来的，不代表跟哪个 IMU 强绑定，不能拿来做分组键）。
 
+文件名里可以再带一段可选的 "_dog{编号}"（比如 ..._imu1_dog7_raw.csv），
+标出这份 IMU 数据是哪只狗的——现在采集端还没加这个，所以是可选的，新旧
+文件名都要兼容。碰到没见过的 dog 编号会自动在 dogs 表建档（只有编号，
+名字/品种之类的信息留到管理页面再补）；没带 dog 编号的样本 dog_id 留空，
+不强制。视频文件名上如果也带了这段（一般是从 CSV 那份模板抄过来的），
+忽略不用——同一批视频是给好几只狗共用的，不该被某一个 dog 编号绑定。
+
 扫描在后台异步跑（不阻塞请求线程），前端通过轮询状态接口显示进度条。
 
 性能设计（一万级session规模下验证过原版本会很慢，这里做了两处优化）：
@@ -36,12 +43,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
+from app.models.dog import Dog
 from app.models.media_file import MediaFile, MediaFileType
 from app.models.sample import ImportStatus, Sample
 from app.models.user import User
 from app.utils.ffprobe import count_csv_rows, probe_video
 
-_CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)", re.IGNORECASE)
+# 第4段 dog 编号是可选的，现在的采集端还没带这个，得兼容没有这一段的旧文件名
+_CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)(?:_dog([A-Za-z0-9]+))?", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 _PROBE_CONCURRENCY = 8
 
@@ -107,12 +116,12 @@ async def run_scan(nas_root: str, admin_id: int) -> None:
             _progress.error_message = f"{type(exc).__name__}: {exc}"
 
 
-def _parse_filename(filename: str) -> tuple[str, int, int] | None:
+def _parse_filename(filename: str) -> tuple[str, int, int, str | None] | None:
     stem = os.path.splitext(filename)[0]
     match = _CAM_RE.match(stem)
     if not match:
         return None
-    return match.group(1), int(match.group(2)), int(match.group(3))
+    return match.group(1), int(match.group(2)), int(match.group(3)), match.group(4)
 
 
 def _parse_session_date(session_key: str) -> date | None:
@@ -125,7 +134,7 @@ def _parse_session_date(session_key: str) -> date | None:
         return None
 
 
-def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[str, dict[int, str]]]:
+def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
     """
     纯文件系统遍历，不涉及数据库/子进程，跑在线程池里避免阻塞事件循环。
 
@@ -137,7 +146,7 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[str, di
     覆盖先写入的，其余 IMU 的 CSV 就这样丢了、一声不吭——只会生成一个样本，
     而不是每个 IMU 各一个样本。
     """
-    groups: dict[str, dict[str, dict[int, str]]] = {}
+    groups: dict[str, dict] = {}
     for root, _dirs, files in os.walk(data_raw_dir):
         for fname in files:
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
@@ -146,16 +155,18 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict[str, di
             parsed = _parse_filename(fname)
             if parsed is None:
                 continue
-            session_key, cam_idx, imu_idx = parsed
+            session_key, cam_idx, imu_idx, dog_code = parsed
             full_path = os.path.join(root, fname)
             rel_path = os.path.relpath(full_path, nas_root)
             g = groups.setdefault(session_key, {"videos": {}, "csvs": {}})
             if ext == "mp4":
                 # 同一路摄像头正常只有一份视频；万一撞了（不同 imu 编号的文件名
-                # 巧合落到同一个 cam 编号），保留先扫到的那份，不用后写的覆盖
+                # 巧合落到同一个 cam 编号），保留先扫到的那份，不用后写的覆盖。
+                # 视频文件名上就算带了 dog 编号也不用——同一批视频是给好几只
+                # 狗共用的，不该被某一个 dog 编号绑定，只有 CSV 上的才算数。
                 g["videos"].setdefault(cam_idx, rel_path)
             else:
-                g["csvs"].setdefault(imu_idx, rel_path)
+                g["csvs"].setdefault(imu_idx, {"path": rel_path, "dog_code": dog_code})
     return groups
 
 
@@ -198,9 +209,14 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             continue
         cam_paths = {c: videos[c] for c in (1, 2, 3) if c in videos}
         imu_items = sorted(csvs.items())
-        for imu_idx, csv_rel in imu_items:
+        for imu_idx, csv_info in imu_items:
+            csv_rel = csv_info["path"]
             sample_code = session_key if len(imu_items) == 1 else f"{session_key}_imu{imu_idx}"
-            candidates[sample_code] = {"cam_paths": cam_paths, "csv_rel": csv_rel}
+            candidates[sample_code] = {
+                "cam_paths": cam_paths,
+                "csv_rel": csv_rel,
+                "dog_code": csv_info["dog_code"],
+            }
             all_candidate_paths.update(cam_paths.values())
             all_candidate_paths.add(csv_rel)
 
@@ -224,6 +240,23 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     _progress.processed += len(candidates) - len(new_session_keys)
     _progress.tick()
 
+    # 这批新样本里出现的 dog 编号解析成 dog_id：没见过的编号自动建档（只有
+    # 编号，名字/品种之类的信息留到管理页面再补）。没带 dog 编号的样本
+    # （现在还是大多数）不受影响，dog_id 留空。
+    dog_codes = {candidates[k]["dog_code"] for k in new_session_keys if candidates[k]["dog_code"]}
+    dog_id_by_code: dict[str, int] = {}
+    if dog_codes:
+        existing_dogs = (
+            await db.execute(select(Dog.id, Dog.dog_code).where(Dog.dog_code.in_(dog_codes)))
+        ).all()
+        dog_id_by_code = {code: did for did, code in existing_dogs}
+        for code in dog_codes - dog_id_by_code.keys():
+            dog = Dog(dog_code=code)
+            db.add(dog)
+            await db.flush()
+            dog_id_by_code[code] = dog.id
+        await db.commit()
+
     # 并发探测（ffprobe/csv行数/文件大小），限流避免一下起几千个ffmpeg进程
     semaphore = asyncio.Semaphore(_PROBE_CONCURRENCY)
 
@@ -239,8 +272,10 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         cam_paths, csv_rel = info["cam_paths"], info["csv_rel"]
         probe, row_count, total_size, missing = result["probe"], result["row_count"], result["total_size"], result["missing"]
 
+        dog_code = info["dog_code"]
         sample = Sample(
             sample_code=session_key,
+            dog_id=dog_id_by_code.get(dog_code) if dog_code else None,
             session_date=_parse_session_date(session_key),
             video_cam1_path=cam_paths[1],
             video_cam2_path=cam_paths[2],

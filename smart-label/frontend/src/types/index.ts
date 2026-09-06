@@ -21,7 +21,7 @@ export interface LabelDefinition {
 export interface Sample {
   id: number;
   sample_code: string;
-  dog_id: string | null;
+  dog_id: number | null;
   session_date: string | null;
   video_cam1_path: string;
   video_cam2_path: string;

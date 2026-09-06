@@ -24,7 +24,10 @@ class Sample(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     sample_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    dog_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 哪只狗的样本。现在采集端文件名里还没带这个信息，所以允许为空；
+    # 等文件名里带上 dog 编号之后，扫描导入会自动按编号建档/关联（见
+    # sample_import_service.py），到时候新样本自然都会有，历史样本继续留空。
+    dog_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("dogs.id"), nullable=True)
     session_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     video_cam1_path: Mapped[str] = mapped_column(String(500), nullable=False)
