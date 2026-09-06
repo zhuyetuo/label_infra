@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { InputNumber, Radio, Slider, Space, Typography } from "antd";
+import { Button, InputNumber, Radio, Slider, Space, Typography } from "antd";
+import { PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
 
@@ -66,6 +67,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const isSuppressed = () => performance.now() < suppressUntil.current;
   const [speed, setSpeed] = useState(1);
   const [frame, setFrame] = useState(0);
+  // 总的播放状态（以第一路为准），给总播放/暂停按钮显示用
+  const [playing, setPlaying] = useState(false);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -115,12 +118,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         }
       };
 
+      // 播放/暂停不看 isSuppressed：漂移校正、循环跳转都会 markProgrammatic，播放中
+      // 几乎总在抑制窗口里，用户点某一路的暂停别的路就跟不上。play/pause 本身是幂等
+      // 的（已暂停的再 pause 不会再触发事件），直接同步不会来回打架。
       const onPlay = () => {
-        if (isSuppressed()) return;
+        if (idx === 0) setPlaying(true);
         syncOthers("play");
       };
       const onPause = () => {
-        if (isSuppressed()) return;
+        if (idx === 0) setPlaying(false);
         syncOthers("pause");
       };
       const onSeeked = () => {
@@ -357,8 +363,18 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       if (!wrapper || !video) return;
 
       const state: ZoomState = { scale: 1, tx: 0, ty: 0 };
+      // 平移不能把画面拖出框：放大后画面比框大 (scale-1)*框 这么多，左右/上下各最多
+      // 挪一半，超过就露底色了
+      const clamp = () => {
+        const maxX = ((state.scale - 1) * wrapper.clientWidth) / 2;
+        const maxY = ((state.scale - 1) * wrapper.clientHeight) / 2;
+        state.tx = Math.max(-maxX, Math.min(maxX, state.tx));
+        state.ty = Math.max(-maxY, Math.min(maxY, state.ty));
+      };
       const apply = () => {
+        clamp();
         video.style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${state.scale})`;
+        wrapper.style.cursor = state.scale > ZOOM_MIN ? "grab" : "";
       };
 
       let dragging = false;
@@ -374,15 +390,28 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         if (state.scale === ZOOM_MIN) {
           state.tx = 0;
           state.ty = 0;
+        } else {
+          // 以鼠标所在点为中心缩放：鼠标指着的那块画面缩放前后停在同一个位置
+          const rect = wrapper.getBoundingClientRect();
+          const px = e.clientX - rect.left - rect.width / 2;
+          const py = e.clientY - rect.top - rect.height / 2;
+          const k = state.scale / prevScale;
+          state.tx = px - (px - state.tx) * k;
+          state.ty = py - (py - state.ty) * k;
         }
         apply();
       };
 
+      // 放大之后直接按住左键就能拖（不用再按 shift）；没放大时不拦截，让原生控制条正常用
       const onMouseDown = (e: MouseEvent) => {
-        if (!e.shiftKey || e.button !== 0 || state.scale <= ZOOM_MIN) return;
+        if (e.button !== 0 || state.scale <= ZOOM_MIN) return;
+        // 点在原生控制条上（画面底部约 40px）不当作拖拽
+        const rect = wrapper.getBoundingClientRect();
+        if (e.clientY > rect.bottom - 44) return;
         dragging = true;
         lastX = e.clientX;
         lastY = e.clientY;
+        wrapper.style.cursor = "grabbing";
         e.preventDefault();
       };
       const onMouseMove = (e: MouseEvent) => {
@@ -394,7 +423,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         apply();
       };
       const onMouseUp = () => {
+        if (!dragging) return;
         dragging = false;
+        apply();
       };
       const onDblClick = (e: MouseEvent) => {
         if (!e.shiftKey && state.scale === ZOOM_MIN) return;
@@ -417,6 +448,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         window.removeEventListener("mouseup", onMouseUp);
         wrapper.removeEventListener("dblclick", onDblClick);
         video.style.transform = "";
+        wrapper.style.cursor = "";
       });
     });
     return () => cleanups.forEach((fn) => fn());
@@ -478,8 +510,43 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           ? Math.min(rowSize.h, rowSize.w / sumAspect)
           : 0;
 
+  // 总播放/暂停：三路一起动，不用挨个点每路自己的控制条
+  const toggleAll = () => {
+    const vids = refs.current.filter((v): v is HTMLVideoElement => v != null);
+    if (vids.length === 0) return;
+    const anyPlaying = vids.some((v) => !v.paused);
+    markProgrammatic();
+    for (const v of vids) {
+      if (anyPlaying) v.pause();
+      else v.play().catch(() => {});
+    }
+    setPlaying(!anyPlaying);
+  };
+
+  // 空格 = 总播放/暂停（焦点在输入框里时不抢）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "BUTTON" || el.isContentEditable)) return;
+      e.preventDefault();
+      toggleAll();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const speedControls = (
     <Space wrap>
+      <Button
+        size="small"
+        type="primary"
+        icon={playing ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+        onClick={toggleAll}
+        title="三路一起播放/暂停（快捷键：空格）"
+      >
+        {playing ? "暂停" : "播放"}
+      </Button>
       <Typography.Text type="secondary">播放速度：</Typography.Text>
       <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
         {SPEED_OPTIONS.map((s) => (
@@ -517,7 +584,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           </Typography.Text>
           <InputNumber size="small" min={0} max={totalFrames ?? undefined} value={frame} onChange={handleFrameJump} />
           <Typography.Text type="secondary">
-            of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放 / Shift+拖拽平移）
+            of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放，放大后直接拖拽平移，双击复原）
           </Typography.Text>
         </>
       )}
@@ -590,7 +657,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                 }}
                 style={
                   fill
-                    ? { flex: 1, minWidth: 0, display: "flex" }
+                    ? // overflow:hidden 是关键：放大后的画面只能在自己这一格里放大/拖动，
+                      // 不能溢出去盖住旁边两路
+                      { flex: 1, minWidth: 0, display: "flex", overflow: "hidden", position: "relative", background: "#000" }
                     : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
                 }
               >
