@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models.annotation import LabelItemSource
 from app.models.task import TaskStatus, TaskType
 
 
@@ -36,6 +37,10 @@ class LabelItemIn(BaseModel):
     # 若这条标签是在编辑一条已存在的记录（AI生成或之前保存过的），前端带上原记录id；
     # 留空代表这是本次新增的标签。用于正确计算 source_type/is_modified（AI标签修改比例统计依赖这个）。
     origin_item_id: int | None = None
+    # 新增条目的来源：前端点"AI预标注"填进来的传 ai_generated（带置信度），
+    # 人手画的不传。只对新增条目生效，已存在条目的来源不会被改写。
+    source_type: LabelItemSource | None = None
+    ai_confidence: float | None = None
 
 
 class LabelItemOut(LabelItemIn):

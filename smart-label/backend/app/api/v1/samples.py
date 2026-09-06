@@ -4,8 +4,10 @@
 "不想等，立刻扫一次"的快捷方式，不是唯一入口。
 """
 
+import asyncio
 import json
 import os
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -20,9 +22,11 @@ from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.schemas.model_version import PrelabelResult
+from app.schemas.model_version import PrelabelItem, PrelabelResult
 from app.schemas.sample import SampleMediaOut, SampleOut, SampleUpdate, ScanProgressOut, ScanStartResult
 from app.services import algo_client
+from app.services.imu_service import ImuReadError, get_meta
+from app.services.media_resolver import PathTraversalError, resolve_nas_path
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
@@ -125,6 +129,22 @@ async def ai_prelabel(
         if visible is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该样本")
 
+    if not sample.imu_csv_path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "该样本没有 IMU CSV，无法做 AI 预标注")
+
+    # AI 服务返回的片段时间是绝对墙钟时间字符串，标注工作台用的是"相对 CSV 第一行"
+    # 的毫秒数，所以要先拿到 CSV 起点时间来换算。跟 /imu/meta 用同一套解析。
+    try:
+        csv_abs = resolve_nas_path(sample.imu_csv_path)
+        meta = await asyncio.to_thread(get_meta, csv_abs)
+    except PathTraversalError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "IMU 文件路径非法") from e
+    except ImuReadError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    csv_start = _parse_ts(meta.get("start_timestamp"))
+    if csv_start is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "IMU CSV 没有可用的时间戳列，无法换算 AI 片段时间")
+
     try:
         result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id)
     except algo_client.AlgoServiceError as e:
@@ -139,12 +159,79 @@ async def ai_prelabel(
     sample.ai_label_path = ai_label_relpath
     await db.commit()
 
-    return ok(PrelabelResult(
-        sample_id=sample.id,
-        ai_label_path=ai_label_relpath,
-        events=result["events"],
-        scratch_count=result["scratch_count"],
-    ).model_dump())
+    items, skipped = _flatten_segments(result.get("segments") or {}, csv_start)
+    return ok(
+        PrelabelResult(
+            sample_id=sample.id,
+            ai_label_path=ai_label_relpath,
+            items=items,
+            n_windows=int(result.get("n_windows") or 0),
+            skipped=skipped,
+        ).model_dump()
+    )
+
+
+_TS_FORMATS = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S")
+
+
+def _parse_ts(value: object) -> datetime | None:
+    """
+    解析 AI 服务/IMU meta 里的时间字符串。imu_train 用 strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    输出（毫秒精度），get_meta 给的是 isoformat。两边都是从同一个 CSV 的时间戳列来的，
+    统一按 naive 时间比较；带时区的先把时区剥掉，避免 aware/naive 相减报错。
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        dt = None
+        for fmt in _TS_FORMATS:
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None)
+
+
+def _flatten_segments(segments: dict, csv_start: datetime) -> tuple[list[PrelabelItem], int]:
+    """
+    {类别: [{start_ts, end_ts, conf_max, ...}]} -> 按开始时间排好序的扁平列表，时间换成
+    相对 CSV 起点的毫秒。时间戳缺失或换算后时长非正的片段跳过，只计数返回给前端提示。
+    """
+    items: list[PrelabelItem] = []
+    skipped = 0
+    for label_name, segs in segments.items():
+        for seg in segs or []:
+            start = _parse_ts(seg.get("start_ts"))
+            end = _parse_ts(seg.get("end_ts"))
+            if start is None or end is None:
+                skipped += 1
+                continue
+            start_ms = int(round((start - csv_start).total_seconds() * 1000))
+            end_ms = int(round((end - csv_start).total_seconds() * 1000))
+            if end_ms <= start_ms or end_ms <= 0:
+                skipped += 1
+                continue
+            conf = seg.get("conf_max")
+            if conf is None:
+                conf = seg.get("conf_mean")
+            items.append(
+                PrelabelItem(
+                    label_name=str(label_name),
+                    start_time_ms=max(0, start_ms),
+                    end_time_ms=end_ms,
+                    confidence=float(conf) if conf is not None else 0.0,
+                )
+            )
+    items.sort(key=lambda it: (it.start_time_ms, it.end_time_ms))
+    return items, skipped
 
 
 @router.post("/import-scan")

@@ -154,8 +154,11 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 label_id=incoming.label_id,
                 start_time_ms=incoming.start_time_ms,
                 end_time_ms=incoming.end_time_ms,
-                source_type=LabelItemSource.human_added,
+                source_type=incoming.source_type or LabelItemSource.human_added,
                 is_modified=False,
+                ai_confidence=incoming.ai_confidence
+                if incoming.source_type == LabelItemSource.ai_generated
+                else None,
                 created_by=user.id,
             )
             db.add(new_item)
