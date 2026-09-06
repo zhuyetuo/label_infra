@@ -9,6 +9,7 @@ from app.api.v1 import (
     label_templates,
     labels,
     media,
+    model_versions,
     projects,
     reviews,
     samples,
@@ -31,3 +32,5 @@ api_router.include_router(imu.router)
 api_router.include_router(clips.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(dogs.router)
+api_router.include_router(model_versions.router)
+api_router.include_router(model_versions.callback_router)
