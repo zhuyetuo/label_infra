@@ -34,7 +34,14 @@ export const getDraft = (id: number) => request.get<never, Draft>(`/tasks/${id}/
 
 export const saveDraft = (
   id: number,
-  items: { label_id: number; start_time_ms: number; end_time_ms: number; origin_item_id?: number }[]
+  items: {
+    label_id: number;
+    start_time_ms: number;
+    end_time_ms: number;
+    origin_item_id?: number;
+    source_type?: "ai_generated" | "human_added";
+    ai_confidence?: number | null;
+  }[]
 ) => request.put<never, null>(`/tasks/${id}/draft`, { items });
 
 export const submitTask = (id: number) => request.post<never, Task>(`/tasks/${id}/submit`);

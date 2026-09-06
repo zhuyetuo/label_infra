@@ -32,16 +32,26 @@ class ModelVersionOut(BaseModel):
     updated_at: datetime
 
 
-class PrelabelEvent(BaseModel):
-    behavior_type: int
-    behavior_name: str
-    start_time: int
-    end_time: int
+class PrelabelItem(BaseModel):
+    """一段 AI 预测出来的行为，时间已经换算成相对 IMU CSV 起点的毫秒数——
+    跟标注工作台里 LabelItem 用的是同一个时间基准，前端拿到就能直接画色块。"""
+
+    label_name: str
+    start_time_ms: int
+    end_time_ms: int
     confidence: float
 
 
 class PrelabelResult(BaseModel):
+    """
+    imu_train/label_service 的 /infer 返回的是按类别分组的 segments
+    （{类别: [{start_ts, end_ts, conf_max, ...}]}，start_ts 是绝对墙钟时间字符串），
+    后端在 ai_prelabel 里摊平并换算成相对毫秒后给前端，前端不用管时间戳换算。
+    """
+
     sample_id: int
     ai_label_path: str
-    events: list[PrelabelEvent]
-    scratch_count: int
+    items: list[PrelabelItem]
+    n_windows: int
+    # 时间戳为空/换算出来时长非正的片段数，前端提示用
+    skipped: int

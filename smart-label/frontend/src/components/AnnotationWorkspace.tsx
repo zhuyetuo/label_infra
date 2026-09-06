@@ -14,9 +14,9 @@ import {
   Typography,
   message,
 } from "antd";
-import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
+import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
-import { getSampleMedia } from "@/api/samples";
+import { aiPrelabel, getSampleMedia } from "@/api/samples";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -83,6 +83,7 @@ export default function AnnotationWorkspace({
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
+  const [prelabeling, setPrelabeling] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
   // 默认只露一条波形把高度让给视频；想通盘看六轴时切到"展开全部"，
@@ -205,8 +206,56 @@ export default function AnnotationWorkspace({
         start_time_ms: i.start_time_ms,
         end_time_ms: i.end_time_ms,
         origin_item_id: i.origin_item_id ?? undefined,
+        // 新增条目要带上来源，AI 预标注出来的才能在库里记成 ai_generated
+        source_type: i.origin_item_id == null ? i.source_type : undefined,
+        ai_confidence: i.origin_item_id == null ? i.ai_confidence : undefined,
       }))
     );
+  };
+
+  // AI 预标注：后端转发到 imu_train/label_service 的 /infer，返回的类别名按
+  // 标签的显示名（退一步按 code）匹配到项目标签，匹配不上的类别整体跳过并提示。
+  const handleAiPrelabel = async () => {
+    if (sampleId == null) return;
+    setPrelabeling(true);
+    try {
+      const res = await aiPrelabel(sampleId);
+      const byName = new Map<string, number>();
+      labels.forEach((l) => {
+        byName.set(l.display_name, l.id);
+        if (!byName.has(l.code)) byName.set(l.code, l.id);
+      });
+      const unmatched = new Set<string>();
+      const base = -Date.now();
+      const created: LabelItem[] = [];
+      res.items.forEach((it, idx) => {
+        const lid = byName.get(it.label_name);
+        if (lid == null) {
+          unmatched.add(it.label_name);
+          return;
+        }
+        created.push({
+          id: base - idx,
+          label_id: lid,
+          start_time_ms: it.start_time_ms,
+          end_time_ms: it.end_time_ms,
+          origin_item_id: null,
+          source_type: "ai_generated",
+          is_modified: false,
+          ai_confidence: it.confidence,
+          created_by: null,
+        });
+      });
+      // 已有的 AI 条目先清掉再填，避免重复点两次叠两层；人工画的保留
+      setItems((prev) => [...prev.filter((i) => i.source_type !== "ai_generated" || i.origin_item_id != null), ...created]);
+      const parts = [`AI 预标注完成：填入 ${created.length} 段`];
+      if (unmatched.size) parts.push(`类别「${[...unmatched].join("、")}」没有对应标签，已跳过`);
+      if (res.skipped) parts.push(`${res.skipped} 段时间无效已忽略`);
+      if (unmatched.size || res.skipped) message.warning(parts.join("；"), 6);
+      else message.success(parts[0]);
+    } finally {
+      setPrelabeling(false);
+    }
   };
 
   const handleSaveDraft = async () => {
@@ -385,6 +434,19 @@ export default function AnnotationWorkspace({
               })}
               {labels.length === 0 && (
                 <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
+              )}
+              {hasCsv && sampleId != null && labels.length > 0 && (
+                <Tooltip title="调用 AI 模型对这条 IMU 数据做行为识别，结果作为预填的标注框，可以再手动修改">
+                  <Button
+                    size="small"
+                    icon={<ThunderboltOutlined />}
+                    loading={prelabeling}
+                    onClick={handleAiPrelabel}
+                    style={{ marginLeft: 8 }}
+                  >
+                    AI预标注
+                  </Button>
+                </Tooltip>
               )}
             </Space>
           </div>

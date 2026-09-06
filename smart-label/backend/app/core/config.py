@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # 和这个后端共享同一份 nas_root，接口里只传相对路径，不传文件内容
     algo_service_url: str = "http://algo-service:8383"
     algo_service_timeout_sec: int = 30
+    # /infer 是同步推理，AI 服务那边还加了锁排队，一次几十秒很正常，单独放宽。
+    # 前端 axios 给这个请求 180s、nginx proxy_read_timeout 300s，这里要比前端略短，
+    # 这样超时是后端报出清楚的 502 而不是前端先断掉。
+    algo_infer_timeout_sec: int = 170
 
     # --- CORS ---
     cors_allow_origins: list[str] = ["http://localhost:8284"]

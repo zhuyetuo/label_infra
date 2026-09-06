@@ -18,6 +18,26 @@ export interface SampleMedia {
 export const getSampleMedia = (sampleId: number) =>
   request.get<never, SampleMedia>(`/samples/${sampleId}/media`);
 
+/** 后端已经把 AI 服务按类别分组的片段摊平、换算成相对 CSV 起点的毫秒 */
+export interface PrelabelItem {
+  label_name: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  confidence: number;
+}
+
+export interface PrelabelResult {
+  sample_id: number;
+  ai_label_path: string;
+  items: PrelabelItem[];
+  n_windows: number;
+  skipped: number;
+}
+
+/** 同步调用 AI 服务推理，可能要等几十秒，超时放宽 */
+export const aiPrelabel = (sampleId: number) =>
+  request.post<never, PrelabelResult>(`/samples/${sampleId}/ai-prelabel`, undefined, { timeout: 180_000 });
+
 export interface ScanProgress {
   status: "idle" | "running" | "done" | "error";
   total_groups: number;

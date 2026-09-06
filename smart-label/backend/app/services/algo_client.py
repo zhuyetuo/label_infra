@@ -28,8 +28,12 @@ async def infer(imu_csv_path: str, sample_id: int | None = None) -> dict:
     url = f"{_base_url()}/api/v1/label/infer"
     payload = {"path": imu_csv_path, "sample_id": sample_id}
     try:
-        async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
+        async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)
+    except httpx.TimeoutException as e:
+        raise AlgoServiceError(
+            f"AI 服务推理超时（>{settings.algo_infer_timeout_sec}s），可能有其他推理在排队，稍后再试"
+        ) from e
     except httpx.RequestError as e:
         raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
 
