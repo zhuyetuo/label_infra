@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Typography, message } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLabel, deleteLabel, listLabels, updateLabel } from "@/api/labels";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
@@ -156,6 +156,8 @@ function LabelDefinitionsPanel() {
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         标签属于项目：不同项目要标的东西不一样，各自维护自己的标签，互不影响。
+        套用模板来的标签，颜色会跟着模板走——去「标签模板」页改了某个标签的颜色，
+        这里同 code 的标签会跟着变；自己在这里手动改过颜色之后就不再跟随，改模板不会再覆盖回来。
       </Typography.Paragraph>
       <Table
         rowKey="id"
@@ -177,9 +179,8 @@ function LabelDefinitionsPanel() {
           },
           {
             title: "颜色",
-            dataIndex: "color",
-            render: (c: string | null) =>
-              c ? (
+            render: (_, l: LabelDefinition) =>
+              l.color ? (
                 <Space size={6}>
                   <span
                     style={{
@@ -187,12 +188,19 @@ function LabelDefinitionsPanel() {
                       width: 18,
                       height: 18,
                       borderRadius: 3,
-                      background: c,
+                      background: l.color,
                       border: "1px solid rgba(0,0,0,0.12)",
                       verticalAlign: "middle",
                     }}
                   />
-                  <span>{c}</span>
+                  <span>{l.color}</span>
+                  {l.template_item_id != null && (
+                    <Tooltip title="颜色跟着标签模板走，去「标签模板」页改；这里手动改颜色会断开跟随">
+                      <Tag color="default" style={{ marginLeft: 2 }}>
+                        跟随模板
+                      </Tag>
+                    </Tooltip>
+                  )}
                 </Space>
               ) : (
                 "-"
@@ -280,7 +288,15 @@ function LabelDefinitionsPanel() {
           <Form.Item name="display_name" label="显示名（如 抓挠）" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="color" label="颜色（标注色块和标签按钮都用这个颜色）">
+          <Form.Item
+            name="color"
+            label="颜色（标注色块和标签按钮都用这个颜色）"
+            extra={
+              editing?.template_item_id != null
+                ? "这条标签的颜色目前跟着标签模板走；在这里改颜色会断开跟随，之后改模板颜色就不会再影响它了"
+                : undefined
+            }
+          >
             <ColorSwatchPicker />
           </Form.Item>
           <Form.Item name="sort_order" label="排序（越小越靠前）">

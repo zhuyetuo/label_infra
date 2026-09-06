@@ -1,13 +1,16 @@
 """
 标签模板：常用的一套标签存下来，新建项目直接套用，不用每次从头敲一遍。
 
-模板是全局的，不属于任何项目；套用时把模板里的条目拷贝成该项目自己的标签，
-之后改项目标签不会反向影响模板，改模板也不会影响已经套用过的项目——
-拷贝而不是引用，是为了让各项目的标签体系可以各自演进。
+模板是全局的，不属于任何项目；套用时把模板里的条目拷贝成该项目自己的标签。
+显示名/排序/是否启用这些都是拷贝之后各项目自己演进，互不影响；但颜色是个
+例外——套用时顺带记下"这条项目标签来自哪个模板条目"（LabelDefinition.
+template_item_id），之后改模板里这个条目的颜色，会自动同步到所有还跟着它
+的项目标签，不用每个项目挨个改一遍。项目自己手动改过某条标签的颜色之后，
+这条就跟模板断开了（见 labels.py），改模板颜色不会再覆盖回去。
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -61,14 +64,47 @@ def _to_out(tpl: LabelTemplate, items: list[LabelTemplateItem]) -> dict:
 
 
 async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTemplateItemIn]) -> None:
-    """模板里的条目整组替换：先清空再插入，省得逐条比对增删改。"""
-    await db.execute(delete(LabelTemplateItem).where(LabelTemplateItem.template_id == template_id))
+    """
+    模板里的条目整组替换。按 code 就地更新（不是删光重插）——这样条目的 id
+    在编辑模板时保持不变，项目标签记的 template_item_id 才不会失效，颜色
+    才跟得下去。code 消失的条目才真的删掉，删的话跟着它的项目标签的
+    template_item_id 会被数据库 FK 自动置空（ON DELETE SET NULL）。
+
+    颜色变了的条目，顺带把所有还跟着它（template_item_id 没被手动断开）的
+    项目标签一起改成新颜色。
+    """
+    existing = {
+        i.code: i
+        for i in (
+            await db.execute(select(LabelTemplateItem).where(LabelTemplateItem.template_id == template_id))
+        )
+        .scalars()
+        .all()
+    }
+
     seen: set[str] = set()
     for item in items:
         if item.code in seen:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"模板里 code 重复: {item.code}")
         seen.add(item.code)
-        db.add(LabelTemplateItem(template_id=template_id, **item.model_dump()))
+
+        row = existing.pop(item.code, None)
+        if row is None:
+            db.add(LabelTemplateItem(template_id=template_id, **item.model_dump()))
+            continue
+        if row.color != item.color:
+            await db.execute(
+                update(LabelDefinition)
+                .where(LabelDefinition.template_item_id == row.id)
+                .values(color=item.color)
+            )
+        row.display_name = item.display_name
+        row.color = item.color
+        row.sort_order = item.sort_order
+
+    # 剩下没被本次提交的 code 覆盖到的旧条目，是真的从模板里删掉了
+    for row in existing.values():
+        await db.delete(row)
 
 
 @router.get("")
@@ -128,15 +164,18 @@ async def save_project_labels_as_template(
     db.add(tpl)
     await db.flush()
     for label in labels:
-        db.add(
-            LabelTemplateItem(
-                template_id=tpl.id,
-                code=label.code,
-                display_name=label.display_name,
-                color=label.color,
-                sort_order=label.sort_order,
-            )
+        tpl_item = LabelTemplateItem(
+            template_id=tpl.id,
+            code=label.code,
+            display_name=label.display_name,
+            color=label.color,
+            sort_order=label.sort_order,
         )
+        db.add(tpl_item)
+        await db.flush()
+        # 反向也挂上关联：这批标签就是模板的源头，以后改模板颜色理应也影响回它们，
+        # 不然「存为模板」出来的模板改颜色时，唯独原项目自己不跟着变，会很奇怪
+        label.template_item_id = tpl_item.id
     await db.commit()
     await db.refresh(tpl)
     grouped = await _load_items(db, [tpl.id])
@@ -220,6 +259,7 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
                 display_name=item.display_name,
                 color=item.color,
                 sort_order=item.sort_order,
+                template_item_id=item.id,
                 created_by=admin.id,
             )
         )

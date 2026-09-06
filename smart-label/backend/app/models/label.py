@@ -23,6 +23,11 @@ class LabelDefinition(Base):
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(50), nullable=False)
     color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 套用模板时记下来源条目：模板改颜色会顺带同步这里的 color（见
+    # label_templates.py），项目自己手动改过颜色之后会把这个置空、断开跟随。
+    template_item_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("label_template_items.id", ondelete="SET NULL"), nullable=True
+    )
     parent_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("label_definitions.id"), nullable=True)
     sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

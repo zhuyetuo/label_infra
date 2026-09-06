@@ -11,6 +11,8 @@ class LabelOut(BaseModel):
     code: str
     display_name: str
     color: str | None
+    # 是不是还跟着模板走颜色：套用模板时建立，项目自己改过颜色之后会断开
+    template_item_id: int | None
     parent_id: int | None
     sort_order: int
     is_active: bool
