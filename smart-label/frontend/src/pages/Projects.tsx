@@ -24,11 +24,13 @@ import {
   assignProject,
   createProject,
   deleteProject,
+  getProjectPrelabelHistory,
   getProjectPrelabelStatus,
   listProjects,
   startProjectPrelabel,
   updateProject,
   type PrelabelProgress,
+  type PrelabelRun,
 } from "@/api/projects";
 import {
   bulkCreateTasks,
@@ -120,7 +122,23 @@ export default function Projects() {
     if (m < 60) return `约 ${m} 分钟`;
     return `约 ${Math.floor(m / 60)} 小时 ${m % 60} 分钟`;
   };
+  // 秒数 → "0:07" / "3:42" / "1:02:15"，精确到秒，从 0 开始计，跑完看总耗时用
+  const fmtClock = (sec: number | null | undefined) => {
+    const s = Math.max(0, Math.round(sec ?? 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    return h ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
+  };
   const prevStatusRef = useRef<Record<number, string>>({});
+  // 弹窗里展示的历史运行记录（每次跑完后端记一条）
+  const [prelabelHistory, setPrelabelHistory] = useState<PrelabelRun[]>([]);
+  useEffect(() => {
+    if (!prelabelTarget) return;
+    getProjectPrelabelHistory(prelabelTarget.id)
+      .then(setPrelabelHistory)
+      .catch(() => setPrelabelHistory([]));
+  }, [prelabelTarget?.id]);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["projects"] });
@@ -750,31 +768,37 @@ export default function Projects() {
               if (!total) return <Typography.Text type="secondary">0</Typography.Text>;
               const pp = prelabelProgress[p.id];
               return (
-                <Space size={4} wrap>
+                // 进度块单独占一行，别跟"共 N"和状态 Tag 混在同一个 wrap 的 Space 里
+                // ——混在一起时"共 N"会被挤到进度条右边，看着像显示错了
+                <div>
                   {pp?.status === "running" && (
-                    // 批量 AI 预标注进行中：总共多少个、跑到第几个、正在跑哪个样本
                     <Tooltip
-                      title={`正在跑：${pp.current_sample_code ?? ""}（任务 #${pp.current_task_id ?? ""}）
-成功 ${pp.succeeded} · 跳过 ${pp.skipped} · 失败 ${pp.failed}${
-                        pp.estimated_remaining_sec != null ? ` · 预计还需 ${Math.ceil(pp.estimated_remaining_sec / 60)} 分钟` : ""
-                      }`}
+                      title={`${pp.current_sample_code ?? ""}
+成功 ${pp.succeeded} · 跳过 ${pp.skipped} · 失败 ${pp.failed} · 等 AI 共 ${fmtClock(pp.ai_wait_sec)}`}
                     >
-                      <div style={{ width: "100%", minWidth: 200 }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
                         <Progress
                           size="small"
                           status="active"
                           percent={pp.total ? Math.round((pp.processed / pp.total) * 100) : 0}
                           format={() => `AI ${pp.processed}/${pp.total}`}
                         />
-                        {/* 耗时预估直接摆出来，不用悬停才看得到；后端按已完成的速率算，
-                            第一批还没回来之前没有数据，先显示"预估中" */}
+                        {/* 已用时长从 0 秒精确计，跑完就知道总共花了多久；剩余时间按已完成
+                            速率估，第一批还没回来之前没有数据，先显示"预估中" */}
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          已用 {fmtEta(pp.elapsed_sec) ?? "-"} ·{" "}
+                          已用 {fmtClock(pp.elapsed_sec)} ·{" "}
                           {pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "预估中…"}
                         </Typography.Text>
                       </div>
                     </Tooltip>
                   )}
+                  {pp?.status === "done" && pp.finished_at != null && Date.now() / 1000 - pp.finished_at < 3600 && (
+                    // 刚跑完的一小时内把总耗时留在这里，不用点开弹窗找
+                    <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
+                      AI 预标注完成：{pp.succeeded} 个，总耗时 {fmtClock(pp.elapsed_sec)}
+                    </Typography.Text>
+                  )}
+                <Space size={4} wrap>
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
                     <Tag
@@ -793,6 +817,7 @@ export default function Projects() {
                     </Tag>
                   ))}
                 </Space>
+                </div>
               );
             },
           },
@@ -910,7 +935,8 @@ export default function Projects() {
                 <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     上一次/当前：{pp.status === "running" ? "进行中" : pp.status === "done" ? "已完成" : "出错"}，
-                    {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}，已用 {fmtEta(pp.elapsed_sec) ?? "-"}
+                    {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}，
+                    {pp.status === "running" ? "已用" : "总耗时"} {fmtClock(pp.elapsed_sec)}（其中等 AI {fmtClock(pp.ai_wait_sec)}）
                     {pp.status === "running" && (
                       <>，{pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "剩余时间预估中…"}</>
                     )}
@@ -933,6 +959,52 @@ export default function Projects() {
                 </div>
               );
             })()}
+            {prelabelHistory.length > 0 && (
+              <div>
+                <Typography.Text strong style={{ fontSize: 12 }}>
+                  历史运行记录（每次跑完记一条，觉得慢了拿这些数字反馈）
+                </Typography.Text>
+                <Table
+                  size="small"
+                  rowKey="id"
+                  pagination={false}
+                  dataSource={prelabelHistory}
+                  style={{ marginTop: 4 }}
+                  columns={[
+                    {
+                      title: "时间",
+                      width: 130,
+                      render: (_, r: PrelabelRun) => (r.finished_at ? new Date(r.finished_at).toLocaleString("zh-CN", { hour12: false }) : "-"),
+                    },
+                    {
+                      title: "数量",
+                      width: 120,
+                      render: (_, r: PrelabelRun) => (
+                        <span>
+                          {r.succeeded}
+                          <span style={{ color: "#999" }}>
+                            {" "}
+                            / 跳过 {r.skipped} / 失败 {r.failed}
+                          </span>
+                        </span>
+                      ),
+                    },
+                    { title: "总耗时", width: 80, render: (_, r: PrelabelRun) => fmtClock(r.elapsed_sec) },
+                    { title: "等 AI", width: 80, render: (_, r: PrelabelRun) => fmtClock(r.ai_wait_sec) },
+                    {
+                      title: "平均/个",
+                      width: 80,
+                      render: (_, r: PrelabelRun) => (r.avg_sec_per_task != null ? `${r.avg_sec_per_task}s` : "-"),
+                    },
+                    {
+                      title: "结果",
+                      render: (_, r: PrelabelRun) =>
+                        r.status === "done" ? <Tag color="green">完成</Tag> : <Tag color="red">{r.error_message || "出错"}</Tag>,
+                    },
+                  ]}
+                />
+              </div>
+            )}
           </Space>
         )}
       </Modal>
