@@ -4,6 +4,7 @@ from app.api.v1 import (
     auth,
     clips,
     dashboard,
+    dogs,
     imu,
     label_templates,
     labels,
@@ -29,3 +30,4 @@ api_router.include_router(media.router)
 api_router.include_router(imu.router)
 api_router.include_router(clips.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(dogs.router)

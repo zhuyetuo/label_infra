@@ -4,6 +4,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.audit_log import AuditLog
 from app.models.background_job import BackgroundJob
 from app.models.clip import ClipJob
+from app.models.dog import Dog
 from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.media_file import MediaFile
@@ -16,6 +17,7 @@ from app.models.user import User
 __all__ = [
     "User",
     "Project",
+    "Dog",
     "Sample",
     "Task",
     "LabelDefinition",

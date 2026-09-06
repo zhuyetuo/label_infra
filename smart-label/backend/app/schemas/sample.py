@@ -10,7 +10,7 @@ class SampleOut(BaseModel):
 
     id: int
     sample_code: str
-    dog_id: str | None
+    dog_id: int | None
     session_date: date | None
     video_cam1_path: str
     video_cam2_path: str
