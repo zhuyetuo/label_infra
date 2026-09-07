@@ -337,7 +337,7 @@ export default function Tasks() {
             sorter: (a: Task, b: Task) =>
               Object.values(a.label_counts ?? {}).reduce((s, c) => s + c.n, 0) -
               Object.values(b.label_counts ?? {}).reduce((s, c) => s + c.n, 0),
-            sortDirections: ["descend", "ascend"],
+            sortDirections: ["descend", "ascend", "descend"],
             render: (_, task: Task) => {
               const lc = task.label_counts ?? {};
               const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);

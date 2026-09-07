@@ -850,7 +850,7 @@ export default function Projects() {
                       : "片段",
                     width: 260,
                     sorter: (a: Task, b: Task) => segCount(a, f.labels) - segCount(b, f.labels),
-                    sortDirections: ["descend", "ascend"],
+                    sortDirections: ["descend", "ascend", "descend"],
                     render: (_, task: Task) => {
                       const lc = task.label_counts ?? {};
                       const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
