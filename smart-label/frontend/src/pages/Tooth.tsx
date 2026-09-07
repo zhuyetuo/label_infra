@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Collapse, Empty, Image, Modal, Progress, Radio, Slider, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Collapse, Empty, Image, Modal, Progress, Radio, Slider, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   detectToothPhotos,
@@ -29,6 +29,9 @@ export default function Tooth() {
   // 置信度阈值：0 = 模型给出的全部检出都返回（看模型到底看到了什么），默认 0；
   // 批量检测和单张检测都用这个值，结果里记着当时用的阈值
   const [conf, setConf] = useState(0);
+  // 默认每张图只留置信度最高的一个框（一张嘴一个结论）；勾掉看模型全部输出
+  const [onlyTop, setOnlyTop] = useState(true);
+  const detectOpts = (with_image: boolean) => ({ conf, with_image, top_k: onlyTop ? 1 : 0 });
   // 缩略图 URL 要带路径签名 token，逐张换太多请求——一次换一批，缓存在这里
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [running, setRunning] = useState<{ done: number; total: number } | null>(null);
@@ -88,7 +91,7 @@ export default function Tooth() {
       // 每批 20 张，跑完一批刷一次进度；后端逐张落库，中途关页面已跑完的不丢
       for (let i = 0; i < paths.length; i += 20) {
         const chunk = paths.slice(i, i + 20);
-        const res = await detectToothPhotos(chunk, { conf, with_image: false });
+        const res = await detectToothPhotos(chunk, detectOpts(false));
         res.forEach((r) => (r.ok ? okN++ : errors.push(`${r.rel_path}: ${r.error}`)));
         setRunning({ done: Math.min(i + chunk.length, paths.length), total: paths.length });
       }
@@ -105,7 +108,7 @@ export default function Tooth() {
     // 有结果就重新跑一次拿带框图（YOLO 单张很快），没结果就不自动跑，让用户点按钮
     if (photo.result) {
       try {
-        const [r] = await detectToothPhotos([photo.rel_path], { conf, with_image: true });
+        const [r] = await detectToothPhotos([photo.rel_path], detectOpts(true));
         setViewing({ photo: { ...photo, result: r.result ?? photo.result }, annotated: r.annotated_jpeg_b64, loading: false });
         return;
       } catch {
@@ -119,7 +122,7 @@ export default function Tooth() {
     if (!viewing) return;
     setViewing({ ...viewing, loading: true });
     try {
-      const [r] = await detectToothPhotos([viewing.photo.rel_path], { conf, with_image: true });
+      const [r] = await detectToothPhotos([viewing.photo.rel_path], detectOpts(true));
       if (!r.ok) throw new Error(r.error);
       setViewing({ photo: { ...viewing.photo, result: r.result ?? null }, annotated: r.annotated_jpeg_b64, loading: false });
       refresh();
@@ -179,7 +182,8 @@ export default function Tooth() {
       <Space style={{ marginBottom: 8 }}>
         <Typography.Text>置信度阈值</Typography.Text>
         <Slider min={0} max={0.95} step={0.05} value={conf} onChange={setConf} style={{ width: 240 }} tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}%` }} />
-        <Tag>{(conf * 100).toFixed(0)}%{conf === 0 ? "（全部检出都显示）" : ""}</Tag>
+        <Tag>{(conf * 100).toFixed(0)}%{conf === 0 ? "（不按阈值过滤）" : ""}</Tag>
+        <Checkbox checked={onlyTop} onChange={(e) => setOnlyTop(e.target.checked)}>只保留最高分的一个框</Checkbox>
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         照片来自素材库 NAS 的 <code>{data?.root ?? "口腔验证/"}</code>，按「日期目录 / 狗」归类，只读不改。检测走 imu_train 的牙齿 YOLO 模型，结果落库，角标显示置信度最高的类别；点图看带框图。
@@ -292,6 +296,7 @@ export default function Tooth() {
                 </Button>
                 <Typography.Text type="secondary">阈值 {(conf * 100).toFixed(0)}%</Typography.Text>
                 <Slider min={0} max={0.95} step={0.05} value={conf} onChange={setConf} style={{ width: 160 }} />
+                <Checkbox checked={onlyTop} onChange={(e) => setOnlyTop(e.target.checked)}>只留最高分一个框</Checkbox>
                 {viewing.photo.result && (
                   <Typography.Text type="secondary">
                     上次检测 {viewing.photo.result.detected_at?.replace("T", " ").slice(0, 19)} · 阈值 {viewing.photo.result.model_conf}
