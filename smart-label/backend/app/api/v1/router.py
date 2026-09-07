@@ -13,6 +13,7 @@ from app.api.v1 import (
     projects,
     reviews,
     samples,
+    skin,
     tasks,
     tooth,
     users,
@@ -37,3 +38,4 @@ api_router.include_router(model_versions.router)
 api_router.include_router(model_versions.callback_router)
 api_router.include_router(tooth.router)
 api_router.include_router(tooth.stream_router)
+api_router.include_router(skin.router)

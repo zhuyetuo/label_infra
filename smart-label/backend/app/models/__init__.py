@@ -12,6 +12,7 @@ from app.models.model_version import ModelVersion
 from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
+from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.task import Task
 from app.models.tooth_photo import ToothPhotoResult
 from app.models.user import User
@@ -34,4 +35,6 @@ __all__ = [
     "AuditLog",
     "ModelVersion",
     "ToothPhotoResult",
+    "SkinRecord",
+    "SkinWeeklyRow",
 ]
