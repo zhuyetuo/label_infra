@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
-import TrackingCharts from "@/components/TrackingCharts";
+import TrackingCharts, { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { useNavigate } from "react-router-dom";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
@@ -60,7 +60,7 @@ export default function Skin() {
   const [mlTab, setMlTab] = useState("ml");
   const tab = version === "pm" ? pmTab : mlTab;
   // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
-  const AUTO_TABS = new Set(["tracking", "link", "weekly", "history", "photos"]);
+  const AUTO_TABS = new Set(["tracking", "charts", "link", "weekly", "history", "photos"]);
   const setTab = (key: string) => {
     if (ML_TABS.has(key)) { setVersion("ml"); setMlTab(key); return; }
     setVersion("pm");
@@ -137,6 +137,7 @@ export default function Skin() {
           { key: "tracking", label: "每日跟踪表", children: (
             <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setPmTab("q"); }} />
           ) },
+          { key: "charts", label: "趋势图表", children: <ChartsTab /> },
           { key: "link", label: "项目联动（AI vs 人工）", children: (
             <LinkTab opts={opts} onApply={(c, meta) => {
               setCIn(c); setCSource(meta.source); setCCompare({ ai: meta.ai, human: meta.human });
@@ -263,6 +264,120 @@ function QuestionnaireTab(p: {
 }
 
 // ── 导入 IMU 统计数据 ───────────────────────────────────────────────────
+
+// ── 趋势图表：跟跟踪表共用同一套筛选条件（localStorage 同一个 key），只看图 ──
+
+function ChartsTab() {
+  const [f, setF] = useState(loadTrackFilter);
+  const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
+    setF((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  const { data, isFetching } = useQuery({
+    queryKey: ["skin-tracking", f.from, f.to],
+    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
+    refetchOnWindowFocus: false,
+  });
+  const all = data?.rows ?? [];
+  const dogs = [...new Set(all.map((r) => r.dog_name))].sort();
+  const rows = all.filter((r) => f.dogs.length === 0 || f.dogs.includes(r.dog_name));
+
+  // 每只狗一组概览数字：多少天、平均/最高 C、几天 C2、最近一天什么样
+  const summary = useMemo(() => {
+    const m = new Map<string, TrackingRow[]>();
+    for (const r of rows) m.set(r.dog_name, [...(m.get(r.dog_name) ?? []), r]);
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([dog, rs]) => {
+      const cs = rs.map((r) => r.c_value).filter((v): v is number => v != null);
+      const sorted = [...rs].sort((a, b) => a.date.localeCompare(b.date));
+      const last = sorted[sorted.length - 1];
+      return {
+        dog,
+        days: rs.length,
+        avgC: cs.length ? cs.reduce((a, b) => a + b, 0) / cs.length : null,
+        maxC: cs.length ? Math.max(...cs) : null,
+        c2Days: rs.filter((r) => r.c_tier === "C2").length,
+        needQ: rs.filter((r) => r.question_triggered).length,
+        last,
+      };
+    });
+  }, [rows]);
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={[dayjs(f.from), dayjs(f.to)]}
+          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
+          allowClear={false}
+        />
+        <Select
+          mode="multiple"
+          allowClear
+          placeholder="全部狗"
+          style={{ minWidth: 240 }}
+          value={f.dogs}
+          onChange={(v) => setFilter({ dogs: v })}
+          options={dogs.map((d) => ({ value: d, label: d }))}
+          maxTagCount="responsive"
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          跟「每日跟踪表」共用筛选条件，两边改一处另一处也跟着变。
+        </Typography.Text>
+      </Space>
+
+      {isFetching && !all.length ? <Spin /> : null}
+      {!isFetching && !all.length ? (
+        <Alert type="info" showIcon message="这段日期还没有数据，先去「项目联动」点一次「重新拉取」" />
+      ) : null}
+
+      {summary.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          {summary.map((sm) => (
+            <Descriptions
+              key={sm.dog}
+              size="small"
+              bordered
+              column={2}
+              style={{ minWidth: 340, flex: "1 1 340px" }}
+              title={<span style={{ fontSize: 14 }}>{sm.dog}</span>}
+            >
+              <Descriptions.Item label="有数据天数">{sm.days}</Descriptions.Item>
+              <Descriptions.Item label="需要问答">{sm.needQ} 天</Descriptions.Item>
+              <Descriptions.Item label="平均 C">{fmt(sm.avgC, 1)}</Descriptions.Item>
+              <Descriptions.Item label="最高 C">{sm.maxC ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label="C2 天数">
+                {sm.c2Days ? <Tag color="red">{sm.c2Days} 天</Tag> : "0"}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近一天">
+                {sm.last ? (
+                  <span>
+                    {sm.last.date} {sm.last.c_value ?? "—"} <Tag color={tierColor(sm.last.c_tier)}>{sm.last.c_tier}</Tag>
+                  </span>
+                ) : "—"}
+              </Descriptions.Item>
+            </Descriptions>
+          ))}
+        </div>
+      )}
+
+      {rows.length > 0 &&
+        METRICS.map((m) => (
+          <div key={m.value} style={{ marginBottom: 20 }}>
+            <Typography.Text strong>{m.label}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              {m.value === "count" && "虚线是基线（这只狗别的日子的中位数），C 值里的「变化幅度」就是跟它比出来的"}
+              {m.value === "c" && "0–30 是 C0，30–50 是 C1，50 以上是 C2；红旗信号会直接判 C2"}
+              {m.value === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值"}
+            </Typography.Text>
+            <TrendChart rows={rows} metric={m.value} height={220} />
+          </div>
+        ))}
+      <TierDistribution rows={rows} />
+    </div>
+  );
+}
 
 // ── 每日跟踪表：一行 = (日期, 狗)，长期看每只狗的走势 ────────────────────
 
