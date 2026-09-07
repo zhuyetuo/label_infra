@@ -79,7 +79,7 @@ export const skinMlPreview = (b: { rows: MlRow[]; date_label: string; imu: strin
 export const skinMlPredictC = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null }) => request.post<never, MlPredict>("/skin/ml/predict-c", b, { timeout: 300_000 });
 export const skinMlPredictS = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null; answers: Answers }) => request.post<never, MlPredict>("/skin/ml/predict-s", b, { timeout: 300_000 });
 
-export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number }) =>
+export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number; include_drafts?: boolean }) =>
   request.get<never, LinkResult>("/skin/link/stats", { params: p, timeout: 300_000 });
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>

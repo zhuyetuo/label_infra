@@ -83,6 +83,7 @@ async def collect_link_stats(
     project_id: int | None = None,
     scratch_label: str = "抓挠",
     ai_min_conf: float = 0.0,
+    include_drafts: bool = False,
 ) -> dict:
     """返回 {rows: [...], warnings: [...]}，rows 每行一个 (日期, IMU)。"""
     warnings: list[str] = []
@@ -115,8 +116,9 @@ async def collect_link_stats(
     ).scalars().all()
     scratch_label_ids = set(label_rows)
 
-    # 人工片段：已提交/已通过任务当前轮的记录
-    human_tasks = [t for t in tasks if t.status in HUMAN_STATUSES]
+    # 人工片段：默认只认已提交/已通过（有人复核过）；include_drafts=True 时把
+    # 标注中、待认领里已经存了草稿的也算进来——自己一个人玩、不走审核流程时用
+    human_tasks = tasks if include_drafts else [t for t in tasks if t.status in HUMAN_STATUSES]
     items_by_task: dict[int, list[tuple[int, int]]] = defaultdict(list)
     if human_tasks and scratch_label_ids:
         rows = await db.execute(
@@ -220,8 +222,9 @@ async def collect_link_stats(
         # AI 版：这天只要有 AI JSON 就出一行（没抓挠也是"0 次"，不是"没数据"）
         if counts[k]["total"] - counts[k]["no_ai"] > 0 or ai_events.get(k):
             ai_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in ai_events.get(k, [])], "wear_seconds": wear})
-        # 人工版：至少有一个任务提交/通过才算有人工数据
-        if counts[k]["approved"] + counts[k]["submitted"] > 0:
+        # 人工版：默认要有任务提交/通过；include_drafts 时只要这天有任务就出一行
+        has_human = counts[k]["total"] > 0 if include_drafts else counts[k]["approved"] + counts[k]["submitted"] > 0
+        if has_human:
             human_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in human_events.get(k, [])], "wear_seconds": wear})
 
     async def _stats(rows: list[dict], which: str) -> dict[tuple, dict]:
@@ -253,7 +256,8 @@ async def collect_link_stats(
     out_rows = []
     for k in keys:
         c = counts[k]
-        human_done = c["approved"] + c["submitted"]
+        human_done = c["total"] if include_drafts else c["approved"] + c["submitted"]
+        human_all = c["total"] if include_drafts else c["approved"]
         out_rows.append({
             "date": k[0],
             "imu": k[1],
@@ -262,6 +266,6 @@ async def collect_link_stats(
             "ai": ai_stats.get(k),
             "human": human_stats.get(k),
             # 人工完整 = 这天所有任务都已通过；部分 = 有提交/通过但没全通过
-            "human_status": "complete" if c["total"] and c["approved"] == c["total"] else ("partial" if human_done else "none"),
+            "human_status": "complete" if c["total"] and human_all == c["total"] else ("partial" if human_done else "none"),
         })
     return {"rows": out_rows, "warnings": warnings}

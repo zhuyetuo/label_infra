@@ -47,20 +47,26 @@ async def link_stats(
     date_to: _dt.date,
     project_id: int | None = None,
     ai_min_conf: float = 0.0,
+    include_drafts: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """
     把这段日期里标注平台上的「抓挠」片段按 (日期, IMU) 聚合成日统计 + C 值，AI 版
     （稳定版预标注原始 JSON）和人工版（已提交/已通过任务的当前片段）各一份，前端
     并排对比、选一个灌进 C 值计算。基线按传入日期范围内的其它天算，想要更准的
-    基线就把范围拉长。
+    基线就把范围拉长。include_drafts=true 时人工版把还没提交/审核的草稿也算进去
+    （自己一个人标、不走审核流程时用）。
     """
     if date_to < date_from:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
     if (date_to - date_from).days > 92:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "一次最多拉 3 个月")
     try:
-        return ok(await collect_link_stats(db, date_from, date_to, project_id, ai_min_conf=ai_min_conf))
+        return ok(
+            await collect_link_stats(
+                db, date_from, date_to, project_id, ai_min_conf=ai_min_conf, include_drafts=include_drafts
+            )
+        )
     except SkinLinkError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     except Exception as e:  # noqa: BLE001
