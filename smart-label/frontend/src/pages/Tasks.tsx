@@ -41,7 +41,8 @@ export default function Tasks() {
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   // 打开工作台时把该任务所属项目的标签带进去
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
-  // 皮肤评估的每日跟踪表跳过来时带 ?seg=抓挠，片段列表默认就筛好
+  // 带 ?task=ID&seg=抓挠 直接打开某个任务并把片段筛到该标签（分享链接/外部跳转用；
+  // 皮肤评估的跟踪表是在它自己那一页开工作台，不走这里）
   const [searchParams] = useSearchParams();
   const focusLabelName = searchParams.get("seg");
 
