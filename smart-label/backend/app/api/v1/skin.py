@@ -19,6 +19,7 @@ from app.db.session import get_db
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services.skin_link_service import SkinLinkError, collect_link_stats
 
 router = APIRouter(prefix="/skin", tags=["skin"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
@@ -33,6 +34,32 @@ async def _algo(method: str, path: str, payload: dict | None = None, timeout: fl
     if resp.status_code != 200:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"AI 服务返回 {resp.status_code}: {resp.text[:300]}")
     return resp.json()
+
+
+# ── 标注平台联动：AI 版 / 人工版抓挠日统计 ───────────────────────────────
+
+@router.get("/link/stats")
+async def link_stats(
+    date_from: _dt.date,
+    date_to: _dt.date,
+    project_id: int | None = None,
+    ai_min_conf: float = 0.0,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    把这段日期里标注平台上的「抓挠」片段按 (日期, IMU) 聚合成日统计 + C 值，AI 版
+    （稳定版预标注原始 JSON）和人工版（已提交/已通过任务的当前片段）各一份，前端
+    并排对比、选一个灌进 C 值计算。基线按传入日期范围内的其它天算，想要更准的
+    基线就把范围拉长。
+    """
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
+    if (date_to - date_from).days > 92:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "一次最多拉 3 个月")
+    try:
+        return ok(await collect_link_stats(db, date_from, date_to, project_id, ai_min_conf=ai_min_conf))
+    except SkinLinkError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
 
 # ── 透传：规则/统计/ML ─────────────────────────────────────────────────
@@ -108,6 +135,11 @@ class SkinRecordIn(BaseModel):
     s_total: float | None = None
     s_tier: str | None = None
     c_inputs: dict | None = None
+    c_source: str | None = None
+    c_value_ai: float | None = None
+    c_tier_ai: str | None = None
+    c_value_human: float | None = None
+    c_tier_human: str | None = None
     confirm_overwrite: bool = False
 
 
@@ -118,6 +150,8 @@ def _record_out(r: SkinRecord) -> dict:
         "hair_spot": r.hair_spot, "hair_diameter": r.hair_diameter, "coat": r.coat,
         "q_score": r.q_score, "c_value": r.c_value, "c_tier": r.c_tier, "s_total": r.s_total, "s_tier": r.s_tier,
         "c_inputs": json.loads(r.c_inputs) if r.c_inputs else None,
+        "c_source": r.c_source, "c_value_ai": r.c_value_ai, "c_tier_ai": r.c_tier_ai,
+        "c_value_human": r.c_value_human, "c_tier_human": r.c_tier_human,
         "created_by": r.created_by, "created_at": r.created_at.isoformat() if r.created_at else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
