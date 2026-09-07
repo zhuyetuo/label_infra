@@ -11,6 +11,25 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
   const { data, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
+
+  useEffect(() => {
+    // 缩略图要带路径签名 token，8 个一组换，几百张几秒钟
+    const missing = allPhotos.filter((p) => !urls[p.rel_path]).map((p) => p.rel_path);
+    if (!missing.length) return;
+    let cancelled = false;
+    (async () => {
+      for (let i = 0; i < missing.length; i += 8) {
+        const chunk = missing.slice(i, i + 8);
+        const tokens = await Promise.all(chunk.map((p) => getMaterialPhotoToken(album, p).catch(() => null)));
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        chunk.forEach((p, j) => { if (tokens[j]) next[p] = materialPhotoUrl(album, p, tokens[j]!.token); });
+        setUrls((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPhotos, album]);
   // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
   const allPhotos = useMemo(
     () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, dog: d.name, folder: f.folder })))),
