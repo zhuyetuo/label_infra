@@ -12,6 +12,12 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
 
+  // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
+  const allPhotos = useMemo(
+    () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, dog: d.name, folder: f.folder })))),
+    [data]
+  );
+
   useEffect(() => {
     // 缩略图要带路径签名 token，8 个一组换，几百张几秒钟
     const missing = allPhotos.filter((p) => !urls[p.rel_path]).map((p) => p.rel_path);
@@ -30,12 +36,6 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allPhotos, album]);
-
-  // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
-  const allPhotos = useMemo(
-    () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, dog: d.name, folder: f.folder })))),
-    [data]
-  );
   if (error) {
     return <Alert type="error" showIcon message="照片目录读不到" description={`${(error as Error).message}。确认素材库 NAS 已挂到 /home/toky/alg_material 并在 docker-compose 里挂进了容器。`} />;
   }
