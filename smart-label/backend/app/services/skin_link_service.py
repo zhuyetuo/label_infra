@@ -93,7 +93,8 @@ async def collect_link_stats(
         )
     ).scalars().all()
     if not samples:
-        return {"rows": [], "warnings": ["这段日期里没有样本"]}
+        return {"rows": [], "warnings": [f"{date_from} ~ {date_to} 这段日期里没有样本（样本按 session_date 算，"
+                                         f"就是文件名里的采集日期，不是项目名）"]}
     sample_ids = [s.id for s in samples]
 
     tq = select(Task).where(Task.sample_id.in_(sample_ids))
@@ -217,19 +218,31 @@ async def collect_link_stats(
         if counts[k]["approved"] + counts[k]["submitted"] > 0:
             human_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in human_events.get(k, [])], "wear_seconds": wear})
 
-    async def _stats(rows: list[dict]) -> dict[tuple, dict]:
+    async def _stats(rows: list[dict], which: str) -> dict[tuple, dict]:
         if not rows:
             return {}
-        res = await _algo_post("stats/from-events", {"rows": rows, "target_label": scratch_label})
-        out = {}
-        for r in res.get("rows") or []:
-            cin = await _algo_post("stats/to-c-inputs", r)
-            c_payload = {kk: vv for kk, vv in cin.items() if kk not in ("fill_date", "dog_name", "warnings")}
-            c = await _algo_post("c-score", c_payload)
-            out[(r["date"], r["imu"])] = {"stats": r, "c_inputs": cin, "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")}}
-        return out
+        try:
+            res = await _algo_post("stats/from-events", {"rows": rows, "target_label": scratch_label})
+            out = {}
+            for r in res.get("rows") or []:
+                cin = await _algo_post("stats/to-c-inputs", r)
+                c_payload = {kk: vv for kk, vv in cin.items() if kk not in ("fill_date", "dog_name", "warnings")}
+                c = await _algo_post("c-score", c_payload)
+                out[(r["date"], r["imu"])] = {
+                    "stats": r, "c_inputs": cin,
+                    "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")},
+                }
+            return out
+        except SkinLinkError as e:
+            # AI 服务连不上/接口不存在（比如 label_service 没重启）时，别把整张表打空——
+            # 任务进度这些本地算出来的照样有用，把原因写进 warnings 让人一眼看到
+            warnings.append(f"{which}的统计没算成：{e}")
+            return {}
 
-    ai_stats, human_stats = await asyncio.gather(_stats(ai_rows), _stats(human_rows))
+    ai_stats, human_stats = await asyncio.gather(_stats(ai_rows, "AI 版"), _stats(human_rows, "人工版"))
+
+    if not keys:
+        warnings.append(f"这段日期里有 {len(samples)} 个样本，但样本编号都取不到 _imu 后缀，没法按狗归类")
 
     out_rows = []
     for k in keys:
