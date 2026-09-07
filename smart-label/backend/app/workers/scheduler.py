@@ -10,6 +10,7 @@
 
 import asyncio
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -62,7 +63,8 @@ async def _auto_scan_samples() -> None:
 async def main() -> None:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(_sweep_once, "interval", minutes=2, id="reclaim_expired_tasks")
-    scheduler.add_job(_auto_scan_samples, "interval", minutes=10, id="auto_scan_samples")
+    # 启动后立刻扫一次，不用等 10 分钟；之后每 10 分钟一次
+    scheduler.add_job(_auto_scan_samples, "interval", minutes=10, id="auto_scan_samples", next_run_time=datetime.now())
     scheduler.start()
     logger.info("定时任务已启动：超时回收(每2分钟) + NAS样本自动扫描(每10分钟)")
     await asyncio.Event().wait()  # 常驻进程
