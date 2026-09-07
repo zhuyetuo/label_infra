@@ -64,7 +64,7 @@ export interface LinkRow {
   tasks: { total: number; approved: number; submitted: number; in_progress: number; pending: number; rejected: number; no_ai: number };
   ai_mode: string[]; ai: LinkSide | null; human: LinkSide | null; human_status: "complete" | "partial" | "none";
 }
-export interface LinkResult { rows: LinkRow[]; warnings: string[] }
+export interface LinkResult { rows: LinkRow[]; warnings: string[]; from_cache?: boolean }
 export interface WeeklyRow { id: number; imu: string; dog_name: string | null; report_date: string; data: Record<string, string | number>; updated_at: string | null }
 
 export const getSkinOptions = () => request.get<never, SkinOptions>("/skin/options");
@@ -79,7 +79,7 @@ export const skinMlPreview = (b: { rows: MlRow[]; date_label: string; imu: strin
 export const skinMlPredictC = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null }) => request.post<never, MlPredict>("/skin/ml/predict-c", b, { timeout: 300_000 });
 export const skinMlPredictS = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null; answers: Answers }) => request.post<never, MlPredict>("/skin/ml/predict-s", b, { timeout: 300_000 });
 
-export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number; include_drafts?: boolean }) =>
+export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number; include_drafts?: boolean; refresh?: boolean }) =>
   request.get<never, LinkResult>("/skin/link/stats", { params: p, timeout: 300_000 });
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>

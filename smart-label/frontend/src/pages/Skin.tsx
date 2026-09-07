@@ -239,24 +239,61 @@ function QuestionnaireTab(p: {
 
 // ── 项目联动：标注平台 AI 版 / 人工版抓挠统计 ──────────────────────────
 
+// 筛选条件记在浏览器本地；结果本身存在后端 skin_daily_stats 表里，打开页面直接读库
+const LINK_FILTER_KEY = "skin-link-filter";
+type LinkFilter = { from: string; to: string; projectId: number | null; includeDrafts: boolean };
+const loadLinkFilter = (): LinkFilter => {
+  try {
+    const raw = localStorage.getItem(LINK_FILTER_KEY);
+    if (raw) return JSON.parse(raw) as LinkFilter;
+  } catch { /* 存不了就用默认值 */ }
+  return {
+    from: dayjs().subtract(13, "day").format("YYYY-MM-DD"),
+    to: dayjs().format("YYYY-MM-DD"),
+    projectId: null,
+    includeDrafts: false,
+  };
+};
+
 function LinkTab(p: {
   opts: SkinOptions;
   onApply: (c: CInputs, meta: { fill_date: string | null; dog_name: string | null; imu: string; source: CSource; ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }) => void;
 }) {
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(13, "day"), dayjs()]);
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [rows, setRows] = useState<LinkRow[]>([]);
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const qcLink = useQueryClient();
+  const [f, setF] = useState<LinkFilter>(loadLinkFilter);
+  const setFilter = (patch: Partial<LinkFilter>) =>
+    setF((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(LINK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs(f.from), dayjs(f.to)];
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
 
+  // 打开就读库里存好的结果，不扫 NAS、不调 AI 服务
+  const { data, isFetching } = useQuery({
+    queryKey: ["skin-link", f.from, f.to],
+    queryFn: () => skinLinkStats({ date_from: f.from, date_to: f.to }),
+    refetchOnWindowFocus: false,
+  });
+  const [recomputing, setRecomputing] = useState(false);
+  const rows = data?.rows ?? [];
+  const warnings = data?.warnings ?? [];
+  const loading = isFetching || recomputing;
+
+  // 重新拉取 = 扫一遍 NAS / 任务重算，覆盖库里的结果；标注有更新时才需要点
   const pull = async () => {
-    setLoading(true);
+    setRecomputing(true);
     try {
-      const r = await skinLinkStats({ date_from: range[0].format("YYYY-MM-DD"), date_to: range[1].format("YYYY-MM-DD"), project_id: projectId });
-      setRows(r.rows); setWarnings(r.warnings);
+      const r = await skinLinkStats({
+        date_from: f.from, date_to: f.to, project_id: f.projectId, include_drafts: f.includeDrafts, refresh: true,
+      });
+      qcLink.setQueryData(["skin-link", f.from, f.to], r);
       if (!r.rows.length) message.info(r.warnings[0] ?? "这段日期里没有样本/任务");
-    } finally { setLoading(false); }
+      else message.success(`已重新计算并保存 ${r.rows.length} 行`);
+    } finally {
+      setRecomputing(false);
+    }
   };
   const apply = (row: LinkRow, source: "ai" | "human") => {
     const side = source === "ai" ? row.ai : row.human;
@@ -280,14 +317,27 @@ function LinkTab(p: {
   return (
     <div>
       <Space wrap style={{ marginBottom: 8 }}>
-        <DatePicker.RangePicker value={range} onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
-        <Select allowClear placeholder="全部项目" style={{ width: 220 }} value={projectId ?? undefined} onChange={(v) => setProjectId(v ?? null)}
+        <DatePicker.RangePicker
+          value={range}
+          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
+          allowClear={false}
+        />
+        <Select allowClear placeholder="全部项目" style={{ width: 220 }} value={f.projectId ?? undefined} onChange={(v) => setFilter({ projectId: v ?? null })}
           options={(projects ?? []).map((pr) => ({ value: pr.id, label: pr.name }))} />
-        <Button type="primary" loading={loading} onClick={pull}>拉取</Button>
+        <Checkbox checked={f.includeDrafts} onChange={(e) => setFilter({ includeDrafts: e.target.checked })}>
+          人工版包含未审核的草稿
+        </Checkbox>
+        <Button type="primary" loading={loading} onClick={pull}>重新拉取</Button>
+        {data && !loading && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}；
+            标注有更新、或者改了上面的条件，再点「重新拉取」
+          </Typography.Text>
+        )}
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         按 (日期, IMU) 聚合标注平台上的「抓挠」片段：<b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响），
-        <b>人工版</b> = 已提交/已通过任务里当前的片段（勾上「包含未审核的草稿」就把标注中/待认领里已经标了的也算进来）。基线用这段日期里的其它天算，范围拉长基线更准。
+        <b>人工版</b> = 已提交/已通过任务里当前的片段（勾上「包含未审核的草稿」就把标注中/待认领里已经标了的也算进来）。结果存在服务器上，打开页面直接读；基线用<b>所有算过的天</b>算，不只是这次选的范围。
         「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
       </Typography.Paragraph>
       {warnings.length > 0 && (

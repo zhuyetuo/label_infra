@@ -20,7 +20,7 @@ from app.db.session import get_db
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.services.skin_link_service import SkinLinkError, collect_link_stats
+from app.services.skin_link_service import SkinLinkError, collect_link_stats, read_stored_link_stats
 
 router = APIRouter(prefix="/skin", tags=["skin"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
@@ -48,6 +48,7 @@ async def link_stats(
     project_id: int | None = None,
     ai_min_conf: float = 0.0,
     include_drafts: bool = False,
+    refresh: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -61,6 +62,11 @@ async def link_stats(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
     if (date_to - date_from).days > 92:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "一次最多拉 3 个月")
+    if not refresh:
+        # 默认读库里存好的：不扫 NAS、不调 AI 服务，打开就有
+        stored = await read_stored_link_stats(db, date_from, date_to)
+        if stored["rows"]:
+            return ok(stored)
     try:
         return ok(
             await collect_link_stats(
