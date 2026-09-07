@@ -782,7 +782,7 @@ export default function Projects() {
                       const s = samples?.find((x) => x.id === id);
                       return (
                         <Space size={4}>
-                          <Tooltip title={role === "super_admin" ? undefined : String(sampleCode(id))}>
+                          <Tooltip title={String(sampleCode(id))}>
                             <span>{sampleName(id)}</span>
                           </Tooltip>
                           {noCsv(task) && (

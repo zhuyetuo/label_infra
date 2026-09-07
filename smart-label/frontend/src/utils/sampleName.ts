@@ -43,17 +43,16 @@ export function formatDuration(sec: number | null | undefined): string {
 }
 
 /**
- * 列表里显示用的样本名。超级管理员（平台开发者）看原始编号，其他人看
- * "2026-08-20 00:00:00 ~ 01:00:00"。
+ * 列表里显示用的样本名，所有角色一样："09:42:46 ~ 09:59:59"。项目名本身就是
+ * 日期，这里不重复；原始编号放在鼠标悬停里给开发者看。
  */
 export function sampleDisplayName(
   code: string | null | undefined,
   durationSec: number | null | undefined,
-  role: string | null | undefined
+  _role?: string | null | undefined
 ): string {
   if (!code) return "";
-  if (role === "super_admin") return code;
   const t = parseSampleTime(code, durationSec);
   if (!t) return code;
-  return `${t.date} ${t.start} ~ ${t.end ?? "?"}`;
+  return `${t.start} ~ ${t.end ?? "?"}`;
 }

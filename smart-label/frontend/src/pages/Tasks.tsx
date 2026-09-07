@@ -287,7 +287,7 @@ export default function Tasks() {
             sorter: (a: Task, b: Task) => String(sampleCode(a)).localeCompare(String(sampleCode(b))),
             defaultSortOrder: "ascend" as const,
             render: (_: number, task: Task) => (
-              <Tooltip title={role === "super_admin" ? undefined : String(sampleCode(task))}>
+              <Tooltip title={String(sampleCode(task))}>
                 <span>{sampleName(task)}</span>
               </Tooltip>
             ),
