@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # --- 算法任务素材库（另一个 NAS 共享，只读）---
     # 牙齿/口腔照片在 material_root/oral_dir/{YYYY-MM-DD-ok}/{狗名}/*.jpg，docker-compose
     # 把它跟 nas_root 一样按同路径挂进容器；imu_train/label_service 的 MATERIAL_ROOT 指同一目录
-    material_root: str = "/home/toky/算法任务素材库"
+    material_root: str = "/home/toky/alg_material"
     oral_dir: str = "口腔验证"
 
     # --- JWT ---
