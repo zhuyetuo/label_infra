@@ -36,7 +36,7 @@ from app.services.task_service import (
     TaskConflictError,
     claim_all_in_project,
     claim_task,
-    sample_brief,
+
     heartbeat,
     release_all_in_project,
     release_task,
@@ -206,6 +206,14 @@ async def list_tasks(
     result = await db.execute(query)
     tasks = result.scalars().all()
 
+    # 下面几个聚合查询以前是把上万个 task_id 拼成 IN (...) 发过去，MySQL 直接放弃
+    # 范围优化（日志里的 range_optimizer_max_mem_size exceeded），退化成全表扫。
+    # 改成 JOIN 这个子查询：条件一样，但是能走索引，SQL 文本也不会几百 KB。
+    scoped_ids = apply_task_scope(select(Task.id), user)
+    if project_id is not None:
+        scoped_ids = scoped_ids.where(Task.project_id == project_id)
+    scope = scoped_ids.subquery()
+
     # 待认领但已经有人标过一部分（比如中途放弃）的任务，前端要标出来提示
     # "有草稿"，不是从零开始
     # 同时带上当前轮已经存了多少段：标注中的任务光看状态分不出"只是认领了进去
@@ -216,8 +224,9 @@ async def list_tasks(
         rows = await db.execute(
             select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
             .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(scope, scope.c.id == Task.id)
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
-            .where(AnnotationRecord.round_no == Task.round_no, Task.id.in_(task_ids))
+            .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id)
         )
         draft_counts = {task_id: int(n) for task_id, n in rows.all()}
@@ -243,8 +252,9 @@ async def list_tasks(
                 func.sum(ai_pending),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(scope, scope.c.id == Task.id)
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
-            .where(AnnotationRecord.round_no == Task.round_no, Task.id.in_(task_ids))
+            .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
         for task_id, label_id, n, n_pending in rows.all():
@@ -261,8 +271,18 @@ async def list_tasks(
         )
         review_comments = dict(rows.all())
 
-    # 样本编号 + 指派人名字：非管理员拿不到 /samples、/users，列表里不能只给 ID
-    briefs = await sample_brief(db, tasks)
+    # 样本编号 + 指派人名字：非管理员拿不到 /samples、/users，列表里不能只给 ID。
+    # 同样用 JOIN 子查询取，不拼上万个 sample_id 的 IN 列表
+    brief_rows = await db.execute(
+        select(Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count)
+        .join(Task, Task.sample_id == Sample.id)
+        .join(scope, scope.c.id == Task.id)
+        .distinct()
+    )
+    briefs = {
+        sid: {"sample_code": code, "video_duration_sec": dur, "imu_row_count": rows_n}
+        for sid, code, dur, rows_n in brief_rows.all()
+    }
     user_names: dict[int, str] = {}
     user_roles: dict[int, str] = {}
     if tasks:

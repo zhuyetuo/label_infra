@@ -28,7 +28,7 @@ class Sample(Base):
     # 等文件名里带上 dog 编号之后，扫描导入会自动按编号建档/关联（见
     # sample_import_service.py），到时候新样本自然都会有，历史样本继续留空。
     dog_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("dogs.id"), nullable=True)
-    session_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    session_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
 
     video_cam1_path: Mapped[str] = mapped_column(String(500), nullable=False)
     video_cam2_path: Mapped[str] = mapped_column(String(500), nullable=False)
