@@ -52,7 +52,7 @@ async def _auto_scan_samples() -> None:
     p = get_progress()
     if p.status == "error":
         logger.error("自动扫描失败: %s", p.error_message)
-    elif p.created:
+    else:
         logger.info(
             "自动扫描完成: 新增%d个样本（其中verified=%d, error=%d），跳过已存在%d个",
             p.created, p.verified, p.errors, p.skipped_existing,

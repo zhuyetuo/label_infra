@@ -191,6 +191,10 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
 
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     data_raw_dir = os.path.join(nas_root, settings.data_raw_dir)
+    if not os.path.isdir(data_raw_dir):
+        # 目录不存在多半是容器没挂 NAS（scheduler 之前就漏挂过），直接报错，
+        # 别静悄悄地"扫描完成，新增 0 个"
+        raise RuntimeError(f"原始数据目录不存在: {data_raw_dir}（容器是否挂载了 NAS_ROOT？）")
     groups = await asyncio.to_thread(_scan_filesystem, data_raw_dir, nas_root)
     # 先给个粗略估计（按 session 数），下面按 IMU 展开出实际样本数之后会再校正一次，
     # 避免这中间 tick() 拿 0 做分母算出奇怪的剩余时间
