@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { Radio, Space, Tag, Typography } from "antd";
+import { Space, Tag, Typography } from "antd";
 import type { TrackingRow } from "@/api/skin";
 import "./TrackingCharts.css";
 
 /**
- * 每日跟踪的可视化：一条线一只狗，按天看走势。
+ * 「趋势图表」页用的两个图：一条线一只狗的折线图，和 C 档位分布条。
  *
- * 三个指标（抓挠次数 / C 值 / S 总分）量纲完全不同，不做双轴——一次只画一个指标，
- * 用上面的按钮切；要对比就来回切，比两条 Y 轴叠在一张图上好读得多。
- * 「抓挠次数」这个指标额外画一条虚线基线（这只狗别的日子的中位数），C 值里的
+ * 三个指标（抓挠次数 / C 值 / S 总分）量纲完全不同，不做双轴——图表页把三张图
+ * 上下排开（小倍数），各自一套 Y 轴，比两条 Y 轴叠在一张图上好读得多。
+ * 「抓挠次数」那张额外画一条虚线基线（这只狗别的日子的中位数），C 值里的
  * 「变化幅度」就是拿当天跟它比出来的，看走势时得能看见这根线。
  */
 
@@ -197,33 +197,6 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
             ))}
           </Space>
         </div>
-  );
-}
-
-/** 跟踪表上方的紧凑版：一次一个指标，用按钮切 */
-export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
-  const [metric, setMetric] = useState<Metric>("count");
-  if (!rows.length) return null;
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <Space wrap style={{ marginBottom: 8 }}>
-        <Radio.Group
-          size="small"
-          optionType="button"
-          value={metric}
-          onChange={(e) => setMetric(e.target.value)}
-          options={METRICS.map((m) => ({ label: m.label, value: m.value }))}
-        />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          一条线一只狗，鼠标移上去看当天数值。
-          {metric === "count" && "虚线是基线（这只狗别的日子的中位数）。"}
-          {metric === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值。"}
-          {" 三个指标量纲不同，只能一次看一个，不做双轴。"}
-        </Typography.Text>
-      </Space>
-      <TrendChart rows={rows} metric={metric} />
-      <TierDistribution rows={rows} />
-    </div>
   );
 }
 

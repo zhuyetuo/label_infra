@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
-import TrackingCharts, { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
+import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
@@ -496,7 +496,6 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       {(data?.warnings?.length ?? 0) > 0 && (
         <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={data!.warnings.join("；")} />
       )}
-      <TrackingCharts rows={rows} />
       <Table
         size="small"
         rowKey={(r: TrackingRow) => `${r.date}-${r.imu}`}
