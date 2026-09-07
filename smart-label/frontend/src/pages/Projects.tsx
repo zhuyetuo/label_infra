@@ -115,6 +115,7 @@ export default function Projects() {
   // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
   const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
   const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
+  const [prelabelMode, setPrelabelMode] = useState<"stable" | "raw">("stable");
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
 
@@ -203,7 +204,7 @@ export default function Projects() {
     if (!prelabelTarget) return;
     setPrelabelStarting(true);
     try {
-      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite);
+      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite, prelabelMode);
       message.info(r.queued ? "这个项目已经有一批在跑，本次请求已排在后面" : "已开始，进度在项目行里看");
       await pollPrelabel([prelabelTarget.id]);
       setPrelabelTarget(null);
@@ -1125,6 +1126,25 @@ export default function Projects() {
               直接写进任务草稿。标注员打开任务时就已经有 AI 框了，只需要确认或纠正。
               已提交、已通过、被驳回、以及已经有人工标注的任务不会被碰。
             </Typography.Paragraph>
+            <Space>
+              <Typography.Text>版本：</Typography.Text>
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                size="small"
+                value={prelabelMode}
+                onChange={(e) => setPrelabelMode(e.target.value)}
+                options={[
+                  { label: "稳定版", value: "stable" },
+                  { label: "调试版", value: "raw" },
+                ]}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {prelabelMode === "stable"
+                  ? "活动/睡觉做了平滑、碎片并入邻段；抓挠/甩身体合并成 bout，单窗口噪声丢掉。片段少、可信"
+                  : "模型逐窗口原始输出，活动/睡觉会来回闪，抓挠有很多单窗口噪声。用来看模型到底说了什么"}
+              </Typography.Text>
+            </Space>
             <Checkbox checked={prelabelOverwrite} onChange={(e) => setPrelabelOverwrite(e.target.checked)}>
               连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
             </Checkbox>

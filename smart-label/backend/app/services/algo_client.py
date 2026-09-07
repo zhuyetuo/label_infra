@@ -23,10 +23,14 @@ def _base_url() -> str:
     return settings.algo_service_url.rstrip("/")
 
 
-async def infer(imu_csv_path: str, sample_id: int | None = None) -> dict:
-    """同步调用 algo_service /infer，返回预标注的行为片段列表。"""
+def _mode(mode: str | None) -> str:
+    return mode if mode in ("raw", "stable") else settings.algo_infer_mode
+
+
+async def infer(imu_csv_path: str, sample_id: int | None = None, mode: str | None = None) -> dict:
+    """同步调用 algo_service /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。"""
     url = f"{_base_url()}/api/v1/label/infer"
-    payload = {"path": imu_csv_path, "sample_id": sample_id}
+    payload = {"path": imu_csv_path, "sample_id": sample_id, "mode": _mode(mode)}
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)
@@ -42,7 +46,7 @@ async def infer(imu_csv_path: str, sample_id: int | None = None) -> dict:
     return resp.json()
 
 
-async def infer_batch(items: list[dict]) -> list[dict]:
+async def infer_batch(items: list[dict], mode: str | None = None) -> list[dict]:
     """
     一批文件一次发给 /infer_batch，AI 服务那边进程池并行跑。返回跟 items 一一对应的
     [{sample_id, path, ok, error, result}]，result 结构跟 /infer 一样。单个文件失败
@@ -51,7 +55,7 @@ async def infer_batch(items: list[dict]) -> list[dict]:
     url = f"{_base_url()}/api/v1/label/infer_batch"
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_batch_timeout_sec) as client:
-            resp = await client.post(url, json={"items": items})
+            resp = await client.post(url, json={"items": items, "mode": _mode(mode)})
     except httpx.TimeoutException as e:
         raise AlgoServiceError(
             f"AI 服务批量推理超时（{len(items)} 个 >{settings.algo_infer_batch_timeout_sec}s）"
