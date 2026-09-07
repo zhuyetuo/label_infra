@@ -9,6 +9,7 @@ import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { useUrlTask } from "@/utils/urlTask";
 import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -80,6 +81,9 @@ export default function Tasks() {
 
   // 列表接口自带 sample_code / assigned_to_name，标注员、审核员拿不到 /samples、/users 也能正常显示
   const sampleCode = (t: Task) => t.sample_code ?? samples?.find((s) => s.id === t.sample_id)?.sample_code ?? t.sample_id;
+  const durationOf = (t: Task) => t.video_duration_sec ?? samples?.find((s) => s.id === t.sample_id)?.video_duration_sec ?? null;
+  // 超级管理员看原始编号，其他人看"哪天 几点~几点"
+  const sampleName = (t: Task) => sampleDisplayName(String(sampleCode(t)), durationOf(t), role);
   const userName = (t: Task) => {
     if (t.assigned_to == null) return null;
     if (t.assigned_to_name) return t.assigned_to_name;
@@ -152,7 +156,7 @@ export default function Tasks() {
         matchImu(t) &&
         matchStatus(t) &&
         matchLabels(t) &&
-        (!q || String(sampleCode(t)).toLowerCase().includes(q) || String(t.id) === q)
+        (!q || String(sampleCode(t)).toLowerCase().includes(q) || sampleName(t).includes(q) || String(t.id) === q)
     );
     // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
     const labelTotals = projLabels
@@ -279,9 +283,21 @@ export default function Tasks() {
           {
             title: "样本",
             dataIndex: "sample_id",
+            // 编号里带采集时间，按编号排就是按采集时间排
             sorter: (a: Task, b: Task) => String(sampleCode(a)).localeCompare(String(sampleCode(b))),
             defaultSortOrder: "ascend" as const,
-            render: (_: number, task: Task) => sampleCode(task),
+            render: (_: number, task: Task) => (
+              <Tooltip title={role === "super_admin" ? undefined : String(sampleCode(task))}>
+                <span>{sampleName(task)}</span>
+              </Tooltip>
+            ),
+          },
+          {
+            title: "总时长",
+            width: 110,
+            // 按时长排，想先挑短的就点一下
+            sorter: (a: Task, b: Task) => (durationOf(a) ?? 0) - (durationOf(b) ?? 0),
+            render: (_: unknown, task: Task) => formatDuration(durationOf(task)),
           },
           {
             title: "类型",

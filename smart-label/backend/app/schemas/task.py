@@ -35,6 +35,7 @@ class TaskOut(BaseModel):
     # 样本编号和指派人名字：标注员/审核员拿不到 /samples 和 /users，列表里只能看
     # 到一串 ID，按 imu 归目录也没法算，所以列表接口直接把这两个带出来
     sample_code: str | None = None
+    video_duration_sec: int | None = None
     assigned_to_name: str | None = None
 
 

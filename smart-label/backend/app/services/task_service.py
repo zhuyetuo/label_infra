@@ -10,6 +10,7 @@ from app.models.annotation import (
     LabelItemSource,
     RecordSourceType,
 )
+from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.models.user import User
 from app.services.task_scope import exclude_sensitive
@@ -19,6 +20,19 @@ from app.services.annotation_validation import find_first_overlap
 
 class TaskConflictError(Exception):
     """认领/续期/保存 因状态不符或不是当前持有人而失败。"""
+
+
+async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
+    """
+    任务列表要展示的样本信息 {sample_id: {sample_code, video_duration_sec}}。
+    标注员/审核员拿不到 /samples，列表接口自己带；前端拿 sample_code 里的
+    采集时间 + 时长拼成"几号 几点到几点、多长"这种人看得懂的名字。
+    """
+    ids = {t.sample_id for t in tasks}
+    if not ids:
+        return {}
+    rows = await db.execute(select(Sample.id, Sample.sample_code, Sample.video_duration_sec).where(Sample.id.in_(ids)))
+    return {sid: {"sample_code": code, "video_duration_sec": dur} for sid, code, dur in rows.all()}
 
 
 async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:

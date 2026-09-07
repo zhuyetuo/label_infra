@@ -24,6 +24,8 @@ import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
+import { useAuthStore } from "@/stores/authStore";
+import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, saveBool, saveHeight } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
@@ -70,6 +72,7 @@ export default function AnnotationWorkspace({
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
+  const role = useAuthStore((s) => s.userInfo?.role);
 
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
@@ -380,7 +383,10 @@ export default function AnnotationWorkspace({
       title={
         <Space wrap style={{ width: "100%" }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
-          <Tag>样本 {sampleId}</Tag>
+          <Tag>
+            样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : sampleId}
+            {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
+          </Tag>
           {readOnly && <Tag color="orange">只读</Tag>}
           {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
           <span ref={setControlsHost} style={{ display: "inline-flex" }} />
