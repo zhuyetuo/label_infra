@@ -53,6 +53,7 @@ import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
+import { UserTag } from "@/utils/roleTag";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -557,9 +558,11 @@ export default function Projects() {
   };
 
   // 项目下这些任务都指派给谁了
+  const roleOf = (id: number | null) =>
+    id == null ? null : allTasks?.find((t) => t.assigned_to === id)?.assigned_to_role ?? users?.find((u) => u.id === id)?.role ?? null;
   const assigneeSummary = (projectId: number) => {
     const ids = new Set(tasksOf(projectId).map((t) => t.assigned_to));
-    const named = [...ids].filter((i): i is number => i != null).map(userName);
+    const named = [...ids].filter((i): i is number => i != null).map((i) => ({ id: i, name: userName(i) ?? `#${i}`, role: roleOf(i) }));
     const hasUnassigned = ids.has(null);
     return { named, hasUnassigned };
   };
@@ -880,7 +883,7 @@ export default function Projects() {
                     title: "指派给",
                     dataIndex: "assigned_to",
                     render: (id: number | null) =>
-                      id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : userName(id),
+                      id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : <UserTag name={userName(id) ?? `#${id}`} role={roleOf(id)} me={id === userId} />,
                   },
                   {
                     title: "操作",
@@ -1042,9 +1045,7 @@ export default function Projects() {
               return (
                 <Space size={4} wrap>
                   {named.map((n) => (
-                    <Tag key={n} color="blue">
-                      {n}
-                    </Tag>
+                    <UserTag key={n.id} name={n.name} role={n.role} me={n.id === userId} />
                   ))}
                   {hasUnassigned && <Tag>有未指派</Tag>}
                 </Space>

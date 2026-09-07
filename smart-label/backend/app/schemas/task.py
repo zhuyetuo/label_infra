@@ -39,6 +39,8 @@ class TaskOut(BaseModel):
     # IMU CSV 数据行数，0 = 文件是空的，打开工作台会报"CSV 没有数据行"，这种任务管理员该删掉
     imu_row_count: int | None = None
     assigned_to_name: str | None = None
+    # 指派人角色，列表里按角色上色（超管/管理员/标注员/审核员一眼分开）
+    assigned_to_role: str | None = None
 
 
 class LabelItemIn(BaseModel):

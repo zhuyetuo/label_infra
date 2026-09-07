@@ -264,11 +264,14 @@ async def list_tasks(
     # 样本编号 + 指派人名字：非管理员拿不到 /samples、/users，列表里不能只给 ID
     briefs = await sample_brief(db, tasks)
     user_names: dict[int, str] = {}
+    user_roles: dict[int, str] = {}
     if tasks:
         uids = {t.assigned_to for t in tasks if t.assigned_to is not None}
         if uids:
-            rows = await db.execute(select(User.id, User.display_name, User.username).where(User.id.in_(uids)))
-            user_names = {uid: (dn or un) for uid, dn, un in rows.all()}
+            rows = await db.execute(select(User.id, User.display_name, User.username, User.role).where(User.id.in_(uids)))
+            for uid, dn, un, role in rows.all():
+                user_names[uid] = dn or un
+                user_roles[uid] = role.value if hasattr(role, "value") else str(role)
 
     return ok(
         [
@@ -280,6 +283,7 @@ async def list_tasks(
                 "review_comment": review_comments.get(t.id),
                 **briefs.get(t.sample_id, {}),
                 "assigned_to_name": user_names.get(t.assigned_to) if t.assigned_to is not None else None,
+                "assigned_to_role": user_roles.get(t.assigned_to) if t.assigned_to is not None else None,
             }
             for t in tasks
         ]

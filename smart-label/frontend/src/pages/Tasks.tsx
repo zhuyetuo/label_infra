@@ -11,6 +11,7 @@ import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
+import { UserTag } from "@/utils/roleTag";
 import { useUrlTask } from "@/utils/urlTask";
 import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -368,8 +369,9 @@ export default function Tasks() {
             render: (_: number | null, task: Task) => {
               const name = userName(task);
               if (name == null) return <Typography.Text type="secondary">未指派</Typography.Text>;
-              // 指派给自己的高亮出来，一眼知道哪些是自己该干的
-              return task.assigned_to === userId ? <Tag color="blue">{name}（我）</Tag> : name;
+              // 按角色上色，指派给自己的再标一个「我」
+              const role = task.assigned_to_role ?? users?.find((u) => u.id === task.assigned_to)?.role ?? null;
+              return <UserTag name={name} role={role} me={task.assigned_to === userId} />;
             },
           },
           {
