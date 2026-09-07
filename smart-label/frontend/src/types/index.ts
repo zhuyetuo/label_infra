@@ -67,6 +67,8 @@ export interface Task {
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */
   sample_code?: string | null;
   video_duration_sec?: number | null;
+  /** IMU CSV 数据行数，0 = 空文件，打开工作台会报"CSV 没有数据行" */
+  imu_row_count?: number | null;
   assigned_to_name?: string | null;
 }
 

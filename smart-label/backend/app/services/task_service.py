@@ -31,8 +31,13 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
     ids = {t.sample_id for t in tasks}
     if not ids:
         return {}
-    rows = await db.execute(select(Sample.id, Sample.sample_code, Sample.video_duration_sec).where(Sample.id.in_(ids)))
-    return {sid: {"sample_code": code, "video_duration_sec": dur} for sid, code, dur in rows.all()}
+    rows = await db.execute(
+        select(Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count).where(Sample.id.in_(ids))
+    )
+    return {
+        sid: {"sample_code": code, "video_duration_sec": dur, "imu_row_count": rows_n}
+        for sid, code, dur, rows_n in rows.all()
+    }
 
 
 async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:

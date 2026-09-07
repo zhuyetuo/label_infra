@@ -26,6 +26,7 @@ from app.schemas.task import (
     ProjectScopeRequest,
     ReopenRequest,
     TaskCreate,
+    TaskIdsRequest,
     TaskOut,
 )
 from app.services.ai_prelabel_service import start_project_prelabel
@@ -151,30 +152,47 @@ async def reopen(
     return ok(TaskOut.model_validate(task).model_dump())
 
 
-@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
-async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def _delete_tasks(db: AsyncSession, task_ids: list[int]) -> int:
     """
-    管理员删除任务。任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，
-    所以要按 标签条目 -> 标注记录 -> 审核记录 -> 任务 的顺序清掉，不能直接删任务。
+    任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，所以要按
+    标签条目 -> 标注记录 -> 审核记录 -> 任务 的顺序清掉，不能直接删任务。
     被它当作父任务的子任务不跟着删，只把 parent_task_id 置空，避免误伤已拆分的短任务。
     """
-    task = await db.get(Task, task_id)
-    if task is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
-
+    if not task_ids:
+        return 0
     record_ids = (
-        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id == task_id))).scalars().all()
+        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars().all()
     )
     if record_ids:
         await db.execute(
             delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids))
         )
-    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id == task_id))
-    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id == task_id))
-    await db.execute(update(Task).where(Task.parent_task_id == task_id).values(parent_task_id=None))
-    await db.execute(delete(Task).where(Task.id == task_id))
+    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
+    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
+    await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
+    result = await db.execute(delete(Task).where(Task.id.in_(task_ids)))
     await db.commit()
+    return result.rowcount
+
+
+@router.delete("/{task_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """管理员删除任务。"""
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    await _delete_tasks(db, [task_id])
     return ok(msg="任务已删除")
+
+
+@router.post("/delete-batch", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def delete_tasks_batch(body: TaskIdsRequest, db: AsyncSession = Depends(get_db)):
+    """
+    批量删任务：主要用来清掉 IMU CSV 是空的那些（打开就报"CSV 没有数据行"），
+    别把这种坏数据分给标注员。前端按 imu_row_count 筛出来再调这里。
+    """
+    n = await _delete_tasks(db, list(set(body.task_ids)))
+    return ok({"count": n})
 
 
 @router.get("")

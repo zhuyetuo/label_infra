@@ -38,6 +38,7 @@ import {
   claimTask,
   createTask,
   deleteTask,
+  deleteTasksBatch,
   listTasks,
   releaseAllTasks,
   releaseTask,
@@ -93,11 +94,12 @@ export default function Projects() {
   type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
   // labels：只看含这些类别片段的任务；aiPending：只看还有 AI 待确认片段的任务——
   // 批量预标注完想专门审某一类（比如抓挠），靠这两个直接挑出要看的任务
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; imu: string };
+  // noCsv：只看 IMU CSV 是空的任务（打开就报"CSV 没有数据行"），管理员筛出来一键删掉，别分给别人
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; imu: string; noCsv: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, imu: "ALL" };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, imu: "ALL", noCsv: false };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -402,6 +404,11 @@ export default function Projects() {
     samples?.find((s) => s.id === id)?.video_duration_sec ?? allTasks?.find((t) => t.sample_id === id)?.video_duration_sec ?? null;
   // 超级管理员看原始编号，其他人看"哪天 几点~几点"
   const sampleName = (id: number) => sampleDisplayName(String(sampleCode(id)), durationOf(id), role);
+  // CSV 行数 0 = 空文件；null 是导入时没统计到，不当成"没数据"
+  const noCsv = (t: Task) => {
+    const n = t.imu_row_count ?? samples?.find((s) => s.id === t.sample_id)?.imu_row_count;
+    return n === 0;
+  };
 
   const handleCreateTask = async (values: { sample_id: number; task_type: "from_scratch" | "ai_assisted" }) => {
     if (!createForProject) return;
@@ -608,9 +615,11 @@ export default function Projects() {
               imuCounts.set(k, (imuCounts.get(k) ?? 0) + 1);
             }
             const matchImu = (t: Task) => f.imu === "ALL" || imuOf(String(sampleCode(t.sample_id))) === f.imu;
+            const noCsvTasks = all.filter(noCsv);
             const rows = all.filter(
               (t) =>
                 matchImu(t) &&
+                (!f.noCsv || noCsv(t)) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
@@ -700,7 +709,29 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.imu !== "ALL") && (
+                {isAdmin && noCsvTasks.length > 0 && (
+                  <>
+                    <Checkbox checked={f.noCsv} onChange={(e) => setFilter(p.id, { noCsv: e.target.checked })}>
+                      <span style={{ color: "#ff4d4f" }}>无 CSV 数据 {noCsvTasks.length}</span>
+                    </Checkbox>
+                    <Popconfirm
+                      title={`删除这 ${noCsvTasks.length} 个无 CSV 数据的任务？`}
+                      description="这些任务的 IMU 文件是空的，打开就报「CSV 没有数据行」，没法标；会一并删掉草稿和审核记录，不可恢复"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={async () => {
+                        const r = await deleteTasksBatch(noCsvTasks.map((t) => t.id));
+                        message.success(`已删除 ${r.count} 个任务`);
+                        setFilter(p.id, { noCsv: false });
+                        refresh();
+                      }}
+                    >
+                      <Button size="small" danger>
+                        删除无 CSV 任务
+                      </Button>
+                    </Popconfirm>
+                  </>
+                )}
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.imu !== "ALL" || f.noCsv) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
@@ -747,13 +778,18 @@ export default function Projects() {
                     // 样本编号里带采集时间，按字符串排就是按采集时间排；默认升序
                     sorter: (a: Task, b: Task) => String(sampleCode(a.sample_id)).localeCompare(String(sampleCode(b.sample_id))),
                     defaultSortOrder: "ascend" as const,
-                    render: (id: number) => {
+                    render: (id: number, task: Task) => {
                       const s = samples?.find((x) => x.id === id);
                       return (
                         <Space size={4}>
                           <Tooltip title={role === "super_admin" ? undefined : String(sampleCode(id))}>
                             <span>{sampleName(id)}</span>
                           </Tooltip>
+                          {noCsv(task) && (
+                            <Tooltip title="IMU CSV 文件是空的，打开工作台会报「CSV 没有数据行」，没法标注，建议删除">
+                              <Tag color="red" style={{ marginRight: 0 }}>无CSV</Tag>
+                            </Tooltip>
+                          )}
                           {s?.is_sensitive && (
                             <Tooltip title={`含敏感隐私信息，只有管理员能看能标${s.sensitive_note ? `：${s.sensitive_note}` : ""}`}>
                               <Tag color="red" style={{ marginRight: 0 }}>敏感</Tag>
