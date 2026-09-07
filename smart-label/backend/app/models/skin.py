@@ -39,6 +39,13 @@ class SkinRecord(Base):
     s_total: Mapped[float | None] = mapped_column(Float, nullable=True)
     s_tier: Mapped[str | None] = mapped_column(String(4), nullable=True)
     c_inputs: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：算 C 值时的 10 个输入，方便回看")
+    # C 值来源：ai=标注平台 AI 版 / human=标注平台人工版 / stats=扫 stats.csv / manual=手填；
+    # 从标注平台拉取时两个版本的 C 值都存，历史记录里对比模型 vs 人工
+    c_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    c_value_ai: Mapped[float | None] = mapped_column(Float, nullable=True)
+    c_tier_ai: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    c_value_human: Mapped[float | None] = mapped_column(Float, nullable=True)
+    c_tier_human: Mapped[str | None] = mapped_column(String(4), nullable=True)
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -52,8 +52,19 @@ export interface SkinRecord {
   id: number; dog_name: string; dog_id: number | null; fill_date: string; filler: string; imu: string | null;
   has_hair_loss: string | null; color: string | null; odor: string | null; lesion: string | null; hair_spot: string | null; hair_diameter: string | null; coat: string | null;
   q_score: number | null; c_value: number | null; c_tier: string | null; s_total: number | null; s_tier: string | null; c_inputs: CInputs | null;
+  /** C 值来源：ai / human（标注平台）/ stats（stats.csv）/ manual；从标注平台拉取时两个版本都存 */
+  c_source: CSource | null; c_value_ai: number | null; c_tier_ai: string | null; c_value_human: number | null; c_tier_human: string | null;
   created_by: number; created_at: string | null; updated_at: string | null;
 }
+export type CSource = "ai" | "human" | "stats" | "manual";
+/** 标注平台联动：一行一个 (日期, IMU)，AI 版 / 人工版各一份日统计 + C 值 */
+export interface LinkSide { stats: StatsRow; c_inputs: CInputs & { fill_date: string | null; dog_name: string | null; warnings: string[] }; c: { total: number | null; tier: string | null; red_flags: string[] } }
+export interface LinkRow {
+  date: string; imu: string;
+  tasks: { total: number; approved: number; submitted: number; in_progress: number; pending: number; rejected: number; no_ai: number };
+  ai_mode: string[]; ai: LinkSide | null; human: LinkSide | null; human_status: "complete" | "partial" | "none";
+}
+export interface LinkResult { rows: LinkRow[]; warnings: string[] }
 export interface WeeklyRow { id: number; imu: string; dog_name: string | null; report_date: string; data: Record<string, string | number>; updated_at: string | null }
 
 export const getSkinOptions = () => request.get<never, SkinOptions>("/skin/options");
@@ -68,6 +79,8 @@ export const skinMlPreview = (b: { rows: MlRow[]; date_label: string; imu: strin
 export const skinMlPredictC = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null }) => request.post<never, MlPredict>("/skin/ml/predict-c", b, { timeout: 300_000 });
 export const skinMlPredictS = (b: { rows: MlRow[]; date_label: string; imu: string; dog_name: string | null; answers: Answers }) => request.post<never, MlPredict>("/skin/ml/predict-s", b, { timeout: 300_000 });
 
+export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number }) =>
+  request.get<never, LinkResult>("/skin/link/stats", { params: p, timeout: 300_000 });
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>
   request.post<never, SkinRecord>("/skin/records", body);

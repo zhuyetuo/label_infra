@@ -8,9 +8,10 @@ import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
-  skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
-  type Answers, type CInputs, type CResult, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type WeeklyRow,
+  skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
+  type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type WeeklyRow,
 } from "@/api/skin";
+import { listProjects } from "@/api/projects";
 
 // 皮肤评估：pm_skin_scoring 那个 Gradio（填写问答 / 导入IMU统计 / C值 / S总分 / ML对比 /
 // 周报表 / 历史记录）的 React 版。所有分值由 imu_train/label_service 按 PM 规则算
@@ -23,6 +24,7 @@ const EMPTY_C: CInputs = {
 };
 const tierColor = (t?: string | null) => (t?.endsWith("2") ? "red" : t?.endsWith("1") ? "orange" : t ? "green" : undefined);
 const fmt = (v: unknown, nd = 2) => (v == null || v === "" ? "—" : typeof v === "number" ? v.toFixed(nd) : String(v));
+const SOURCE_LABEL: Record<CSource, string> = { ai: "来源：标注平台 AI 版", human: "来源：标注平台人工版", stats: "来源：stats.csv", manual: "来源：手填" };
 
 export default function Skin() {
   const qc = useQueryClient();
@@ -38,6 +40,10 @@ export default function Skin() {
   const [qScore, setQScore] = useState<QScore | null>(null);
   const [cIn, setCIn] = useState<CInputs>(EMPTY_C);
   const [cRes, setCRes] = useState<CResult | null>(null);
+  // C 输入是从哪来的（ai/human=标注平台，stats=stats.csv，manual=手改），以及从标注平台
+  // 拉取时另一个版本的 C 值——保存记录时两个版本一起存，历史里对比模型 vs 人工
+  const [cSource, setCSource] = useState<CSource>("manual");
+  const [cCompare, setCCompare] = useState<{ ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }>({ ai: null, human: null });
   const [sRes, setSRes] = useState<SResult | null>(null);
   const [sCValue, setSCValue] = useState<number | null>(null);
   const [sCTierHint, setSCTierHint] = useState<string | null>(null);
@@ -105,12 +111,19 @@ export default function Skin() {
         items={(version === "pm" ? [
           { key: "q", label: "填写问答", children: (
             <QuestionnaireTab opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate} filler={filler} setFiller={setFiller}
-              answers={answers} setAnswer={setAnswer} qScore={qScore} imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} onSaved={() => qc.invalidateQueries({ queryKey: ["skin-records"] })} goto={setTab} />
+              answers={answers} setAnswer={setAnswer} qScore={qScore} imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} cSource={cSource} cCompare={cCompare}
+              onSaved={() => qc.invalidateQueries({ queryKey: ["skin-records"] })} goto={setTab} />
+          ) },
+          { key: "link", label: "项目联动（AI vs 人工）", children: (
+            <LinkTab opts={opts} onApply={(c, meta) => {
+              setCIn(c); setCSource(meta.source); setCCompare({ ai: meta.ai, human: meta.human });
+              if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setTab("c");
+            }} />
           ) },
           { key: "stats", label: "导入IMU统计数据", children: (
-            <StatsTab opts={opts} onApply={(c, meta) => { setCIn(c); if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setTab("c"); }} />
+            <StatsTab opts={opts} onApply={(c, meta) => { setCIn(c); setCSource("stats"); setCCompare({ ai: null, human: null }); if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setTab("c"); }} />
           ) },
-          { key: "c", label: "C值计算", children: <CTab cIn={cIn} setCIn={setCIn} cRes={cRes} goto={setTab} /> },
+          { key: "c", label: "C值计算", children: <CTab cIn={cIn} setCIn={(c) => { setCIn(c); setCSource("manual"); }} cRes={cRes} cSource={cSource} cCompare={cCompare} goto={setTab} /> },
           { key: "s", label: "S总分", children: <STab sRes={sRes} sCValue={sCValue} setSCValue={(v) => { setSCValue(v); setSCTierHint(null); }} answers={answers} qScore={qScore} goto={setTab} /> },
           { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
           { key: "history", label: "历史记录", children: <HistoryTab /> },
@@ -128,7 +141,9 @@ export default function Skin() {
 function QuestionnaireTab(p: {
   opts: SkinOptions; dogName: string | null; setDogName: (v: string | null) => void; fillDate: string; setFillDate: (v: string) => void;
   filler: string; setFiller: (v: string) => void; answers: Answers; setAnswer: (k: keyof Answers, v: string | null) => void; qScore: QScore | null;
-  imu: string | null; cRes: CResult | null; sRes: SResult | null; cIn: CInputs; onSaved: () => void; goto: (k: string) => void;
+  imu: string | null; cRes: CResult | null; sRes: SResult | null; cIn: CInputs; cSource: CSource;
+  cCompare: { ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null };
+  onSaved: () => void; goto: (k: string) => void;
 }) {
   const { opts, answers, setAnswer, qScore } = p;
   const [confirm, setConfirm] = useState(false);
@@ -163,6 +178,9 @@ function QuestionnaireTab(p: {
         hair_spot: qScore?.letters.hair_spot || null, hair_diameter: qScore?.letters.hair_diameter || null, coat: qScore?.letters.coat || null,
         q_score: qScore?.total ?? null, c_value: p.cRes?.total ?? null, c_tier: p.cRes?.tier ?? null,
         s_total: p.sRes?.total ?? null, s_tier: p.sRes?.s_tier ?? null, c_inputs: p.cIn, confirm_overwrite: confirm,
+        c_source: p.cSource,
+        c_value_ai: p.cCompare.ai?.total ?? null, c_tier_ai: p.cCompare.ai?.tier ?? null,
+        c_value_human: p.cCompare.human?.total ?? null, c_tier_human: p.cCompare.human?.tier ?? null,
       });
       message.success(confirm ? "已覆盖旧记录" : "已保存新记录");
       setConfirm(false);
@@ -218,6 +236,93 @@ function QuestionnaireTab(p: {
 }
 
 // ── 导入 IMU 统计数据 ───────────────────────────────────────────────────
+
+// ── 项目联动：标注平台 AI 版 / 人工版抓挠统计 ──────────────────────────
+
+function LinkTab(p: {
+  opts: SkinOptions;
+  onApply: (c: CInputs, meta: { fill_date: string | null; dog_name: string | null; imu: string; source: CSource; ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }) => void;
+}) {
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(13, "day"), dayjs()]);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [rows, setRows] = useState<LinkRow[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+
+  const pull = async () => {
+    setLoading(true);
+    try {
+      const r = await skinLinkStats({ date_from: range[0].format("YYYY-MM-DD"), date_to: range[1].format("YYYY-MM-DD"), project_id: projectId });
+      setRows(r.rows); setWarnings(r.warnings);
+      if (!r.rows.length) message.info("这段日期里没有样本/任务");
+    } finally { setLoading(false); }
+  };
+  const apply = (row: LinkRow, source: "ai" | "human") => {
+    const side = source === "ai" ? row.ai : row.human;
+    if (!side) return;
+    const { fill_date, dog_name, warnings: w, ...cin } = side.c_inputs;
+    w.forEach((x) => message.warning(x, 6));
+    p.onApply(cin, {
+      fill_date: fill_date ?? row.date, dog_name: dog_name ?? p.opts.imu_dog_default_map[row.imu] ?? null, imu: row.imu, source,
+      ai: row.ai ? { total: row.ai.c.total, tier: row.ai.c.tier } : null,
+      human: row.human ? { total: row.human.c.total, tier: row.human.c.tier } : null,
+    });
+    message.success(`已把 ${row.date} ${row.imu} 的${source === "ai" ? "AI 版" : "人工版"}统计填进「C值计算」`);
+  };
+  const side = (s: LinkRow["ai"]) => s ? (
+    <span>
+      {s.stats.event_count} 次 / {fmt(s.stats.total_duration_min, 1)} 分 → <b>{s.c.total ?? "—"}</b> <Tag color={tierColor(s.c.tier)}>{s.c.tier}</Tag>
+      {s.stats.data_quality_flag !== "good" && <Tag color="orange">佩戴 {fmt(s.stats.valid_wear_hours, 1)}h</Tag>}
+    </span>
+  ) : <Typography.Text type="secondary">—</Typography.Text>;
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <DatePicker.RangePicker value={range} onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+        <Select allowClear placeholder="全部项目" style={{ width: 220 }} value={projectId ?? undefined} onChange={(v) => setProjectId(v ?? null)}
+          options={(projects ?? []).map((pr) => ({ value: pr.id, label: pr.name }))} />
+        <Button type="primary" loading={loading} onClick={pull}>拉取</Button>
+      </Space>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        按 (日期, IMU) 聚合标注平台上的「抓挠」片段：<b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响），
+        <b>人工版</b> = 已提交/已通过任务里当前的片段。基线用这段日期里的其它天算，范围拉长基线更准。
+        「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
+        {warnings.length > 0 && <div style={{ color: "#faad14" }}>{warnings.slice(0, 5).join("；")}{warnings.length > 5 ? ` …共 ${warnings.length} 条` : ""}</div>}
+      </Typography.Paragraph>
+      <Table size="small" rowKey={(r) => `${r.date}-${r.imu}`} dataSource={rows} pagination={false} scroll={{ x: "max-content" }}
+        columns={[
+          { title: "日期", dataIndex: "date" },
+          { title: "机位 / 狗", render: (_, r: LinkRow) => `${r.imu} / ${p.opts.imu_dog_default_map[r.imu] ?? "?"}` },
+          { title: "任务进度", render: (_, r: LinkRow) => (
+            <Space size={4}>
+              <span>{r.tasks.approved}/{r.tasks.total} 已通过</span>
+              {r.tasks.submitted > 0 && <Tag color="blue">待审 {r.tasks.submitted}</Tag>}
+              {r.tasks.no_ai > 0 && <Tag>无 AI {r.tasks.no_ai}</Tag>}
+              <Tag color={r.human_status === "complete" ? "green" : r.human_status === "partial" ? "orange" : undefined}>
+                {r.human_status === "complete" ? "人工完整" : r.human_status === "partial" ? "人工部分" : "无人工"}
+              </Tag>
+              {r.ai_mode.includes("raw") && <Tag color="volcano">AI 调试版</Tag>}
+            </Space>
+          ) },
+          { title: "AI 版：次数 / 时长 → C", render: (_, r: LinkRow) => side(r.ai) },
+          { title: "人工版：次数 / 时长 → C", render: (_, r: LinkRow) => side(r.human) },
+          { title: "ΔC", render: (_, r: LinkRow) => {
+            if (r.ai?.c.total == null || r.human?.c.total == null) return "—";
+            const d = r.human.c.total - r.ai.c.total;
+            return <span style={{ color: Math.abs(d) >= 10 ? "#ff4d4f" : undefined }}>{d > 0 ? "+" : ""}{d.toFixed(1)}</span>;
+          } },
+          { title: "操作", render: (_, r: LinkRow) => (
+            <Space>
+              <Button size="small" disabled={!r.ai} onClick={() => apply(r, "ai")}>用 AI 版</Button>
+              <Button size="small" type="primary" disabled={!r.human} onClick={() => apply(r, "human")}>用人工版</Button>
+            </Space>
+          ) },
+        ]} />
+    </div>
+  );
+}
 
 function StatsTab(p: { opts: SkinOptions; onApply: (c: CInputs, meta: { fill_date: string | null; dog_name: string | null; imu: string }) => void }) {
   const [roots, setRoots] = useState(p.opts.default_stats_roots);
@@ -289,7 +394,10 @@ function StatsTab(p: { opts: SkinOptions; onApply: (c: CInputs, meta: { fill_dat
 
 // ── C 值计算 ──────────────────────────────────────────────────────────
 
-function CTab(p: { cIn: CInputs; setCIn: (c: CInputs) => void; cRes: CResult | null; goto: (k: string) => void }) {
+function CTab(p: {
+  cIn: CInputs; setCIn: (c: CInputs) => void; cRes: CResult | null; cSource: CSource;
+  cCompare: { ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }; goto: (k: string) => void;
+}) {
   const { cIn, setCIn, cRes } = p;
   const num = (k: keyof CInputs, label: string, info?: string) => (
     <div>
@@ -321,7 +429,11 @@ function CTab(p: { cIn: CInputs; setCIn: (c: CInputs) => void; cRes: CResult | n
         </div>
       </div>
       <div style={{ width: 380 }}>
-        <Descriptions title={<span>C 值：<b style={{ fontSize: 20 }}>{cRes?.total ?? "—"}</b> <Tag color={tierColor(cRes?.tier)}>{cRes?.tier}</Tag></span>} column={1} size="small" bordered>
+        <Descriptions title={<span>C 值：<b style={{ fontSize: 20 }}>{cRes?.total ?? "—"}</b> <Tag color={tierColor(cRes?.tier)}>{cRes?.tier}</Tag>
+            <Tag>{SOURCE_LABEL[p.cSource]}</Tag>
+            {p.cCompare.ai && <Tag color="purple">AI 版 {p.cCompare.ai.total ?? "—"} {p.cCompare.ai.tier}</Tag>}
+            {p.cCompare.human && <Tag color="green">人工版 {p.cCompare.human.total ?? "—"} {p.cCompare.human.tier}</Tag>}
+          </span>} column={1} size="small" bordered>
           <Descriptions.Item label="变化幅度 (0-30)">{comp ? (comp.delta.counted ? `${comp.delta.score}${comp.delta.by ? `（按${comp.delta.by}，比值 ${comp.delta.ratio?.toFixed(2)}）` : ""}` : "不计分（无基线）") : "—"}</Descriptions.Item>
           <Descriptions.Item label="聚集程度 (0-20)">{comp?.cluster.score ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="持续程度 (0-20)">{comp?.persistence.score ?? "—"}</Descriptions.Item>
@@ -560,7 +672,10 @@ function HistoryTab() {
         { title: "颜色/体味/皮损", render: (_, r: SkinRecord) => `${r.color ?? "-"} / ${r.odor ?? "-"} / ${r.lesion ?? "-"}` },
         { title: "分布/面积/毛质", render: (_, r: SkinRecord) => `${r.hair_spot ?? "-"} / ${r.hair_diameter ?? "-"} / ${r.coat ?? "-"}` },
         { title: "问答分", dataIndex: "q_score" },
-        { title: "C 值", render: (_, r: SkinRecord) => (r.c_value != null ? <span>{r.c_value} <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag></span> : "-") },
+        { title: "C 值", render: (_, r: SkinRecord) => (r.c_value != null ? <span>{r.c_value} <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>{r.c_source && <Tag style={{ marginLeft: 4 }}>{{ ai: "AI", human: "人工", stats: "csv", manual: "手填" }[r.c_source]}</Tag>}</span> : "-") },
+        { title: "AI 版 C", render: (_, r: SkinRecord) => (r.c_value_ai != null ? <span>{r.c_value_ai} <Tag color={tierColor(r.c_tier_ai)}>{r.c_tier_ai}</Tag></span> : "-") },
+        { title: "人工版 C", render: (_, r: SkinRecord) => (r.c_value_human != null ? <span>{r.c_value_human} <Tag color={tierColor(r.c_tier_human)}>{r.c_tier_human}</Tag></span> : "-") },
+        { title: "ΔC (人工-AI)", render: (_, r: SkinRecord) => (r.c_value_ai != null && r.c_value_human != null ? <span style={{ color: Math.abs(r.c_value_human - r.c_value_ai) >= 10 ? "#ff4d4f" : undefined }}>{(r.c_value_human - r.c_value_ai).toFixed(1)}</span> : "-") },
         { title: "S 总分", render: (_, r: SkinRecord) => (r.s_total != null ? <span>{r.s_total} <Tag color={tierColor(r.s_tier)}>{r.s_tier}</Tag></span> : "-") },
         { title: "保存时间", dataIndex: "updated_at", render: (v: string | null) => v?.replace("T", " ").slice(0, 19) },
         { title: "操作", render: (_, r: SkinRecord) => (
