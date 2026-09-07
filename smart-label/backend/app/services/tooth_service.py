@@ -34,13 +34,23 @@ class ToothError(Exception):
     pass
 
 
+# 素材库里按"日期/狗/照片"组织的相册：oral=口腔照片（牙齿识别页），skin=皮肤瘙痒问诊照片（皮肤评估页）
+ALBUMS = {"oral": lambda: settings.oral_dir, "skin": lambda: settings.skin_photo_dir}
+
+
+def album_root(album: str = "oral") -> str:
+    if album not in ALBUMS:
+        raise ToothError(f"未知相册: {album}")
+    return os.path.join(settings.material_root, ALBUMS[album]())
+
+
 def oral_root() -> str:
-    return os.path.join(settings.material_root, settings.oral_dir)
+    return album_root("oral")
 
 
-def resolve_photo(rel_path: str) -> str:
-    """相对 oral_dir 的路径 → 绝对路径，realpath 必须仍在 oral_root 之内"""
-    root = os.path.realpath(oral_root())
+def resolve_photo(rel_path: str, album: str = "oral") -> str:
+    """相对相册目录的路径 → 绝对路径，realpath 必须仍在相册目录之内"""
+    root = os.path.realpath(album_root(album))
     full = os.path.realpath(os.path.join(root, rel_path))
     if full != root and not full.startswith(root + os.sep):
         raise ToothError("非法路径")
@@ -49,12 +59,12 @@ def resolve_photo(rel_path: str) -> str:
     return full
 
 
-def list_photos() -> list[dict]:
-    """扫 oral_root 两层目录（日期/狗），返回 [{folder, date, ok, dogs:[{name, photos:[{rel_path, filename, size_bytes}]}]}]，
+def list_photos(album: str = "oral") -> list[dict]:
+    """扫相册两层目录（日期/狗），返回 [{folder, date, ok, dogs:[{name, photos:[{rel_path, filename, size_bytes}]}]}]，
     日期倒序。几百张图几十个目录，每次现扫就行，不缓存。"""
-    root = oral_root()
+    root = album_root(album)
     if not os.path.isdir(root):
-        raise ToothError(f"口腔照片目录不存在: {root}（素材库 NAS 还没挂载？）")
+        raise ToothError(f"照片目录不存在: {root}（素材库 NAS 还没挂载？）")
     out = []
     for folder in sorted(os.listdir(root), reverse=True):
         fpath = os.path.join(root, folder)
@@ -89,14 +99,14 @@ def list_photos() -> list[dict]:
 
 # ── 路径签名 token ──────────────────────────────────────────────────────
 
-def issue_photo_token(rel_path: str) -> str:
+def issue_photo_token(rel_path: str, album: str = "oral") -> str:
     expires_at = int(time.time()) + settings.media_token_ttl_hours * 3600
-    payload = f"tooth:{rel_path}:{expires_at}"
+    payload = f"{album}:{rel_path}:{expires_at}"
     sig = hmac.new(settings.jwt_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{expires_at}.{sig}"
 
 
-def verify_photo_token(rel_path: str, token: str) -> bool:
+def verify_photo_token(rel_path: str, token: str, album: str = "oral") -> bool:
     try:
         expires_at_str, sig = token.split(".", 1)
         expires_at = int(expires_at_str)
@@ -104,7 +114,7 @@ def verify_photo_token(rel_path: str, token: str) -> bool:
         return False
     if expires_at < int(time.time()):
         return False
-    payload = f"tooth:{rel_path}:{expires_at}"
+    payload = f"{album}:{rel_path}:{expires_at}"
     expected = hmac.new(settings.jwt_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
     return hmac.compare_digest(expected, sig)
 

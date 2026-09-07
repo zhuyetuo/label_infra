@@ -5,6 +5,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
+import PhotoGallery from "@/components/PhotoGallery";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
@@ -92,6 +93,7 @@ export default function Skin() {
           { key: "ml", label: "ML版对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setTab("q"); }} /> },
           { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
           { key: "history", label: "历史记录", children: <HistoryTab /> },
+          { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
         ]}
       />
     </div>

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # 把它跟 nas_root 一样按同路径挂进容器；imu_train/label_service 的 MATERIAL_ROOT 指同一目录
     material_root: str = "/home/toky/alg_material"
     oral_dir: str = "口腔验证"
+    # 皮肤瘙痒问诊照片，目录结构跟口腔一样（{日期-ok}/{狗}/*.jpg）
+    skin_photo_dir: str = "颈圈算法验证/皮肤瘙痒/视频问诊"
 
     # --- JWT ---
     jwt_secret: str = "CHANGE_ME_IN_PRODUCTION"
