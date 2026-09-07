@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
+import TrackingCharts from "@/components/TrackingCharts";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
@@ -263,12 +264,12 @@ function QuestionnaireTab(p: {
 // ── 每日跟踪表：一行 = (日期, 狗)，长期看每只狗的走势 ────────────────────
 
 const TRACK_FILTER_KEY = "skin-tracking-filter";
-const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean } => {
+const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean; dogs: string[] } => {
   try {
     const raw = localStorage.getItem(TRACK_FILTER_KEY);
     if (raw) return JSON.parse(raw);
   } catch { /* 用默认值 */ }
-  return { from: dayjs().subtract(29, "day").format("YYYY-MM-DD"), to: dayjs().format("YYYY-MM-DD"), onlyTriggered: false };
+  return { from: dayjs().subtract(29, "day").format("YYYY-MM-DD"), to: dayjs().format("YYYY-MM-DD"), onlyTriggered: false, dogs: [] as string[] };
 };
 
 function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
@@ -286,8 +287,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     refetchOnWindowFocus: false,
   });
   const all = data?.rows ?? [];
-  const rows = f.onlyTriggered ? all.filter((r) => r.question_triggered) : all;
-  const dogs = [...new Set(all.map((r) => r.dog_name))];
+  const dogs = [...new Set(all.map((r) => r.dog_name))].sort();
+  const rows = all.filter(
+    (r) => (!f.onlyTriggered || r.question_triggered) && (f.dogs.length === 0 || f.dogs.includes(r.dog_name))
+  );
 
   const sTag = (s: TrackingRow["s_no_q"]) =>
     s && s.total != null ? (
@@ -306,6 +309,16 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
           allowClear={false}
         />
+        <Select
+          mode="multiple"
+          allowClear
+          placeholder="全部狗"
+          style={{ minWidth: 220 }}
+          value={f.dogs}
+          onChange={(v) => setFilter({ dogs: v })}
+          options={dogs.map((d) => ({ value: d, label: d }))}
+          maxTagCount="responsive"
+        />
         <Checkbox checked={f.onlyTriggered} onChange={(e) => setFilter({ onlyTriggered: e.target.checked })}>
           只看需要问答的
         </Checkbox>
@@ -318,6 +331,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       {(data?.warnings?.length ?? 0) > 0 && (
         <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={data!.warnings.join("；")} />
       )}
+      <TrackingCharts rows={rows} />
       <Table
         size="small"
         rowKey={(r: TrackingRow) => `${r.date}-${r.imu}`}
@@ -336,6 +350,20 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               const m = r.stats?.total_duration_min as number | undefined;
               return n == null ? "—" : `${n} 次 / ${fmt(m, 1)} 分`;
             },
+          },
+          {
+            title: "基线",
+            width: 110,
+            render: (_: unknown, r: TrackingRow) =>
+              r.n_baseline_days ? (
+                <Tooltip title={`${r.n_baseline_days} 天历史的中位数；C 值里的「变化幅度」就是拿当天跟它比`}>
+                  <Typography.Text type="secondary">{r.baseline_count} 次 / {fmt(r.baseline_duration_min, 1)} 分</Typography.Text>
+                </Tooltip>
+              ) : (
+                <Tooltip title="还没有基线，变化幅度那 30 分不计，C 值上限只有 70">
+                  <Tag>无基线</Tag>
+                </Tooltip>
+              ),
           },
           {
             title: "C 值",
@@ -363,6 +391,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "问答",
             width: 170,
+            // C0 这天本来就不用问答，不显示「未填」和「去填问答」，免得看着像漏了什么
             render: (_: unknown, r: TrackingRow) => (
               <Space size={4}>
                 {r.question_triggered ? <Tag color="orange">需要问答</Tag> : <Tag>不必问答</Tag>}
@@ -370,9 +399,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   <Tooltip title={`填写人：${r.filler ?? "-"}，问答分 ${r.q_score ?? "-"}`}>
                     <Tag color="green">已填</Tag>
                   </Tooltip>
-                ) : (
-                  <Tag color={r.question_triggered ? "red" : undefined}>未填</Tag>
-                )}
+                ) : r.question_triggered ? (
+                  <Tag color="red">未填</Tag>
+                ) : null}
               </Space>
             ),
           },
@@ -405,11 +434,15 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "操作",
-            render: (_: unknown, r: TrackingRow) => (
-              <Button size="small" type={r.question_triggered && !r.has_answers ? "primary" : "link"} onClick={() => p.onGotoQ(r.date, r.dog_name)}>
-                {r.has_answers ? "改问答" : "去填问答"}
-              </Button>
-            ),
+            render: (_: unknown, r: TrackingRow) => {
+              // 只有「需要问答」或者已经填过的才给入口
+              if (!r.question_triggered && !r.has_answers) return <Typography.Text type="secondary">—</Typography.Text>;
+              return (
+                <Button size="small" type={r.question_triggered && !r.has_answers ? "primary" : "link"} onClick={() => p.onGotoQ(r.date, r.dog_name)}>
+                  {r.has_answers ? "改问答" : "去填问答"}
+                </Button>
+              );
+            },
           },
         ]}
       />

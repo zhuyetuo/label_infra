@@ -142,6 +142,10 @@ async def daily_tracking(
             "imu": imu,
             "dog_name": dog,
             "stats": m["stats"],
+            # 基线（这只狗别的日子的中位数）单独拎出来，图上要画成参考线
+            "baseline_count": (m["stats"] or {}).get("baseline_count"),
+            "baseline_duration_min": (m["stats"] or {}).get("baseline_duration_min"),
+            "n_baseline_days": (m["stats"] or {}).get("n_baseline_days"),
             "c_ai": m["ai"],
             "c_human": m["human"],
             "c_source": p_source,

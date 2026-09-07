@@ -102,6 +102,9 @@ export interface TrackingRow {
   imu: string;
   dog_name: string;
   stats: Record<string, number | string | boolean | null>;
+  baseline_count: number | null;
+  baseline_duration_min: number | null;
+  n_baseline_days: number | null;
   c_ai: CSide | null;
   c_human: CSide | null;
   c_source: "human" | "ai" | null;
