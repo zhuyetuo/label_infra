@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Empty, Input, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Checkbox, Empty, Input, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
@@ -78,10 +78,13 @@ export default function Tasks() {
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId));
   });
 
-  const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
-  const userName = (id: number) => {
-    const u = users?.find((x) => x.id === id);
-    return u ? u.display_name || u.username : `#${id}`;
+  // 列表接口自带 sample_code / assigned_to_name，标注员、审核员拿不到 /samples、/users 也能正常显示
+  const sampleCode = (t: Task) => t.sample_code ?? samples?.find((s) => s.id === t.sample_id)?.sample_code ?? t.sample_id;
+  const userName = (t: Task) => {
+    if (t.assigned_to == null) return null;
+    if (t.assigned_to_name) return t.assigned_to_name;
+    const u = users?.find((x) => x.id === t.assigned_to);
+    return u ? u.display_name || u.username : `#${t.assigned_to}`;
   };
 
   const tasksOf = (projectId: number) => {
@@ -107,36 +110,161 @@ export default function Tasks() {
     return counts;
   };
 
-  // 每个项目当前选中的 imu 目录（"ALL" = 全部）
-  const [imuFilter, setImuFilter] = useState<Record<number, string>>({});
+  // 每个项目各自一套筛选，跟项目页一样：imu 目录 / 状态 / 搜索 / 含类别 / 只看有 AI 待确认。
+  // 标注员、审核员平时只在这个页面干活，批量预标注完想专门标某一类（比如抓挠）全靠这些
+  type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; imu: string };
+  const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
+  const filterOf = (projectId: number): TaskFilter =>
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, imu: "ALL" };
+  const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
+    setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
 
   const renderTaskTable = (p: Project) => {
     const all = tasksOf(p.id);
     const projLabels = labelsOf(p.id);
+    const f = filterOf(p.id);
+    const counts = statusSummary(p.id);
+    const q = f.q.trim().toLowerCase();
+    const matchStatus = (t: Task) => {
+      if (f.status === "ALL") return true;
+      if (f.status === "IN_PROGRESS_STARTED") return t.status === "IN_PROGRESS" && (t.draft_item_count ?? 0) > 0;
+      if (f.status === "IN_PROGRESS_EMPTY") return t.status === "IN_PROGRESS" && !(t.draft_item_count ?? 0);
+      return t.status === f.status;
+    };
+    const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
+    const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
+    const matchLabels = (t: Task) => {
+      const lc = t.label_counts ?? {};
+      if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
+      if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
+      return true;
+    };
+    // 按样本编号 _imu{N} 归成目录，一个 imu 对应一只狗
     const imuCounts = new Map<string, number>();
     for (const t of all) {
-      const k = imuOf(String(sampleCode(t.sample_id)));
+      const k = imuOf(String(sampleCode(t)));
       imuCounts.set(k, (imuCounts.get(k) ?? 0) + 1);
     }
-    const imu = imuFilter[p.id] ?? "ALL";
-    const rows = imu === "ALL" ? all : all.filter((t) => imuOf(String(sampleCode(t.sample_id))) === imu);
+    const matchImu = (t: Task) => f.imu === "ALL" || imuOf(String(sampleCode(t))) === f.imu;
+    const rows = all.filter(
+      (t) =>
+        matchImu(t) &&
+        matchStatus(t) &&
+        matchLabels(t) &&
+        (!q || String(sampleCode(t)).toLowerCase().includes(q) || String(t.id) === q)
+    );
+    // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
+    const labelTotals = projLabels
+      .map((l) => {
+        let n = 0, pending = 0, tasksN = 0;
+        for (const t of all) {
+          const c = t.label_counts?.[l.id];
+          if (!c?.n) continue;
+          n += c.n; pending += c.ai_pending; tasksN += 1;
+        }
+        return { label: l, n, pending, tasksN };
+      })
+      .filter((x) => x.n > 0);
+    const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
+    const filtered = f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.imu !== "ALL";
     return (
       <>
       {imuCounts.size > 1 && (
-        // 按样本编号 _imu{N} 归成目录，一个 imu 对应一只狗
         <Space wrap style={{ marginBottom: 8 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>按设备/狗：</Typography.Text>
           <Radio.Group
             size="small"
             optionType="button"
             buttonStyle="solid"
-            value={imu}
-            onChange={(e) => setImuFilter((prev) => ({ ...prev, [p.id]: e.target.value }))}
+            value={f.imu}
+            onChange={(e) => setFilter(p.id, { imu: e.target.value })}
             options={[
               { label: `全部 ${all.length}`, value: "ALL" },
               ...sortImuKeys(imuCounts.keys()).map((k) => ({ label: `${k} ${imuCounts.get(k)}`, value: k })),
             ]}
           />
+        </Space>
+      )}
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Radio.Group
+          size="small"
+          optionType="button"
+          value={f.status}
+          onChange={(e) => setFilter(p.id, { status: e.target.value })}
+          options={[
+            { label: `全部 ${all.length}`, value: "ALL" },
+            ...(Object.keys(TASK_STATUS_META) as TaskStatus[]).flatMap((s) => {
+              const meta = TASK_STATUS_META[s];
+              const opt = (text: string, n: number, value: StatusFilter, disabled: boolean) => ({
+                value,
+                disabled,
+                label: (
+                  <span style={disabled ? undefined : { color: meta.hex, fontWeight: 500 }}>
+                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: meta.hex, marginRight: 5, opacity: disabled ? 0.3 : 1 }} />
+                    {text} {n}
+                  </span>
+                ),
+              });
+              const base = opt(meta.label, counts[s] ?? 0, s, !counts[s]);
+              if (s !== "IN_PROGRESS" || !counts[s]) return [base];
+              return [
+                base,
+                opt("标注中·已有内容", startedCount, "IN_PROGRESS_STARTED", !startedCount),
+                opt("标注中·还没动手", inProgress.length - startedCount, "IN_PROGRESS_EMPTY", inProgress.length === startedCount),
+              ];
+            }),
+          ]}
+        />
+        <Input.Search
+          size="small"
+          allowClear
+          placeholder="搜样本名 / 任务ID"
+          style={{ width: 240 }}
+          value={f.q}
+          onChange={(e) => setFilter(p.id, { q: e.target.value })}
+        />
+        <Select
+          size="small"
+          mode="multiple"
+          allowClear
+          placeholder="含类别…"
+          style={{ minWidth: 160 }}
+          value={f.labels}
+          onChange={(v) => setFilter(p.id, { labels: v })}
+          options={projLabels.map((l) => ({ value: l.id, label: l.display_name }))}
+        />
+        <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
+          只看有 AI 待确认
+        </Checkbox>
+        {filtered && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            筛出 {rows.length} 个
+          </Typography.Text>
+        )}
+      </Space>
+      {labelTotals.length > 0 && (
+        <Space wrap size={4} style={{ marginBottom: 8 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
+          </Typography.Text>
+          {labelTotals.map(({ label, n, pending, tasksN }) => (
+            <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}；点击只看含「${label.display_name}」的任务`}>
+              <Tag
+                color={label.color ?? undefined}
+                style={{ cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined }}
+                onClick={() =>
+                  setFilter(p.id, {
+                    labels: f.labels.includes(label.id) ? f.labels.filter((x) => x !== label.id) : [...f.labels, label.id],
+                  })
+                }
+              >
+                {label.display_name} {n}
+                {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
+                <span style={{ opacity: 0.6 }}> · {tasksN} 任务</span>
+              </Tag>
+            </Tooltip>
+          ))}
         </Space>
       )}
       <Table
@@ -145,15 +273,15 @@ export default function Tasks() {
         dataSource={rows}
         sortDirections={["ascend", "descend", "ascend"]}
         pagination={rows.length > 10 ? { pageSize: 10 } : false}
-        locale={{ emptyText: onlyMine ? "这个项目下没有指派给你的任务" : "这个项目下还没有任务" }}
+        locale={{ emptyText: onlyMine ? "这个项目下没有指派给你的任务" : filtered ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
         columns={[
           { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
           {
             title: "样本",
             dataIndex: "sample_id",
-            sorter: (a: Task, b: Task) => String(sampleCode(a.sample_id)).localeCompare(String(sampleCode(b.sample_id))),
+            sorter: (a: Task, b: Task) => String(sampleCode(a)).localeCompare(String(sampleCode(b))),
             defaultSortOrder: "ascend" as const,
-            render: (id: number) => sampleCode(id),
+            render: (_: number, task: Task) => sampleCode(task),
           },
           {
             title: "类型",
@@ -219,8 +347,12 @@ export default function Tasks() {
             title: "指派给",
             dataIndex: "assigned_to",
             width: 130,
-            render: (id: number | null) =>
-              id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : userName(id),
+            render: (_: number | null, task: Task) => {
+              const name = userName(task);
+              if (name == null) return <Typography.Text type="secondary">未指派</Typography.Text>;
+              // 指派给自己的高亮出来，一眼知道哪些是自己该干的
+              return task.assigned_to === userId ? <Tag color="blue">{name}（我）</Tag> : name;
+            },
           },
           {
             title: "操作",

@@ -64,6 +64,9 @@ export interface Task {
   label_counts?: Record<number, { n: number; ai_pending: number }>;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
+  /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */
+  sample_code?: string | null;
+  assigned_to_name?: string | null;
 }
 
 export interface LabelItem {

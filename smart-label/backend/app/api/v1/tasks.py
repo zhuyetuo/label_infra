@@ -242,6 +242,19 @@ async def list_tasks(
         )
         review_comments = dict(rows.all())
 
+    # 样本编号 + 指派人名字：非管理员拿不到 /samples、/users，列表里不能只给 ID
+    sample_codes: dict[int, str] = {}
+    user_names: dict[int, str] = {}
+    if tasks:
+        rows = await db.execute(
+            select(Sample.id, Sample.sample_code).where(Sample.id.in_({t.sample_id for t in tasks}))
+        )
+        sample_codes = dict(rows.all())
+        uids = {t.assigned_to for t in tasks if t.assigned_to is not None}
+        if uids:
+            rows = await db.execute(select(User.id, User.display_name, User.username).where(User.id.in_(uids)))
+            user_names = {uid: (dn or un) for uid, dn, un in rows.all()}
+
     return ok(
         [
             {
@@ -250,6 +263,8 @@ async def list_tasks(
                 "draft_item_count": draft_counts.get(t.id, 0),
                 "label_counts": label_counts.get(t.id, {}),
                 "review_comment": review_comments.get(t.id),
+                "sample_code": sample_codes.get(t.sample_id),
+                "assigned_to_name": user_names.get(t.assigned_to) if t.assigned_to is not None else None,
             }
             for t in tasks
         ]

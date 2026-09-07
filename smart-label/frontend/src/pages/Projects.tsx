@@ -387,12 +387,16 @@ export default function Projects() {
   const tasksOf = (projectId: number) => allTasks?.filter((t) => t.project_id === projectId) ?? [];
   const labelCount = (projectId: number) =>
     allLabels?.filter((l) => l.project_id === projectId).length ?? 0;
+  // 非管理员拿不到 /users、/samples，优先用任务列表接口自带的 assigned_to_name / sample_code
   const userName = (id: number | null) => {
     if (id == null) return null;
+    const fromTask = allTasks?.find((t) => t.assigned_to === id)?.assigned_to_name;
+    if (fromTask) return fromTask;
     const u = users?.find((x) => x.id === id);
     return u ? u.display_name || u.username : `#${id}`;
   };
-  const sampleCode = (id: number) => samples?.find((s) => s.id === id)?.sample_code ?? id;
+  const sampleCode = (id: number) =>
+    samples?.find((s) => s.id === id)?.sample_code ?? allTasks?.find((t) => t.sample_id === id)?.sample_code ?? id;
 
   const handleCreateTask = async (values: { sample_id: number; task_type: "from_scratch" | "ai_assisted" }) => {
     if (!createForProject) return;
