@@ -7,9 +7,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import TrackingCharts, { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
-import { useNavigate } from "react-router-dom";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import { getTask } from "@/api/tasks";
+import { listLabels } from "@/api/labels";
+import type { LabelDefinition, Task } from "@/types";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
@@ -391,6 +394,7 @@ const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean; 
 };
 
 function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
+  const userId = useAuthStore((st) => st.userInfo?.id);
   const [f, setF] = useState(loadTrackFilter);
   const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
     setF((prev) => {
@@ -400,7 +404,22 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     });
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
   const [checkFor, setCheckFor] = useState<TrackingRow | null>(null);
-  const navigate = useNavigate();
+  // 复看标注直接在这一页开工作台，关掉就回到跟踪表——跳去任务页的话关掉会落在
+  // 任务列表，还得自己切回来
+  const [wsTask, setWsTask] = useState<Task | null>(null);
+  const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
+  const [wsLoading, setWsLoading] = useState<number | null>(null);
+  const openWorkspace = async (taskId: number) => {
+    setWsLoading(taskId);
+    try {
+      const t = await getTask(taskId);
+      setWsLabels(await listLabels(t.project_id));
+      setWsTask(t);
+      setCheckFor(null);
+    } finally {
+      setWsLoading(null);
+    }
+  };
   const { data, isFetching, refetch } = useQuery({
     queryKey: ["skin-tracking", f.from, f.to],
     queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
@@ -603,6 +622,14 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
         ]}
       />
+      <AnnotationWorkspace
+        task={wsTask}
+        labels={wsLabels}
+        focusLabelName="抓挠"
+        readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
+        onClose={() => setWsTask(null)}
+        onSubmitted={() => setWsTask(null)}
+      />
       <Modal
         title={`${checkFor?.date ?? ""} ${checkFor?.dog_name ?? ""} —— 挑一段去复看抓挠`}
         open={checkFor != null}
@@ -638,7 +665,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               title: "操作",
               width: 100,
               render: (_: unknown, t) => (
-                <Button size="small" type="link" onClick={() => navigate(`/tasks?task=${t.task_id}&seg=抓挠`)}>
+                <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
                   查看标注
                 </Button>
               ),
