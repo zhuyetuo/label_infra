@@ -26,6 +26,7 @@ import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
 import { useAuthStore } from "@/stores/authStore";
+import { INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, saveBool, saveHeight } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
@@ -82,7 +83,7 @@ export default function AnnotationWorkspace({
   const [hasCsv, setHasCsv] = useState(false);
   const [prelabeling, setPrelabeling] = useState(false);
   // 稳定版（平滑合并）/ 调试版（逐窗口原始输出），默认稳定版
-  const [prelabelMode, setPrelabelMode] = useState<"stable" | "raw">("stable");
+  const [prelabelMode, setPrelabelMode] = useState<InferMode>("stable");
   // IMU 总时长，片段列表算"预测覆盖了多少、哪里是空白"要用
   const [durationMs, setDurationMs] = useState<number | null>(null);
   const [fps, setFps] = useState<number | null>(null);
@@ -510,16 +511,13 @@ export default function AnnotationWorkspace({
                 </Tooltip>
               )}
               {hasCsv && sampleId != null && labels.length > 0 && (
-                <Tooltip title="稳定版：活动/睡觉平滑、抓挠合并成 bout、单窗口噪声丢掉；调试版：模型逐窗口原始输出">
+                <Tooltip title="稳定版：滞回+合并+过滤；稳定版 v2：Viterbi 解码；调试版：模型逐窗口原始输出">
                   <Radio.Group
                     size="small"
                     optionType="button"
                     value={prelabelMode}
                     onChange={(e) => setPrelabelMode(e.target.value)}
-                    options={[
-                      { label: "稳定版", value: "stable" },
-                      { label: "调试版", value: "raw" },
-                    ]}
+                    options={INFER_MODE_OPTIONS}
                   />
                 </Tooltip>
               )}

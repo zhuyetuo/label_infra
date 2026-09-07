@@ -125,7 +125,7 @@ async def bulk_create_tasks(
     await db.commit()
     # "AI预标注+人工修改"类型：建完直接后台批量跑 AI，项目页能看到进度
     if body.task_type == TaskType.ai_assisted and new_tasks:
-        await start_project_prelabel(body.project_id, task_ids=[t.id for t in new_tasks])
+        await start_project_prelabel(body.project_id, task_ids=[t.id for t in new_tasks], mode=body.infer_mode)
 
     skipped = sorted(already_has_task)
     return ok(

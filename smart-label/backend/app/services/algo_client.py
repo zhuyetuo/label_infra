@@ -24,7 +24,7 @@ def _base_url() -> str:
 
 
 def _mode(mode: str | None) -> str:
-    return mode if mode in ("raw", "stable") else settings.algo_infer_mode
+    return mode if mode in ("raw", "stable", "viterbi") else settings.algo_infer_mode
 
 
 async def infer(imu_csv_path: str, sample_id: int | None = None, mode: str | None = None) -> dict:

@@ -63,6 +63,7 @@ export const bulkCreateTasks = (body: {
   sample_ids: number[];
   task_type: TaskType;
   assigned_to?: number;
+  infer_mode?: "stable" | "viterbi" | "raw" | null;
 }) =>
   request.post<never, { created: number; skipped: number; skipped_sample_ids: number[] }>(
     "/tasks/bulk",

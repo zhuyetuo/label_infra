@@ -54,6 +54,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
+import { INFER_MODE_HINT, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -117,7 +118,9 @@ export default function Projects() {
   // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
   const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
   const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
-  const [prelabelMode, setPrelabelMode] = useState<"stable" | "raw">("stable");
+  const [prelabelMode, setPrelabelMode] = useState<InferMode>("stable");
+  // 新建项目 / 批量导入时 ai_assisted 自动跑预标注用哪个版本
+  const [createInferMode, setCreateInferMode] = useState<InferMode>("stable");
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
 
@@ -277,6 +280,7 @@ export default function Projects() {
           project_id: projectId,
           sample_ids: [...createSelected],
           task_type: createTaskType,
+          infer_mode: createTaskType === "ai_assisted" ? createInferMode : null,
           assigned_to: createAssignee ?? undefined,
         });
         message.success(
@@ -452,6 +456,7 @@ export default function Projects() {
         project_id: bulkForProject.id,
         sample_ids: [...bulkSelected],
         task_type: bulkTaskType,
+        infer_mode: bulkTaskType === "ai_assisted" ? createInferMode : null,
         assigned_to: bulkAssignee ?? undefined,
       });
       message.success(`已导入 ${r.created} 个任务${r.skipped ? `，跳过已导入过的 ${r.skipped} 个` : ""}`);
@@ -1142,16 +1147,9 @@ export default function Projects() {
                 size="small"
                 value={prelabelMode}
                 onChange={(e) => setPrelabelMode(e.target.value)}
-                options={[
-                  { label: "稳定版", value: "stable" },
-                  { label: "调试版", value: "raw" },
-                ]}
+                options={INFER_MODE_OPTIONS}
               />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {prelabelMode === "stable"
-                  ? "活动/睡觉做了平滑、碎片并入邻段；抓挠/甩身体合并成 bout，单窗口噪声丢掉。片段少、可信"
-                  : "模型逐窗口原始输出，活动/睡觉会来回闪，抓挠有很多单窗口噪声。用来看模型到底说了什么"}
-              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{INFER_MODE_HINT[prelabelMode]}</Typography.Text>
             </Space>
             <Checkbox checked={prelabelOverwrite} onChange={(e) => setPrelabelOverwrite(e.target.checked)}>
               连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
@@ -1289,6 +1287,9 @@ export default function Projects() {
                     { value: "from_scratch", label: "从零标注" },
                   ]}
                 />
+                {createTaskType === "ai_assisted" && (
+                  <Select style={{ width: 130 }} value={createInferMode} onChange={setCreateInferMode} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+                )}
                 <Select
                   style={{ width: 200 }}
                   allowClear
@@ -1445,6 +1446,9 @@ export default function Projects() {
               { value: "ai_assisted", label: "AI预标注+人工修改（建好后自动跑 AI）" },
             ]}
           />
+          {bulkTaskType === "ai_assisted" && (
+            <Select style={{ width: 130 }} value={createInferMode} onChange={setCreateInferMode} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+          )}
           <Typography.Text>指派给</Typography.Text>
           <Select
             style={{ width: 160 }}
