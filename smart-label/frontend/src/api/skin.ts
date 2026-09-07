@@ -102,6 +102,11 @@ export interface TrackingRow {
   imu: string;
   dog_name: string;
   stats: Record<string, number | string | boolean | null>;
+  baseline_count: number | null;
+  baseline_duration_min: number | null;
+  n_baseline_days: number | null;
+  /** NAS 上实际的狗目录名，弹窗按它筛图（跟 PM 狗名可能不一样） */
+  photo_dog: string | null;
   c_ai: CSide | null;
   c_human: CSide | null;
   c_source: "human" | "ai" | null;

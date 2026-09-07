@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     # --- 皮肤评估 ---
     # C 值到了哪些档位就该去做问答（PM 规则里没写死，按「C1/C2 才需要问」实现）
     skin_question_trigger_tiers: list[str] = ["C1", "C2"]
+    # NAS 照片目录里的狗名跟 PM 的「品种-名字」经常对不上，中文/拼音也混着写。
+    # 「品种-名字」里的名字部分会自动匹配，这里补的是拼音这类靠字面猜不出来的
+    skin_dog_aliases: dict[str, list[str]] = {
+        "比熊-BB": ["BB", "bb"],
+        "金毛-巴利": ["Bali", "bali", "巴利"],
+        "中华田园犬-露露": ["Lulu", "lulu", "露露"],
+        "马尔济斯-小满": ["Xiaoman", "xiaoman", "小满"],
+    }
 
     # --- JWT ---
     jwt_secret: str = "CHANGE_ME_IN_PRODUCTION"

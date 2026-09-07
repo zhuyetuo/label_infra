@@ -1,0 +1,19 @@
+/* uPlot 默认样式偏浅色，这里让坐标轴/图例文字跟着 antd 的主题走，深色下不至于看不见 */
+.tracking-charts .uplot,
+.tracking-charts .u-legend {
+  font-family: inherit;
+  font-size: 12px;
+  color: inherit;
+}
+.tracking-charts .u-legend .u-marker {
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+}
+/* 图例平铺一行，四只狗一眼看全 */
+.tracking-charts .u-legend .u-series {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
