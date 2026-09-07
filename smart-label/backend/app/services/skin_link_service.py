@@ -31,6 +31,7 @@ from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
+from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task, TaskStatus
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
 
@@ -227,28 +228,14 @@ async def collect_link_stats(
         if has_human:
             human_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in human_events.get(k, [])], "wear_seconds": wear})
 
-    async def _stats(rows: list[dict], which: str) -> dict[tuple, dict]:
-        if not rows:
-            return {}
-        try:
-            res = await _algo_post("stats/from-events", {"rows": rows, "target_label": scratch_label})
-            out = {}
-            for r in res.get("rows") or []:
-                cin = await _algo_post("stats/to-c-inputs", r)
-                c_payload = {kk: vv for kk, vv in cin.items() if kk not in ("fill_date", "dog_name", "warnings")}
-                c = await _algo_post("c-score", c_payload)
-                out[(r["date"], r["imu"])] = {
-                    "stats": r, "c_inputs": cin,
-                    "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")},
-                }
-            return out
-        except SkinLinkError as e:
-            # AI 服务连不上/接口不存在（比如 label_service 没重启）时，别把整张表打空——
-            # 任务进度这些本地算出来的照样有用，把原因写进 warnings 让人一眼看到
-            warnings.append(f"{which}的统计没算成：{e}")
-            return {}
+    # 这一趟算出来的事件先落库（同 日期+IMU+来源 覆盖），再连同库里其它天一起
+    # 送去算——基线是"这只狗别的日子的中位数"，只拿本次选的范围算会偏，范围里
+    # 只有一天时干脆没有基线（C 值上限只有 70）
+    await _upsert_events(db, "ai", ai_rows, counts, ai_modes)
+    await _upsert_events(db, "human", human_rows, counts, ai_modes)
+    await db.flush()
 
-    ai_stats, human_stats = await asyncio.gather(_stats(ai_rows, "AI 版"), _stats(human_rows, "人工版"))
+    ai_stats, human_stats = await _stats_with_full_baseline(db, scratch_label, warnings)
 
     if not keys:
         warnings.append(f"这段日期里有 {len(samples)} 个样本，但样本编号都取不到 _imu 后缀，没法按狗归类")
@@ -269,3 +256,136 @@ async def collect_link_stats(
             "human_status": "complete" if c["total"] and human_all == c["total"] else ("partial" if human_done else "none"),
         })
     return {"rows": out_rows, "warnings": warnings}
+
+
+# ── 落库 & 用全部历史天数算基线 ──────────────────────────────────────────
+
+async def _upsert_events(db: AsyncSession, source: str, rows: list[dict], counts: dict, ai_modes: dict) -> None:
+    """把这一趟算出来的事件写进 skin_daily_stats，同 (日期, IMU, 来源) 覆盖。"""
+    for r in rows:
+        key = (r["date"], r["imu"])
+        stat_date = date.fromisoformat(r["date"])
+        existing = (
+            await db.execute(
+                select(SkinDailyStat).where(
+                    SkinDailyStat.stat_date == stat_date,
+                    SkinDailyStat.imu == r["imu"],
+                    SkinDailyStat.source == source,
+                )
+            )
+        ).scalar_one_or_none()
+        row = existing or SkinDailyStat(stat_date=stat_date, imu=r["imu"], source=source)
+        row.events = json.dumps(r["events"], ensure_ascii=False)
+        row.wear_seconds = float(r.get("wear_seconds") or 0.0)
+        row.tasks = json.dumps(counts.get(key, {}), ensure_ascii=False)
+        row.ai_mode = ",".join(sorted(ai_modes.get(key, []))) or None
+        if existing is None:
+            db.add(row)
+
+
+async def _stats_with_full_baseline(
+    db: AsyncSession, scratch_label: str, warnings: list[str]
+) -> tuple[dict[tuple, dict], dict[tuple, dict]]:
+    """
+    库里所有天（不只是这次选的范围）一起送去算日统计，基线才准；算完把结果写回
+    对应行，之后直接读库不用再调 AI 服务。返回 (ai, human) 两个 {(date, imu): {...}}。
+    """
+    stored = (await db.execute(select(SkinDailyStat))).scalars().all()
+    by_source: dict[str, list[SkinDailyStat]] = defaultdict(list)
+    for r in stored:
+        by_source[r.source].append(r)
+
+    # C 值每行要两次 HTTP，天数多了别一个个串着等
+    sem = asyncio.Semaphore(8)
+
+    async def _c_of(stat_row: dict) -> dict | None:
+        async with sem:
+            try:
+                cin = await _algo_post("stats/to-c-inputs", stat_row)
+                payload = {k: v for k, v in cin.items() if k not in ("fill_date", "dog_name", "warnings")}
+                c = await _algo_post("c-score", payload)
+                return {
+                    "c_inputs": cin,
+                    "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")},
+                }
+            except SkinLinkError:
+                return None
+
+    async def _one_source(source: str, which: str) -> dict[tuple, dict]:
+        rows = by_source.get(source) or []
+        if not rows:
+            return {}
+        payload = [
+            {"date": r.stat_date.isoformat(), "imu": r.imu, "events": json.loads(r.events), "wear_seconds": r.wear_seconds}
+            for r in rows
+        ]
+        try:
+            res = await _algo_post("stats/from-events", {"rows": payload, "target_label": scratch_label})
+        except SkinLinkError as e:
+            warnings.append(f"{which}的统计没算成：{e}")
+            return {}
+        stat_rows = res.get("rows") or []
+        cs = await asyncio.gather(*(_c_of(sr) for sr in stat_rows))
+        by_key = {(r.stat_date.isoformat(), r.imu): r for r in rows}
+        out: dict[tuple, dict] = {}
+        for sr, cres in zip(stat_rows, cs):
+            key = (sr["date"], sr["imu"])
+            item = {
+                "stats": sr,
+                "c_inputs": (cres or {}).get("c_inputs"),
+                "c": (cres or {}).get("c") or {"total": None, "tier": None, "red_flags": []},
+            }
+            out[key] = item
+            db_row = by_key.get(key)
+            if db_row is not None:
+                db_row.stats = json.dumps(sr, ensure_ascii=False)
+                db_row.c_inputs = json.dumps(item["c_inputs"], ensure_ascii=False) if item["c_inputs"] else None
+                db_row.c_value = item["c"].get("total")
+                db_row.c_tier = item["c"].get("tier")
+        return out
+
+    ai = await _one_source("ai", "AI 版")
+    human = await _one_source("human", "人工版")
+    await db.commit()
+    return ai, human
+
+
+async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: date) -> dict:
+    """直接读库里存好的结果，不调 AI 服务、不扫 NAS——打开页面默认走这条路。"""
+    rows = (
+        await db.execute(
+            select(SkinDailyStat)
+            .where(SkinDailyStat.stat_date >= date_from, SkinDailyStat.stat_date <= date_to)
+            .order_by(SkinDailyStat.stat_date, SkinDailyStat.imu)
+        )
+    ).scalars().all()
+    by_key: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.stat_date.isoformat(), r.imu)
+        entry = by_key.setdefault(
+            key,
+            {"date": key[0], "imu": key[1], "tasks": {}, "ai_mode": [], "ai": None, "human": None, "human_status": "none"},
+        )
+        if r.stats:
+            entry[r.source] = {
+                "stats": json.loads(r.stats),
+                "c_inputs": json.loads(r.c_inputs) if r.c_inputs else None,
+                "c": {"total": r.c_value, "tier": r.c_tier, "red_flags": []},
+            }
+        if r.tasks:
+            try:
+                t = json.loads(r.tasks)
+                if t:
+                    entry["tasks"] = t
+            except ValueError:
+                pass
+        if r.ai_mode:
+            entry["ai_mode"] = sorted(set(entry["ai_mode"]) | set(r.ai_mode.split(",")))
+    for entry in by_key.values():
+        c = entry["tasks"] or {}
+        total, approved = c.get("total", 0), c.get("approved", 0)
+        done = approved + c.get("submitted", 0)
+        entry["human_status"] = "complete" if total and approved == total else ("partial" if done else "none")
+    out = [by_key[k] for k in sorted(by_key)]
+    msg = [] if out else [f"{date_from} ~ {date_to} 还没算过，点「重新拉取」算一次（之后就一直存着，不用再算）"]
+    return {"rows": out, "warnings": msg, "from_cache": True}
