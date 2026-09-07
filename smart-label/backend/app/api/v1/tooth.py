@@ -66,7 +66,7 @@ async def photo_stream(path: str, token: str, request: Request):
 
 class DetectIn(BaseModel):
     paths: list[str] = Field(..., min_length=1, max_length=500, description="相对 口腔验证/ 的路径")
-    conf: float | None = Field(None, ge=0.05, le=0.95)
+    conf: float | None = Field(None, ge=0.0, le=0.95, description="置信度阈值，0 = 全部检出都返回")
     with_image: bool = Field(False, description="只有单张查看时才要带框图，批量跑不要")
 
 
