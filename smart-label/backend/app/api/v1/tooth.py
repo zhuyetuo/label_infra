@@ -96,6 +96,9 @@ async def detect(body: DetectIn, db: AsyncSession = Depends(get_db), user: User 
         row.width, row.height = data.get("width"), data.get("height")
         row.detected_by = user.id
         await db.flush()
+        # detected_at 是数据库端 now() 默认值，flush 后是过期属性；不显式 refresh 的话
+        # result_to_dict 里一读它就触发同步懒加载 → async 下报 MissingGreenlet
+        await db.refresh(row)
         results.append({"rel_path": rel_path, "ok": True, "result": svc.result_to_dict(row),
                         "annotated_jpeg_b64": data.get("annotated_jpeg_b64"), "class_names": data.get("class_names")})
     await db.commit()
