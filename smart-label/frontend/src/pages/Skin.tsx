@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Popconfirm, Radio, Select, Space, Spin, Table, Tabs, Tag, Typography, message,
+  Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,8 +8,8 @@ import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
-  skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
-  type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type WeeklyRow,
+  skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
+  type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
 } from "@/api/skin";
 import { listProjects } from "@/api/projects";
 
@@ -50,12 +50,18 @@ export default function Skin() {
   // 两个版本：PM 版（问答/IMU/C 值/S 总分/周报/历史/照片）和 ML 版（模型对比，后续在这里加）
   const ML_TABS = new Set(["ml"]);
   const [version, setVersion] = useState<"pm" | "ml">("pm");
-  const [pmTab, setPmTab] = useState("q");
+  // PM 版里再分两块：auto = 每天每只狗自动跑出来的长期跟踪；manual = 自己编数据验算规则
+  const [pmMode, setPmMode] = useState<"auto" | "manual">("auto");
+  const [pmTab, setPmTab] = useState("tracking");
   const [mlTab, setMlTab] = useState("ml");
   const tab = version === "pm" ? pmTab : mlTab;
   // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
+  const AUTO_TABS = new Set(["tracking", "link", "weekly", "history", "photos"]);
   const setTab = (key: string) => {
-    if (ML_TABS.has(key)) { setVersion("ml"); setMlTab(key); } else { setVersion("pm"); setPmTab(key); }
+    if (ML_TABS.has(key)) { setVersion("ml"); setMlTab(key); return; }
+    setVersion("pm");
+    setPmMode(AUTO_TABS.has(key) ? "auto" : "manual");
+    setPmTab(key);
   };
 
   // 问答改动 → 实时重算问答分（跟 Gradio 版 .change 一样）
@@ -99,8 +105,21 @@ export default function Skin() {
             { label: "ML 版", value: "ml" },
           ]}
         />
+        {version === "pm" && (
+          <Radio.Group
+            optionType="button"
+            value={pmMode}
+            onChange={(e) => { setPmMode(e.target.value); setPmTab(e.target.value === "auto" ? "tracking" : "q"); }}
+            options={[
+              { label: "每日跟踪（自动）", value: "auto" },
+              { label: "手动验证", value: "manual" },
+            ]}
+          />
+        )}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {version === "pm"
+          {version === "pm" && pmMode === "auto"
+            ? "每天每只狗自动跑出来：IMU 抓挠统计 → C 值（AI 版 / 人工版）→ 要不要问答 → S 总分。长期跟踪看这里。"
+            : version === "pm"
             ? "PM 版皮肤评估：问答分 → C 值（IMU 抓挠统计）→ S 总分（C×40% + 皮肤组×35% + 毛发组×25%）。分值规则全部在 imu_train/label_service 里（跟命令行 Gradio 版逐字一致），这里只做界面和记录存储。"
             : "ML 版：同一套问答输入喂给合成数据训出来的模型 A/B，跟 PM 版结果对比。"}
         </Typography.Text>
@@ -108,28 +127,32 @@ export default function Skin() {
       <Tabs
         activeKey={tab}
         onChange={setTab}
-        items={(version === "pm" ? [
-          { key: "q", label: "填写问答", children: (
-            <QuestionnaireTab opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate} filler={filler} setFiller={setFiller}
-              answers={answers} setAnswer={setAnswer} qScore={qScore} imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} cSource={cSource} cCompare={cCompare}
-              onSaved={() => qc.invalidateQueries({ queryKey: ["skin-records"] })} goto={setTab} />
+        items={(version === "ml" ? [
+          { key: "ml", label: "模型对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setVersion("pm"); setPmTab("q"); }} /> },
+        ] : pmMode === "auto" ? [
+          { key: "tracking", label: "每日跟踪表", children: (
+            <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setPmTab("q"); }} />
           ) },
           { key: "link", label: "项目联动（AI vs 人工）", children: (
             <LinkTab opts={opts} onApply={(c, meta) => {
               setCIn(c); setCSource(meta.source); setCCompare({ ai: meta.ai, human: meta.human });
-              if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setTab("c");
+              if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setPmMode("manual"); setPmTab("c");
             }} />
+          ) },
+          { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
+          { key: "history", label: "历史记录", children: <HistoryTab /> },
+          { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
+        ] : [
+          { key: "q", label: "填写问答", children: (
+            <QuestionnaireTab opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate} filler={filler} setFiller={setFiller}
+              answers={answers} setAnswer={setAnswer} qScore={qScore} imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} cSource={cSource} cCompare={cCompare}
+              onSaved={() => qc.invalidateQueries({ queryKey: ["skin-records"] })} goto={setTab} />
           ) },
           { key: "stats", label: "导入IMU统计数据", children: (
             <StatsTab opts={opts} onApply={(c, meta) => { setCIn(c); setCSource("stats"); setCCompare({ ai: null, human: null }); if (meta.fill_date) setFillDate(meta.fill_date); if (meta.dog_name) setDogName(meta.dog_name); setImu(meta.imu); setTab("c"); }} />
           ) },
           { key: "c", label: "C值计算", children: <CTab cIn={cIn} setCIn={(c) => { setCIn(c); setCSource("manual"); }} cRes={cRes} cSource={cSource} cCompare={cCompare} goto={setTab} /> },
           { key: "s", label: "S总分", children: <STab sRes={sRes} sCValue={sCValue} setSCValue={(v) => { setSCValue(v); setSCTierHint(null); }} answers={answers} qScore={qScore} goto={setTab} /> },
-          { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
-          { key: "history", label: "历史记录", children: <HistoryTab /> },
-          { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
-        ] : [
-          { key: "ml", label: "模型对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setTab("q"); }} /> },
         ])}
       />
     </div>
@@ -236,6 +259,179 @@ function QuestionnaireTab(p: {
 }
 
 // ── 导入 IMU 统计数据 ───────────────────────────────────────────────────
+
+// ── 每日跟踪表：一行 = (日期, 狗)，长期看每只狗的走势 ────────────────────
+
+const TRACK_FILTER_KEY = "skin-tracking-filter";
+const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean } => {
+  try {
+    const raw = localStorage.getItem(TRACK_FILTER_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* 用默认值 */ }
+  return { from: dayjs().subtract(29, "day").format("YYYY-MM-DD"), to: dayjs().format("YYYY-MM-DD"), onlyTriggered: false };
+};
+
+function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
+  const [f, setF] = useState(loadTrackFilter);
+  const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
+    setF((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ["skin-tracking", f.from, f.to],
+    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
+    refetchOnWindowFocus: false,
+  });
+  const all = data?.rows ?? [];
+  const rows = f.onlyTriggered ? all.filter((r) => r.question_triggered) : all;
+  const dogs = [...new Set(all.map((r) => r.dog_name))];
+
+  const sTag = (s: TrackingRow["s_no_q"]) =>
+    s && s.total != null ? (
+      <span>
+        {s.total} <Tag color={tierColor(s.s_tier)}>{s.s_tier}</Tag>
+      </span>
+    ) : (
+      <Typography.Text type="secondary">—</Typography.Text>
+    );
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <DatePicker.RangePicker
+          value={[dayjs(f.from), dayjs(f.to)]}
+          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
+          allowClear={false}
+        />
+        <Checkbox checked={f.onlyTriggered} onChange={(e) => setFilter({ onlyTriggered: e.target.checked })}>
+          只看需要问答的
+        </Checkbox>
+        <Button loading={isFetching} onClick={() => refetch()}>刷新</Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果（人工版优先，没有就用 AI 版）；
+          C 到 {(data?.trigger_tiers ?? ["C1", "C2"]).join(" / ")} 才需要做问答。
+        </Typography.Text>
+      </Space>
+      {(data?.warnings?.length ?? 0) > 0 && (
+        <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={data!.warnings.join("；")} />
+      )}
+      <Table
+        size="small"
+        rowKey={(r: TrackingRow) => `${r.date}-${r.imu}`}
+        loading={isFetching}
+        dataSource={rows}
+        pagination={{ pageSize: 30, showSizeChanger: true }}
+        scroll={{ x: "max-content" }}
+        columns={[
+          { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
+          { title: "狗", width: 150, render: (_: unknown, r: TrackingRow) => `${r.dog_name}（${r.imu}）` },
+          {
+            title: "抓挠 次数/时长",
+            width: 130,
+            render: (_: unknown, r: TrackingRow) => {
+              const n = r.stats?.event_count as number | undefined;
+              const m = r.stats?.total_duration_min as number | undefined;
+              return n == null ? "—" : `${n} 次 / ${fmt(m, 1)} 分`;
+            },
+          },
+          {
+            title: "C 值",
+            width: 150,
+            sorter: (a: TrackingRow, b: TrackingRow) => (a.c_value ?? -1) - (b.c_value ?? -1),
+            render: (_: unknown, r: TrackingRow) =>
+              r.c_value == null ? "—" : (
+                <Space size={4}>
+                  <b>{r.c_value}</b>
+                  <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>
+                  <Tag>{r.c_source === "human" ? "人工" : "AI"}</Tag>
+                </Space>
+              ),
+          },
+          {
+            title: "AI / 人工",
+            width: 120,
+            render: (_: unknown, r: TrackingRow) => (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
+                {r.delta_c != null && <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>（Δ{r.delta_c > 0 ? "+" : ""}{r.delta_c}）</span>}
+              </Typography.Text>
+            ),
+          },
+          {
+            title: "问答",
+            width: 170,
+            render: (_: unknown, r: TrackingRow) => (
+              <Space size={4}>
+                {r.question_triggered ? <Tag color="orange">需要问答</Tag> : <Tag>不必问答</Tag>}
+                {r.has_answers ? (
+                  <Tooltip title={`填写人：${r.filler ?? "-"}，问答分 ${r.q_score ?? "-"}`}>
+                    <Tag color="green">已填</Tag>
+                  </Tooltip>
+                ) : (
+                  <Tag color={r.question_triggered ? "red" : undefined}>未填</Tag>
+                )}
+              </Space>
+            ),
+          },
+          {
+            title: "S 总分（不填问答）",
+            width: 150,
+            render: (_: unknown, r: TrackingRow) => (
+              <Tooltip title="问答留空时的 S，只有 C 值那 40% 在起作用，是这一天的下限">
+                <span>{sTag(r.s_no_q)}</span>
+              </Tooltip>
+            ),
+          },
+          {
+            title: "S 总分（含问答）",
+            width: 150,
+            sorter: (a: TrackingRow, b: TrackingRow) => (a.s_with_q?.total ?? -1) - (b.s_with_q?.total ?? -1),
+            render: (_: unknown, r: TrackingRow) => sTag(r.s_with_q),
+          },
+          {
+            title: "照片",
+            width: 80,
+            render: (_: unknown, r: TrackingRow) =>
+              r.photo_count ? (
+                <Button size="small" type="link" onClick={() => setPhotoFor(r)}>
+                  {r.photo_count} 张
+                </Button>
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
+          },
+          {
+            title: "操作",
+            render: (_: unknown, r: TrackingRow) => (
+              <Button size="small" type={r.question_triggered && !r.has_answers ? "primary" : "link"} onClick={() => p.onGotoQ(r.date, r.dog_name)}>
+                {r.has_answers ? "改问答" : "去填问答"}
+              </Button>
+            ),
+          },
+        ]}
+      />
+      <Modal
+        title={`${photoFor?.date ?? ""} ${photoFor?.dog_name ?? ""} 的皮肤照片`}
+        open={photoFor != null}
+        onCancel={() => setPhotoFor(null)}
+        footer={null}
+        width="90vw"
+      >
+        {photoFor && (
+          <PhotoGallery
+            album="skin"
+            hint={`只看 ${photoFor.date} / ${photoFor.dog_name}`}
+            filterDate={photoFor.date}
+            filterDog={photoFor.dog_name}
+          />
+        )}
+      </Modal>
+    </div>
+  );
+}
 
 // ── 项目联动：标注平台 AI 版 / 人工版抓挠统计 ──────────────────────────
 
