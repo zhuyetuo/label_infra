@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Collapse, Empty, Image, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Button, Collapse, Empty, Modal, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
 
@@ -10,7 +10,25 @@ import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album
 export default function PhotoGallery({ album, hint }: { album: Album; hint?: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const allPhotos = useMemo(() => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos)), [data]);
+  // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
+  const allPhotos = useMemo(
+    () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, dog: d.name, folder: f.folder })))),
+    [data]
+  );
+  const [viewIdx, setViewIdx] = useState<number | null>(null);
+  const viewing = viewIdx != null ? allPhotos[viewIdx] : null;
+  const step = (delta: number) => setViewIdx((i) => (i == null ? i : Math.min(allPhotos.length - 1, Math.max(0, i + delta))));
+  useEffect(() => {
+    if (viewIdx == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") step(-1);
+      if (e.key === "ArrowRight") step(1);
+      if (e.key === "Escape") setViewIdx(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewIdx]);
 
   useEffect(() => {
     // 缩略图要带路径签名 token，8 个一组换，几百张几秒钟
@@ -38,25 +56,52 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
   if (!data?.folders.length) return <Empty description="还没有照片" />;
 
   const grid = (photos: MaterialPhoto[]) => (
-    <Image.PreviewGroup>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-        {photos.map((p) => (
-          <div key={p.rel_path} style={{ width: 160 }}>
-            <div style={{ width: 160, height: 120, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {urls[p.rel_path] ? <Image src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} /> : <Spin size="small" />}
-            </div>
-            <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+      {photos.map((p) => (
+        <div key={p.rel_path} style={{ width: 160, cursor: "pointer" }} onClick={() => setViewIdx(allPhotos.findIndex((x) => x.rel_path === p.rel_path))}>
+          <div style={{ width: 160, height: 120, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {urls[p.rel_path] ? <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
           </div>
-        ))}
-      </div>
-    </Image.PreviewGroup>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
+        </div>
+      ))}
+    </div>
   );
 
   return (
     <div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。
+        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。点图放大，左右方向键或按钮翻上一张/下一张。
       </Typography.Paragraph>
+      <Modal
+        open={viewing != null}
+        onCancel={() => setViewIdx(null)}
+        footer={null}
+        width="90vw"
+        style={{ top: 20 }}
+        title={
+          viewing ? (
+            <Space>
+              <Button size="small" disabled={viewIdx === 0} onClick={() => step(-1)}>← 上一张</Button>
+              <Button size="small" disabled={viewIdx === allPhotos.length - 1} onClick={() => step(1)}>下一张 →</Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{(viewIdx ?? 0) + 1} / {allPhotos.length}</Typography.Text>
+              <Tag>{viewing.folder}</Tag>
+              <Tag color="blue">{viewing.dog}</Tag>
+              <span>{viewing.filename}</span>
+            </Space>
+          ) : ""
+        }
+      >
+        {viewing && (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 300 }}>
+            {urls[viewing.rel_path] ? (
+              <img src={urls[viewing.rel_path]} alt={viewing.filename} style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain" }} />
+            ) : (
+              <Spin />
+            )}
+          </div>
+        )}
+      </Modal>
       <Collapse
         defaultActiveKey={[data.folders[0].folder]}
         items={data.folders.map((f) => ({
