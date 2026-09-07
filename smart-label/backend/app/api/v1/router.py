@@ -8,6 +8,7 @@ from app.api.v1 import (
     imu,
     label_templates,
     labels,
+    material,
     media,
     model_versions,
     projects,
@@ -39,3 +40,5 @@ api_router.include_router(model_versions.callback_router)
 api_router.include_router(tooth.router)
 api_router.include_router(tooth.stream_router)
 api_router.include_router(skin.router)
+api_router.include_router(material.router)
+api_router.include_router(material.stream_router)
