@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Empty, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Empty, Input, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
@@ -8,6 +8,7 @@ import { listLabels } from "@/api/labels";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
+import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { useUrlTask } from "@/utils/urlTask";
 import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -106,10 +107,38 @@ export default function Tasks() {
     return counts;
   };
 
+  // 每个项目当前选中的 imu 目录（"ALL" = 全部）
+  const [imuFilter, setImuFilter] = useState<Record<number, string>>({});
+
   const renderTaskTable = (p: Project) => {
-    const rows = tasksOf(p.id);
+    const all = tasksOf(p.id);
     const projLabels = labelsOf(p.id);
+    const imuCounts = new Map<string, number>();
+    for (const t of all) {
+      const k = imuOf(String(sampleCode(t.sample_id)));
+      imuCounts.set(k, (imuCounts.get(k) ?? 0) + 1);
+    }
+    const imu = imuFilter[p.id] ?? "ALL";
+    const rows = imu === "ALL" ? all : all.filter((t) => imuOf(String(sampleCode(t.sample_id))) === imu);
     return (
+      <>
+      {imuCounts.size > 1 && (
+        // 按样本编号 _imu{N} 归成目录，一个 imu 对应一只狗
+        <Space wrap style={{ marginBottom: 8 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>按设备/狗：</Typography.Text>
+          <Radio.Group
+            size="small"
+            optionType="button"
+            buttonStyle="solid"
+            value={imu}
+            onChange={(e) => setImuFilter((prev) => ({ ...prev, [p.id]: e.target.value }))}
+            options={[
+              { label: `全部 ${all.length}`, value: "ALL" },
+              ...sortImuKeys(imuCounts.keys()).map((k) => ({ label: `${k} ${imuCounts.get(k)}`, value: k })),
+            ]}
+          />
+        </Space>
+      )}
       <Table
         size="small"
         rowKey="id"
@@ -258,6 +287,7 @@ export default function Tasks() {
           },
         ]}
       />
+      </>
     );
   };
 
