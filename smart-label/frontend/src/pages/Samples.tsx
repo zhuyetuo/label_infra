@@ -13,6 +13,7 @@ import {
 import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
+import { imuOf, sortImuKeys } from "@/utils/imuOf";
 
 const statusColor: Record<Sample["import_status"], string> = {
   pending: "default",
@@ -263,34 +264,54 @@ export default function Samples() {
         <Table loading rowKey="id" columns={columns} dataSource={[]} />
       ) : (
         <Collapse
-          items={groups.map(([dateKey, samples]) => ({
-            key: dateKey,
-            label: `${dateKey}（${samples.length} 个样本）`,
-            children: (
+          items={groups.map(([dateKey, samples]) => {
+            // 日期目录下再按 imu 分成子目录：imu1/imu2/imu3/imu4 各对应一只狗，
+            // 看某只狗的数据直接点开它的目录。NAS 上的文件不动，只是页面里这么归纳
+            const byImu = new Map<string, Sample[]>();
+            for (const smp of samples) {
+              const k = imuOf(smp.sample_code);
+              if (!byImu.has(k)) byImu.set(k, []);
+              byImu.get(k)!.push(smp);
+            }
+            const renderTable = (rows: Sample[]) => (
               <Table
                 rowKey="id"
                 size="small"
-                dataSource={samples}
-                pagination={samples.length > 20 ? { pageSize: 20 } : false}
+                dataSource={rows}
+                pagination={rows.length > 20 ? { pageSize: 20 } : false}
                 columns={columns}
                 // antd 默认点三下是 升序 -> 降序 -> 取消排序（回到原始顺序），第三种
                 // 看着像乱序；这里只在升/降之间切
                 sortDirections={["ascend", "descend", "ascend"]}
-                // 勾选跨日期分组共用一个集合，可以在几天里各挑几个一起标
+                // 勾选跨日期/跨 imu 分组共用一个集合，可以在几天里各挑几个一起标
                 rowSelection={{
-                  selectedRowKeys: samples.filter((s) => selected.has(s.id)).map((s) => s.id),
-                  onChange: (_, rows) => {
+                  selectedRowKeys: rows.filter((s) => selected.has(s.id)).map((s) => s.id),
+                  onChange: (_, picked) => {
                     setSelected((prev) => {
                       const next = new Set(prev);
-                      samples.forEach((s) => next.delete(s.id));
-                      rows.forEach((s) => next.add(s.id));
+                      rows.forEach((s) => next.delete(s.id));
+                      picked.forEach((s) => next.add(s.id));
                       return next;
                     });
                   },
                 }}
               />
-            ),
-          }))}
+            );
+            return {
+              key: dateKey,
+              label: `${dateKey}（${samples.length} 个样本）`,
+              children: (
+                <Collapse
+                  size="small"
+                  items={sortImuKeys(byImu.keys()).map((imu) => ({
+                    key: imu,
+                    label: `${imu}（${byImu.get(imu)!.length} 个样本）`,
+                    children: renderTable(byImu.get(imu)!),
+                  }))}
+                />
+              ),
+            };
+          })}
         />
       )}
 

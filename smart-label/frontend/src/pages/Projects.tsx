@@ -49,6 +49,7 @@ import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
+import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -91,11 +92,11 @@ export default function Projects() {
   type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
   // labels：只看含这些类别片段的任务；aiPending：只看还有 AI 待确认片段的任务——
   // 批量预标注完想专门审某一类（比如抓挠），靠这两个直接挑出要看的任务
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean };
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; imu: string };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, imu: "ALL" };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -221,7 +222,8 @@ export default function Projects() {
     form.setFieldsValue({ name: "", description: "", templateId: templates?.[0]?.id });
     setCreateSelected(new Set());
     setCreateTaskType("ai_assisted");
-    setCreateAssignee(null);
+    // 默认指派给自己（管理员/超管建项目大多是自己先调试），不想要就在下拉里清掉进公共池
+    setCreateAssignee(isAdmin ? (userId ?? null) : null);
     setNameAuto(true);
     setOpen(true);
   };
@@ -590,8 +592,16 @@ export default function Projects() {
               if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
               return true;
             };
+            // imu 目录：按样本编号的 _imu{N} 后缀分，一个 imu 对应一只狗，先选目录再看任务
+            const imuCounts = new Map<string, number>();
+            for (const t of all) {
+              const k = imuOf(String(sampleCode(t.sample_id)));
+              imuCounts.set(k, (imuCounts.get(k) ?? 0) + 1);
+            }
+            const matchImu = (t: Task) => f.imu === "ALL" || imuOf(String(sampleCode(t.sample_id))) === f.imu;
             const rows = all.filter(
               (t) =>
+                matchImu(t) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
@@ -612,6 +622,22 @@ export default function Projects() {
             const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
             return (
               <>
+              {imuCounts.size > 1 && (
+                <Space wrap style={{ marginBottom: 8 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>按设备/狗：</Typography.Text>
+                  <Radio.Group
+                    size="small"
+                    optionType="button"
+                    buttonStyle="solid"
+                    value={f.imu}
+                    onChange={(e) => setFilter(p.id, { imu: e.target.value })}
+                    options={[
+                      { label: `全部 ${all.length}`, value: "ALL" },
+                      ...sortImuKeys(imuCounts.keys()).map((k) => ({ label: `${k} ${imuCounts.get(k)}`, value: k })),
+                    ]}
+                  />
+                </Space>
+              )}
               <Space wrap style={{ marginBottom: 8 }}>
                 <Radio.Group
                   size="small"
@@ -665,7 +691,7 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending) && (
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.imu !== "ALL") && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
