@@ -71,6 +71,9 @@ services:
     environment:
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
     volumes:
+      # 自动扫描 NAS 新样本跑在这个容器里，NAS 必须跟 api 一样挂进来——之前漏了，
+      # 扫描每 10 分钟对着一个不存在的目录跑，永远扫不到新数据
+      - ${NAS_ROOT_HOST:-/home/toky/ai_data}:${NAS_ROOT:-/home/toky/ai_data}
       - ../../logs/smart-label:/app/logs
     # 超时回收定时任务必须只跑一个实例，不要 scale 这个 service
     command: python -m app.workers.scheduler
