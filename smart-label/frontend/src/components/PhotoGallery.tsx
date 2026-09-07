@@ -73,15 +73,17 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
           onVisibleChange: (open: boolean) => setPreview((prev) => ({ ...prev, open })),
           onChange: (current: number) => setPreview((prev) => ({ ...prev, current })),
           // 路径放图片最上面（imageRender 里贴一条），工具栏只留"上一张 | 原生按钮 | 下一张"，两个翻页按钮挨着
+          // 不能给 originalNode 外面套 div——会破坏 antd 给图片定的最大尺寸，图片撑满整屏；
+          // 标签用 fixed 定位单独贴，跟图片布局无关
           imageRender: (originalNode, { current }) => (
-            <div style={{ position: "relative", display: "inline-block" }}>
+            <>
               {originalNode}
               {allPhotos[current] && (
-                <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 12px", borderRadius: 4, fontSize: 13, pointerEvents: "none" }}>
+                <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 12px", borderRadius: 4, fontSize: 13, pointerEvents: "none", zIndex: 1 }}>
                   {allPhotos[current].folder} / {allPhotos[current].dog} / {allPhotos[current].filename}
                 </div>
               )}
-            </div>
+            </>
           ),
           toolbarRender: (originalNode, info) => (
             <Space size={8}>
