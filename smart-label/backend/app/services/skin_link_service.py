@@ -160,7 +160,11 @@ async def collect_link_stats(
             else:
                 c["pending"] += 1
 
-        data = await asyncio.to_thread(_read_ai_json, ai_label_relpath(s.imu_csv_path))
+        try:
+            data = await asyncio.to_thread(_read_ai_json, ai_label_relpath(s.imu_csv_path))
+        except Exception as e:  # noqa: BLE001 单个样本的 AI JSON 有问题不该让整张表打不开
+            warnings.append(f"样本 {s.sample_code} 的 AI 结果读不出来：{type(e).__name__}: {e}")
+            data = None
         span: tuple[datetime, datetime] | None = None
         if data:
             ai_modes[key].add(str(data.get("mode") or "raw"))
@@ -187,6 +191,8 @@ async def collect_link_stats(
                 csv_start = await _csv_start_of(s)
             except PrelabelError as e:
                 warnings.append(f"样本 {s.sample_code}：{e}")
+            except Exception as e:  # noqa: BLE001 读 CSV 时间戳失败同理，记一条继续
+                warnings.append(f"样本 {s.sample_code} 读时间戳失败：{type(e).__name__}: {e}")
         if span is None and csv_start is not None and s.video_duration_sec:
             span = (csv_start, csv_start + timedelta(seconds=int(s.video_duration_sec)))
         if span is not None:
