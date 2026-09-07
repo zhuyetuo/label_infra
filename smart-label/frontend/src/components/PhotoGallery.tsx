@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Collapse, Empty, Modal, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Button, Collapse, Empty, Image, Space, Spin, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
 
@@ -10,98 +10,58 @@ import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album
 export default function PhotoGallery({ album, hint }: { album: Album; hint?: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
   const [urls, setUrls] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
   // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
   const allPhotos = useMemo(
     () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, dog: d.name, folder: f.folder })))),
     [data]
   );
-  const [viewIdx, setViewIdx] = useState<number | null>(null);
-  const viewing = viewIdx != null ? allPhotos[viewIdx] : null;
-  const step = (delta: number) => setViewIdx((i) => (i == null ? i : Math.min(allPhotos.length - 1, Math.max(0, i + delta))));
-  useEffect(() => {
-    if (viewIdx == null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") step(-1);
-      if (e.key === "ArrowRight") step(1);
-      if (e.key === "Escape") setViewIdx(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewIdx]);
-
-  useEffect(() => {
-    // 缩略图要带路径签名 token，8 个一组换，几百张几秒钟
-    const missing = allPhotos.filter((p) => !urls[p.rel_path]).map((p) => p.rel_path);
-    if (!missing.length) return;
-    let cancelled = false;
-    (async () => {
-      for (let i = 0; i < missing.length; i += 8) {
-        const chunk = missing.slice(i, i + 8);
-        const tokens = await Promise.all(chunk.map((p) => getMaterialPhotoToken(album, p).catch(() => null)));
-        if (cancelled) return;
-        const next: Record<string, string> = {};
-        chunk.forEach((p, j) => { if (tokens[j]) next[p] = materialPhotoUrl(album, p, tokens[j]!.token); });
-        setUrls((prev) => ({ ...prev, ...next }));
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allPhotos, album]);
-
   if (error) {
     return <Alert type="error" showIcon message="照片目录读不到" description={`${(error as Error).message}。确认素材库 NAS 已挂到 /home/toky/alg_material 并在 docker-compose 里挂进了容器。`} />;
   }
   if (isLoading) return <Spin />;
   if (!data?.folders.length) return <Empty description="还没有照片" />;
 
+  // 缩略图只渲染（不带预览），预览统一由外层一个 PreviewGroup 接管，这样整页的图
+  // 在放大状态下能一路左右翻，不用关掉再点下一张；工具栏里加两个明显的左右按钮
   const grid = (photos: MaterialPhoto[]) => (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-      {photos.map((p) => (
-        <div key={p.rel_path} style={{ width: 160, cursor: "pointer" }} onClick={() => setViewIdx(allPhotos.findIndex((x) => x.rel_path === p.rel_path))}>
-          <div style={{ width: 160, height: 120, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {urls[p.rel_path] ? <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
+      {photos.map((p) => {
+        const idx = allPhotos.findIndex((x) => x.rel_path === p.rel_path);
+        return (
+          <div key={p.rel_path} style={{ width: 160, cursor: "pointer" }} onClick={() => urls[p.rel_path] && setPreview({ open: true, current: idx })}>
+            <div style={{ width: 160, height: 120, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {urls[p.rel_path] ? <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
           </div>
-          <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 
   return (
     <div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。点图放大，左右方向键或按钮翻上一张/下一张。
+        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。点图放大，工具栏左右按钮或键盘方向键翻上一张/下一张。
       </Typography.Paragraph>
-      <Modal
-        open={viewing != null}
-        onCancel={() => setViewIdx(null)}
-        footer={null}
-        width="90vw"
-        style={{ top: 20 }}
-        title={
-          viewing ? (
-            <Space>
-              <Button size="small" disabled={viewIdx === 0} onClick={() => step(-1)}>← 上一张</Button>
-              <Button size="small" disabled={viewIdx === allPhotos.length - 1} onClick={() => step(1)}>下一张 →</Button>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{(viewIdx ?? 0) + 1} / {allPhotos.length}</Typography.Text>
-              <Tag>{viewing.folder}</Tag>
-              <Tag color="blue">{viewing.dog}</Tag>
-              <span>{viewing.filename}</span>
+      <Image.PreviewGroup
+        items={allPhotos.map((p) => ({ src: urls[p.rel_path] ?? "", alt: `${p.folder} / ${p.dog} / ${p.filename}` }))}
+        preview={{
+          visible: preview.open,
+          current: preview.current,
+          onVisibleChange: (open: boolean) => setPreview((prev) => ({ ...prev, open })),
+          onChange: (current: number) => setPreview((prev) => ({ ...prev, current })),
+          toolbarRender: (originalNode, info) => (
+            <Space size={16}>
+              <Button size="small" disabled={info.current <= 0} onClick={() => info.actions.onActive?.(-1)}>← 上一张</Button>
+              <span style={{ color: "#fff" }}>{allPhotos[info.current] ? `${allPhotos[info.current].folder} / ${allPhotos[info.current].dog} / ${allPhotos[info.current].filename}` : ""}</span>
+              {originalNode}
+              <Button size="small" disabled={info.current >= info.total - 1} onClick={() => info.actions.onActive?.(1)}>下一张 →</Button>
             </Space>
-          ) : ""
-        }
-      >
-        {viewing && (
-          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 300 }}>
-            {urls[viewing.rel_path] ? (
-              <img src={urls[viewing.rel_path]} alt={viewing.filename} style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain" }} />
-            ) : (
-              <Spin />
-            )}
-          </div>
-        )}
-      </Modal>
+          ),
+        }}
+      />
       <Collapse
         defaultActiveKey={[data.folders[0].folder]}
         items={data.folders.map((f) => ({

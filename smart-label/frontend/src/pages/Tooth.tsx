@@ -341,6 +341,16 @@ export default function Tooth() {
                   <Image
                     src={viewing.annotated ? `data:image/jpeg;base64,${viewing.annotated}` : urls[viewing.photo.rel_path]}
                     style={{ maxHeight: 520, objectFit: "contain" }}
+                    preview={{
+                      // 放大状态下也能直接翻上一张/下一张（换图后带框结果跟着换）
+                      toolbarRender: (originalNode) => (
+                        <Space size={16}>
+                          <Button size="small" disabled={viewingIdx <= 0} onClick={() => step(-1)}>← 上一张</Button>
+                          {originalNode}
+                          <Button size="small" disabled={viewingIdx < 0 || viewingIdx >= visiblePhotos.length - 1} onClick={() => step(1)}>下一张 →</Button>
+                        </Space>
+                      ),
+                    }}
                   />
                 </div>
                 <div style={{ width: 300 }}>
