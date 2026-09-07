@@ -72,10 +72,20 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
           current: preview.current,
           onVisibleChange: (open: boolean) => setPreview((prev) => ({ ...prev, open })),
           onChange: (current: number) => setPreview((prev) => ({ ...prev, current })),
+          // 路径放图片最上面（imageRender 里贴一条），工具栏只留"上一张 | 原生按钮 | 下一张"，两个翻页按钮挨着
+          imageRender: (originalNode, { current }) => (
+            <div style={{ position: "relative", display: "inline-block" }}>
+              {originalNode}
+              {allPhotos[current] && (
+                <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 12px", borderRadius: 4, fontSize: 13, pointerEvents: "none" }}>
+                  {allPhotos[current].folder} / {allPhotos[current].dog} / {allPhotos[current].filename}
+                </div>
+              )}
+            </div>
+          ),
           toolbarRender: (originalNode, info) => (
-            <Space size={16}>
+            <Space size={8}>
               <Button size="small" disabled={info.current <= 0} onClick={() => info.actions.onActive?.(-1)}>← 上一张</Button>
-              <span style={{ color: "#fff" }}>{allPhotos[info.current] ? `${allPhotos[info.current].folder} / ${allPhotos[info.current].dog} / ${allPhotos[info.current].filename}` : ""}</span>
               {originalNode}
               <Button size="small" disabled={info.current >= info.total - 1} onClick={() => info.actions.onActive?.(1)}>下一张 →</Button>
             </Space>
