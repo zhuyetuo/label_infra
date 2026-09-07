@@ -578,19 +578,23 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "问答",
             width: 170,
-            // C0 这天本来就不用问答，不显示「未填」和「去填问答」，免得看着像漏了什么
-            render: (_: unknown, r: TrackingRow) => (
-              <Space size={4}>
-                {r.question_triggered ? <Tag color="orange">需要问答</Tag> : <Tag>不必问答</Tag>}
-                {r.has_answers ? (
-                  <Tooltip title={`填写人：${r.filler ?? "-"}，问答分 ${r.q_score ?? "-"}`}>
-                    <Tag color="green">已填</Tag>
-                  </Tooltip>
-                ) : r.question_triggered ? (
-                  <Tag color="red">未填</Tag>
-                ) : null}
-              </Space>
-            ),
+            // 没触发就整个留空：48 行里大半是 C0，每行都挂个「不必问答」全是噪音，
+            // 一眼扫过去只想看到哪几天真的要去问
+            render: (_: unknown, r: TrackingRow) => {
+              if (!r.question_triggered && !r.has_answers) return <Typography.Text type="secondary">—</Typography.Text>;
+              return (
+                <Space size={4}>
+                  {r.question_triggered && <Tag color="orange">需要问答</Tag>}
+                  {r.has_answers ? (
+                    <Tooltip title={`填写人：${r.filler ?? "-"}，问答分 ${r.q_score ?? "-"}`}>
+                      <Tag color="green">已填</Tag>
+                    </Tooltip>
+                  ) : (
+                    <Tag color="red">未填</Tag>
+                  )}
+                </Space>
+              );
+            },
           },
           {
             title: "S 总分（不填问答）",
