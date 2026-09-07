@@ -6,11 +6,13 @@ import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { useUrlTask } from "@/utils/urlTask";
+import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import type { Task } from "@/types";
 
 export default function Reviews() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
+  const role = useAuthStore((s) => s.userInfo?.role);
   const { data, isLoading } = useQuery({ queryKey: ["review-queue"], queryFn: reviewQueue });
   const { data: labels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
 
@@ -57,7 +59,18 @@ export default function Reviews() {
         dataSource={data}
         columns={[
           { title: "任务ID", dataIndex: "id", width: 80 },
-          { title: "样本ID", dataIndex: "sample_id" },
+          {
+            title: "样本",
+            dataIndex: "sample_id",
+            render: (id: number, task: Task) =>
+              task.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : id,
+          },
+          {
+            title: "总时长",
+            width: 110,
+            sorter: (a: Task, b: Task) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0),
+            render: (_: unknown, task: Task) => formatDuration(task.video_duration_sec),
+          },
           { title: "轮次", dataIndex: "round_no" },
           { title: "标注员ID", dataIndex: "assigned_to" },
           {

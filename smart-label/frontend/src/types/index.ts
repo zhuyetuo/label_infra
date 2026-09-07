@@ -66,6 +66,7 @@ export interface Task {
   review_comment?: string | null;
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */
   sample_code?: string | null;
+  video_duration_sec?: number | null;
   assigned_to_name?: string | null;
 }
 

@@ -13,6 +13,7 @@ from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
 from app.services.review_service import ReviewConflictError, claim_review, decide_review, release_review
 from app.services.task_scope import exclude_own_annotation, exclude_sensitive
+from app.services.task_service import sample_brief
 
 router = APIRouter(
     prefix="/reviews", tags=["reviews"], dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin, UserRole.super_admin))]
@@ -30,7 +31,8 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
     # 敏感样本上的任务只出现在管理员的审核队列里
     query = exclude_sensitive(query, user)
     tasks = (await db.execute(query)).scalars().all()
-    return ok([TaskOut.model_validate(t).model_dump() for t in tasks])
+    briefs = await sample_brief(db, tasks)
+    return ok([{**TaskOut.model_validate(t).model_dump(), **briefs.get(t.sample_id, {})} for t in tasks])
 
 
 @router.post("/{task_id}/claim")

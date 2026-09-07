@@ -50,6 +50,7 @@ import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -397,6 +398,10 @@ export default function Projects() {
   };
   const sampleCode = (id: number) =>
     samples?.find((s) => s.id === id)?.sample_code ?? allTasks?.find((t) => t.sample_id === id)?.sample_code ?? id;
+  const durationOf = (id: number) =>
+    samples?.find((s) => s.id === id)?.video_duration_sec ?? allTasks?.find((t) => t.sample_id === id)?.video_duration_sec ?? null;
+  // 超级管理员看原始编号，其他人看"哪天 几点~几点"
+  const sampleName = (id: number) => sampleDisplayName(String(sampleCode(id)), durationOf(id), role);
 
   const handleCreateTask = async (values: { sample_id: number; task_type: "from_scratch" | "ai_assisted" }) => {
     if (!createForProject) return;
@@ -608,7 +613,7 @@ export default function Projects() {
                 matchImu(t) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
-                (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || String(t.id) === q)
+                (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
             );
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
@@ -746,7 +751,9 @@ export default function Projects() {
                       const s = samples?.find((x) => x.id === id);
                       return (
                         <Space size={4}>
-                          <span>{s?.sample_code ?? id}</span>
+                          <Tooltip title={role === "super_admin" ? undefined : String(sampleCode(id))}>
+                            <span>{sampleName(id)}</span>
+                          </Tooltip>
                           {s?.is_sensitive && (
                             <Tooltip title={`含敏感隐私信息，只有管理员能看能标${s.sensitive_note ? `：${s.sensitive_note}` : ""}`}>
                               <Tag color="red" style={{ marginRight: 0 }}>敏感</Tag>
@@ -755,6 +762,13 @@ export default function Projects() {
                         </Space>
                       );
                     },
+                  },
+                  {
+                    title: "总时长",
+                    width: 110,
+                    // 按时长排，想先挑短的就点一下
+                    sorter: (a: Task, b: Task) => (durationOf(a.sample_id) ?? 0) - (durationOf(b.sample_id) ?? 0),
+                    render: (_: unknown, task: Task) => formatDuration(durationOf(task.sample_id)),
                   },
                   {
                     title: "类型",
