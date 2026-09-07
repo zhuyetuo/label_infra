@@ -39,8 +39,9 @@ const valueOf = (r: TrackingRow, m: Metric): number | null => {
   return r.s_with_q?.total ?? r.s_no_q?.total ?? null;
 };
 
-export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
-  const [metric, setMetric] = useState<Metric>("count");
+/** 单个指标的折线图：一条线一只狗。图表页把三个指标各画一张（小倍数），
+ *  跟踪表里只画一张、用按钮切——两处共用这一个组件。 */
+export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]; metric: Metric; height?: number }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const [dark, setDark] = useState(isDark);
@@ -94,7 +95,7 @@ export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
     const plot = new uPlot(
       {
         width: hostRef.current.clientWidth,
-        height: 260,
+        height,
         // 图例默认就在，>=2 条线时身份不能只靠颜色
         legend: { show: true, live: true },
         cursor: { points: { size: 8 }, focus: { prox: 24 } },
@@ -126,16 +127,21 @@ export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
       hostRef.current
     );
     plotRef.current = plot;
-    const onResize = () => plot.setSize({ width: hostRef.current!.clientWidth, height: 260 });
+    const onResize = () => plot.setSize({ width: hostRef.current!.clientWidth, height });
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
       plot.destroy();
       plotRef.current = null;
     };
-  }, [dogs, dates, series, baseline, palette, dark]);
+  }, [dogs, dates, series, baseline, palette, dark, height]);
 
-  // 档位分布：每只狗 C0/C1/C2 各多少天。段之间留 2px 缝，数字直接标在段上
+  if (!rows.length) return null;
+  return <div className="tracking-charts"><div ref={hostRef} /></div>;
+}
+
+/** C 档位分布：每只狗 C0/C1/C2 各多少天 */
+export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
   const tierDist = useMemo(() => {
     const m = new Map<string, Record<string, number>>();
     for (const r of rows) {
@@ -146,29 +152,8 @@ export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
     }
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [rows]);
-
-  if (!rows.length) return null;
-
+  if (!tierDist.length) return null;
   return (
-    <div className="tracking-charts" style={{ marginBottom: 12 }}>
-      <Space wrap style={{ marginBottom: 8 }}>
-        <Radio.Group
-          size="small"
-          optionType="button"
-          value={metric}
-          onChange={(e) => setMetric(e.target.value)}
-          options={METRICS.map((m) => ({ label: m.label, value: m.value }))}
-        />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          一条线一只狗，鼠标移上去看当天数值。
-          {metric === "count" && "虚线是这只狗的基线（别的日子的中位数），C 值里的「变化幅度」就是跟它比出来的。"}
-          {metric === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值。"}
-          {" 三个指标量纲不同，只能一次看一个，不做双轴。"}
-        </Typography.Text>
-      </Space>
-      <div ref={hostRef} />
-
-      {tierDist.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             C 档位分布（天数）：
@@ -212,7 +197,35 @@ export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
             ))}
           </Space>
         </div>
-      )}
+  );
+}
+
+/** 跟踪表上方的紧凑版：一次一个指标，用按钮切 */
+export default function TrackingCharts({ rows }: { rows: TrackingRow[] }) {
+  const [metric, setMetric] = useState<Metric>("count");
+  if (!rows.length) return null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Radio.Group
+          size="small"
+          optionType="button"
+          value={metric}
+          onChange={(e) => setMetric(e.target.value)}
+          options={METRICS.map((m) => ({ label: m.label, value: m.value }))}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          一条线一只狗，鼠标移上去看当天数值。
+          {metric === "count" && "虚线是基线（这只狗别的日子的中位数）。"}
+          {metric === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值。"}
+          {" 三个指标量纲不同，只能一次看一个，不做双轴。"}
+        </Typography.Text>
+      </Space>
+      <TrendChart rows={rows} metric={metric} />
+      <TierDistribution rows={rows} />
     </div>
   );
 }
+
+export { METRICS };
+export type { Metric };
