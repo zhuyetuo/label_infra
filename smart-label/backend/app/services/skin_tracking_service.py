@@ -53,10 +53,31 @@ async def _algo_post(path: str, payload: dict) -> dict:
     return resp.json()
 
 
-def _photo_counts() -> dict[tuple[str, str], int]:
-    """{(日期, 狗名): 张数}。目录是 {material_root}/{skin_photo_dir}/{日期[-ok]}/{狗}/*.jpg"""
+def _norm_dog(name: str) -> set[str]:
+    """
+    一只狗的几种叫法。PM 那边是「金毛-巴利」这种「品种-名字」，NAS 上的目录名
+    常常只写名字（「巴利」），也可能写拼音（「Bali」）。这里把可能的写法都列出来，
+    匹配时任一相等或互相包含就算同一只。
+    """
+    n = (name or "").strip()
+    parts = {n, n.lower()}
+    for alias in settings.skin_dog_aliases.get(n, []):
+        parts.add(alias)
+        parts.add(alias.lower())
+    for sep in ("-", "_", " "):
+        if sep in n:
+            for piece in n.split(sep):
+                piece = piece.strip()
+                if piece:
+                    parts.add(piece)
+                    parts.add(piece.lower())
+    return {p for p in parts if p}
+
+
+def _photo_index() -> list[tuple[str, str, int]]:
+    """[(日期, 目录里的狗名, 张数)]。目录是 {material_root}/{skin_photo_dir}/{日期[-ok]}/{狗}/*.jpg"""
     root = os.path.join(settings.material_root, settings.skin_photo_dir)
-    out: dict[tuple[str, str], int] = {}
+    out: list[tuple[str, str, int]] = []
     if not os.path.isdir(root):
         return out
     exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -71,8 +92,24 @@ def _photo_counts() -> dict[tuple[str, str], int]:
                 continue
             n = sum(1 for fn in os.listdir(dpath) if os.path.splitext(fn)[1].lower() in exts)
             if n:
-                out[(day, dog)] = out.get((day, dog), 0) + n
+                out.append((day, dog, n))
     return out
+
+
+def _match_photos(index: list[tuple[str, str, int]], day: str, dog: str) -> tuple[int, str | None]:
+    """返回 (张数, NAS 上实际的狗目录名)。目录名跟 PM 狗名对不上是常态，做宽松匹配。"""
+    aliases = _norm_dog(dog)
+    total, matched = 0, None
+    for d, folder_dog, n in index:
+        if d != day:
+            continue
+        fd = folder_dog.strip()
+        fdl = fd.lower()
+        hit = fd in aliases or fdl in aliases or any(a in fdl or fdl in a.lower() for a in aliases if len(a) >= 2)
+        if hit:
+            total += n
+            matched = matched or fd
+    return total, matched
 
 
 async def daily_tracking(
@@ -102,7 +139,7 @@ async def daily_tracking(
     for r in sorted(records, key=lambda x: (x.updated_at or x.created_at)):
         rec_by_key[(r.fill_date.isoformat(), r.dog_name)] = r
 
-    photos = await asyncio.to_thread(_photo_counts)
+    photo_index = await asyncio.to_thread(_photo_index)
     imu_dog_map = imu_dog_map or {}
 
     # 先把 (日期, IMU) 的两份 C 值合到一起
@@ -132,6 +169,7 @@ async def daily_tracking(
         m = merged[key]
         dog = imu_dog_map.get(imu) or imu
         rec = rec_by_key.get((day, dog))
+        photo_n, photo_dog = _match_photos(photo_index, day, dog)
         # 人工版优先（人核对过的更可信），没有就用 AI 版
         primary = m["human"] or m["ai"]
         p_source = "human" if m["human"] else ("ai" if m["ai"] else None)
@@ -162,7 +200,9 @@ async def daily_tracking(
             "record_id": rec.id if rec else None,
             "q_score": rec.q_score if rec else None,
             "filler": rec.filler if rec else None,
-            "photo_count": photos.get((day, dog), 0),
+            "photo_count": photo_n,
+            # NAS 上实际的目录名，前端弹窗按它去筛图（可能跟 PM 的狗名不一样）
+            "photo_dog": photo_dog,
             "s_no_q": None,
             "s_with_q": None,
         }

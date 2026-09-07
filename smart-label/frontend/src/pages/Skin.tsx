@@ -343,8 +343,31 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           { title: "狗", width: 150, render: (_: unknown, r: TrackingRow) => `${r.dog_name}（${r.imu}）` },
           {
+            title: "有效佩戴",
+            width: 120,
+            sorter: (a: TrackingRow, b: TrackingRow) =>
+              ((a.stats?.valid_wear_hours as number) ?? 0) - ((b.stats?.valid_wear_hours as number) ?? 0),
+            // 佩戴不够的天抓挠次数天然偏低，不看这个列会把"没戴够"误读成"不痒了"
+            render: (_: unknown, r: TrackingRow) => {
+              const h = r.stats?.valid_wear_hours as number | undefined;
+              const flag = r.stats?.data_quality_flag as string | undefined;
+              if (h == null) return "—";
+              const good = flag === "good";
+              return (
+                <Tooltip title={good ? "佩戴 ≥12 小时，数据够用" : "佩戴不足 12 小时，这天的抓挠次数天然偏低，别当成「不痒了」；基线也不会采用这天"}>
+                  <Space size={4}>
+                    <span>{fmt(h, 1)} h</span>
+                    {!good && <Tag color="orange">{flag === "partial" ? "偏少" : "不足"}</Tag>}
+                  </Space>
+                </Tooltip>
+              );
+            },
+          },
+          {
             title: "抓挠 次数/时长",
             width: 130,
+            sorter: (a: TrackingRow, b: TrackingRow) =>
+              ((a.stats?.event_count as number) ?? 0) - ((b.stats?.event_count as number) ?? 0),
             render: (_: unknown, r: TrackingRow) => {
               const n = r.stats?.event_count as number | undefined;
               const m = r.stats?.total_duration_min as number | undefined;
@@ -447,18 +470,18 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         ]}
       />
       <Modal
-        title={`${photoFor?.date ?? ""} ${photoFor?.dog_name ?? ""} 的皮肤照片`}
+        title={`${photoFor?.date ?? ""} ${photoFor?.dog_name ?? ""} 的皮肤照片（${photoFor?.photo_count ?? 0} 张）`}
         open={photoFor != null}
         onCancel={() => setPhotoFor(null)}
         footer={null}
-        width="90vw"
+        width={820}
       >
         {photoFor && (
           <PhotoGallery
             album="skin"
-            hint={`只看 ${photoFor.date} / ${photoFor.dog_name}`}
+            hint="点图放大，可左右翻"
             filterDate={photoFor.date}
-            filterDog={photoFor.dog_name}
+            filterDog={photoFor.photo_dog ?? photoFor.dog_name}
           />
         )}
       </Modal>
