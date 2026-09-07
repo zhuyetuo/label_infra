@@ -1,3 +1,5 @@
+export type UserRole = "super_admin" | "admin" | "annotator" | "reviewer";
+
 export interface Project {
   id: number;
   name: string;
@@ -70,6 +72,7 @@ export interface Task {
   /** IMU CSV 数据行数，0 = 空文件，打开工作台会报"CSV 没有数据行" */
   imu_row_count?: number | null;
   assigned_to_name?: string | null;
+  assigned_to_role?: UserRole | null;
 }
 
 export interface LabelItem {
@@ -96,7 +99,7 @@ export interface AppUser {
   username: string;
   display_name: string;
   email: string | null;
-  role: "super_admin" | "admin" | "annotator" | "reviewer";
+  role: UserRole;
   is_outsourced: boolean;
   is_active: boolean;
   must_change_password: boolean;
