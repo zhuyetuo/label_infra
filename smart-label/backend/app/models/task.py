@@ -46,7 +46,7 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("projects.id"), nullable=False, index=True)
-    sample_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("samples.id"), nullable=False)
+    sample_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("samples.id"), nullable=False, index=True)
     task_type: Mapped[TaskType] = mapped_column(Enum(TaskType), nullable=False)
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus), nullable=False, default=TaskStatus.PENDING_ASSIGN
@@ -58,8 +58,8 @@ class Task(Base):
 
     round_no: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
 
-    assigned_to: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
-    reviewer_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    assigned_to: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    reviewer_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
 
     # 软锁：认领时写入，超时未续期由定时任务回收
     locked_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
