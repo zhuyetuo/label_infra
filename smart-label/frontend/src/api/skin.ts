@@ -107,6 +107,8 @@ export interface TrackingRow {
   n_baseline_days: number | null;
   /** NAS 上实际的狗目录名，弹窗按它筛图（跟 PM 狗名可能不一样） */
   photo_dog: string | null;
+  /** 这天这只狗底下的任务，点进去复看标注用 */
+  tasks_detail: { task_id: number; sample_code: string; status: string; scratch_segments: number }[];
   c_ai: CSide | null;
   c_human: CSide | null;
   c_source: "human" | "ai" | null;

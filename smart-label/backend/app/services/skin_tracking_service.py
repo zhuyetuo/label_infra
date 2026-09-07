@@ -23,18 +23,29 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections import defaultdict
 from datetime import date
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.label import LabelDefinition
+from app.models.sample import Sample
 from app.models.skin import SkinRecord
 from app.models.skin_daily import SkinDailyStat
+from app.models.task import Task
 
 _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")
+_IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
+
+
+def _imu_of(sample_code: str) -> str | None:
+    m = _IMU_RE.search(sample_code or "")
+    return f"IMU{m.group(1)}" if m else None
 
 
 class SkinTrackingError(Exception):
@@ -140,6 +151,54 @@ async def daily_tracking(
         rec_by_key[(r.fill_date.isoformat(), r.dog_name)] = r
 
     photo_index = await asyncio.to_thread(_photo_index)
+
+    # 这一天这只狗底下有哪几个任务：跟踪表里点「查看标注」要跳过去复看，
+    # 顺带带上每个任务里「抓挠」片段有几段，好挑哪一段去看
+    task_rows = (
+        await db.execute(
+            select(Task.id, Task.status, Sample.sample_code, Sample.session_date)
+            .join(Sample, Sample.id == Task.sample_id)
+            .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
+            .order_by(Sample.sample_code)
+        )
+    ).all()
+    scratch_label_ids = set(
+        (
+            await db.execute(
+                select(LabelDefinition.id).where(
+                    (LabelDefinition.display_name == "抓挠") | (LabelDefinition.code == "抓挠")
+                )
+            )
+        ).scalars().all()
+    )
+    seg_counts: dict[int, int] = {}
+    if task_rows and scratch_label_ids:
+        rows_c = await db.execute(
+            select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .where(
+                AnnotationRecord.task_id.in_([t[0] for t in task_rows]),
+                AnnotationRecord.round_no == Task.round_no,
+                AnnotationLabelItem.label_id.in_(scratch_label_ids),
+            )
+            .group_by(AnnotationRecord.task_id)
+        )
+        seg_counts = {tid: int(n) for tid, n in rows_c.all()}
+
+    tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for tid, status, code, sdate in task_rows:
+        imu = _imu_of(code)
+        if imu is None or sdate is None:
+            continue
+        tasks_by_key[(sdate.isoformat(), imu)].append(
+            {
+                "task_id": tid,
+                "sample_code": code,
+                "status": status.value if hasattr(status, "value") else str(status),
+                "scratch_segments": seg_counts.get(tid, 0),
+            }
+        )
     imu_dog_map = imu_dog_map or {}
 
     # 先把 (日期, IMU) 的两份 C 值合到一起
@@ -200,6 +259,7 @@ async def daily_tracking(
             "record_id": rec.id if rec else None,
             "q_score": rec.q_score if rec else None,
             "filler": rec.filler if rec else None,
+            "tasks_detail": tasks_by_key.get(key, []),
             "photo_count": photo_n,
             # NAS 上实际的目录名，前端弹窗按它去筛图（可能跟 PM 的狗名不一样）
             "photo_dog": photo_dog,

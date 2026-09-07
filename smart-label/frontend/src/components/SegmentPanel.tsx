@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
@@ -82,6 +82,8 @@ interface Props {
   onDelete: (id: number) => void;
   /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
+  /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
+  initialFilterLabels?: number[];
 }
 
 export default function SegmentPanel({
@@ -97,6 +99,7 @@ export default function SegmentPanel({
   onUpdate,
   onDelete,
   onCreate,
+  initialFilterLabels,
 }: Props) {
   const isLooping = (startMs: number, endMs: number) =>
     loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
@@ -115,7 +118,11 @@ export default function SegmentPanel({
         </Tooltip>
       )
     ) : null;
-  const [filterLabels, setFilterLabels] = useState<number[]>([]);
+  const [filterLabels, setFilterLabels] = useState<number[]>(initialFilterLabels ?? []);
+  // 换任务（比如从跟踪表连着看好几条）时把默认筛选重新套上
+  useEffect(() => {
+    if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
+  }, [initialFilterLabels]);
   // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注
   const [viewGaps, setViewGaps] = useState(false);
   const [filterSource, setFilterSource] = useState<SourceFilter>("all");

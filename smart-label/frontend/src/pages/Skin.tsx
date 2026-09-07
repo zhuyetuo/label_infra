@@ -7,6 +7,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import TrackingCharts from "@/components/TrackingCharts";
+import { useNavigate } from "react-router-dom";
+import { sampleDisplayName } from "@/utils/sampleName";
+import { TaskStatusTag } from "@/utils/taskStatus";
 import {
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
@@ -281,6 +284,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       return next;
     });
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
+  const [checkFor, setCheckFor] = useState<TrackingRow | null>(null);
+  const navigate = useNavigate();
   const { data, isFetching, refetch } = useQuery({
     queryKey: ["skin-tracking", f.from, f.to],
     queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
@@ -444,6 +449,20 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             render: (_: unknown, r: TrackingRow) => sTag(r.s_with_q),
           },
           {
+            title: "复看标注",
+            width: 100,
+            // 这天的抓挠是好几个小时段任务加起来的，点开挑一个进标注工作台，
+            // 片段列表会默认筛到「抓挠」，直接核对是不是真有这么多
+            render: (_: unknown, r: TrackingRow) =>
+              r.tasks_detail?.length ? (
+                <Button size="small" type="link" onClick={() => setCheckFor(r)}>
+                  查看标注
+                </Button>
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
+          },
+          {
             title: "照片",
             width: 80,
             render: (_: unknown, r: TrackingRow) =>
@@ -469,6 +488,49 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
         ]}
       />
+      <Modal
+        title={`${checkFor?.date ?? ""} ${checkFor?.dog_name ?? ""} —— 挑一段去复看抓挠`}
+        open={checkFor != null}
+        onCancel={() => setCheckFor(null)}
+        footer={null}
+        width={720}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
+          逐条跳转/循环看视频就能核对是不是真有这么多。
+        </Typography.Paragraph>
+        <Table<TrackingRow["tasks_detail"][number]>
+          size="small"
+          rowKey="task_id"
+          dataSource={checkFor?.tasks_detail ?? []}
+          pagination={false}
+          scroll={{ y: 360 }}
+          columns={[
+            {
+              title: "时间段",
+              render: (_: unknown, t) => sampleDisplayName(t.sample_code, null, null),
+            },
+            {
+              title: "抓挠片段",
+              width: 100,
+              sorter: (a, b) => a.scratch_segments - b.scratch_segments,
+              defaultSortOrder: "descend" as const,
+              render: (_: unknown, t) =>
+                t.scratch_segments ? <Tag color="red">{t.scratch_segments} 段</Tag> : <Typography.Text type="secondary">0</Typography.Text>,
+            },
+            { title: "状态", width: 110, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
+            {
+              title: "操作",
+              width: 100,
+              render: (_: unknown, t) => (
+                <Button size="small" type="link" onClick={() => navigate(`/tasks?task=${t.task_id}&seg=抓挠`)}>
+                  查看标注
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </Modal>
       <Modal
         title={`${photoFor?.date ?? ""} ${photoFor?.dog_name ?? ""} 的皮肤照片（${photoFor?.photo_count ?? 0} 张）`}
         open={photoFor != null}
