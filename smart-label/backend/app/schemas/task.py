@@ -36,6 +36,8 @@ class TaskOut(BaseModel):
     # 到一串 ID，按 imu 归目录也没法算，所以列表接口直接把这两个带出来
     sample_code: str | None = None
     video_duration_sec: int | None = None
+    # IMU CSV 数据行数，0 = 文件是空的，打开工作台会报"CSV 没有数据行"，这种任务管理员该删掉
+    imu_row_count: int | None = None
     assigned_to_name: str | None = None
 
 
@@ -106,6 +108,10 @@ class ReopenRequest(BaseModel):
     """退回重标时可以附一句原因，记进 audit_logs 方便追溯。"""
 
     comment: str | None = None
+
+
+class TaskIdsRequest(BaseModel):
+    task_ids: list[int]
 
 
 class ProjectScopeRequest(BaseModel):
