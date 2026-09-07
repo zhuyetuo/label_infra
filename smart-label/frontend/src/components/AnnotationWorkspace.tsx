@@ -20,6 +20,8 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getSampleMedia } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
+import CandidatePanel from "@/components/CandidatePanel";
+import { listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -102,6 +104,8 @@ export default function AnnotationWorkspace({
   const [chartScrollLocked, setChartScrollLocked] = useState(() => getSavedBool(CHART_SCROLL_LOCK_KEY, false));
 
   const [items, setItems] = useState<LabelItem[]>([]);
+  // 疑似抓挠候选：不在草稿里，单独一张表，人工逐条确认/排除
+  const [candidates, setCandidates] = useState<AiCandidate[]>([]);
   const [labelId, setLabelId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -151,6 +155,7 @@ export default function AnnotationWorkspace({
 
       const draft = await getDraft(taskId);
       setItems(draft.items);
+      listCandidates(taskId).then(setCandidates).catch(() => setCandidates([]));
       setLoading(false);
     })();
   }, [taskId, sampleId]);
@@ -258,7 +263,7 @@ export default function AnnotationWorkspace({
     if (sampleId == null) return;
     setPrelabeling(true);
     try {
-      const res = await aiPrelabel(sampleId, prelabelMode);
+      const res = await aiPrelabel(sampleId, prelabelMode, taskId ?? undefined);
       const byName = new Map<string, number>();
       labels.forEach((l) => {
         byName.set(l.display_name, l.id);
@@ -291,6 +296,7 @@ export default function AnnotationWorkspace({
       const parts = [`AI 预标注完成：填入 ${created.length} 段`];
       if (unmatched.size) parts.push(`类别「${[...unmatched].join("、")}」没有对应标签，已跳过`);
       if (res.skipped) parts.push(`${res.skipped} 段时间无效已忽略`);
+      if (taskId != null) listCandidates(taskId).then(setCandidates).catch(() => {});
       if (unmatched.size || res.skipped) message.warning(parts.join("；"), 6);
       else message.success(parts[0]);
     } finally {
@@ -660,6 +666,26 @@ export default function AnnotationWorkspace({
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
                   onCreate={readOnly ? undefined : appendItem}
+                />
+              ),
+            },
+            {
+              key: "cands",
+              label: `疑似抓挠（${candidates.filter((c) => c.status === "pending").length} 待确认 / ${candidates.length}）`,
+              children: (
+                <CandidatePanel
+                  candidates={candidates}
+                  readOnly={readOnly}
+                  onSeek={(ms) => bus.seek(ms / 1000)}
+                  onLoop={setLoop}
+                  loopRange={loopRange}
+                  onDecided={async () => {
+                    if (taskId == null) return;
+                    // 确认会往当前轮草稿里写一条人工片段，重新拉一次草稿和候选
+                    const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
+                    setItems(draft.items);
+                    setCandidates(cs);
+                  }}
                 />
               ),
             },

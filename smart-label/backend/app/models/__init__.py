@@ -1,5 +1,6 @@
 """导入全部模型，供 alembic autogenerate 和 Base.metadata.create_all 发现表结构。"""
 
+from app.models.ai_candidate import AiCandidate
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.audit_log import AuditLog
 from app.models.background_job import BackgroundJob
@@ -18,6 +19,7 @@ from app.models.tooth_photo import ToothPhotoResult
 from app.models.user import User
 
 __all__ = [
+    "AiCandidate",
     "User",
     "Project",
     "Dog",

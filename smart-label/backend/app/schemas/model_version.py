@@ -10,6 +10,12 @@ class DatasetSpecIn(BaseModel):
     extra_date: list[str] = []
     missing_strategy: str | None = None
     skip_syn: bool = False
+    # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。
+    # AI 服务会把它整理成 data/raw_custom/<date>/merged_tmp.json 再跑 train_custom.sh
+    export_json: str | None = None
+    source_hz: int | None = None
+    hz: int | None = None
+    clean: bool = False
 
 
 class TrainSubmitIn(BaseModel):
@@ -28,6 +34,8 @@ class ModelVersionOut(BaseModel):
     model_version: str | None
     model_path: str | None
     error: str | None
+    dataset_spec: str
+    metrics: str | None
     created_at: datetime
     updated_at: datetime
 

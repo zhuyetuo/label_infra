@@ -26,7 +26,7 @@ from app.schemas.sample import (
     ScanProgressOut,
     ScanStartResult,
 )
-from app.services.ai_prelabel_service import PrelabelError, infer_sample
+from app.services.ai_prelabel_service import PrelabelError, infer_sample, replace_candidates
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
@@ -128,6 +128,7 @@ async def get_sample_media(
 async def ai_prelabel(
     sample_id: int,
     mode: str | None = None,
+    task_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -159,6 +160,14 @@ async def ai_prelabel(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
     sample.ai_label_path = inf.ai_label_path
+    # 带了 task_id（工作台里点的）就把疑似抓挠候选一并存下来，人工在片段面板下面
+    # 那个「疑似抓挠」列表里逐条确认/排除
+    if task_id is not None:
+        task = (
+            await db.execute(apply_task_scope(select(Task).where(Task.id == task_id), user).limit(1))
+        ).scalar_one_or_none()
+        if task is not None and task.sample_id == sample.id:
+            await replace_candidates(db, task, inf.candidates)
     await db.commit()
 
     return ok(

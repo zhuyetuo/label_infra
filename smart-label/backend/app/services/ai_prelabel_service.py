@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource, RecordSourceType
 from app.models.audit_log import AuditLog
 
@@ -108,11 +109,72 @@ def flatten_segments(segments: dict, csv_start: datetime) -> tuple[list[Prelabel
 
 
 @dataclass
+class CandidateItem:
+    """疑似抓挠候选：不进草稿，单独存 ai_candidates 给人工确认/排除。"""
+
+    label_name: str
+    start_time_ms: int
+    end_time_ms: int
+    confidence: float | None
+    spec: float | None
+    reason: str
+
+
+@dataclass
 class SampleInference:
     items: list[PrelabelItem]
     skipped: int
     n_windows: int
     ai_label_path: str
+    candidates: list[CandidateItem] = field(default_factory=list)
+
+
+def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str = "抓挠") -> list[CandidateItem]:
+    out: list[CandidateItem] = []
+    for c in raw or []:
+        start, end = parse_ts(c.get("start_ts")), parse_ts(c.get("end_ts"))
+        if start is None or end is None:
+            continue
+        s_ms = int(round((start - csv_start).total_seconds() * 1000))
+        e_ms = int(round((end - csv_start).total_seconds() * 1000))
+        if e_ms <= s_ms or e_ms <= 0:
+            continue
+        out.append(
+            CandidateItem(
+                label_name=scratch_label,
+                start_time_ms=max(0, s_ms),
+                end_time_ms=e_ms,
+                confidence=float(c["conf_mean"]) if c.get("conf_mean") is not None else None,
+                spec=float(c["spec"]) if c.get("spec") is not None else None,
+                reason=str(c.get("reason") or "low_conf"),
+            )
+        )
+    out.sort(key=lambda c: c.start_time_ms)
+    return out
+
+
+async def replace_candidates(db: AsyncSession, task: Task, cands: list[CandidateItem]) -> int:
+    """整批换掉这个任务当前轮的候选；已经被人工决定过的（confirmed/rejected）留着不动。"""
+    old = (
+        await db.execute(
+            select(AiCandidate).where(
+                AiCandidate.task_id == task.id,
+                AiCandidate.round_no == task.round_no,
+                AiCandidate.status == CandidateStatus.pending,
+            )
+        )
+    ).scalars().all()
+    for o in old:
+        await db.delete(o)
+    for c in cands:
+        db.add(
+            AiCandidate(
+                task_id=task.id, round_no=task.round_no, label_name=c.label_name,
+                start_time_ms=c.start_time_ms, end_time_ms=c.end_time_ms,
+                confidence=c.confidence, spec=c.spec, reason=c.reason,
+            )
+        )
+    return len(cands)
 
 
 async def _csv_start_of(sample: Sample) -> datetime:
@@ -156,7 +218,9 @@ async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime
 
     await asyncio.to_thread(_write)
     items, skipped = flatten_segments(result.get("segments") or {}, csv_start)
-    return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0), ai_label_path=relpath)
+    cands = flatten_candidates(result.get("candidates") or [], csv_start)
+    return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0),
+                           ai_label_path=relpath, candidates=cands)
 
 
 async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInference:
@@ -524,6 +588,7 @@ async def _apply(
         )
         written += 1
 
+    await replace_candidates(db, p.task, inf.candidates)
     p.sample.ai_label_path = inf.ai_label_path
     # 建任务时选的是"从零标注"，批量跑完 AI 之后实际上就是 AI 预标注+人工修改了，
     # 类型跟着改过来，导出时才会落到 ai_revised 那个目录

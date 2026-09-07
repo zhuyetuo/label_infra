@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     auth,
+    candidates,
     clips,
     dashboard,
     dogs,
@@ -29,6 +30,7 @@ api_router.include_router(label_templates.router)
 api_router.include_router(samples.router)
 api_router.include_router(samples.scoped_router)
 api_router.include_router(tasks.router)
+api_router.include_router(candidates.router)
 api_router.include_router(reviews.router)
 api_router.include_router(media.router)
 api_router.include_router(imu.router)

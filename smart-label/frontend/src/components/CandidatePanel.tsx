@@ -1,0 +1,167 @@
+import { useMemo, useState } from "react";
+import { Button, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { RetweetOutlined } from "@ant-design/icons";
+import { decideCandidate, type AiCandidate } from "@/api/candidates";
+import { formatMs } from "@/components/SegmentPanel";
+
+/**
+ * 疑似抓挠候选面板：正式片段（稳定版）为了准会滤掉一部分真抓挠，这里是低门槛
+ * 再抽一遍的结果。人工点「跳转」或「循环」看两秒视频，确认就变成一条正式的人工
+ * 片段，排除就记一笔——两种决定都是重训模型最有价值的数据。
+ */
+
+const REASON_LABEL: Record<AiCandidate["reason"], string> = {
+  low_conf: "模型低置信",
+  spectral: "频谱像抓挠",
+};
+
+interface Props {
+  candidates: AiCandidate[];
+  readOnly?: boolean;
+  onSeek: (ms: number) => void;
+  onLoop?: (range: { startMs: number; endMs: number } | null) => void;
+  loopRange?: { startMs: number; endMs: number } | null;
+  /** 确认/排除之后刷新列表；确认时还要把新片段拉进草稿，所以一并重载草稿 */
+  onDecided: (c: AiCandidate, decision: AiCandidate["status"]) => void;
+}
+
+export default function CandidatePanel({ candidates, readOnly, onSeek, onLoop, loopRange, onDecided }: Props) {
+  const [filter, setFilter] = useState<"pending" | "all">("pending");
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const rows = useMemo(
+    () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending")),
+    [candidates, filter]
+  );
+  const pendingCount = candidates.filter((c) => c.status === "pending").length;
+
+  const decide = async (c: AiCandidate, decision: AiCandidate["status"]) => {
+    setBusy(c.id);
+    try {
+      await decideCandidate(c.id, decision);
+      message.success(decision === "confirmed" ? "已确认，已加入标注片段" : "已排除");
+      onDecided(c, decision);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const isLooping = (c: AiCandidate) =>
+    loopRange != null && loopRange.startMs === c.start_time_ms && loopRange.endMs === c.end_time_ms;
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Radio.Group
+          size="small"
+          optionType="button"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          options={[
+            { label: `待确认 ${pendingCount}`, value: "pending" },
+            { label: `全部 ${candidates.length}`, value: "all" },
+          ]}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          正式片段之外、模型可能漏掉的抓挠。看一眼视频，是就「确认」（变成正式片段），不是就「排除」。
+          两种都会成为下次训练的数据。
+        </Typography.Text>
+      </Space>
+      <Table
+        size="small"
+        rowKey="id"
+        dataSource={rows}
+        pagination={rows.length > 10 ? { pageSize: 10 } : false}
+        scroll={{ x: 720, y: 220 }}
+        locale={{
+          emptyText: candidates.length ? (
+            <Empty description="没有待确认的候选" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <Empty description="这条数据没有疑似片段（跑一次 AI 预标注才会生成）" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ),
+        }}
+        columns={[
+          {
+            title: "时间",
+            width: 190,
+            render: (_, c: AiCandidate) => `${formatMs(c.start_time_ms)} ~ ${formatMs(c.end_time_ms)}`,
+          },
+          {
+            title: "时长",
+            width: 80,
+            sorter: (a: AiCandidate, b: AiCandidate) =>
+              a.end_time_ms - a.start_time_ms - (b.end_time_ms - b.start_time_ms),
+            render: (_, c: AiCandidate) => `${((c.end_time_ms - c.start_time_ms) / 1000).toFixed(1)}s`,
+          },
+          {
+            title: "线索",
+            width: 130,
+            render: (_, c: AiCandidate) => (
+              <Tag color={c.reason === "spectral" ? "purple" : "orange"}>{REASON_LABEL[c.reason]}</Tag>
+            ),
+          },
+          {
+            title: "置信度",
+            width: 90,
+            sorter: (a: AiCandidate, b: AiCandidate) => (a.confidence ?? 0) - (b.confidence ?? 0),
+            render: (_, c: AiCandidate) => (c.confidence != null ? `${Math.round(c.confidence * 100)}%` : "—"),
+          },
+          {
+            title: "频谱",
+            width: 80,
+            sorter: (a: AiCandidate, b: AiCandidate) => (a.spec ?? 0) - (b.spec ?? 0),
+            render: (_, c: AiCandidate) => (
+              <Tooltip title="陀螺仪 4–8Hz 能量占比；抓挠是后腿高频往复，这个值越高越像">
+                <span>{c.spec != null ? c.spec.toFixed(2) : "—"}</span>
+              </Tooltip>
+            ),
+          },
+          {
+            title: "状态",
+            width: 90,
+            render: (_, c: AiCandidate) =>
+              c.status === "confirmed" ? <Tag color="green">已确认</Tag> :
+              c.status === "rejected" ? <Tag>已排除</Tag> : <Tag color="gold">待确认</Tag>,
+          },
+          {
+            title: "操作",
+            render: (_, c: AiCandidate) => (
+              <Space size={0}>
+                <Button size="small" type="link" onClick={() => onSeek(c.start_time_ms)}>
+                  跳转
+                </Button>
+                {onLoop &&
+                  (isLooping(c) ? (
+                    <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
+                      停止
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      type="link"
+                      icon={<RetweetOutlined />}
+                      onClick={() => onLoop({ startMs: c.start_time_ms, endMs: c.end_time_ms })}
+                    >
+                      循环
+                    </Button>
+                  ))}
+                {!readOnly && c.status === "pending" && (
+                  <>
+                    <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
+                      确认是抓挠
+                    </Button>
+                    <Popconfirm title="排除这一段？" onConfirm={() => decide(c, "rejected")}>
+                      <Button size="small" type="link" danger loading={busy === c.id}>
+                        排除
+                      </Button>
+                    </Popconfirm>
+                  </>
+                )}
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}

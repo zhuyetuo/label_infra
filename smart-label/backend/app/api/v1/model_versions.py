@@ -8,10 +8,12 @@
 存一条记录、转发轮询。
 """
 
+import datetime as _dt
 import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import ModelVersionOut, TrainSubmitIn
 from app.services import algo_client
+from app.services.training_export_service import TrainingExportError, export_dataset, list_datasets
 
 router = APIRouter(
     prefix="/model-versions", tags=["model-versions"],
@@ -34,6 +37,51 @@ router = APIRouter(
 callback_router = APIRouter(prefix="/model-versions", tags=["model-versions"])
 
 _logger = logging.getLogger("smart-label.model_versions")
+
+
+class DatasetExportIn(BaseModel):
+    name: str
+    date_from: _dt.date
+    date_to: _dt.date
+    project_id: int | None = None
+    # 只用「已通过」最稳；赶时间可以把「待审核」也算上，但那部分还没人复核
+    include_submitted: bool = False
+
+
+@router.get("/datasets")
+async def get_datasets():
+    """NAS 上已经导出过的训练数据集（data_train/<name>/meta.json）。"""
+    return ok(list_datasets())
+
+
+@router.post("/datasets")
+async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_db)):
+    """
+    把这段日期里审核通过的任务的当前片段导成 Label Studio 格式，落到 NAS 的
+    data_train/<name>/，然后就能选它提交训练。
+    """
+    try:
+        meta = await export_dataset(
+            db, body.name, body.date_from, body.date_to, body.project_id, body.include_submitted
+        )
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return ok(meta)
+
+
+@router.post("/{version_id}/activate")
+async def activate_model(version_id: int, db: AsyncSession = Depends(get_db)):
+    """让 AI 服务立刻用这个训练产出的模型跑推理（重建进程池，正在跑的推理会中断）。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    if not row.model_path:
+        raise HTTPException(status_code=400, detail="这条记录还没有模型文件（训练没完成或失败）")
+    try:
+        info = await algo_client.switch_model(row.model_path)
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return ok(info)
 
 
 @router.post("/train")

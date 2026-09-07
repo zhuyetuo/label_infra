@@ -86,6 +86,19 @@ async def start_train(dataset_spec: dict, model_type: str, tag: str | None = Non
     return resp.json()["job_id"]
 
 
+async def switch_model(model_path: str) -> dict:
+    """让 AI 服务运行时切到这个模型（重建进程池）。重启服务会回到它自己配置的 LABEL_MODEL。"""
+    url = f"{_base_url()}/api/v1/label/model/switch"
+    try:
+        async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
+            resp = await client.post(url, json={"model_path": model_path})
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"algo_service /model/switch 返回 {resp.status_code}: {resp.text[:500]}")
+    return resp.json()
+
+
 async def poll_train(algo_job_id: int) -> dict:
     """查询 algo_service 那边训练任务的当前状态。"""
     url = f"{_base_url()}/api/v1/label/train/{algo_job_id}"

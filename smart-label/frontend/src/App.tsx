@@ -10,6 +10,7 @@ import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
 import Tooth from "@/pages/Tooth";
 import Skin from "@/pages/Skin";
+import Training from "@/pages/Training";
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/label-templates" element={<Navigate to="/label-definitions" replace />} />
         <Route path="/tooth" element={<Tooth />} />
         <Route path="/skin" element={<Skin />} />
+        <Route path="/training" element={<Training />} />
         <Route path="/users" element={<Users />} />
         <Route path="/" element={<Navigate to="/tasks" replace />} />
       </Route>
