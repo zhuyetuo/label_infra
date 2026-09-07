@@ -255,7 +255,7 @@ function LinkTab(p: {
     try {
       const r = await skinLinkStats({ date_from: range[0].format("YYYY-MM-DD"), date_to: range[1].format("YYYY-MM-DD"), project_id: projectId });
       setRows(r.rows); setWarnings(r.warnings);
-      if (!r.rows.length) message.info("这段日期里没有样本/任务");
+      if (!r.rows.length) message.info(r.warnings[0] ?? "这段日期里没有样本/任务");
     } finally { setLoading(false); }
   };
   const apply = (row: LinkRow, source: "ai" | "human") => {
@@ -289,8 +289,24 @@ function LinkTab(p: {
         按 (日期, IMU) 聚合标注平台上的「抓挠」片段：<b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响），
         <b>人工版</b> = 已提交/已通过任务里当前的片段。基线用这段日期里的其它天算，范围拉长基线更准。
         「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
-        {warnings.length > 0 && <div style={{ color: "#faad14" }}>{warnings.slice(0, 5).join("；")}{warnings.length > 5 ? ` …共 ${warnings.length} 条` : ""}</div>}
       </Typography.Paragraph>
+      {warnings.length > 0 && (
+        // 拉不到数或者数字看着不对时，原因基本都在这里（AI 服务没起、样本缺时间戳……）
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 8 }}
+          message={`有 ${warnings.length} 条提示`}
+          description={
+            <div style={{ maxHeight: 120, overflow: "auto", fontSize: 12 }}>
+              {warnings.slice(0, 20).map((w, i) => (
+                <div key={i}>{w}</div>
+              ))}
+              {warnings.length > 20 && <div>…还有 {warnings.length - 20} 条</div>}
+            </div>
+          }
+        />
+      )}
       <Table size="small" rowKey={(r) => `${r.date}-${r.imu}`} dataSource={rows} pagination={false} scroll={{ x: "max-content" }}
         columns={[
           { title: "日期", dataIndex: "date" },
