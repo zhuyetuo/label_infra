@@ -94,8 +94,6 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
             raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
         if not target.is_active:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "该账号已停用，不能指派任务")
-        if target.role == UserRole.reviewer:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "审核员不承担标注任务，请选标注员或管理员")
 
     movable = (
         [TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS, TaskStatus.SUBMITTED, TaskStatus.REJECTED]

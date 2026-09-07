@@ -12,7 +12,7 @@ from app.schemas.envelope import ok
 from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
 from app.services.review_service import ReviewConflictError, claim_review, decide_review, release_review
-from app.services.task_scope import exclude_sensitive
+from app.services.task_scope import exclude_own_annotation, exclude_sensitive
 
 router = APIRouter(
     prefix="/reviews", tags=["reviews"], dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin, UserRole.super_admin))]
@@ -21,11 +21,12 @@ router = APIRouter(
 
 @router.get("/queue")
 async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """待审核队列：状态=SUBMITTED，且未被其他审核员占用。"""
+    """待审核队列：状态=SUBMITTED，且未被其他审核员占用。审核员自己标的不能自己审。"""
     query = select(Task).where(
         Task.status == TaskStatus.SUBMITTED,
         (Task.reviewer_id.is_(None)) | (Task.reviewer_id == user.id),
     ).order_by(Task.updated_at.asc())
+    query = exclude_own_annotation(query, user)
     # 敏感样本上的任务只出现在管理员的审核队列里
     query = exclude_sensitive(query, user)
     tasks = (await db.execute(query)).scalars().all()
