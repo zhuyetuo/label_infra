@@ -41,7 +41,16 @@ export default function Skin() {
   const [sRes, setSRes] = useState<SResult | null>(null);
   const [sCValue, setSCValue] = useState<number | null>(null);
   const [sCTierHint, setSCTierHint] = useState<string | null>(null);
-  const [tab, setTab] = useState("q");
+  // 两个版本：PM 版（问答/IMU/C 值/S 总分/周报/历史/照片）和 ML 版（模型对比，后续在这里加）
+  const ML_TABS = new Set(["ml"]);
+  const [version, setVersion] = useState<"pm" | "ml">("pm");
+  const [pmTab, setPmTab] = useState("q");
+  const [mlTab, setMlTab] = useState("ml");
+  const tab = version === "pm" ? pmTab : mlTab;
+  // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
+  const setTab = (key: string) => {
+    if (ML_TABS.has(key)) { setVersion("ml"); setMlTab(key); } else { setVersion("pm"); setPmTab(key); }
+  };
 
   // 问答改动 → 实时重算问答分（跟 Gradio 版 .change 一样）
   useEffect(() => {
@@ -73,14 +82,27 @@ export default function Skin() {
 
   return (
     <div>
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-        PM 版皮肤评估：问答分 → C 值（IMU 抓挠统计）→ S 总分（C×40% + 皮肤组×35% + 毛发组×25%），ML 版对比是同一套输入喂给合成数据训出来的模型 A/B。
-        分值规则全部在 imu_train/label_service 里（跟命令行 Gradio 版逐字一致），这里只做界面和记录存储。
-      </Typography.Paragraph>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Radio.Group
+          optionType="button"
+          buttonStyle="solid"
+          value={version}
+          onChange={(e) => setVersion(e.target.value)}
+          options={[
+            { label: "PM 版", value: "pm" },
+            { label: "ML 版", value: "ml" },
+          ]}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {version === "pm"
+            ? "PM 版皮肤评估：问答分 → C 值（IMU 抓挠统计）→ S 总分（C×40% + 皮肤组×35% + 毛发组×25%）。分值规则全部在 imu_train/label_service 里（跟命令行 Gradio 版逐字一致），这里只做界面和记录存储。"
+            : "ML 版：同一套问答输入喂给合成数据训出来的模型 A/B，跟 PM 版结果对比。"}
+        </Typography.Text>
+      </Space>
       <Tabs
         activeKey={tab}
         onChange={setTab}
-        items={[
+        items={(version === "pm" ? [
           { key: "q", label: "填写问答", children: (
             <QuestionnaireTab opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate} filler={filler} setFiller={setFiller}
               answers={answers} setAnswer={setAnswer} qScore={qScore} imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} onSaved={() => qc.invalidateQueries({ queryKey: ["skin-records"] })} goto={setTab} />
@@ -90,11 +112,12 @@ export default function Skin() {
           ) },
           { key: "c", label: "C值计算", children: <CTab cIn={cIn} setCIn={setCIn} cRes={cRes} goto={setTab} /> },
           { key: "s", label: "S总分", children: <STab sRes={sRes} sCValue={sCValue} setSCValue={(v) => { setSCValue(v); setSCTierHint(null); }} answers={answers} qScore={qScore} goto={setTab} /> },
-          { key: "ml", label: "ML版对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setTab("q"); }} /> },
           { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
           { key: "history", label: "历史记录", children: <HistoryTab /> },
           { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
-        ]}
+        ] : [
+          { key: "ml", label: "模型对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setTab("q"); }} /> },
+        ])}
       />
     </div>
   );
