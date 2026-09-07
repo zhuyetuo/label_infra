@@ -6,6 +6,7 @@ imu_train/label_service 的 /api/v1/skin/*（规则只有一份在那边），�
 
 import datetime as _dt
 import json
+import logging
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,6 +23,8 @@ from app.schemas.envelope import ok
 from app.services.skin_link_service import SkinLinkError, collect_link_stats
 
 router = APIRouter(prefix="/skin", tags=["skin"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+
+_logger = logging.getLogger("smart-label.skin")
 
 
 async def _algo(method: str, path: str, payload: dict | None = None, timeout: float | None = None):
@@ -60,6 +63,10 @@ async def link_stats(
         return ok(await collect_link_stats(db, date_from, date_to, project_id, ai_min_conf=ai_min_conf))
     except SkinLinkError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        # 出了预料之外的错也要让人在界面上看到原因，而不是"暂无数据"一片空白
+        _logger.exception("项目联动统计失败 %s~%s project=%s", date_from, date_to, project_id)
+        return ok({"rows": [], "warnings": [f"统计失败：{type(e).__name__}: {e}"]})
 
 
 # ── 透传：规则/统计/ML ─────────────────────────────────────────────────
