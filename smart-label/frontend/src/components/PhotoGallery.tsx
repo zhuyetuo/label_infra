@@ -78,11 +78,7 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
           imageRender: (originalNode, { current }) => (
             <>
               {originalNode}
-              {allPhotos[current] && (
-                <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 12px", borderRadius: 4, fontSize: 13, pointerEvents: "none", zIndex: 1 }}>
-                  {allPhotos[current].folder} / {allPhotos[current].dog} / {allPhotos[current].filename}
-                </div>
-              )}
+              {allPhotos[current] && <ImageCaption text={`${allPhotos[current].folder} / ${allPhotos[current].dog} / ${allPhotos[current].filename}`} />}
             </>
           ),
           toolbarRender: (originalNode, info) => (
@@ -114,6 +110,35 @@ export default function PhotoGallery({ album, hint }: { album: Album; hint?: str
           ),
         }))}
       />
+    </div>
+  );
+}
+
+
+// 贴在预览图正上方的路径标签：不能给 antd 的 img 套容器（会破坏它的尺寸约束），
+// 所以单独 fixed 定位，位置按实际渲染出来的图片边框算（缩放/旋转/换图都跟着走）
+function ImageCaption({ text }: { text: string }) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const img = document.querySelector<HTMLImageElement>(".ant-image-preview-img");
+      if (img) {
+        const r = img.getBoundingClientRect();
+        setPos((prev) => {
+          const next = { top: Math.max(8, r.top - 34), left: r.left + r.width / 2 };
+          return prev && Math.abs(prev.top - next.top) < 1 && Math.abs(prev.left - next.left) < 1 ? prev : next;
+        });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [text]);
+  if (!pos) return null;
+  return (
+    <div style={{ position: "fixed", top: pos.top, left: pos.left, transform: "translateX(-50%)", background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 12px", borderRadius: 4, fontSize: 13, pointerEvents: "none", zIndex: 1, whiteSpace: "nowrap" }}>
+      {text}
     </div>
   );
 }
