@@ -32,6 +32,10 @@ class TaskOut(BaseModel):
     label_counts: dict[int, dict[str, int]] = {}
     # 被驳回时审核员写的意见，方便标注员知道要改什么
     review_comment: str | None = None
+    # 样本编号和指派人名字：标注员/审核员拿不到 /samples 和 /users，列表里只能看
+    # 到一串 ID，按 imu 归目录也没法算，所以列表接口直接把这两个带出来
+    sample_code: str | None = None
+    assigned_to_name: str | None = None
 
 
 class LabelItemIn(BaseModel):
