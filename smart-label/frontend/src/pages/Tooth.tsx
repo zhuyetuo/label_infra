@@ -142,7 +142,7 @@ export default function Tooth() {
         type="error"
         showIcon
         message="口腔照片目录读不到"
-        description={`${(error as Error).message}。确认素材库 NAS 已挂到 ${data?.root ?? "/home/toky/算法任务素材库"} 并在 docker-compose 里挂进了容器。`}
+        description={`${(error as Error).message}。确认素材库 NAS 已挂到 ${data?.root ?? "/home/toky/alg_material"} 并在 docker-compose 里挂进了容器。`}
       />
     );
   }

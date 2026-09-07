@@ -1,11 +1,15 @@
 """
 牙齿识别：素材库 NAS 上的口腔照片目录浏览 + 调 imu_train/label_service 的 YOLO 检测。
 
-目录约定（material_root/oral_dir 下）：
-    2026-09-02-ok/            日期目录，后缀 -ok 表示这天的照片已整理好
-    ├── Bali/                 狗名目录
-    │   ├── 微信图片_xxx.jpg
-    └── 杜小满-马尔济斯/
+目录约定（material_root/oral_dir 下，实际 NAS 就是这个结构）：
+    /home/toky/alg_material/口腔验证/
+    ├── 2026-08-21-ok/        日期目录，后缀 -ok 表示这天的照片已整理好；"2026-09-09-" 是还没拍的空目录
+    │   ├── Bali/             狗名目录（早期 Bali/Bibi/Lulu/杜小满-马尔济斯，9 月起 巴利/bibi/lulu/小满，大小写和中英文不统一，原样显示）
+    │   │   ├── 20260824-200554.jpg
+    │   │   └── Thumbs.db     Windows 缩略图缓存，按扩展名过滤掉
+    │   └── 杜小满-马尔济斯/
+    └── 2026-08-30-ok/
+        └── 微信图片_xxx.jpg  偶尔有散图直接放在日期目录下，列到"（未归类）"
 照片只读不写；检测结果落 tooth_photo_results 表。图片给浏览器看走
 /tooth/photos/stream?path=&token=，token 是按路径签的短期 HMAC（跟 media token
 一个思路，只是绑定路径而不是 media_files.id——这批照片不是样本，不进 media_files）。
@@ -58,6 +62,12 @@ def list_photos() -> list[dict]:
             continue
         m = _DATE_RE.match(folder)
         dogs = []
+        # 日期目录下直接扔的散图（没放进狗目录的，比如 2026-08-30-ok/微信图片_xxx.jpg）
+        # 也列出来，归到"（未归类）"，不然页面上看不到这几张
+        stray = []
+        for fn in sorted(os.listdir(fpath)):
+            if os.path.isfile(os.path.join(fpath, fn)) and os.path.splitext(fn)[1].lower() in IMAGE_EXTS:
+                stray.append({"rel_path": f"{folder}/{fn}", "filename": fn, "size_bytes": os.path.getsize(os.path.join(fpath, fn))})
         for dog in sorted(os.listdir(fpath)):
             dpath = os.path.join(fpath, dog)
             if not os.path.isdir(dpath):
@@ -70,6 +80,8 @@ def list_photos() -> list[dict]:
                 photos.append({"rel_path": f"{folder}/{dog}/{fn}", "filename": fn, "size_bytes": os.path.getsize(p)})
             if photos:
                 dogs.append({"name": dog, "photos": photos})
+        if stray:
+            dogs.append({"name": "（未归类）", "photos": stray})
         if dogs:
             out.append({"folder": folder, "date": m.group(1) if m else None, "ok": folder.endswith("-ok"), "dogs": dogs})
     return out
