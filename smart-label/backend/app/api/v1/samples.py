@@ -153,6 +153,9 @@ async def ai_prelabel(
         if visible is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该样本")
 
+    # 同步推理要等几十秒，等的时候先把数据库连接还回池子里（下面用到 db 时会自己
+    # 重新拿），否则几个人同时点「AI预标注」就能把连接池占满
+    await db.close()
     # 推理 + 时间换算 + 原始 JSON 落盘都在 ai_prelabel_service 里，跟项目批量预标注共用
     try:
         inf = await infer_sample(sample, mode=mode)

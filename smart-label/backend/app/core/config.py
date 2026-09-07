@@ -6,6 +6,12 @@ class Settings(BaseSettings):
 
     # --- 数据库 ---
     mysql_dsn: str = "mysql+asyncmy://smart_label:smart_label@127.0.0.1:3306/smart_label"
+    # 连接池：SQLAlchemy 默认 5+10 太小——批量预标注、批量导出这些后台任务本身要占
+    # 连接，用的人多几个就会把池子耗光，然后所有请求（包括登录）一起 503。
+    # MySQL 默认 max_connections=151，这里 20+30 留足余量
+    db_pool_size: int = 20
+    db_max_overflow: int = 30
+    db_pool_timeout_sec: int = 10
 
     # --- NAS ---
     # 所有原始/标注/切片文件的根目录，数据库里只存相对这个根目录的相对路径

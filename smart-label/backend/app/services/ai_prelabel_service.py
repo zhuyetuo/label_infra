@@ -476,7 +476,11 @@ async def _run_project(
         if not prepared:
             continue
 
-        # 2) 一整批发给 AI 服务并行跑
+        # 2) 一整批发给 AI 服务并行跑。
+        # 等 AI 的这几十秒到几分钟里不能占着数据库连接——一个批量任务占一条、
+        # 几个项目同时跑就能把连接池耗光，然后连登录都 503（踩过）。close() 之后
+        # 这个 session 下次用到时会自己重新拿连接，不影响后面的写库。
+        await db.close()
         try:
             t0 = time.time()
             results = await algo_client.infer_batch(
