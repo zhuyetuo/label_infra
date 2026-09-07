@@ -93,3 +93,31 @@ export const deleteWeekly = (id: number) => request.delete<never, null>(`/skin/w
 export const weeklyAutofill = (b: { imu: string; dog_name?: string | null; stats_rows: StatsRow[]; date_labels: string[] }) =>
   request.post<never, { filled: number; skipped: string[] }>("/skin/weekly/autofill", b, { timeout: 300_000 });
 export const weeklyRecomputeAll = (imu?: string) => request.post<never, { count: number }>("/skin/weekly/recompute-all", undefined, { params: imu ? { imu } : {} });
+
+/** 每日跟踪：一行 = (日期, 狗)，C 值 → 是否触发问答 → S 总分（不填问答 / 填了问答两份） */
+export interface CSide { c_value: number | null; c_tier: string | null }
+export interface STotalOut { total: number | null; s_tier: string | null; c_tier: string | null }
+export interface TrackingRow {
+  date: string;
+  imu: string;
+  dog_name: string;
+  stats: Record<string, number | string | boolean | null>;
+  c_ai: CSide | null;
+  c_human: CSide | null;
+  c_source: "human" | "ai" | null;
+  c_value: number | null;
+  c_tier: string | null;
+  delta_c: number | null;
+  question_triggered: boolean;
+  has_answers: boolean;
+  record_id: number | null;
+  q_score: number | null;
+  filler: string | null;
+  photo_count: number;
+  s_no_q: STotalOut | null;
+  s_with_q: STotalOut | null;
+}
+export interface TrackingResult { rows: TrackingRow[]; warnings: string[]; trigger_tiers: string[] }
+
+export const skinDailyTracking = (p: { date_from: string; date_to: string }) =>
+  request.get<never, TrackingResult>("/skin/daily-tracking", { params: p, timeout: 300_000 });

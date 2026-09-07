@@ -7,8 +7,17 @@ import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album
 // 同一只狗同一天的照片可以左右翻）。皮肤评估页的「皮肤照片」用；牙齿识别页有自己带
 // 检测结果的版本（Tooth.tsx）。
 
-export default function PhotoGallery({ album, hint }: { album: Album; hint?: string }) {
-  const { data, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
+export default function PhotoGallery({ album, hint, filterDate, filterDog }: { album: Album; hint?: string; filterDate?: string; filterDog?: string }) {
+  const { data: raw, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
+  // 每日跟踪表里点「N 张」时只看那一天那只狗的；不传就是全部
+  const data = useMemo(() => {
+    if (!raw || (!filterDate && !filterDog)) return raw;
+    const folders = raw.folders
+      .filter((f) => !filterDate || f.folder.slice(0, 10) === filterDate)
+      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => !filterDog || d.name === filterDog) }))
+      .filter((f) => f.dogs.length > 0);
+    return { ...raw, folders };
+  }, [raw, filterDate, filterDog]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
 

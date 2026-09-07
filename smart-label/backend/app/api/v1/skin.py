@@ -21,6 +21,7 @@ from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services.skin_link_service import SkinLinkError, collect_link_stats, read_stored_link_stats
+from app.services.skin_tracking_service import SkinTrackingError, daily_tracking
 
 router = APIRouter(prefix="/skin", tags=["skin"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
@@ -79,6 +80,26 @@ async def link_stats(
         # 出了预料之外的错也要让人在界面上看到原因，而不是"暂无数据"一片空白
         _logger.exception("项目联动统计失败 %s~%s project=%s", date_from, date_to, project_id)
         return ok({"rows": [], "warnings": [f"统计失败：{type(e).__name__}: {e}"]})
+
+
+@router.get("/daily-tracking")
+async def get_daily_tracking(date_from: _dt.date, date_to: _dt.date, db: AsyncSession = Depends(get_db)):
+    """
+    每日跟踪表：一行 = (日期, 狗)。C 值取「项目联动」存下来的（人工版优先，没有用 AI 版），
+    据此判断要不要做问答；S 总分算两份——问答留空的（下限）和有问答记录时的真实值。
+    还带上当天这只狗有几张皮肤照片。
+    """
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
+    try:
+        opts = await _algo("GET", "options")
+        imu_map = (opts or {}).get("imu_dog_default_map") or {}
+    except HTTPException:
+        imu_map = {}
+    try:
+        return ok(await daily_tracking(db, date_from, date_to, imu_map))
+    except SkinTrackingError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
 
 # ── 透传：规则/统计/ML ─────────────────────────────────────────────────

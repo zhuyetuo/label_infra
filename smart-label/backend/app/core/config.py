@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # 皮肤瘙痒问诊照片，目录结构跟口腔一样（{日期-ok}/{狗}/*.jpg）
     skin_photo_dir: str = "颈圈算法验证/皮肤瘙痒/视频问诊"
 
+    # --- 皮肤评估 ---
+    # C 值到了哪些档位就该去做问答（PM 规则里没写死，按「C1/C2 才需要问」实现）
+    skin_question_trigger_tiers: list[str] = ["C1", "C2"]
+
     # --- JWT ---
     jwt_secret: str = "CHANGE_ME_IN_PRODUCTION"
     jwt_algorithm: str = "HS256"
