@@ -49,6 +49,7 @@ import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
@@ -578,7 +579,8 @@ export default function Projects() {
         点左侧箭头可以展开看项目下的任务；「指派」可以把整个项目的任务一次性分给某个人。
       </Typography.Paragraph>
 
-      <Table
+      <ResizableTable
+        storageKey="projects"
         rowKey="id"
         loading={isLoading}
         dataSource={data}
@@ -763,7 +765,8 @@ export default function Projects() {
                   ))}
                 </Space>
               )}
-              <Table
+              <ResizableTable
+                storageKey="project-tasks"
                 size="small"
                 rowKey="id"
                 dataSource={rows}
@@ -944,11 +947,15 @@ export default function Projects() {
           },
         }}
         columns={[
-          { title: "ID", dataIndex: "id", width: 60 },
+          { title: "ID", dataIndex: "id", width: 60, sorter: (a: Project, b: Project) => a.id - b.id },
           {
             title: "项目名",
+            key: "name",
             width: 160,
             ellipsis: true,
+            // 项目名就是日期，按名字排 = 按日期排
+            sorter: (a: Project, b: Project) => a.name.localeCompare(b.name),
+            sortDirections: ["descend", "ascend", "descend"],
             render: (_, p: Project) => (
               <Space>
                 <strong>{p.name}</strong>
