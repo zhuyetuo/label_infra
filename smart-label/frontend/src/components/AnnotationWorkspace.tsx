@@ -36,6 +36,8 @@ import type { LabelDefinition, LabelItem, Task } from "@/types";
 
 interface Props {
   task: Task | null;
+  /** 打开时片段列表默认只筛这个标签（皮肤跟踪表跳过来复看「抓挠」用） */
+  focusLabelName?: string | null;
   labels: LabelDefinition[];
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
@@ -67,6 +69,7 @@ const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 // 时间点不用手填毫秒，所见即所得。
 export default function AnnotationWorkspace({
   task,
+  focusLabelName,
   labels,
   readOnly,
   onClose,
@@ -170,6 +173,14 @@ export default function AnnotationWorkspace({
   }, [taskId, readOnly]);
 
   const labelById = useMemo(() => new Map(labels.map((l) => [l.id, l])), [labels]);
+  // 名字 → 标签 id（项目之间标签 id 不同，只能按名字找）
+  const focusIds = useMemo(
+    () =>
+      focusLabelName
+        ? labels.filter((l) => l.display_name === focusLabelName || l.code === focusLabelName).map((l) => l.id)
+        : [],
+    [focusLabelName, labels]
+  );
   const colorOf = (id: number) =>
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
   const nameOf = (id: number) => labelById.get(id)?.display_name ?? `#${id}`;
@@ -666,6 +677,7 @@ export default function AnnotationWorkspace({
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
                   onCreate={readOnly ? undefined : appendItem}
+                  initialFilterLabels={focusIds}
                 />
               ),
             },

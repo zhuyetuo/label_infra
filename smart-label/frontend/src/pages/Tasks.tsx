@@ -13,6 +13,7 @@ import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { useUrlTask } from "@/utils/urlTask";
+import { useSearchParams } from "react-router-dom";
 import { TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
@@ -40,6 +41,9 @@ export default function Tasks() {
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   // 打开工作台时把该任务所属项目的标签带进去
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
+  // 皮肤评估的每日跟踪表跳过来时带 ?seg=抓挠，片段列表默认就筛好
+  const [searchParams] = useSearchParams();
+  const focusLabelName = searchParams.get("seg");
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -565,6 +569,7 @@ export default function Tasks() {
 
       <AnnotationWorkspace
         task={workspaceTask}
+        focusLabelName={focusLabelName}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         onClose={() => setWorkspaceTask(null)}
