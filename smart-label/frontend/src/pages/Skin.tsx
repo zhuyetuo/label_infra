@@ -60,6 +60,9 @@ export default function Skin() {
   // PM 版里再分两块：auto = 每天每只狗自动跑出来的长期跟踪；manual = 自己编数据验算规则
   const [pmMode, setPmMode] = useState<"auto" | "manual">("auto");
   const [pmTab, setPmTab] = useState("tracking");
+  // 跟踪表点「去填问答」时在弹窗里填：看完不填直接关掉也能回到那张表，
+  // 不像切 tab 那样把跟踪表的滚动位置和筛选弄丢
+  const [qModal, setQModal] = useState(false);
   const [mlTab, setMlTab] = useState("ml");
   const tab = version === "pm" ? pmTab : mlTab;
   // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
@@ -138,7 +141,7 @@ export default function Skin() {
           { key: "ml", label: "模型对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setVersion("pm"); setPmTab("q"); }} /> },
         ] : pmMode === "auto" ? [
           { key: "tracking", label: "每日跟踪表", children: (
-            <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setPmTab("q"); }} />
+            <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setQModal(true); }} />
           ) },
           { key: "charts", label: "趋势图表", children: <ChartsTab /> },
           { key: "link", label: "项目联动（AI vs 人工）", children: (
@@ -163,6 +166,29 @@ export default function Skin() {
           { key: "s", label: "S总分", children: <STab sRes={sRes} sCValue={sCValue} setSCValue={(v) => { setSCValue(v); setSCTierHint(null); }} answers={answers} qScore={qScore} goto={setTab} /> },
         ])}
       />
+
+      <Modal
+        title={`填写问答 - ${dogName ?? ""} ${fillDate}`}
+        open={qModal}
+        onCancel={() => setQModal(false)}
+        footer={null}
+        width={900}
+        styles={{ body: { maxHeight: "72vh", overflow: "auto" } }}
+        destroyOnClose
+      >
+        <QuestionnaireTab
+          opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate}
+          filler={filler} setFiller={setFiller} answers={answers} setAnswer={setAnswer} qScore={qScore}
+          imu={imu} cRes={cRes} sRes={sRes} cIn={cIn} cSource={cSource} cCompare={cCompare}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ["skin-records"] });
+            qc.invalidateQueries({ queryKey: ["skin-tracking"] });
+            setQModal(false);
+          }}
+          // 弹窗里的跳转按钮先关弹窗，不然新页面被挡在后面
+          goto={(k) => { setQModal(false); setTab(k); }}
+        />
+      </Modal>
     </div>
   );
 }
