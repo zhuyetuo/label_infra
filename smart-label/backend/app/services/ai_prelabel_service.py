@@ -159,11 +159,11 @@ async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime
     return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0), ai_label_path=relpath)
 
 
-async def infer_sample(sample: Sample) -> SampleInference:
+async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInference:
     """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。"""
     csv_start = await _csv_start_of(sample)
     try:
-        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id)
+        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id, mode=mode)
     except algo_client.AlgoServiceError as e:
         raise PrelabelError(str(e)) from e
     return await _store_and_normalize(sample, result, csv_start)
@@ -234,37 +234,39 @@ def is_running(project_id: int) -> bool:
 
 
 async def start_project_prelabel(
-    project_id: int, task_ids: list[int] | None = None, overwrite_ai: bool = False
+    project_id: int, task_ids: list[int] | None = None, overwrite_ai: bool = False, mode: str | None = None
 ) -> bool:
     """
     后台开始给项目里的任务做 AI 预标注。task_ids 为空 = 项目下所有符合条件的任务。
     已经在跑则把这批请求排到后面（返回 False 表示"已在跑，已排队"）。
     """
     if project_id in _running:
-        q = _queued.setdefault(project_id, {"task_ids": set(), "all": False, "overwrite_ai": False})
+        q = _queued.setdefault(project_id, {"task_ids": set(), "all": False, "overwrite_ai": False, "mode": None})
         if task_ids is None:
             q["all"] = True
         else:
             q["task_ids"].update(task_ids)
         q["overwrite_ai"] = q["overwrite_ai"] or overwrite_ai
+        q["mode"] = mode or q["mode"]
         return False
     _running.add(project_id)
-    asyncio.create_task(_run(project_id, task_ids, overwrite_ai))
+    asyncio.create_task(_run(project_id, task_ids, overwrite_ai, mode))
     return True
 
 
-async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool) -> None:
+async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, mode: str | None = None) -> None:
     progress = PrelabelProgress(status="running", project_id=project_id, started_at=time.time())
     _progress[project_id] = progress
     try:
         while True:
             async with SessionLocal() as db:
-                await _run_project(db, project_id, task_ids, overwrite_ai, progress)
+                await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode)
             nxt = _queued.pop(project_id, None)
             if not nxt:
                 break
             task_ids = None if nxt["all"] else sorted(nxt["task_ids"])
             overwrite_ai = nxt["overwrite_ai"]
+            mode = nxt.get("mode")
         progress.status = "done"
     except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩
         progress.status = "error"
@@ -345,7 +347,12 @@ class _Prepared:
 
 
 async def _run_project(
-    db: AsyncSession, project_id: int, task_ids: list[int] | None, overwrite_ai: bool, progress: PrelabelProgress
+    db: AsyncSession,
+    project_id: int,
+    task_ids: list[int] | None,
+    overwrite_ai: bool,
+    progress: PrelabelProgress,
+    mode: str | None = None,
 ) -> None:
     # 只处理还在标注员手里之前的任务：待认领 / 标注中。已提交、已通过、被驳回的
     # 都是有人工介入过的成品或半成品，批量覆盖会把人家的活儿冲掉。
@@ -409,7 +416,7 @@ async def _run_project(
         try:
             t0 = time.time()
             results = await algo_client.infer_batch(
-                [{"path": p.sample.imu_csv_path, "sample_id": p.sample.id} for p in prepared]
+                [{"path": p.sample.imu_csv_path, "sample_id": p.sample.id} for p in prepared], mode=mode
             )
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1

@@ -126,7 +126,10 @@ async def get_sample_media(
 
 @scoped_router.post("/{sample_id}/ai-prelabel")
 async def ai_prelabel(
-    sample_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    sample_id: int,
+    mode: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     标注员点"AI预标注"时调这个接口：同步调用 algo_service /infer 拿到预测的
@@ -151,7 +154,7 @@ async def ai_prelabel(
 
     # 推理 + 时间换算 + 原始 JSON 落盘都在 ai_prelabel_service 里，跟项目批量预标注共用
     try:
-        inf = await infer_sample(sample)
+        inf = await infer_sample(sample, mode=mode)
     except PrelabelError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 

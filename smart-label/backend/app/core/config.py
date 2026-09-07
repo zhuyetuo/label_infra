@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # 并行（22 个 worker 左右），一块 40 个 ≈ 两轮，单文件十几秒，正常一分钟内回；
     # 超时给足余量，机器被别的东西占满时也别误判失败
     algo_infer_batch_size: int = 40
+    # 推理模式：stable=稳定版（AI 服务做状态平滑+事件合并过滤，片段少而可信），
+    # raw=调试版（模型逐窗口原始输出，活动/睡觉会来回闪）。前端每次可以单独选
+    algo_infer_mode: str = "stable"
     algo_infer_batch_timeout_sec: int = 1800
 
     # --- CORS ---

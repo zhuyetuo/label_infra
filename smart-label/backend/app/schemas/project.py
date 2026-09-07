@@ -45,3 +45,5 @@ class ProjectPrelabelRequest(BaseModel):
     task_ids: list[int] | None = None
     # 连已经有 AI 片段（但没人改过/确认过）的任务也重新跑，比如换了模型想刷新
     overwrite_ai: bool = False
+    # stable=稳定版 / raw=调试版，留空用 settings.algo_infer_mode
+    mode: str | None = None

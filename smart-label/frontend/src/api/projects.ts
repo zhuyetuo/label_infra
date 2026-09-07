@@ -32,9 +32,12 @@ export interface PrelabelProgress {
 }
 
 /** 项目下待认领/标注中且没人动过的任务批量跑 AI 预标注（后台），用 status 轮询进度 */
-export const startProjectPrelabel = (id: number, overwriteAi = false) =>
+export type InferMode = "stable" | "raw";
+
+export const startProjectPrelabel = (id: number, overwriteAi = false, mode: InferMode = "stable") =>
   request.post<never, { started: boolean; queued: boolean }>(`/projects/${id}/ai-prelabel`, {
     overwrite_ai: overwriteAi,
+    mode,
   });
 
 export const getProjectPrelabelStatus = (id: number) =>
