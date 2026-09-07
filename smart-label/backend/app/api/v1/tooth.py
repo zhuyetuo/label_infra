@@ -68,6 +68,7 @@ class DetectIn(BaseModel):
     paths: list[str] = Field(..., min_length=1, max_length=500, description="相对 口腔验证/ 的路径")
     conf: float | None = Field(None, ge=0.0, le=0.95, description="置信度阈值，0 = 全部检出都返回")
     with_image: bool = Field(False, description="只有单张查看时才要带框图，批量跑不要")
+    top_k: int = Field(1, ge=0, le=50, description="每张图最多保留几个框，默认 1（一张嘴一个结论）；0 = 不限")
 
 
 @router.post("/detect")
@@ -78,7 +79,7 @@ async def detect(body: DetectIn, db: AsyncSession = Depends(get_db), user: User 
     for rel_path in body.paths:
         try:
             svc.resolve_photo(rel_path)
-            data = await svc.detect_remote(rel_path, body.conf, body.with_image)
+            data = await svc.detect_remote(rel_path, body.conf, body.with_image, body.top_k)
         except svc.ToothError as e:
             results.append({"rel_path": rel_path, "ok": False, "error": str(e)})
             continue

@@ -60,7 +60,7 @@ export const toothPhotoUrl = (path: string, token: string) =>
   `/api/v1/tooth/photos/stream?path=${encodeURIComponent(path)}&token=${token}`;
 
 /** 逐张调 AI 服务检测并落库；with_image 只在单张查看时开 */
-export const detectToothPhotos = (paths: string[], opts?: { conf?: number; with_image?: boolean }) =>
+export const detectToothPhotos = (paths: string[], opts?: { conf?: number; with_image?: boolean; top_k?: number }) =>
   request.post<never, ToothDetectItem[]>("/tooth/detect", { paths, ...opts }, { timeout: 600_000 });
 
 export const getToothStatus = () =>

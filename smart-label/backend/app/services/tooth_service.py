@@ -121,11 +121,11 @@ def verify_photo_token(rel_path: str, token: str, album: str = "oral") -> bool:
 
 # ── 调 label_service 检测 ─────────────────────────────────────────────
 
-async def detect_remote(rel_path: str, conf: float | None, with_image: bool) -> dict:
+async def detect_remote(rel_path: str, conf: float | None, with_image: bool, top_k: int = 1) -> dict:
     """label_service 的 MATERIAL_ROOT 跟这边 material_root 是同一目录，它要的 path 是
     相对 MATERIAL_ROOT 的，所以前面拼上 oral_dir。"""
     url = f"{settings.algo_service_url.rstrip('/')}/api/v1/tooth/detect"
-    payload = {"path": f"{settings.oral_dir}/{rel_path}", "conf": conf, "with_image": with_image}
+    payload = {"path": f"{settings.oral_dir}/{rel_path}", "conf": conf, "with_image": with_image, "top_k": top_k}
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)
