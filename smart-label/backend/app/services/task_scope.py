@@ -34,11 +34,22 @@ def exclude_sensitive(stmt, user: User):
     return stmt.where(Task.sample_id.not_in(_sensitive_sample_ids()))
 
 
+def exclude_own_annotation(stmt, user: User):
+    """
+    审核员也能标注了，那就得挡住"自己标的自己审"。管理员不受限（项目默认
+    指派给超级管理员，他自己标完自己过是常规操作）。Select/Update 都能套。
+    """
+    if is_privileged(user):
+        return stmt
+    return stmt.where(or_(Task.assigned_to.is_(None), Task.assigned_to != user.id))
+
+
 def apply_task_scope(query: Select, user: User) -> Select:
     """
     - admin/super_admin：不过滤，看全部任务
     - annotator：只能看分配给自己的任务（assigned_to = 自己）
-    - reviewer：只能看待审核/自己在审的任务（reviewer_id = 自己，或状态为SUBMITTED且未指派审核人）
+    - reviewer：既能标也能审——分配给自己的标注任务（assigned_to = 自己）+
+      待审核/自己在审的任务（reviewer_id = 自己，或状态为SUBMITTED且未指派审核人）
     - 非管理员一律看不到敏感样本上的任务
     """
     if is_privileged(user):
@@ -52,6 +63,7 @@ def apply_task_scope(query: Select, user: User) -> Select:
         # 审核员可见，跟上面写的规则对不上，也会顺带放开这些任务对应的样本媒体。
         return query.where(
             or_(
+                Task.assigned_to == user.id,
                 Task.reviewer_id == user.id,
                 (Task.reviewer_id.is_(None)) & (Task.status == TaskStatus.SUBMITTED),
             )

@@ -1214,7 +1214,7 @@ export default function Projects() {
                   value={createAssignee ?? undefined}
                   onChange={(v) => setCreateAssignee(v ?? null)}
                   options={users
-                    ?.filter((u) => u.is_active && u.role !== "reviewer")
+                    ?.filter((u) => u.is_active)
                     .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
                   showSearch
                   optionFilterProp="label"
@@ -1288,7 +1288,7 @@ export default function Projects() {
             value={assignUserId ?? undefined}
             onChange={(v) => setAssignUserId(v ?? null)}
             options={users
-              ?.filter((u) => u.is_active && u.role !== "reviewer")
+              ?.filter((u) => u.is_active)
               .map((u) => ({
                 value: u.id,
                 label: `${u.display_name || u.username}（${ROLE_META[u.role]?.label ?? u.role}）`,
@@ -1371,7 +1371,7 @@ export default function Projects() {
             value={bulkAssignee ?? undefined}
             onChange={(v) => setBulkAssignee(v ?? null)}
             options={users
-              ?.filter((u) => u.is_active && u.role !== "reviewer")
+              ?.filter((u) => u.is_active)
               .map((u) => ({ value: u.id, label: u.display_name || u.username }))}
           />
         </Space>
