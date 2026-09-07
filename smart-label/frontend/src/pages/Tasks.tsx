@@ -7,6 +7,7 @@ import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
 import { listUsers } from "@/api/users";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
@@ -271,7 +272,8 @@ export default function Tasks() {
           ))}
         </Space>
       )}
-      <Table
+      <ResizableTable
+        storageKey="tasks-tasks"
         size="small"
         rowKey="id"
         dataSource={rows}
@@ -457,10 +459,12 @@ export default function Tasks() {
         </Typography.Text>
       </Space>
 
-      <Table
+      <ResizableTable
+        storageKey="tasks-projects"
         rowKey="id"
         loading={loadingProjects || isLoading}
         dataSource={visibleProjects}
+        sortDirections={["descend", "ascend", "descend"]}
         pagination={visibleProjects.length > 20 ? { pageSize: 20 } : false}
         locale={{
           emptyText: (
@@ -477,9 +481,12 @@ export default function Tasks() {
           rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
         }}
         columns={[
-          { title: "项目ID", dataIndex: "id", width: 80 },
+          { title: "项目ID", dataIndex: "id", width: 80, sorter: (a: Project, b: Project) => a.id - b.id },
           {
             title: "项目",
+            key: "name",
+            width: 200,
+            sorter: (a: Project, b: Project) => a.name.localeCompare(b.name),
             render: (_, p: Project) => (
               <Space>
                 <strong>{p.name}</strong>
@@ -487,7 +494,7 @@ export default function Tasks() {
               </Space>
             ),
           },
-          { title: "说明", dataIndex: "description", render: (d: string | null) => d || "-" },
+          { title: "说明", dataIndex: "description", width: 200, ellipsis: true, render: (d: string | null) => d || "-" },
           {
             title: "任务",
             width: 300,
