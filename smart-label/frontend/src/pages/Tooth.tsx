@@ -103,6 +103,29 @@ export default function Tooth() {
     }
   };
 
+  // 弹窗里上一张/下一张：按当前筛选后的顺序（日期 > 狗 > 文件名），左右方向键也能翻
+  const visiblePhotos = useMemo(
+    () => (data?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.filter(matches))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, filter]
+  );
+  const viewingIdx = viewing ? visiblePhotos.findIndex((p) => p.rel_path === viewing.photo.rel_path) : -1;
+  const step = (delta: number) => {
+    if (viewingIdx < 0) return;
+    const next = visiblePhotos[viewingIdx + delta];
+    if (next) openPhoto(next);
+  };
+  useEffect(() => {
+    if (!viewing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") step(-1);
+      if (e.key === "ArrowRight") step(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewing, viewingIdx]);
+
   const openPhoto = async (photo: ToothPhoto) => {
     setViewing({ photo, loading: true });
     // 有结果就重新跑一次拿带框图（YOLO 单张很快），没结果就不自动跑，让用户点按钮
@@ -284,8 +307,17 @@ export default function Tooth() {
         onCancel={() => setViewing(null)}
         footer={null}
         width={960}
-        title={viewing ? `${viewing.photo.rel_path}` : ""}
-        destroyOnClose
+        title={
+          viewing ? (
+            <Space>
+              <Button size="small" disabled={viewingIdx <= 0} onClick={() => step(-1)}>← 上一张</Button>
+              <Button size="small" disabled={viewingIdx < 0 || viewingIdx >= visiblePhotos.length - 1} onClick={() => step(1)}>下一张 →</Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{viewingIdx + 1} / {visiblePhotos.length}</Typography.Text>
+              <span>{viewing.photo.rel_path}</span>
+            </Space>
+          ) : ""
+        }
+        destroyOnClose={false}
       >
         {viewing && (
           <Spin spinning={viewing.loading}>
