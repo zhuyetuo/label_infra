@@ -14,6 +14,7 @@ from app.api.v1 import (
     reviews,
     samples,
     tasks,
+    tooth,
     users,
 )
 
@@ -34,3 +35,5 @@ api_router.include_router(dashboard.router)
 api_router.include_router(dogs.router)
 api_router.include_router(model_versions.router)
 api_router.include_router(model_versions.callback_router)
+api_router.include_router(tooth.router)
+api_router.include_router(tooth.stream_router)

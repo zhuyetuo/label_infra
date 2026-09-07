@@ -8,6 +8,7 @@ import Dogs from "@/pages/Dogs";
 import Labels from "@/pages/Labels";
 import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
+import Tooth from "@/pages/Tooth";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/label-definitions" element={<Labels />} />
         {/* 标签模板并到「标签管理」页里做成一个 Tab 了，旧链接跳过去 */}
         <Route path="/label-templates" element={<Navigate to="/label-definitions" replace />} />
+        <Route path="/tooth" element={<Tooth />} />
         <Route path="/users" element={<Users />} />
         <Route path="/" element={<Navigate to="/tasks" replace />} />
       </Route>
