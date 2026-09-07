@@ -2,7 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# tzdata：容器按 TZ 环境变量走宿主机时区（docker-compose 里统一设）
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tzdata && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e .
