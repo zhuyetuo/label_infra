@@ -46,7 +46,7 @@ export interface PrelabelResult {
 
 /** 同步调用 AI 服务推理，可能要等几十秒，超时放宽 */
 /** mode：stable=稳定版（平滑合并后的片段，少而可信）/ raw=调试版（模型逐窗口原始输出） */
-export const aiPrelabel = (sampleId: number, mode: "stable" | "raw" = "stable") =>
+export const aiPrelabel = (sampleId: number, mode: "stable" | "viterbi" | "raw" = "stable") =>
   request.post<never, PrelabelResult>(`/samples/${sampleId}/ai-prelabel`, undefined, {
     timeout: 180_000,
     params: { mode },

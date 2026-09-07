@@ -98,6 +98,8 @@ class BulkTaskCreate(BaseModel):
     sample_ids: list[int]
     task_type: TaskType
     assigned_to: int | None = None
+    # ai_assisted 时自动跑预标注用哪个版本：stable / viterbi / raw，留空用配置默认
+    infer_mode: str | None = None
 
 
 class BulkTaskCreateResult(BaseModel):
