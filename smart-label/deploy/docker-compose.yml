@@ -1,8 +1,11 @@
+# 所有容器时区跟宿主机一致（默认 Asia/Shanghai，.env 里 TZ= 可改）：日志时间、
+# MySQL 的 NOW()/created_at、定时任务的调度时间都按这个来，不然全是 UTC 差 8 小时
 services:
   mysql:
     image: mysql:8.0
     restart: unless-stopped
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-smart_label}
       MYSQL_USER: ${MYSQL_USER:-smart_label}
@@ -28,6 +31,7 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
     command: alembic upgrade head
     networks: [smart-label]
@@ -43,6 +47,7 @@ services:
         condition: service_completed_successfully
     env_file: .env
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
       # imu_train/label_service（AI 推理/训练服务），跟本服务在同一台机器上，
       # 容器内不能用 localhost，所以写宿主机内网 IP。.env 里设了会覆盖这里。
@@ -69,6 +74,7 @@ services:
         condition: service_completed_successfully
     env_file: .env
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       MYSQL_DSN: mysql+asyncmy://${MYSQL_USER:-smart_label}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-smart_label}
     volumes:
       # 自动扫描 NAS 新样本跑在这个容器里，NAS 必须跟 api 一样挂进来——之前漏了，
@@ -83,6 +89,8 @@ services:
     build:
       context: ../frontend
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       - api
     ports:
