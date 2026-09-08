@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  Alert, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
-  Typography, message,
+  Alert, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
+  Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -52,6 +52,7 @@ export default function Training() {
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
   const [tag, setTag] = useState("");
+  const [scope, setScope] = useState<"approved" | "reviewed">("approved");
   const [submitting, setSubmitting] = useState(false);
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
@@ -68,8 +69,12 @@ export default function Training() {
         date_to: range[1].format("YYYY-MM-DD"),
         project_id: projectId,
         include_submitted: includeSubmitted,
+        scope,
       });
-      message.success(`已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时`);
+      message.success(
+        `已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时` +
+          (meta.n_untouched_skipped ? `（跳过 ${meta.n_untouched_skipped} 条没人看过的 AI 片段）` : "")
+      );
       setExportOpen(false);
       setName("");
       qc.invalidateQueries({ queryKey: ["train-datasets"] });
@@ -162,6 +167,11 @@ export default function Training() {
                         <span>
                           {d.date_from} ~ {d.date_to}
                           {d.include_submitted && <Tag color="orange" style={{ marginLeft: 4 }}>含待审核</Tag>}
+                          {d.scope === "reviewed" && (
+                            <Tooltip title="按片段取的：只包含人确认过/改过/人工加的片段，没人看过的 AI 片段没有导出">
+                              <Tag color="blue" style={{ marginLeft: 4 }}>按片段</Tag>
+                            </Tooltip>
+                          )}
                         </span>
                       ),
                     },
@@ -322,9 +332,27 @@ export default function Training() {
               options={(projects ?? []).map((p) => ({ value: p.id, label: p.name }))}
             />
           </Space>
-          <Checkbox checked={includeSubmitted} onChange={(e) => setIncludeSubmitted(e.target.checked)}>
-            把「待审核」的任务也算进去（还没人复核，质量没保证）
-          </Checkbox>
+          {/* 人工复看很费时间，实际总是"这个任务只审了抓挠""那个审了一半"。
+              等整份审完再用，数据集永远攒不起来——所以给一个按片段取的口子 */}
+          <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)} style={{ width: "100%" }}>
+            <Space direction="vertical" size={4}>
+              <Radio value="approved">
+                只用审核通过的任务（整份都算数）
+              </Radio>
+              <Radio value="reviewed">
+                <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似抓挠」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
+                  <span style={{ borderBottom: "1px dashed #bbb" }}>
+                    按片段取：只要人碰过的（审了一半也能用）
+                  </span>
+                </Tooltip>
+              </Radio>
+            </Space>
+          </Radio.Group>
+          {scope === "approved" && (
+            <Checkbox checked={includeSubmitted} onChange={(e) => setIncludeSubmitted(e.target.checked)}>
+              把「待审核」的任务也算进去（还没人复核，质量没保证）
+            </Checkbox>
+          )}
         </Space>
       </Modal>
 

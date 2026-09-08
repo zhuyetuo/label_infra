@@ -7,6 +7,10 @@ export interface TrainDataset {
   date_to: string;
   project_id: number | null;
   include_submitted: boolean;
+  /** approved = 整份审完的任务；reviewed = 只取人碰过的片段 */
+  scope?: "approved" | "reviewed";
+  /** reviewed 模式下跳过了多少条"没人看过的 AI 片段" */
+  n_untouched_skipped?: number;
   n_tasks: number;
   n_segments: number;
   total_hours: number;
@@ -38,6 +42,7 @@ export const exportDataset = (body: {
   date_to: string;
   project_id?: number | null;
   include_submitted?: boolean;
+  scope?: "approved" | "reviewed";
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
 
 export const listModelVersions = () => request.get<never, ModelVersion[]>("/model-versions");
