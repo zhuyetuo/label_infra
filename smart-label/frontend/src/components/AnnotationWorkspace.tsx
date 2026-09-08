@@ -303,11 +303,9 @@ export default function AnnotationWorkspace({
     );
   };
 
-  const persist = async () => {
-    if (taskId == null) return;
-    await saveDraft(
-      taskId,
-      items.map((i) => ({
+  // 草稿的 payload 形状，存草稿的几个地方都用它——以前是各写一份，
+  // 加字段时漏掉一处就会静默丢数据
+  const toDraftPayload = (list: typeof items) => list.map((i) => ({
         label_id: i.label_id,
         start_time_ms: i.start_time_ms,
         end_time_ms: i.end_time_ms,
@@ -318,8 +316,11 @@ export default function AnnotationWorkspace({
         ai_confirmed: i.ai_confirmed,
         uncertain: i.uncertain,
         uncertain_reason: i.uncertain_reason,
-      }))
-    );
+      }));
+
+  const persist = async () => {
+    if (taskId == null) return;
+    await saveDraft(taskId, toDraftPayload(items));
   };
 
   // AI 预标注：后端转发到 imu_train/label_service 的 /infer，返回的类别名按
@@ -903,20 +904,7 @@ export default function AnnotationWorkspace({
                     await decideCandidate(i.from_candidate_id, "pending");
                     const next = items.filter((x) => x.id !== i.id);
                     setItems(next);
-                    await saveDraft(
-                      taskId,
-                      next.map((x) => ({
-                        label_id: x.label_id,
-                        start_time_ms: x.start_time_ms,
-                        end_time_ms: x.end_time_ms,
-                        origin_item_id: x.origin_item_id ?? undefined,
-                        source_type: x.origin_item_id == null ? x.source_type : undefined,
-                        ai_confidence: x.origin_item_id == null ? x.ai_confidence : undefined,
-                        ai_confirmed: x.ai_confirmed,
-                        uncertain: x.uncertain,
-                        uncertain_reason: x.uncertain_reason,
-                      }))
-                    );
+                    await saveDraft(taskId, toDraftPayload(next));
                     setCandidates(await listCandidates(taskId));
                     message.success("已退回候选，可以重新判断");
                   }}
@@ -947,6 +935,22 @@ export default function AnnotationWorkspace({
                     const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
                     setItems(draft.items);
                     setCandidates(cs);
+                  }}
+                  onUndo={async (c) => {
+                    if (taskId == null) return;
+                    // 跟确认时同一个顺序：先把本地改动落库，再动服务器上的东西，
+                    // 不然下面重新拉草稿会把还没保存的改动整个盖掉
+                    if (!readOnly) await persist();
+                    await decideCandidate(c.id, "pending");
+                    // 「确认」时后端往草稿里写了一条，撤回要把它一起收回；
+                    // 「排除」「待定」没写过条目，这里自然什么都不会删
+                    const draft = await getDraft(taskId);
+                    const next = draft.items.filter((x) => x.from_candidate_id !== c.id);
+                    if (!readOnly && next.length !== draft.items.length) {
+                      await saveDraft(taskId, toDraftPayload(next));
+                    }
+                    setItems(next);
+                    setCandidates(await listCandidates(taskId));
                   }}
                 />
               ),
