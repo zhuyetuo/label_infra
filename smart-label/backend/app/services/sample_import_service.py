@@ -189,7 +189,66 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
     return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size}
 
 
+async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
+    """
+    给已存在的样本补回缺失的 media_files 登记。
+
+    为什么会缺：media_files 按路径唯一，而同一次录制的 imu1~imu4 共用同一组 cam
+    视频。删样本时如果按路径删登记，就会把兄弟样本的视频一起带走——那些任务
+    打开就是「没有找到可播放的视频」，而 NAS 上文件明明还在。删那边已经改成
+    只删没人再用的路径了，这里负责把之前已经删坏的补回来。
+
+    也顺带覆盖别的情况：手动清过表、迁移时漏了、导入中途失败。
+    只补 NAS 上真的存在的文件，不凭空造登记。
+    """
+    rows = (
+        await db.execute(
+            select(
+                Sample.video_cam1_path, Sample.video_cam2_path, Sample.video_cam3_path, Sample.imu_csv_path
+            )
+        )
+    ).all()
+    wanted: dict[str, MediaFileType] = {}
+    for cam1, cam2, cam3, csv_rel in rows:
+        for p in (cam1, cam2, cam3):
+            if p:
+                wanted[p] = MediaFileType.raw_video
+        if csv_rel:
+            wanted[csv_rel] = MediaFileType.raw_imu_csv
+    if not wanted:
+        return 0
+    have = set(
+        (
+            await db.execute(select(MediaFile.relative_path).where(MediaFile.relative_path.in_(wanted.keys())))
+        ).scalars()
+    )
+    missing = {p: t for p, t in wanted.items() if p not in have}
+    if not missing:
+        return 0
+
+    def _existing(paths: list[str]) -> list[str]:
+        return [p for p in paths if os.path.isfile(os.path.join(nas_root, p))]
+
+    ok_paths = await asyncio.to_thread(_existing, list(missing.keys()))
+    for p in ok_paths:
+        ft = missing[p]
+        db.add(
+            MediaFile(
+                file_type=ft,
+                relative_path=p,
+                content_type="text/csv" if ft == MediaFileType.raw_imu_csv else "video/mp4",
+            )
+        )
+    if ok_paths:
+        await db.commit()
+        _progress.detail.append(f"补回 {len(ok_paths)} 条丢失的文件登记（视频/CSV 在 NAS 上但库里没有）")
+    return len(ok_paths)
+
+
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
+    # 先补登记再扫新数据：登记缺了的话，已有样本的视频点开就是"没有找到可播放的
+    # 视频"，而扫描只处理新 sample_code，永远不会回头修已有的
+    await _repair_media_rows(db, nas_root)
     data_raw_dir = os.path.join(nas_root, settings.data_raw_dir)
     if not os.path.isdir(data_raw_dir):
         # 目录不存在多半是容器没挂 NAS（scheduler 之前就漏挂过），直接报错，
