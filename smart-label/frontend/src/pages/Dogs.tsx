@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tag, Tooltip,
+  Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tabs, Tag, Tooltip,
   Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -10,6 +10,7 @@ import { createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs"
 import { listSamples } from "@/api/samples";
 import { listTasks } from "@/api/tasks";
 import { TASK_STATUS_META } from "@/utils/taskStatus";
+import { getSavedText, saveText } from "@/utils/persistedSize";
 import type { Sample, TaskStatus } from "@/types";
 
 interface FormValues {
@@ -26,6 +27,7 @@ interface FormValues {
 
 // 现在就这两个场所，做成可选可填：以后开新场地直接输，不用改代码
 const SITES = ["影棚", "狗场"];
+const SITE_TAB_KEY = "smart-label:dogs-site-tab";
 
 // 狗档案：现在主要靠样本扫描时按文件名里的 dog 编号自动建档（采集端还没开始
 // 带这个信息之前基本是空的），这里补一套手动管理 + 每只狗的样本总览（按
@@ -36,6 +38,8 @@ export default function Dogs() {
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
   const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
 
+  // 当前看哪个场所（all / 影棚 / 狗场…）。记住选择：管狗场的人不该每次都先切一下
+  const [siteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Dog | null>(null);
   const [form] = Form.useForm<FormValues>();
@@ -50,6 +54,12 @@ export default function Dogs() {
   // 总预览：一眼看清每个场所有几只狗、登记齐了没有、有没有数据。
   // 「已登记」= 名字填了的：编号是扫描自动建的，名字得人补，没补的那些在
   // 皮肤评估那边就对不上照片目录，是要盯着补完的
+  // 当前标签页要显示哪些狗
+  const shown = useMemo(
+    () => (siteTab === "all" ? dogs ?? [] : (dogs ?? []).filter((d) => ((d.site || "").trim() || "未填场所") === siteTab)),
+    [dogs, siteTab]
+  );
+
   const overview = useMemo(() => {
     const list = dogs ?? [];
     const bySite = new Map<string, Dog[]>();
@@ -131,17 +141,28 @@ export default function Dogs() {
         </Button>
       </Space>
 
-      {/* 总预览 + 按场所分开看：现在影棚和狗场各有一批狗，混在一张表里
-          既数不清哪边有几只，也看不出哪些还没登记名字 */}
-      <Space wrap align="start" style={{ marginBottom: 12 }}>
-        <Card size="small" styles={{ body: { padding: "8px 16px" } }}>
+      {/* 说明在前、卡片在后：卡片高度不一，夹在文字中间会把段落顶得七零八落 */}
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        狗编号（dog_code）现在主要靠样本扫描时从文件名里自动识别建档，采集端还没开始带这个信息之前基本用不上；
+        新建/手动关联样本是在文件名规则落地前的过渡办法。点左侧箭头能展开：记体重/颈围、看这只狗每天的样本和标注进度。
+        <br />
+        同一只狗在三个地方叫法不一样：样本编号里只有<b>机位号</b>（_imu1）、皮肤评估用的是「比熊-BB」这种
+        「品种-名字」、NAS 上的照片目录又常写成 bibi / Bali。这一页就是把它们对上的地方：
+        <b>机位</b>填 IMU1（留空则按编号当机位，编号 1 = IMU1）；<b>别名</b>把照片目录名填进去（逗号分隔），
+        皮肤评估的「照片」列才找得到图。
+      </Typography.Paragraph>
+
+      {/* 总览：一张总的 + 每个场所一张。「已登记」是填了名字的——编号是扫描
+          时自动建的，名字得人补，没补的在皮肤评估那边对不上照片目录 */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+        <Card size="small" title="全部" styles={{ body: { padding: "8px 16px" } }}>
           <Space size={24}>
             <Statistic title="狗总数" value={overview.all.total} valueStyle={{ fontSize: 20 }} />
             <Statistic
               title="已登记名字"
               value={overview.all.named}
               suffix={`/ ${overview.all.total}`}
-              valueStyle={{ fontSize: 20 }}
+              valueStyle={{ fontSize: 20, color: overview.all.named < overview.all.total ? "#fa8c16" : undefined }}
             />
             <Statistic title="有数据的" value={overview.all.withSamples} valueStyle={{ fontSize: 20 }} />
             <Statistic title="样本总数" value={overview.all.samples} valueStyle={{ fontSize: 20 }} />
@@ -161,24 +182,26 @@ export default function Dogs() {
             </Space>
           </Card>
         ))}
-      </Space>
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        狗编号（dog_code）现在主要靠样本扫描时从文件名里自动识别建档，采集端还没开始带这个信息之前基本用不上；
-        新建/手动关联样本是在文件名规则落地前的过渡办法。点左侧箭头能展开看这只狗每天的样本和标注进度。
-        <br />
-        现在影棚和狗场各有一批狗，「场所」这一列可以筛；上面几张卡片是各场所的总览，
-        「已登记」是填了名字的——编号是扫描时自动建的，名字得人补，没补的在皮肤评估那边对不上照片目录。
-        <br />
-        同一只狗在三个地方叫法不一样：样本编号里只有<b>机位号</b>（_imu1）、皮肤评估用的是「比熊-BB」这种
-        「品种-名字」、NAS 上的照片目录又常写成 bibi / Bali。这一页就是把它们对上的地方：
-        <b>机位</b>填 IMU1（留空则按编号当机位，编号 1 = IMU1）；<b>别名</b>把照片目录名填进去（逗号分隔），
-        皮肤评估的「照片」列才找得到图。
-      </Typography.Paragraph>
+      </div>
+
+      {/* 按场所切换：两批狗是两拨人在管，各看各的那批更顺手；「全部」留着做总览。
+          标签是按数据里实际有的场所生成的，以后开新场地不用改代码 */}
+      <Tabs
+        activeKey={siteTab}
+        onChange={(k) => {
+          setSiteTab(k);
+          saveText(SITE_TAB_KEY, k);
+        }}
+        items={[
+          { key: "all", label: `全部 ${overview.all.total}` },
+          ...overview.sites.map((s) => ({ key: s.site, label: `${s.site} ${s.total}` })),
+        ]}
+      />
 
       <Table
         rowKey="id"
         loading={isLoading}
-        dataSource={dogs}
+        dataSource={shown}
         expandable={{
           expandRowByClick: true,
           // 以前只有"有样本"才能展开；现在展开里还有体重记录，没样本的狗也得能展开记
@@ -260,8 +283,6 @@ export default function Dogs() {
             title: "场所",
             dataIndex: "site",
             width: 100,
-            filters: [...SITES.map((x) => ({ text: x, value: x })), { text: "未填", value: "" }],
-            onFilter: (v, d: Dog) => (d.site ?? "") === v,
             render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>),
           },
           { title: "备注", dataIndex: "remark", render: (v: string | null) => v || "-" },
