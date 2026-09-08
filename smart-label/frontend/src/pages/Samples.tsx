@@ -16,6 +16,7 @@ import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { usePersistedSort } from "@/utils/persistedSort";
+import { useResizableColumns } from "@/utils/resizableColumns";
 
 const statusColor: Record<Sample["import_status"], string> = {
   pending: "default",
@@ -74,6 +75,7 @@ export default function Samples() {
   // 只有管理员/超级管理员能看能标；确认不敏感了可以解除。支持勾选一批一起标。
   // 排序记住：样本按 CSV 行数/时长找异常时排一次序，切走再回来不用重排
   const sort = usePersistedSort("samples-sort");
+  const width = useResizableColumns("samples-widths");
   const [sensitiveFilter, setSensitiveFilter] = useState<"全部" | "仅敏感" | "仅非敏感">("全部");
   // 空 CSV：文件建出来了但一行数据都没写，打开就报「CSV 没有数据行」，也算不出
   // 任何指标。行数为 null 是导入时没探到，不算空
@@ -223,6 +225,13 @@ export default function Samples() {
           立即扫描一次
         </Button>
         <Button onClick={() => refetch()}>刷新列表</Button>
+        {width.hasCustom && (
+          <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
+            <Button size="small" type="link" onClick={width.reset}>
+              恢复列宽
+            </Button>
+          </Tooltip>
+        )}
         <Typography.Text type="secondary">系统每 10 分钟自动扫描一次新数据，通常不用手动点</Typography.Text>
       </Space>
 
@@ -323,8 +332,11 @@ export default function Samples() {
                 size="small"
                 dataSource={rows}
                 pagination={rows.length > 20 ? { pageSize: 20 } : false}
-                columns={sort.applySort<Sample>(columns)}
+                columns={width.applyResize<Sample>(sort.applySort<Sample>(columns))}
                 onChange={sort.onTableChange}
+                components={width.components}
+                // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
+                scroll={{ x: "max-content" }}
                 // antd 默认点三下是 升序 -> 降序 -> 取消排序（回到原始顺序），第三种
                 // 看着像乱序；这里只在升/降之间切
                 sortDirections={["ascend", "descend", "ascend"]}

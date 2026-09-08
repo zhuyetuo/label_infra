@@ -48,6 +48,7 @@ import {
 } from "@/api/tasks";
 import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
 import { usePersistedSort } from "@/utils/persistedSort";
+import { useResizableColumns } from "@/utils/resizableColumns";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
@@ -432,6 +433,8 @@ export default function Projects() {
   // CSV 行数 0 = 空文件；null 是导入时没统计到，不当成"没数据"
   // 排序记住：任务表常按「片段数 / 样本」排着找活干，切走再回来不用重排
   const taskSort = usePersistedSort("project-tasks-sort");
+  // 列宽也让人自己拖：「片段」那列内容长短差得远，写死一个宽度总有一头不合适
+  const taskWidth = useResizableColumns("project-tasks-widths");
   const noCsv = (t: Task) => {
     const n = t.imu_row_count ?? samples?.find((s) => s.id === t.sample_id)?.imu_row_count;
     return n === 0;
@@ -762,6 +765,13 @@ export default function Projects() {
                     </Popconfirm>
                   </>
                 )}
+                {taskWidth.hasCustom && (
+                  <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
+                    <Button size="small" type="link" onClick={taskWidth.reset}>
+                      恢复列宽
+                    </Button>
+                  </Tooltip>
+                )}
                 {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.imu !== "ALL" || f.noCsv) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
@@ -803,7 +813,10 @@ export default function Projects() {
                 sortDirections={["ascend", "descend", "ascend"]}
                 locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
                 onChange={taskSort.onTableChange}
-                columns={taskSort.applySort<Task>([
+                components={taskWidth.components}
+                // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
+                scroll={{ x: "max-content" }}
+                columns={taskWidth.applyResize<Task>(taskSort.applySort<Task>([
                   { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
                   {
                     title: "样本",
@@ -972,7 +985,7 @@ export default function Projects() {
                       );
                     },
                   },
-                ])}
+                ]))}
               />
               </>
             );
