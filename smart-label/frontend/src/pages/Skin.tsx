@@ -683,6 +683,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "S 总分（不填问答）",
             width: 150,
+            sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) => (
               <Tooltip title="问答留空时的 S，只有 C 值那 40% 在起作用，是这一天的下限">
                 <span>{sTag(r.s_no_q)}</span>
