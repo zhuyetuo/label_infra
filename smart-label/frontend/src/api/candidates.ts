@@ -13,9 +13,11 @@ export interface AiCandidate {
   spec: number | null;
   /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 */
   reason: "low_conf" | "spectral";
-  status: "pending" | "confirmed" | "rejected";
+  status: "pending" | "confirmed" | "rejected" | "uncertain";
   /** 确认成了哪个类别；空 = 就是抓挠，有值 = 人看完判成别的动作 */
   decided_label_id: number | null;
+  /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
+  uncertain_reason: string | null;
   decided_by: number | null;
   decided_at: string | null;
 }
@@ -23,5 +25,14 @@ export interface AiCandidate {
 export const listCandidates = (taskId: number) =>
   request.get<never, AiCandidate[]>("/candidates", { params: { task_id: taskId } });
 
-export const decideCandidate = (id: number, decision: AiCandidate["status"], labelId?: number) =>
-  request.post<never, AiCandidate>(`/candidates/${id}/decide`, { decision, label_id: labelId ?? null });
+export const decideCandidate = (
+  id: number,
+  decision: AiCandidate["status"],
+  labelId?: number,
+  uncertainReason?: string
+) =>
+  request.post<never, AiCandidate>(`/candidates/${id}/decide`, {
+    decision,
+    label_id: labelId ?? null,
+    uncertain_reason: uncertainReason ?? null,
+  });

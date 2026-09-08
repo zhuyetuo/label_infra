@@ -29,6 +29,13 @@ interface Props {
   scratchLabelIds?: number[];
 }
 
+// 跟正式片段上的「待定」同一套：没画面的除非补拍否则永远定不了，看不清的
+// 换个视角/放慢也许还能定，分开记以后才知道哪些还有救
+const UNCERTAIN_KINDS = [
+  { value: "no_view", short: "没画面", label: "画面里没拍到狗" },
+  { value: "ambiguous", short: "看不清", label: "拍到了但看不准" },
+] as const;
+
 export default function CandidatePanel({
   candidates,
   readOnly,
@@ -55,16 +62,24 @@ export default function CandidatePanel({
   );
   const pendingCount = candidates.filter((c) => c.status === "pending").length;
 
-  const decide = async (c: AiCandidate, decision: AiCandidate["status"], labelId?: number, labelName?: string) => {
+  const decide = async (
+    c: AiCandidate,
+    decision: AiCandidate["status"],
+    labelId?: number,
+    labelName?: string,
+    uncertainReason?: string
+  ) => {
     setBusy(c.id);
     try {
-      await decideCandidate(c.id, decision, labelId);
+      await decideCandidate(c.id, decision, labelId, uncertainReason);
       message.success(
-        decision !== "confirmed"
+        decision === "rejected"
           ? "已排除"
-          : labelName
-            ? `已标成「${labelName}」，加入标注片段`
-            : "已确认，已加入标注片段"
+          : decision === "uncertain"
+            ? "已标成待定，这段不会进训练集"
+            : labelName
+              ? `已标成「${labelName}」，加入标注片段`
+              : "已确认，已加入标注片段"
       );
       setJustDecided((prev) => new Set(prev).add(c.id));
       onDecided(c, decision);
@@ -104,7 +119,7 @@ export default function CandidatePanel({
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           正式片段之外、模型可能漏掉的抓挠。看一眼视频：是抓挠就「确认」，其实是别的动作就「改成别的」
           （比如甩身体——比单纯排除有用，等于给了那个类别一个正例，同时是抓挠最缺的难负样本），
-          都不是就「排除」。
+          都不是就「排除」；看了也拿不准就「待定」（那段时间不进训练集）。
           两种都会成为下次训练的数据。
         </Typography.Text>
       </Space>
@@ -170,6 +185,15 @@ export default function CandidatePanel({
               ) :
               c.status === "rejected" ? (
                 <Tag>已排除</Tag>
+              ) : c.status === "uncertain" ? (
+                (() => {
+                  const k = UNCERTAIN_KINDS.find((x) => x.value === c.uncertain_reason);
+                  return (
+                    <Tooltip title={`${k?.label ?? "拿不准"}；不进训练集，也不算抓挠`}>
+                      <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
+                    </Tooltip>
+                  );
+                })()
               ) : (
                 <Tag color="gold">待确认</Tag>
               ),
@@ -224,6 +248,18 @@ export default function CandidatePanel({
                         </Button>
                       </Dropdown>
                     )}
+                    {/* 跟正式片段那边一样的两种待定：看了拿不准的，既不确认也不
+                        排除，那段时间从训练集里挖掉 */}
+                    <Dropdown
+                      menu={{
+                        items: UNCERTAIN_KINDS.map((k) => ({ key: k.value, label: k.label })),
+                        onClick: ({ key }) => decide(c, "uncertain", undefined, undefined, key),
+                      }}
+                    >
+                      <Button size="small" type="link" loading={busy === c.id}>
+                        待定 <DownOutlined style={{ fontSize: 10 }} />
+                      </Button>
+                    </Dropdown>
                     <Popconfirm title="排除这一段？" onConfirm={() => decide(c, "rejected")}>
                       <Button size="small" type="link" danger loading={busy === c.id}>
                         排除

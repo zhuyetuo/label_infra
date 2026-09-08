@@ -11,6 +11,9 @@ class CandidateStatus(str, enum.Enum):
     pending = "pending"
     confirmed = "confirmed"
     rejected = "rejected"
+    # 看了拿不准：画面里没拍到狗，或者拍到了但像抓挠又不太像。跟正式片段上的
+    # 「待定」一个意思——既不确认也不排除，这段时间从训练集里挖掉
+    uncertain = "uncertain"
 
 
 class AiCandidate(Base):
@@ -39,6 +42,10 @@ class AiCandidate(Base):
     # 这种既是那个类别的正例，也是抓挠最缺的难负样本，值得单独记一笔
     decided_label_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("label_definitions.id"), nullable=True, comment="确认成了哪个类别，空=抓挠"
+    )
+    # 待定的哪一种：no_view / ambiguous，跟片段上的 uncertain_reason 同一套
+    uncertain_reason: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="待定原因：no_view / ambiguous"
     )
     decided_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
