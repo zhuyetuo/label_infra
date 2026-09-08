@@ -328,7 +328,9 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
     """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。"""
     csv_start = await _csv_start_of(sample)
     try:
-        result = await algo_client.infer(sample.imu_csv_path, sample_id=sample.id, mode=mode)
+        result = await algo_client.infer(
+            sample.imu_csv_path, sample_id=sample.id, mode=mode, device_hz=sample.sample_hz
+        )
     except algo_client.AlgoServiceError as e:
         raise PrelabelError(str(e)) from e
     return await _store_and_normalize(sample, result, csv_start)
@@ -616,7 +618,17 @@ async def _run_project(
         try:
             t0 = time.time()
             results = await algo_client.infer_batch(
-                [{"path": p.sample.imu_csv_path, "sample_id": p.sample.id} for p in prepared], mode=mode
+                # 每份文件带上自己的采样率：这批里可能同时有 16Hz 的旧数据和
+                # 50Hz 的新数据，用一个全局值去处理，其中一种必然是错的
+                [
+                    {
+                        "path": p.sample.imu_csv_path,
+                        "sample_id": p.sample.id,
+                        "device_hz": p.sample.sample_hz,
+                    }
+                    for p in prepared
+                ],
+                mode=mode,
             )
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1

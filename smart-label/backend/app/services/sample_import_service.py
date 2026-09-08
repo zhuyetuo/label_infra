@@ -38,7 +38,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +49,7 @@ from app.models.media_file import MediaFile, MediaFileType
 from app.models.sample import ImportStatus, Sample
 from app.models.user import User
 from app.services.sample_dedupe_service import merge_duplicate_samples
-from app.utils.ffprobe import count_csv_rows, probe_video
+from app.utils.ffprobe import count_csv_rows, measure_csv_hz, probe_video
 
 # 第4段 dog 编号是可选的，现在的采集端还没带这个，得兼容没有这一段的旧文件名
 _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)(?:_dog([A-Za-z0-9]+))?", re.IGNORECASE)
@@ -141,6 +141,11 @@ def _parse_session_date(session_key: str) -> date | None:
         return None
 
 
+def _is_raw(rel_path: str) -> bool:
+    """文件名以 _raw 结尾 = 采集端的原始流（没降过采样）。"""
+    return os.path.splitext(os.path.basename(rel_path))[0].lower().endswith("_raw")
+
+
 def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
     """
     纯文件系统遍历，不涉及数据库/子进程，跑在线程池里避免阻塞事件循环。
@@ -173,7 +178,15 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
                 # 狗共用的，不该被某一个 dog 编号绑定，只有 CSV 上的才算数。
                 g["videos"].setdefault(cam_idx, rel_path)
             else:
-                g["csvs"].setdefault(imu_idx, {"path": rel_path, "dog_code": dog_code})
+                # 同一次录制可能在 NAS 上存了两份：..._raw.csv（采集端的原始
+                # 50Hz）和 ..._resampled16hz.csv（当场降过采样的）。文件名里
+                # _camN_imuM 之前的部分完全一样，所以它们会落到同一个 key 上，
+                # 先扫到谁就用谁——扫描顺序决定用哪一份，等于随机。
+                # 明确规则：有 raw 就用 raw（原始流信息最全，降采样这边自己会做），
+                # 没有 raw 才用降过的（8-11 之前只有降过的）。
+                prev = g["csvs"].get(imu_idx)
+                if prev is None or (_is_raw(rel_path) and not _is_raw(prev["path"])):
+                    g["csvs"][imu_idx] = {"path": rel_path, "dog_code": dog_code}
     return groups
 
 
@@ -182,11 +195,16 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
     all_files = [*cam_paths.values(), csv_rel]
     missing = [p for p in all_files if not os.path.isfile(os.path.join(nas_root, p))]
     probe = probe_video(os.path.join(nas_root, cam_paths[1]))
-    row_count = count_csv_rows(os.path.join(nas_root, csv_rel))
+    csv_full = os.path.join(nas_root, csv_rel)
+    row_count = count_csv_rows(csv_full)
+    # 采样率按文件量，不按全局假设：8-11 之前是采集端就降到 16Hz 的，8-11 起才是
+    # 50Hz 原始流，混在一起按同一个频率处理，重采样和特征窗口全错
+    sample_hz = measure_csv_hz(csv_full)
     total_size = sum(
         os.path.getsize(os.path.join(nas_root, p)) for p in all_files if os.path.isfile(os.path.join(nas_root, p))
     )
-    return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size}
+    return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size,
+            "sample_hz": sample_hz}
 
 
 async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
@@ -245,10 +263,48 @@ async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
     return len(ok_paths)
 
 
+async def _backfill_sample_hz(db: AsyncSession, nas_root: str, limit: int = 4000) -> int:
+    """
+    给还没有采样率的老样本补上。
+
+    扫描只处理没见过的 sample_code，不会回头改已有的；而采样率是后加的字段，
+    存量样本全是空的——空的话推理那边就用全局默认值（50Hz），对 8-11 之前那批
+    16Hz 的数据就是错的。所以在这儿补一遍，量不出来的留空，下次再试。
+    """
+    rows = (
+        await db.execute(
+            select(Sample.id, Sample.imu_csv_path)
+            .where(Sample.sample_hz.is_(None), Sample.imu_csv_path.isnot(None))
+            .limit(limit)
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    def _measure(items: list[tuple[int, str]]) -> list[tuple[int, float]]:
+        out = []
+        for sid, rel in items:
+            hz = measure_csv_hz(os.path.join(nas_root, rel))
+            if hz:
+                out.append((sid, hz))
+        return out
+
+    measured = await asyncio.to_thread(_measure, [(r[0], r[1]) for r in rows])
+    for sid, hz in measured:
+        await db.execute(update(Sample).where(Sample.id == sid).values(sample_hz=hz))
+    if measured:
+        await db.commit()
+        _progress.detail.append(f"补上 {len(measured)} 个样本的采样率")
+    return len(measured)
+
+
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     # 先补登记再扫新数据：登记缺了的话，已有样本的视频点开就是"没有找到可播放的
     # 视频"，而扫描只处理新 sample_code，永远不会回头修已有的
     await _repair_media_rows(db, nas_root)
+    # 采样率是后加的字段，存量样本都是空的；空的话推理会按全局默认值处理，
+    # 对 8-11 之前那批 16Hz 数据就是错的
+    await _backfill_sample_hz(db, nas_root)
     data_raw_dir = os.path.join(nas_root, settings.data_raw_dir)
     if not os.path.isdir(data_raw_dir):
         # 目录不存在多半是容器没挂 NAS（scheduler 之前就漏挂过），直接报错，
@@ -344,6 +400,7 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         info = candidates[session_key]
         cam_paths, csv_rel = info["cam_paths"], info["csv_rel"]
         probe, row_count, total_size, missing = result["probe"], result["row_count"], result["total_size"], result["missing"]
+        sample_hz = result.get("sample_hz")
 
         # 空 CSV 不建样本：文件建出来了但一行数据都没写（采集起来就断了之类），
         # 建了也只是个打开就报错、算不出任何指标的空壳，还得手动去删。
@@ -369,6 +426,7 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             video_fps=probe["fps"] if probe else None,
             video_resolution=f"{probe['width']}x{probe['height']}" if probe and probe.get("width") else None,
             imu_row_count=row_count,
+            sample_hz=sample_hz,
             total_size_bytes=total_size,
             import_status=ImportStatus.error if missing else ImportStatus.verified,
             import_error=f"缺失文件: {missing}" if missing else None,

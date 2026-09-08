@@ -34,6 +34,8 @@ export interface Sample {
   video_duration_sec: number | null;
   video_resolution: string | null;
   imu_row_count: number | null;
+  /** 这份 CSV 的实际采样率（导入时量的）。8-11 之前是 16Hz，之后是 50Hz */
+  sample_hz?: number | null;
   import_status: "pending" | "verified" | "error";
   import_error: string | null;
   /** 含敏感隐私信息：只有管理员/超级管理员能看能标 */

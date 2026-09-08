@@ -180,6 +180,22 @@ export default function Samples() {
     },
     { title: "时长(秒)", dataIndex: "video_duration_sec", sorter: (a: Sample, b: Sample) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0) },
     { title: "CSV行数", dataIndex: "imu_row_count", sorter: (a: Sample, b: Sample) => (a.imu_row_count ?? 0) - (b.imu_row_count ?? 0), render: (n: number | null) => n ?? "-" },
+    {
+      // 不是所有样本一个频率：8-11 之前采集端就降到 16Hz 存了，8-11 起才是 50Hz
+      // 原始流。按错的频率跑推理，重采样和特征窗口全错，所以这一列要看得见
+      title: "采样率",
+      dataIndex: "sample_hz",
+      width: 100,
+      sorter: (a: Sample, b: Sample) => (a.sample_hz ?? 0) - (b.sample_hz ?? 0),
+      render: (v: number | null | undefined) =>
+        v == null ? (
+          <Tooltip title="导入时没量出来（老样本或时间戳解析不了）。重新扫描一次会补上">
+            <Typography.Text type="secondary">—</Typography.Text>
+          </Tooltip>
+        ) : (
+          <Tag color={v >= 40 ? "blue" : "orange"}>{v} Hz</Tag>
+        ),
+    },
     { title: "分辨率", dataIndex: "video_resolution" },
     { title: "错误信息", dataIndex: "import_error" },
     {

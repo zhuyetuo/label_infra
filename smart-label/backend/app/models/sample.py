@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -41,6 +41,9 @@ class Sample(Base):
     video_resolution: Mapped[str | None] = mapped_column(String(20), nullable=True)
     imu_sample_rate_hz: Mapped[int | None] = mapped_column(Integer, nullable=True)
     imu_row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 这份 CSV 的采样率。不是所有样本都一样：8-11 之前采集端就已经降到 16Hz 存了，
+    # 8-11 起才是 50Hz 原始流。按错的频率跑推理，重采样和特征窗口全错
+    sample_hz: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     import_status: Mapped[ImportStatus] = mapped_column(
