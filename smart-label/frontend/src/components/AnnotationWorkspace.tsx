@@ -24,13 +24,14 @@ import CandidatePanel from "@/components/CandidatePanel";
 import { decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
+import type { ChannelSet } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
 import { useAuthStore } from "@/stores/authStore";
 import { INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
-import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
+import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys, getSavedText, saveText } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -76,6 +77,7 @@ const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 // IMU 波形整块的展开/折叠，和下面两个面板的展开状态：都记成用户的习惯
 const IMU_OPEN_KEY = "smart-label:imu-open";
+const CHANNEL_SET_KEY = "smart-label:imu-channel-set";
 const PANELS_KEY = "smart-label:ws-panels";
 
 // 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
@@ -130,6 +132,11 @@ export default function AnnotationWorkspace({
   // 复看抓挠时波形其实用得不多（主要看视频），可以整块折起来把地方让给视频；
   // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
   const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
+  // 画哪几条：六条同屏一条只剩十几像素，多数时候只关心其中一组——抓挠看陀螺仪，
+  // 姿态/静止看加速度。分组之后三条各自能拿到两倍多的高度
+  const [channelSet, setChannelSet] = useState<ChannelSet>(
+    () => (getSavedText(CHANNEL_SET_KEY, "all") as ChannelSet) || "all"
+  );
   const [panelKeys, setPanelKeys] = useState<string[]>(() => getSavedKeys(PANELS_KEY, ["segs"]));
 
   const [items, setItems] = useState<LabelItem[]>([]);
@@ -471,9 +478,10 @@ export default function AnnotationWorkspace({
   // 等于白展开。所以给一条波形定一个"还看得清"的下限，剩下的宁可让波形区自己滚：
   // 看得清的三条 + 滚一下，比六条糊成六道杠有用
   const MIN_ROW_PX = 86;
+  const nChannels = channelSet === "all" ? 6 : 3;
   const expandedRowHeight = Math.max(
     MIN_ROW_PX,
-    Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
+    Math.floor((chartBoxH - 24) / nChannels) - CHANNEL_CHROME_PX
   );
 
   // 拖波形区（单条波形模式）底边的把手改高度，跟视频区的把手一个用法；
@@ -804,37 +812,69 @@ export default function AnnotationWorkspace({
             }}
             items={[{
               key: "imu",
-              label: "IMU 波形",
+              label: (
+                // 这排开关本来单独占一行。工作台里高度最紧，跟标题拼一行，
+                // 省下来的给波形
+                <span
+                  style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span onClick={() => { const next = !imuOpen; saveBool(IMU_OPEN_KEY, next); setImuOpen(next); }} style={{ cursor: "pointer" }}>
+                    IMU 波形
+                  </span>
+                  {hasCsv && sampleId != null && (
+                    <>
+                      <Segmented
+                        size="small"
+                        options={["曲线图", "表格"]}
+                        value={imuView}
+                        onChange={(v) => setImuView(v as "曲线图" | "表格")}
+                      />
+                      {imuView === "曲线图" && (
+                        <>
+                          <Segmented
+                            size="small"
+                            options={["单条波形", "展开全部"]}
+                            value={chartExpanded ? "展开全部" : "单条波形"}
+                            onChange={(v) => setChartExpanded(v === "展开全部")}
+                          />
+                          <Tooltip title="六条同屏一条只剩十几像素。抓挠主要看陀螺仪（后腿高频往复），姿态和静止看加速度——只看一组，三条各自能高一倍多">
+                            <Segmented
+                              size="small"
+                              options={[
+                                { label: "六轴", value: "all" },
+                                { label: "加速度", value: "acc" },
+                                { label: "陀螺仪", value: "gyro" },
+                              ]}
+                              value={channelSet}
+                              onChange={(v) => {
+                                setChannelSet(v as ChannelSet);
+                                saveText(CHANNEL_SET_KEY, v as string);
+                              }}
+                            />
+                          </Tooltip>
+                        </>
+                      )}
+                      {imuView === "曲线图" && !chartExpanded && (
+                        <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
+                          <Button
+                            size="small"
+                            type={chartScrollLocked ? "primary" : "default"}
+                            icon={chartScrollLocked ? <LockOutlined /> : <UnlockOutlined />}
+                            onClick={() => {
+                              const next = !chartScrollLocked;
+                              setChartScrollLocked(next);
+                              saveBool(CHART_SCROLL_LOCK_KEY, next);
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </>
+                  )}
+                </span>
+              ),
               children: (hasCsv && sampleId != null ? (
             <>
-              <Space style={{ marginBottom: 8 }}>
-                <Segmented
-                  options={["曲线图", "表格"]}
-                  value={imuView}
-                  onChange={(v) => setImuView(v as "曲线图" | "表格")}
-                />
-                {imuView === "曲线图" && (
-                  <Segmented
-                    options={["单条波形", "展开全部"]}
-                    value={chartExpanded ? "展开全部" : "单条波形"}
-                    onChange={(v) => setChartExpanded(v === "展开全部")}
-                  />
-                )}
-                {imuView === "曲线图" && !chartExpanded && (
-                  <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
-                    <Button
-                      size="small"
-                      type={chartScrollLocked ? "primary" : "default"}
-                      icon={chartScrollLocked ? <LockOutlined /> : <UnlockOutlined />}
-                      onClick={() => {
-                        const next = !chartScrollLocked;
-                        setChartScrollLocked(next);
-                        saveBool(CHART_SCROLL_LOCK_KEY, next);
-                      }}
-                    />
-                  </Tooltip>
-                )}
-              </Space>
               {imuView === "曲线图" ? (
                 // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
                 // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏），
@@ -860,6 +900,7 @@ export default function AnnotationWorkspace({
                       bus={bus}
                       rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
                       compact={chartExpanded}
+                      channelSet={channelSet}
                       segments={segments}
                       activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                       onCreateSegment={readOnly ? undefined : handleCreateFromChart}
