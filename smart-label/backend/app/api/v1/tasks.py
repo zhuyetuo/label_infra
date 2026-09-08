@@ -32,14 +32,15 @@ from app.schemas.task import (
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
+from app.services.dog_name_service import dog_label, imu_dog_map
 from app.services.task_service import (
     TaskConflictError,
     claim_all_in_project,
     claim_task,
-
     heartbeat,
     release_all_in_project,
     release_task,
+    sample_brief,
     save_draft,
     submit_task,
 )
@@ -281,8 +282,14 @@ async def list_tasks(
         .join(scope, scope.c.id == Task.id)
         .distinct()
     )
+    dog_map = await imu_dog_map()
     briefs = {
-        sid: {"sample_code": code, "video_duration_sec": dur, "imu_row_count": rows_n}
+        sid: {
+            "sample_code": code,
+            "video_duration_sec": dur,
+            "imu_row_count": rows_n,
+            "dog_label": dog_label(code, dog_map),
+        }
         for sid, code, dur, rows_n in brief_rows.all()
     }
     user_names: dict[int, str] = {}
@@ -319,7 +326,10 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db), user: User 
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在或无权访问")
-    return ok(TaskOut.model_validate(task).model_dump())
+    # 带上样本简介（样本名/时长/是哪只狗）：皮肤跟踪表那边是拿单个任务直接开
+    # 工作台的，不走列表接口，没有这一段标题上就没有狗名
+    brief = (await sample_brief(db, [task])).get(task.sample_id, {})
+    return ok({**TaskOut.model_validate(task).model_dump(), **brief})
 
 
 @router.post("/claim-all")

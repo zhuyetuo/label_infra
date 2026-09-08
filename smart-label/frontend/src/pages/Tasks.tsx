@@ -296,7 +296,16 @@ export default function Tasks() {
             defaultSortOrder: "ascend" as const,
             render: (_: number, task: Task) => (
               <Tooltip title={String(sampleCode(task))}>
-                <span>{sampleName(task)}</span>
+                <span>
+                  {sampleName(task)}
+                  {/* 按 imu 分组已经在上面的按钮条里了，这里补一句狗名：
+                      同一天四只狗的时段长得一模一样，只看时间分不出是谁 */}
+                  {task.dog_label && (
+                    <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                      {task.dog_label}
+                    </Typography.Text>
+                  )}
+                </span>
               </Tooltip>
             ),
           },

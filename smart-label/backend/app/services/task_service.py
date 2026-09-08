@@ -12,6 +12,7 @@ from app.models.annotation import (
 )
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
+from app.services.dog_name_service import dog_label, imu_dog_map
 from app.models.user import User
 from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
@@ -34,8 +35,15 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
     rows = await db.execute(
         select(Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count).where(Sample.id.in_(ids))
     )
+    # 一个画面里同时有四只狗，标题上不写清楚"现在看的是哪只"就没法确认标注
+    mapping = await imu_dog_map()
     return {
-        sid: {"sample_code": code, "video_duration_sec": dur, "imu_row_count": rows_n}
+        sid: {
+            "sample_code": code,
+            "video_duration_sec": dur,
+            "imu_row_count": rows_n,
+            "dog_label": dog_label(code, mapping),
+        }
         for sid, code, dur, rows_n in rows.all()
     }
 
