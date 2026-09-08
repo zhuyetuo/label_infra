@@ -8,6 +8,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import ModelCompare from "@/components/ModelCompare";
 import {
+  type DatasetSegment,
+  getDatasetSegments,
   deleteDataset,
   activateModel, exportDataset, listDatasets, listModelVersions, refreshModelVersion, submitTrain,
   type ModelVersion, type TrainDataset,
@@ -58,6 +60,13 @@ export default function Training() {
   // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
   // 之前只是没地方看——尤其是 warnings，哪个任务因为什么被跳过全写在里面
   const [dsDetail, setDsDetail] = useState<TrainDataset | null>(null);
+  // 片段明细按需拉：一份数据集几千段，跟列表一起拉没必要
+  const { data: dsSegs, isFetching: loadingSegs } = useQuery({
+    queryKey: ["dataset-segments", dsDetail?.name],
+    queryFn: () => getDatasetSegments(dsDetail!.name),
+    enabled: dsDetail != null,
+  });
+  const [segLabel, setSegLabel] = useState<string | null>(null);
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
   useEffect(() => {
@@ -385,7 +394,7 @@ export default function Training() {
         open={dsDetail != null}
         onCancel={() => setDsDetail(null)}
         footer={null}
-        width={720}
+        width={980}
       >
         {dsDetail && (
           <>
@@ -422,6 +431,48 @@ export default function Training() {
                 </Typography.Text>
               </Descriptions.Item>
             </Descriptions>
+            {/* 到底装了什么：直接读最终喂给训练的那个 json，不是重算一遍 */}
+            <Typography.Text strong style={{ display: "block", marginTop: 12 }}>
+              片段明细（{dsSegs?.total ?? 0}）
+              {dsSegs?.truncated && (
+                <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+                  {" "}
+                  · 太多了，只列前 {dsSegs.rows.length} 条
+                </Typography.Text>
+              )}
+            </Typography.Text>
+            <Space size={4} wrap style={{ margin: "4px 0" }}>
+              <Tag.CheckableTag checked={segLabel == null} onChange={() => setSegLabel(null)}>
+                全部
+              </Tag.CheckableTag>
+              {Object.keys(dsDetail.labels).map((k) => (
+                <Tag.CheckableTag key={k} checked={segLabel === k} onChange={() => setSegLabel(k)}>
+                  {k} {dsDetail.labels[k]}
+                </Tag.CheckableTag>
+              ))}
+            </Space>
+            <Table<DatasetSegment>
+              size="small"
+              rowKey={(r) => `${r.task_id}-${r.start}-${r.label}`}
+              loading={loadingSegs}
+              dataSource={(dsSegs?.rows ?? []).filter((r) => !segLabel || r.label === segLabel)}
+              pagination={{ pageSize: 20, size: "small" }}
+              scroll={{ x: "max-content", y: 300 }}
+              columns={[
+                { title: "任务", dataIndex: "task_id", width: 80 },
+                { title: "样本", dataIndex: "sample_code", ellipsis: true },
+                { title: "类别", dataIndex: "label", width: 90, render: (v: string) => <Tag>{v}</Tag> },
+                { title: "开始", dataIndex: "start", width: 190 },
+                { title: "结束", dataIndex: "end", width: 190 },
+                {
+                  title: "时长(秒)",
+                  dataIndex: "seconds",
+                  width: 100,
+                  sorter: (a, b) => (a.seconds ?? 0) - (b.seconds ?? 0),
+                },
+              ]}
+            />
+
             {/* 哪个任务因为什么没进来，全在这儿。导完对不对，主要看这一段 */}
             <Typography.Text strong style={{ display: "block", marginTop: 12 }}>
               跳过的任务 / 提示（{dsDetail.warnings.length}）
