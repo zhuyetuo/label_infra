@@ -622,6 +622,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   // 「挑一段复看」那张表同理，而且更需要——按待确认数排完，关掉再打开还是那个
   // 顺序，可以接着往下做
   const pickSort = usePersistedSort("skin-pick-sort");
+  // 「这一段还要不要看」现在得同时读两列（人工复看 + 疑似抓挠）自己在心里合并。
+  // 直接给个结论：抓挠都认过了、候选也没有待确认的，这一段就算复看完了
+  const reviewDone = (t: TrackingRow["tasks_detail"][number]) =>
+    (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) && t.cand_pending === 0;
+  const [onlyTodo, setOnlyTodo] = useState(false);
   // 列宽也让人自己拖：写死的宽度总有几列挤成两行、另几列空着半格，
   // 而且不同的人关心的列不一样，没有一套宽度能同时合适
   const trackWidth = useResizableColumns("skin-tracking-widths");
@@ -1111,6 +1116,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             第一次有用的东西——留一句话，细节收进问号里 */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {(() => {
+              // 顺手把「还剩几段」写出来：不然得自己数一遍绿标签
+              const all = checkFor?.tasks_detail ?? [];
+              const done = all.filter(reviewDone).length;
+              return all.length ? `共 ${all.length} 段，已完成 ${done} · ` : "";
+            })()}
             挑一段点「查看标注」进工作台核对，看完在工作台底部下结论{" "}
             <Tooltip
               title={
@@ -1131,16 +1142,21 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               <QuestionCircleOutlined style={{ cursor: "help" }} />
             </Tooltip>
           </Typography.Text>
-          {pickWidth.hasCustom && (
-            <Button size="small" type="link" onClick={pickWidth.reset}>
-              恢复列宽
-            </Button>
-          )}
+          <Space size={8}>
+            <Checkbox checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)}>
+              只看还要审的
+            </Checkbox>
+            {pickWidth.hasCustom && (
+              <Button size="small" type="link" onClick={pickWidth.reset}>
+                恢复列宽
+              </Button>
+            )}
+          </Space>
         </div>
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
           rowKey="task_id"
-          dataSource={checkFor?.tasks_detail ?? []}
+          dataSource={(checkFor?.tasks_detail ?? []).filter((t) => !onlyTodo || !reviewDone(t))}
           pagination={false}
           // 拖出来的列宽要生效，表格得是固定布局——scroll.x 一给 antd 就切过去了
           scroll={{ y: "60vh", x: "max-content" }}
@@ -1160,6 +1176,30 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   {sampleDisplayName(t.sample_code, t.video_duration_sec, null)}
                 </span>
               ),
+            },
+            {
+              // 放在最前面：进来第一眼要看的就是"哪些还没弄完"
+              title: "复看",
+              key: "review_done",
+              width: 90,
+              sorter: (a, b) => Number(reviewDone(a)) - Number(reviewDone(b)),
+              render: (_: unknown, t) =>
+                reviewDone(t) ? (
+                  <Tooltip title="抓挠片段都确认过了，疑似抓挠也没有待确认的——这一段不用再看了">
+                    <Tag color="success">已完成</Tag>
+                  </Tooltip>
+                ) : t.cand_pending > 0 &&
+                  (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) ? (
+                  <Tooltip title={`抓挠已经认过了，但还有 ${t.cand_pending} 条「疑似抓挠」没判断`}>
+                    <Tag color="warning">还差候选</Tag>
+                  </Tooltip>
+                ) : viewed.has(t.task_id) ? (
+                  <Tooltip title="看过但还没下结论">
+                    <Tag color="processing">看到一半</Tag>
+                  </Tooltip>
+                ) : (
+                  <Tag>没看过</Tag>
+                ),
             },
             {
               title: "抓挠片段",
