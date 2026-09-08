@@ -164,6 +164,7 @@ async def get_sample_media(
     rows = (await db.execute(select(MediaFile.id, MediaFile.relative_path).where(MediaFile.relative_path.in_(paths)))).all()
     by_path = {path: mid for mid, path in rows}
 
+    cam_paths = [sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path]
     return ok(
         SampleMediaOut(
             video1_id=by_path.get(sample.video_cam1_path),
@@ -171,6 +172,9 @@ async def get_sample_media(
             video3_id=by_path.get(sample.video_cam3_path),
             csv_id=by_path.get(sample.imu_csv_path),
             video_fps=sample.video_fps,
+            video_paths=cam_paths,
+            # 样本上登记了路径、媒体库里却没有这条：文件没传上 NAS，或者传了还没扫到
+            video_missing_in_library=[p for p in cam_paths if p and p not in by_path],
         ).model_dump()
     )
 
