@@ -1,3 +1,5 @@
+import { Tooltip } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -334,9 +336,26 @@ export default function ImuChart({
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
-        Shift+滚轮缩放 / 放大后按住拖动左右平移（整体视图下全部数据已在视野内，无需拖动）/
-        单击或拖动黑色播放头跳转视频到该时刻（放大后拖到边缘会自动继续滚动）/ 双击恢复整体视图
+      {/* 操作说明收进问号里。这四条只在第一次用的时候有用，却天天占着一整行——
+          而这一行本来可以是波形 */}
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 2, textAlign: "right" }}>
+        <Tooltip
+          title={
+            <div style={{ lineHeight: 1.7 }}>
+              Shift+滚轮：缩放
+              <br />
+              放大后按住拖动：左右平移（整体视图下全部数据已在视野内，无需拖动）
+              <br />
+              单击 / 拖动黑色播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
+              <br />
+              双击：恢复整体视图
+            </div>
+          }
+        >
+          <span style={{ cursor: "help" }}>
+            <QuestionCircleOutlined /> 操作说明
+          </span>
+        </Tooltip>
       </div>
       {CHANNELS.map((c, i) => (
         <div

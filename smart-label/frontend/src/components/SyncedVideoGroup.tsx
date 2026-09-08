@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, InputNumber, Radio, Slider, Space, Typography } from "antd";
-import { PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { Button, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
+import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
 
@@ -639,9 +639,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
             帧：
           </Typography.Text>
           <InputNumber size="small" min={0} max={totalFrames ?? undefined} value={frame} onChange={handleFrameJump} />
-          <Typography.Text type="secondary">
-            of {totalFrames ?? "..."}（{fps} fps，画面内 Shift+滚轮缩放，放大后直接拖拽平移，双击复原）
-          </Typography.Text>
+          {/* 操作说明收进问号里：这行字每次打开都占着一整行的宽度，
+              而它只在第一次用的时候有用 */}
+          <Tooltip
+            title={`${fps} fps。画面内 Shift+滚轮缩放，放大后直接拖拽平移，双击复原`}
+          >
+            <Typography.Text type="secondary" style={{ cursor: "help" }}>
+              of {totalFrames ?? "..."} <QuestionCircleOutlined />
+            </Typography.Text>
+          </Tooltip>
         </>
       )}
     </Space>

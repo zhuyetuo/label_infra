@@ -530,7 +530,20 @@ export default function AnnotationWorkspace({
             样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : sampleId}
             {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
           </Tag>
-          {readOnly && <Tag color="orange">只读</Tag>}
+          {readOnly && (
+            // 「只读」和「认领并修改」拼进标题行：这两个东西说的是同一件事
+            // （现在改不了 / 想改点这里），单独占一行不值当，那一行留给视频
+            <>
+              <Tag color="orange">只读</Tag>
+              {onClaim && (
+                <Tooltip title="现在是只读。要逐条确认、改类别（比如其实是甩身体）、或标成待定，先认领">
+                  <Button size="small" type="primary" onClick={onClaim}>
+                    认领并修改
+                  </Button>
+                </Tooltip>
+              )}
+            </>
+          )}
           {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
           <span ref={setControlsHost} style={{ display: "inline-flex" }} />
         </Space>
@@ -632,19 +645,6 @@ export default function AnnotationWorkspace({
     >
       <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
-        {readOnly && onClaim && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 6 }}
-            message="只读：要逐条确认、改类别（比如其实是甩身体）、或标成待定，先点右下角「认领并修改」"
-            action={
-              <Button size="small" type="primary" onClick={onClaim}>
-                认领并修改
-              </Button>
-            }
-          />
-        )}
         {loopRange && (
           <Alert
             type="info"
