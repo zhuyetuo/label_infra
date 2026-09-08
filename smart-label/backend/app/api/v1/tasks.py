@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -109,25 +109,42 @@ async def bulk_create_tasks(
         .all()
     )
 
-    created = 0
-    new_tasks: list[Task] = []
-    for sample_id in body.sample_ids:
-        if sample_id in already_has_task:
-            continue
-        t = Task(
-            project_id=body.project_id,
-            sample_id=sample_id,
-            task_type=body.task_type,
-            assigned_to=body.assigned_to,
-            created_by=admin.id,
+    # 一次几百上千个样本很常见（十几天一起建项目时更是上万）。逐个 db.add 是走
+    # ORM 的工作单元，几千行会明显慢；这里直接一条 executemany 插进去。
+    # 建完再按 (项目, 样本) 查一次 id——上面已经把"这个项目下已有任务的样本"排掉了，
+    # 所以查出来的就是这一批新建的。MySQL 没有 RETURNING，多这一次查询免不了。
+    new_sample_ids = [sid for sid in body.sample_ids if sid not in already_has_task]
+    created = len(new_sample_ids)
+    new_task_ids: list[int] = []
+    if new_sample_ids:
+        await db.execute(
+            insert(Task),
+            [
+                {
+                    "project_id": body.project_id,
+                    "sample_id": sid,
+                    "task_type": body.task_type,
+                    "status": TaskStatus.PENDING_ASSIGN,
+                    "round_no": 1,
+                    "assigned_to": body.assigned_to,
+                    "created_by": admin.id,
+                }
+                for sid in new_sample_ids
+            ],
         )
-        db.add(t)
-        new_tasks.append(t)
-        created += 1
-    await db.commit()
+        await db.commit()
+        new_task_ids = list(
+            (
+                await db.execute(
+                    select(Task.id).where(
+                        Task.project_id == body.project_id, Task.sample_id.in_(new_sample_ids)
+                    )
+                )
+            ).scalars()
+        )
     # "AI预标注+人工修改"类型：建完直接后台批量跑 AI，项目页能看到进度
-    if body.task_type == TaskType.ai_assisted and new_tasks:
-        await start_project_prelabel(body.project_id, task_ids=[t.id for t in new_tasks], mode=body.infer_mode)
+    if body.task_type == TaskType.ai_assisted and new_task_ids:
+        await start_project_prelabel(body.project_id, task_ids=new_task_ids, mode=body.infer_mode)
 
     skipped = sorted(already_has_task)
     return ok(

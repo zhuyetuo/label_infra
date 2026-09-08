@@ -69,5 +69,8 @@ export const bulkCreateTasks = (body: {
 }) =>
   request.post<never, { created: number; skipped: number; skipped_sample_ids: number[] }>(
     "/tasks/bulk",
-    body
+    body,
+    // 一天上千个样本，插完要几十秒；全局超时是 15s，不放宽的话请求会被
+    // axios 掐断——服务端其实还在建，前端却报错，看着像失败了
+    { timeout: 300_000 }
   );

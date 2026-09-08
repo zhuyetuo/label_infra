@@ -246,6 +246,8 @@ export default function Projects() {
   // 一次勾十几天的样本，然后每天各建一个项目。以前只能一天一天来：勾样本、
   // 起名、建、再重开弹窗——十几天就是十几遍同样的操作
   const [perDate, setPerDate] = useState(false);
+  // 批量建的时候按钮上显示"第几天 / 共几天"，不然十几天下来只有一个转圈
+  const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const openCreate = () => {
@@ -296,9 +298,11 @@ export default function Projects() {
           const d = smp.session_date ?? "未知日期";
           byDate.set(d, [...(byDate.get(d) ?? []), smp.id]);
         }
+        const entries = [...byDate.entries()].sort();
         const ids: number[] = [];
         const failed: string[] = [];
-        for (const [date, sampleIds] of [...byDate.entries()].sort()) {
+        let done = 0;
+        const oneDay = async ([date, sampleIds]: [string, number[]]) => {
           try {
             const created = await createProject({ name: date, description: values.description });
             ids.push(created.id);
@@ -312,8 +316,26 @@ export default function Projects() {
             });
           } catch (e) {
             failed.push(`${date}（${e instanceof Error ? e.message : String(e)}）`);
+          } finally {
+            done += 1;
+            setBatchProgress(`正在建：${done} / ${entries.length} 天`);
           }
-        }
+        };
+        // 一天一天串着来，十几天就是十几个来回，每个还要插上千行任务，等得很久。
+        // 并发几路一起跑；不开太多是怕一次几千行插入把库压住，反而更慢
+        const CONCURRENCY = 4;
+        setBatchProgress(`正在建：0 / ${entries.length} 天`);
+        const queue = [...entries];
+        await Promise.all(
+          Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+            for (;;) {
+              const next = queue.shift();
+              if (!next) return;
+              await oneDay(next);
+            }
+          })
+        );
+        setBatchProgress(null);
         message.success(
           `已建 ${ids.length} 个项目${failed.length ? `，${failed.length} 天失败` : ""}` +
             (createTaskType === "ai_assisted" ? "，AI 预标注已在后台开始" : ""),
@@ -1514,11 +1536,13 @@ export default function Projects() {
             </Form.Item>
           )}
           <Button type="primary" htmlType="submit" block loading={creating}>
-            {editing
-              ? "保存"
-              : createSelected.size > 0
-                ? `创建项目并导入 ${createSelected.size} 个任务${createTaskType === "ai_assisted" ? "（自动 AI 预标注）" : ""}`
-                : "创建空项目"}
+            {batchProgress
+              ? batchProgress
+              : editing
+                ? "保存"
+                : createSelected.size > 0
+                  ? `创建项目并导入 ${createSelected.size} 个任务${createTaskType === "ai_assisted" ? "（自动 AI 预标注）" : ""}`
+                  : "创建空项目"}
           </Button>
         </Form>
       </Modal>
