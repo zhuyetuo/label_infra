@@ -1,5 +1,5 @@
 """
-狗档案照片：存在 NAS 上，按狗编号分目录。
+狗档案的照片和视频：存在 NAS 上，按狗编号分目录。
 
 放 nas_root 而不是素材库（material_root）：素材库那个共享是**只读**挂载的
 （docker-compose 里 `:ro`），传不进去；ai_data 这个本来就要写 AI 结果，是可写的。
@@ -8,8 +8,9 @@
   - 按编号分目录，狗改名了照片也不用跟着搬
   - 文件名带上传时间戳，同名照片不会互相覆盖
 
-读图跟素材库一样走「签名 token + 流式返回」：图片不经过登录态直接由 <img>
-去取，不签名的话等于把 NAS 上的路径敞开给任何人猜。
+读取跟素材库一样走「签名 token + 流式返回」：<img>/<video> 带不了 Authorization
+头，不签名的话等于把 NAS 上的路径敞开给任何人猜。流式返回本身支持 Range，视频
+才能拖进度条。
 """
 
 from __future__ import annotations
@@ -24,8 +25,13 @@ from datetime import datetime
 from app.core.config import settings
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-# 一张狗的照片几 MB 顶天了；限一下免得有人把视频拖进来
+# 浏览器能直接播的就这几种；.mkv/.avi 收下来也放不了，不如一开始就挡掉，
+# 免得传了半天上去发现只能下载
+VIDEO_EXTS = {".mp4", ".mov", ".webm"}
+MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
+# 照片几 MB 顶天；视频是拍一小段看抓挠动作的，给 500MB
 MAX_BYTES = 20 * 1024 * 1024
+MAX_VIDEO_BYTES = 500 * 1024 * 1024
 _SAFE = re.compile(r"[^A-Za-z0-9_.\-一-鿿]")
 
 
@@ -51,12 +57,14 @@ def list_photos(dog_code: str) -> list[dict]:
     out = []
     for fn in os.listdir(d):
         full = os.path.join(d, fn)
-        if not os.path.isfile(full) or os.path.splitext(fn)[1].lower() not in IMAGE_EXTS:
+        ext = os.path.splitext(fn)[1].lower()
+        if not os.path.isfile(full) or ext not in MEDIA_EXTS:
             continue
         st = os.stat(full)
         out.append(
             {
                 "filename": fn,
+                "kind": "video" if ext in VIDEO_EXTS else "image",
                 "size_bytes": st.st_size,
                 "uploaded_at": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                 "token": issue_token(dog_code, fn),
@@ -72,23 +80,46 @@ def count_photos(dog_codes: list[str]) -> dict[str, int]:
     for code in dog_codes:
         d = dog_dir(code)
         try:
-            out[code] = sum(1 for fn in os.listdir(d) if os.path.splitext(fn)[1].lower() in IMAGE_EXTS)
+            out[code] = sum(1 for fn in os.listdir(d) if os.path.splitext(fn)[1].lower() in MEDIA_EXTS)
         except OSError:
             out[code] = 0
     return out
 
 
-def save_photo(dog_code: str, filename: str, data: bytes) -> str:
+def limit_for(ext: str) -> int:
+    return MAX_VIDEO_BYTES if ext in VIDEO_EXTS else MAX_BYTES
+
+
+def prepare_target(dog_code: str, filename: str) -> tuple[str, str, int]:
+    """
+    校验后缀、建目录、算出落盘文件名。返回 (绝对路径, 文件名, 大小上限)。
+
+    分成 prepare/写两步是因为视频可能几百 MB：不能像以前那样 `await file.read()`
+    整个读进内存，得边收边往盘上写。
+    """
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in IMAGE_EXTS:
-        raise DogPhotoError(f"只收图片（{'/'.join(sorted(IMAGE_EXTS))}），这个是 {ext or '没有后缀'}")
-    if len(data) > MAX_BYTES:
-        raise DogPhotoError(f"图片太大（{len(data) / 1024 / 1024:.1f}MB），最多 {MAX_BYTES // 1024 // 1024}MB")
+    if ext not in MEDIA_EXTS:
+        raise DogPhotoError(
+            f"只收图片（{'/'.join(sorted(IMAGE_EXTS))}）和视频（{'/'.join(sorted(VIDEO_EXTS))}），"
+            f"这个是 {ext or '没有后缀'}"
+        )
     d = dog_dir(dog_code)
     os.makedirs(d, exist_ok=True)
-    # 时间戳前缀：同名照片不会互相覆盖，列表里也天然按时间排
+    # 时间戳前缀：同名文件不会互相覆盖，列表里也天然按时间排
     name = f"{datetime.now():%Y%m%d_%H%M%S}_{_SAFE.sub('_', os.path.basename(filename))[:80]}"
-    with open(os.path.join(d, name), "wb") as f:
+    return os.path.join(d, name), name, limit_for(ext)
+
+
+def too_big(nbytes: int, limit: int) -> str:
+    return f"文件太大（{nbytes / 1024 / 1024:.0f}MB），最多 {limit // 1024 // 1024}MB"
+
+
+def save_photo(dog_code: str, filename: str, data: bytes) -> str:
+    """整块写。小图还是走这个方便，视频走 prepare_target + 分块写。"""
+    full, name, limit = prepare_target(dog_code, filename)
+    if len(data) > limit:
+        raise DogPhotoError(too_big(len(data), limit))
+    with open(full, "wb") as f:
         f.write(data)
     return name
 

@@ -289,13 +289,14 @@ export default function Dogs() {
             render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>),
           },
           {
-            title: "照片",
-            width: 90,
+            title: "照片/视频",
+            width: 100,
             sorter: (a: Dog, b: Dog) => a.n_photos - b.n_photos,
-            // 认狗用的档案照，存在可写的那块 NAS 上（跟只读的素材库相册不是一回事）
+            // 认狗用的档案照 + 平时动作的小视频，存在可写的那块 NAS 上
+            // （跟只读的素材库相册不是一回事）
             render: (_: unknown, d: Dog) => (
               <Button size="small" type="link" style={{ padding: 0 }} onClick={(e) => { e.stopPropagation(); setPhotoDog(d); }}>
-                {d.n_photos > 0 ? `${d.n_photos} 张` : "上传"}
+                {d.n_photos > 0 ? `${d.n_photos} 个` : "上传"}
               </Button>
             ),
           },
@@ -376,7 +377,7 @@ export default function Dogs() {
       </Modal>
 
       <Modal
-        title={photoDog ? `照片 - ${photoDog.name || photoDog.dog_code}` : ""}
+        title={photoDog ? `照片 / 视频 - ${photoDog.name || photoDog.dog_code}` : ""}
         open={!!photoDog}
         onCancel={() => setPhotoDog(null)}
         footer={null}

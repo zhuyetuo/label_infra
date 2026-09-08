@@ -31,7 +31,9 @@ router = APIRouter(
 stream_router = APIRouter(prefix="/dogs", tags=["dogs"])
 
 _CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-                  ".webp": "image/webp", ".bmp": "image/bmp"}
+                  ".webp": "image/webp", ".bmp": "image/bmp",
+                  # 视频要报对类型，浏览器才肯用 <video> 播而不是当附件下载
+                  ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
 
 
 def age_text(birth: date | None, today: date | None = None) -> str | None:
@@ -95,7 +97,7 @@ async def _decorate(db: AsyncSession, dogs: list[Dog]) -> list[dict]:
 
 @router.get("/{dog_id}/photos")
 async def list_dog_photos(dog_id: int, db: AsyncSession = Depends(get_db)):
-    """这只狗的照片。每条带一个签名 token，前端直接拿去请求图片流。"""
+    """这只狗的照片和视频。每条带一个签名 token，前端直接拿去请求媒体流。"""
     dog = await db.get(Dog, dog_id)
     if dog is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
@@ -107,12 +109,37 @@ async def upload_dog_photo(dog_id: int, file: UploadFile = File(...), db: AsyncS
     dog = await db.get(Dog, dog_id)
     if dog is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
-    data = await file.read()
     try:
-        name = await asyncio.to_thread(dog_photos.save_photo, dog.dog_code, file.filename or "photo.jpg", data)
+        full, name, limit = await asyncio.to_thread(
+            dog_photos.prepare_target, dog.dog_code, file.filename or "photo.jpg"
+        )
     except dog_photos.DogPhotoError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+
+    # 视频能到几百 MB，不能整个读进内存再写，边收边落盘；超限了就把半截文件删掉
+    written = 0
+    try:
+        with open(full, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > limit:
+                    raise dog_photos.DogPhotoError(dog_photos.too_big(written, limit))
+                await asyncio.to_thread(f.write, chunk)
+    except dog_photos.DogPhotoError as e:
+        await asyncio.to_thread(_unlink_quietly, full)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    except BaseException:
+        # 传到一半断了也不要留半截文件在 NAS 上——列表里会显示成一个放不了的文件
+        await asyncio.to_thread(_unlink_quietly, full)
+        raise
     return ok({"filename": name, "token": dog_photos.issue_token(dog.dog_code, name)})
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 @router.delete("/{dog_id}/photos/{filename}")
@@ -131,7 +158,8 @@ async def delete_dog_photo(dog_id: int, filename: str, db: AsyncSession = Depend
 async def stream_dog_photo(
     dog_id: int, filename: str, token: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    """图片是 <img> 直接来取的，带不上登录态，所以走签名 token（跟素材库一个做法）。"""
+    """<img>/<video> 直接来取，带不上登录态，所以走签名 token（跟素材库一个做法）。
+    stream_file 支持 Range，视频才能拖进度条。"""
     dog = await db.get(Dog, dog_id)
     if dog is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
