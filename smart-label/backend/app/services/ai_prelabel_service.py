@@ -35,7 +35,7 @@ from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.schemas.model_version import PrelabelItem
 from app.services import algo_client
-from app.services.imu_service import ImuReadError, get_meta
+from app.services.imu_service import ImuReadError, get_start_timestamp
 from app.services.media_resolver import PathTraversalError, resolve_nas_path
 
 
@@ -178,17 +178,21 @@ async def replace_candidates(db: AsyncSession, task: Task, cands: list[Candidate
 
 
 async def _csv_start_of(sample: Sample) -> datetime:
-    """读 CSV 第一行的时间，AI 片段的绝对时间要减掉它才是工作台用的相对毫秒。"""
+    """读 CSV 第一行的时间，AI 片段的绝对时间要减掉它才是工作台用的相对毫秒。
+
+    只读文件头（get_start_timestamp），不要整份解析：这个函数在批量场景里会被
+    调上百次，走 get_meta 的话每次都是一两秒，一次皮肤联动就得几分钟。
+    """
     if not sample.imu_csv_path:
         raise PrelabelError("该样本没有 IMU CSV，无法做 AI 预标注")
     try:
         csv_abs = resolve_nas_path(sample.imu_csv_path)
-        meta = await asyncio.to_thread(get_meta, csv_abs)
+        start_ts = await asyncio.to_thread(get_start_timestamp, csv_abs)
     except PathTraversalError as e:
         raise PrelabelError("IMU 文件路径非法") from e
     except ImuReadError as e:
         raise PrelabelError(str(e)) from e
-    csv_start = parse_ts(meta.get("start_timestamp"))
+    csv_start = parse_ts(start_ts)
     if csv_start is None:
         raise PrelabelError("IMU CSV 没有可用的时间戳列，无法换算 AI 片段时间")
     return csv_start

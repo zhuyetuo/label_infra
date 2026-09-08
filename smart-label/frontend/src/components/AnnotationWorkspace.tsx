@@ -115,11 +115,24 @@ export default function AnnotationWorkspace({
   const bus = useMemo(() => new TimeBus(), [taskId]);
   // 片段区间循环：真正的循环逻辑在 bus/视频组件里跑，这里只留一份给按钮高亮/顶部提示用
   const [loopRange, setLoopRange] = useState<{ startMs: number; endMs: number } | null>(null);
-  useEffect(() => bus.onLoopChange((l) => setLoopRange(l ? { startMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) } : null)), [bus]);
+  // 弹窗是常驻挂载的（task=null 时只是 open=false），所以换任务/重新打开时这份
+  // React state 不会自己归零——之前就是因为这个，关掉再进来顶上还挂着「正在循环
+  // 播放」，可视频其实没在循环。这里跟着 bus 走：换 bus 就按新 bus 的实际状态重置。
+  useEffect(() => {
+    const l = bus.getLoop();
+    setLoopRange(l ? { startMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) } : null);
+    return bus.onLoopChange((x) => setLoopRange(x ? { startMs: Math.round(x.start * 1000), endMs: Math.round(x.end * 1000) } : null));
+  }, [bus]);
   // 严格按标注的起止循环，前后不加余量：循环就是用来核对起止标得准不准的，
   // 多放一截反而看不出边界在哪；觉得起止不对就去改起止
   const setLoop = (r: { startMs: number; endMs: number } | null) =>
     bus.setLoop(r ? { start: Math.max(0, r.startMs) / 1000, end: r.endMs / 1000 } : null);
+  // 点 X 关掉就当作「不看这一段了」，顺手停掉循环；同一个任务再进来是同一个 bus，
+  // 不清的话循环会跟着带回来
+  const handleClose = () => {
+    bus.setLoop(null);
+    onClose();
+  };
 
   useEffect(() => {
     if (taskId == null || sampleId == null) {
@@ -333,7 +346,7 @@ export default function AnnotationWorkspace({
       await submitTask(taskId);
       message.success("已提交，等待审核");
       onSubmitted?.();
-      onClose();
+      handleClose();
     } finally {
       setSaving(false);
     }
@@ -414,7 +427,7 @@ export default function AnnotationWorkspace({
         </Space>
       }
       open={taskId != null}
-      onCancel={onClose}
+      onCancel={handleClose}
       // 标注要看细节，占满整个屏幕，别把空间浪费在弹窗留白上
       width="100vw"
       // 弹窗本身已经占满一屏并且 body 自己滚，外层 antd 的 wrap 层再出一根滚动条

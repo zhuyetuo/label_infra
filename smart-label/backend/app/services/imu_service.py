@@ -266,3 +266,58 @@ def get_rows(csv_path: str, offset: int, limit: int) -> dict:
 
 def get_series(csv_path: str, start_ms: int, end_ms: int, max_points: int) -> dict:
     return _safe(_get_series, csv_path, start_ms, end_ms, max_points)
+
+
+# ------------------------------------------------------------ 只要起点时间 ----
+#
+# 「AI 片段的绝对时间 → 工作台相对毫秒」这个换算只用得上 CSV 第一行的时间戳，
+# 但以前是走 get_meta，也就是把整份十几万行的 CSV 读进 pandas、排序、六个通道
+# 逐列转数值——一份一两秒。皮肤评估「重新拉取」一次要过一百多个样本，光这一项
+# 就是好几分钟。这里只读文件头几行，几毫秒的事。
+#
+# 取前 _HEAD_ROWS 行里最小的时间戳：完整版是整份排序后取第一行，而采集端的乱序
+# 也就是相邻几行的抖动，前两百行里的最小值跟排完序的第一行是同一个。
+_HEAD_ROWS = 200
+# 结果只是一个时间戳，留几千份也没多少内存；一次联动一百多个样本，缓存要够大到
+# 一整次都不淘汰，不然下次拉取又要重读
+_START_CACHE_MAX = 4096
+_start_cache: "OrderedDict[tuple[str, float, int], pd.Timestamp]" = OrderedDict()
+_start_cache_lock = threading.Lock()
+
+
+def _get_start_timestamp(csv_path: str) -> pd.Timestamp:
+    try:
+        head = pd.read_csv(csv_path, nrows=_HEAD_ROWS)
+    except Exception as exc:  # noqa: BLE001
+        raise ImuReadError(f"读取CSV失败: {exc}") from exc
+    if head.empty:
+        raise ImuReadError("CSV 没有数据行")
+    head = _normalize_columns(head)
+    if "timestamp" not in head.columns:
+        raise ImuReadError(f"CSV缺少 timestamp 列，实际列名: {list(head.columns)[:12]}")
+    ts = _parse_timestamp(head["timestamp"]).dropna()
+    if ts.empty:
+        raise ImuReadError("timestamp 列全部无法解析")
+    return ts.min()
+
+
+def get_start_timestamp(csv_path: str) -> str:
+    """CSV 起点时间的 ISO 字符串，跟 get_meta()["start_timestamp"] 同义，
+    但只读文件头。批量场景（皮肤联动、批量预标注）用这个。"""
+    try:
+        st = os.stat(csv_path)
+    except OSError as exc:
+        raise ImuReadError(f"读取CSV失败: {exc}") from exc
+    key = (csv_path, st.st_mtime, st.st_size)
+    with _start_cache_lock:
+        cached = _start_cache.get(key)
+        if cached is not None:
+            _start_cache.move_to_end(key)
+            return cached.isoformat()
+    value = _safe(_get_start_timestamp, csv_path)
+    with _start_cache_lock:
+        _start_cache[key] = value
+        _start_cache.move_to_end(key)
+        while len(_start_cache) > _START_CACHE_MAX:
+            _start_cache.popitem(last=False)
+    return value.isoformat()
