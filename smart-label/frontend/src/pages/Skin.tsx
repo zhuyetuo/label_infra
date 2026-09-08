@@ -10,6 +10,7 @@ import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } fro
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { usePersistedSort } from "@/utils/persistedSort";
+import { useResizableColumns } from "@/utils/resizableColumns";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { claimTask, getTask, reopenTask } from "@/api/tasks";
@@ -620,6 +621,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   // 「挑一段复看」那张表同理，而且更需要——按待确认数排完，关掉再打开还是那个
   // 顺序，可以接着往下做
   const pickSort = usePersistedSort("skin-pick-sort");
+  // 列宽也让人自己拖：写死的宽度总有几列挤成两行、另几列空着半格，
+  // 而且不同的人关心的列不一样，没有一套宽度能同时合适
+  const trackWidth = useResizableColumns("skin-tracking-widths");
+  const pickWidth = useResizableColumns("skin-pick-widths");
 
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
   // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
@@ -781,6 +786,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           />
         </Tooltip>
         <Button loading={isFetching} onClick={() => refetch()}>刷新</Button>
+        {trackWidth.hasCustom && (
+          <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
+            <Button size="small" type="link" onClick={trackWidth.reset}>
+              恢复列宽
+            </Button>
+          </Tooltip>
+        )}
         {role === "super_admin" && <PurgeStatsButton from={f.from} to={f.to} onDone={() => refetch()} />}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
@@ -805,7 +817,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         pagination={{ pageSize: 30, showSizeChanger: true }}
         scroll={{ x: "max-content" }}
         onChange={trackSort.onTableChange}
-        columns={trackSort.applySort<TrackingRow>([
+        components={trackWidth.components}
+        columns={trackWidth.applyResize<TrackingRow>(trackSort.applySort<TrackingRow>([
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           {
             title: "狗",
@@ -1023,7 +1036,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               );
             },
           },
-        ])}
+        ]))}
       />
       <AnnotationWorkspace
         task={wsTask}
@@ -1098,14 +1111,24 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           ——跟踪表里「人工版」的次数/时长只有走这一步才会变。下面这张表只管挑段落，状态列会记着
           哪些看过、哪些已经确认过了。
         </Typography.Paragraph>
+        {pickWidth.hasCustom && (
+          <div style={{ textAlign: "right", marginBottom: 4 }}>
+            <Button size="small" type="link" onClick={pickWidth.reset}>
+              恢复列宽
+            </Button>
+          </div>
+        )}
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
           rowKey="task_id"
           dataSource={checkFor?.tasks_detail ?? []}
           pagination={false}
-          scroll={{ y: "60vh" }}
+          // 拖出来的列宽要生效，表格得是固定布局——scroll.x 一给 antd 就切过去了
+          scroll={{ y: "60vh", x: "max-content" }}
           onChange={pickSort.onTableChange}
-          columns={pickSort.applySort<TrackingRow["tasks_detail"][number]>([
+          components={pickWidth.components}
+          columns={pickWidth.applyResize<TrackingRow["tasks_detail"][number]>(
+            pickSort.applySort<TrackingRow["tasks_detail"][number]>([
             {
               title: "时间段",
               width: 220,
@@ -1165,6 +1188,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
             {
               title: "",
+              key: "marks",
               width: 110,
               render: (_: unknown, t) =>
                 approved.has(t.task_id) || t.status === "APPROVED" ? (
@@ -1237,7 +1261,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 </Button>
               ),
             },
-          ])}
+          ]))}
         />
       </Modal>
       <Modal
