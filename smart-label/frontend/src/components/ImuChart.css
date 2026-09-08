@@ -12,3 +12,26 @@
 .u-legend th {
   text-align: left !important;
 }
+
+/* 通道名：平时不显示，鼠标移到这一条波形上才在左边缘浮出来。
+   写死一行标题的话六条就要吃掉一百多像素，画进绘图区又会挡着曲线开头那一段。 */
+.ws-chan {
+  position: relative;
+}
+.ws-chan__name {
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.85);
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+  z-index: 2;
+}
+.ws-chan:hover .ws-chan__name {
+  opacity: 1;
+}

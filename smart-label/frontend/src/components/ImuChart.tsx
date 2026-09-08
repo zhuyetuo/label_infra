@@ -84,8 +84,6 @@ interface Props {
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
-  /** 紧凑模式：通道名画进图里而不是单独占一行标题，六轴同屏时能省下不少高度 */
-  compact?: boolean;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -111,7 +109,6 @@ export default function ImuChart({
   activeColor,
   onCreateSegment,
   onResizeSegment,
-  compact,
 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
@@ -250,7 +247,10 @@ export default function ImuChart({
         const isLast = i === CHANNELS.length - 1;
 
         const opts: uPlot.Options = {
-          title: compact ? undefined : c.label,
+          // 通道名不占地方：既不用 uPlot 的标题行（一行就是二十几像素，六条
+          // 就是一百多），也不画进绘图区（挡着曲线）。改成鼠标移到这一条的
+          // 左边缘才浮出来，见下面的 ws-chan 标签
+          title: undefined,
           width: container.clientWidth,
           height: rowHeight,
           cursor: {
@@ -270,7 +270,6 @@ export default function ImuChart({
           ],
           hooks: { setScale: [onScaleChange(i)] },
           plugins: [
-            ...(compact ? [channelLabelPlugin(c.label, c.color)] : []),
             segmentBandPlugin(segmentsRef, annotateRef, () => startEpochRef.current, i === 0, highlightRef),
             dragPanPlugin(
               onClickSeek,
@@ -332,7 +331,7 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus, compact]);
+  }, [sampleId, rowHeight, bus]);
 
   return (
     <div>
@@ -358,36 +357,24 @@ export default function ImuChart({
         </Tooltip>
       </div>
       {CHANNELS.map((c, i) => (
-        <div
-          key={c.key}
-          ref={(el) => {
-            containerRefs.current[i] = el;
-          }}
-        />
+        // 每条波形套一层相对定位的壳，左边缘贴一个平时透明、鼠标移上去才显出来
+        // 的通道名。既不占高度，也不挡曲线
+        <div key={c.key} className="ws-chan">
+          <div
+            ref={(el) => {
+              containerRefs.current[i] = el;
+            }}
+          />
+          <span className="ws-chan__name" style={{ color: c.color }}>
+            {c.label}
+          </span>
+        </div>
       ))}
       {rangeCaption && (
         <div style={{ fontSize: 12, color: "#555", textAlign: "right", paddingRight: 8 }}>{rangeCaption}</div>
       )}
     </div>
   );
-}
-
-// 紧凑模式下把通道名画在绘图区左上角，省掉 uPlot 的标题行（六轴同屏时
-// 六行标题就要吃掉一百多像素，波形会被压得看不清）
-function channelLabelPlugin(label: string, color: string) {
-  return {
-    hooks: {
-      draw: (u: uPlot) => {
-        const ctx = u.ctx;
-        ctx.save();
-        ctx.font = "bold 11px sans-serif";
-        ctx.fillStyle = color;
-        ctx.textBaseline = "top";
-        ctx.fillText(label, u.bbox.left + 4, u.bbox.top + 2);
-        ctx.restore();
-      },
-    },
-  };
 }
 
 // 把已标注的时间段画成半透明色块垫在曲线下面，第一张图上再标上标签名，
