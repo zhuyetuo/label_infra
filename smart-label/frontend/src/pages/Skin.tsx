@@ -1133,7 +1133,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             pickSort.applySort<TrackingRow["tasks_detail"][number]>([
             {
               title: "时间段",
-              width: 220,
+              key: "range",
+              // 「09:00:00 ~ 09:59:59」实测 150 出头，220 是拍脑袋定的
+              width: 175,
               // 「09:00:14 ~ 10:00:00」不能折成三行，宽度给够并且不许换行
               render: (_: unknown, t) => (
                 <span style={{ whiteSpace: "nowrap" }}>
@@ -1150,19 +1152,39 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               render: (_: unknown, t) =>
                 t.scratch_segments ? <Tag color="red">{t.scratch_segments} 段</Tag> : <Typography.Text type="secondary">0</Typography.Text>,
             },
-            { title: "状态", width: 110, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
+            { title: "状态", width: 90, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
             {
               title: "人工复看",
-              width: 230,
+              key: "review",
+              // 复看进度（已看过/抓挠已确认/整份已通过）本来是右边一个没有标题的
+              // 独立列。表头空着，看上去就像「人工复看」横跨了两列、宽得离谱。
+              // 它俩说的是同一件事（这一段我看到哪了），并成一列
+              width: 240,
               // 光看「9 段」不知道人看过没有、看完是什么结论。这几个数就是结论：
               // 确认了几段、改走几段（比如其实是甩身体）、待定几段（三种原因分开写）
               render: (_: unknown, t) => {
                 const un = t.uncertain_no_view + t.uncertain_ambiguous + t.uncertain_needs_split;
+                // 「我看到哪了」这个进度标签跟结论放一起：以前它在右边一个没有
+                // 标题的独立列里，白占一列还看不出跟谁是一伙的
+                const progress =
+                  approved.has(t.task_id) || t.status === "APPROVED" ? (
+                    <Tag color="green">整份已通过</Tag>
+                  ) : scratchOk.has(t.task_id) ? (
+                    <Tag color="cyan">抓挠已确认</Tag>
+                  ) : viewed.has(t.task_id) ? (
+                    <Tag color="blue">已看过</Tag>
+                  ) : null;
                 if (!t.confirmed && !t.relabeled && !un) {
-                  return <Typography.Text type="secondary">未复看</Typography.Text>;
+                  return (
+                    <Space size={4} wrap>
+                      <Typography.Text type="secondary">未复看</Typography.Text>
+                      {progress}
+                    </Space>
+                  );
                 }
                 return (
                   <Space size={4} wrap>
+                    {progress}
                     {t.confirmed > 0 && <Tag color="green">确认 {t.confirmed}</Tag>}
                     {t.relabeled > 0 && (
                       <Tooltip title="本来是 AI 标的抓挠，人看完改成了别的类别（比如甩身体）">
@@ -1189,22 +1211,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               },
             },
             {
-              title: "",
-              key: "marks",
-              width: 110,
-              render: (_: unknown, t) =>
-                approved.has(t.task_id) || t.status === "APPROVED" ? (
-                  <Tag color="green">整份已通过</Tag>
-                ) : scratchOk.has(t.task_id) ? (
-                  <Tag color="cyan">抓挠已确认</Tag>
-                ) : viewed.has(t.task_id) ? (
-                  <Tag color="blue">已看过</Tag>
-                ) : null,
-            },
-            {
               title: "疑似抓挠",
               key: "cands",
-              width: 210,
+              // 三种待定拆开写之后标签变多了，给宽一点，不然常年折成两行
+              width: 250,
               // 挑下一段来看时，先看"还剩几条没确认"最多的那几段——排完序直接从
               // 上往下做。并列的按总数排，候选多的那段值得先看
               sorter: (a, b) =>
@@ -1254,7 +1264,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
             {
               title: "操作",
-              width: 110,
+              key: "op",
+              width: 90,
               // 这里只负责挑一段进去看：没看过视频就下结论没有意义，所以确认/通过
               // 都放在工作台底部，看完当场点
               render: (_: unknown, t) => (
