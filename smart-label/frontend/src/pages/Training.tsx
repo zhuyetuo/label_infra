@@ -54,6 +54,9 @@ export default function Training() {
   const [tag, setTag] = useState("");
   const [scope, setScope] = useState<"approved" | "reviewed">("approved");
   const [submitting, setSubmitting] = useState(false);
+  // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
+  // 之前只是没地方看——尤其是 warnings，哪个任务因为什么被跳过全写在里面
+  const [dsDetail, setDsDetail] = useState<TrainDataset | null>(null);
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
   useEffect(() => {
@@ -149,7 +152,8 @@ export default function Training() {
                     导出新数据集
                   </Button>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    只导「已通过」的任务当前轮片段，落到 NAS 的 data_train/&lt;名字&gt;/。
+                    导出到 NAS 的 data_train/&lt;名字&gt;/。可以只用审核通过的任务，也可以按片段取——
+                    只要人碰过的（审了一半的任务也能用）。
                   </Typography.Text>
                 </Space>
                 <Table
@@ -191,11 +195,16 @@ export default function Training() {
                     { title: "导出时间", dataIndex: "exported_at", width: 160 },
                     {
                       title: "操作",
-                      width: 110,
+                      width: 150,
                       render: (_, d: TrainDataset) => (
-                        <Button size="small" type="link" onClick={() => setTrainFor(d)}>
-                          用它训练
-                        </Button>
+                        <Space size={0}>
+                          <Button size="small" type="link" onClick={() => setDsDetail(d)}>
+                            详情
+                          </Button>
+                          <Button size="small" type="link" onClick={() => setTrainFor(d)}>
+                            用它训练
+                          </Button>
+                        </Space>
                       ),
                     },
                   ]}
@@ -301,8 +310,8 @@ export default function Training() {
       >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            把这段日期里<b>审核通过</b>的任务的当前片段导成训练数据（含人工纠正过的 AI 片段、人工新增的、
-            从「疑似抓挠」里确认的）。被排除的候选和删掉的误报所在时间已经被其它类别覆盖，天然是负样本。
+            把这段日期里的标注导成训练数据。人工纠正过的 AI 片段、人工新增的、从「疑似抓挠」里确认或
+            改成别的类别的，都算数；标了「待定」的和采集掉数据的时段会挖掉。下面选按什么范围取。
           </Typography.Paragraph>
           <Space>
             <Typography.Text>数据集名</Typography.Text>
@@ -354,6 +363,67 @@ export default function Training() {
             </Checkbox>
           )}
         </Space>
+      </Modal>
+
+      <Modal
+        title={`数据集详情 - ${dsDetail?.name ?? ""}`}
+        open={dsDetail != null}
+        onCancel={() => setDsDetail(null)}
+        footer={null}
+        width={720}
+      >
+        {dsDetail && (
+          <>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="日期范围">
+                {dsDetail.date_from} ~ {dsDetail.date_to}
+              </Descriptions.Item>
+              <Descriptions.Item label="取法">
+                {dsDetail.scope === "reviewed" ? "按片段取（只要人碰过的）" : "只用审核通过的任务"}
+              </Descriptions.Item>
+              <Descriptions.Item label="任务 / 片段">
+                {dsDetail.n_tasks} / {dsDetail.n_segments}
+              </Descriptions.Item>
+              <Descriptions.Item label="总时长">{dsDetail.total_hours} 小时</Descriptions.Item>
+              {dsDetail.scope === "reviewed" && (
+                <Descriptions.Item label="跳过没人看过的 AI 片段">
+                  {dsDetail.n_untouched_skipped ?? 0} 条
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="待定挖掉">{dsDetail.n_uncertain_excluded ?? 0} 段</Descriptions.Item>
+              <Descriptions.Item label="掉数据挖掉">{dsDetail.missing_excluded_min ?? 0} 分钟</Descriptions.Item>
+              <Descriptions.Item label="各类别段数" span={2}>
+                <Space size={4} wrap>
+                  {Object.entries(dsDetail.labels).map(([k, v]) => (
+                    <Tag key={k}>
+                      {k} {v}
+                    </Tag>
+                  ))}
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="导出文件" span={2}>
+                <Typography.Text code copyable style={{ fontSize: 12 }}>
+                  {dsDetail.export_json}
+                </Typography.Text>
+              </Descriptions.Item>
+            </Descriptions>
+            {/* 哪个任务因为什么没进来，全在这儿。导完对不对，主要看这一段 */}
+            <Typography.Text strong style={{ display: "block", marginTop: 12 }}>
+              跳过的任务 / 提示（{dsDetail.warnings.length}）
+            </Typography.Text>
+            {dsDetail.warnings.length === 0 ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                没有跳过任何任务
+              </Typography.Text>
+            ) : (
+              <div style={{ maxHeight: 260, overflow: "auto", fontSize: 12, marginTop: 4 }}>
+                {dsDetail.warnings.map((w, i) => (
+                  <div key={i}>{w}</div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </Modal>
 
       <Modal

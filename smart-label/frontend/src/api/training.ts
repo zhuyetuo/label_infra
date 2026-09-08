@@ -11,6 +11,10 @@ export interface TrainDataset {
   scope?: "approved" | "reviewed";
   /** reviewed 模式下跳过了多少条"没人看过的 AI 片段" */
   n_untouched_skipped?: number;
+  /** 被判「待定」而挖掉的段数 */
+  n_uncertain_excluded?: number;
+  /** 采集掉数据挖掉了多少分钟 */
+  missing_excluded_min?: number;
   n_tasks: number;
   n_segments: number;
   total_hours: number;
