@@ -13,11 +13,21 @@ import type { CSide, STotalOut, TrackingRow } from "@/api/skin";
 const num = (v: unknown, digits = 1) =>
   typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? String(v) : v.toFixed(digits)) : "—";
 
+/**
+ * antd 的 tooltip 默认最宽 250px，内层 div 写多宽都没用（外面那层会把它压回去），
+ * 于是每行都折成三四行、挤成一坨。这份 props 摊到 Tooltip 上把外层一起放宽，
+ * 并让宽度跟着内容走（max-content），短的不留白、长的到 560 才折。
+ */
+export const EXPLAIN_TOOLTIP = {
+  overlayStyle: { maxWidth: 560 },
+  overlayInnerStyle: { width: "max-content", maxWidth: 560 },
+} as const;
+
 function Row({ name, value, note }: { name: string; value: string; note?: string }) {
   return (
-    <div style={{ display: "flex", gap: 8, lineHeight: "18px" }}>
-      <span style={{ flex: "0 0 88px", opacity: 0.75 }}>{name}</span>
-      <span style={{ flex: "0 0 62px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{value}</span>
+    <div style={{ display: "flex", gap: 10, lineHeight: "20px", whiteSpace: "nowrap" }}>
+      <span style={{ flex: "0 0 76px", opacity: 0.75 }}>{name}</span>
+      <span style={{ flex: "0 0 66px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{value}</span>
       {note && <span style={{ opacity: 0.65 }}>{note}</span>}
     </div>
   );
@@ -48,7 +58,7 @@ export function CExplain({ side, source }: { side: CSide | null | undefined; sou
   }
   const c = d.components;
   return (
-    <div style={{ maxWidth: 360 }}>
+    <div>
       <Title>C 值 {num(d.total)} / {d.max_possible} → {d.tier}（{who}）</Title>
       {/* note 由 label_service 生成：里面写明命中了哪一档，比在前端拼一遍安全 */}
       <Row
@@ -79,10 +89,10 @@ export function CExplain({ side, source }: { side: CSide | null | undefined; sou
       <Foot>
         <Row name="合计" value={num(d.total)} note={`≥50 判 C2，≥30 判 C1，否则 C0`} />
         {d.red_flags?.length ? (
-          <div style={{ marginTop: 4 }}>🚩 {d.red_flags.join("、")} —— 红旗直接判 C2，不看总分</div>
+          <div style={{ marginTop: 4, maxWidth: 460, whiteSpace: "normal" }}>🚩 {d.red_flags.join("、")} —— 红旗直接判 C2，不看总分</div>
         ) : null}
         {d.has_baseline === false && (
-          <div style={{ marginTop: 4, opacity: 0.8 }}>
+          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 460, whiteSpace: "normal" }}>
             ⚠️ 还没有个人基线，「变化幅度」不计分，上限只有 70 分，会偏低；这是「信息不足」，不是「确实没变化」
           </div>
         )}
@@ -95,7 +105,7 @@ export function CExplain({ side, source }: { side: CSide | null | undefined; sou
 export function SExplain({ s, withQ }: { s: STotalOut | null | undefined; withQ: boolean }) {
   if (!s || s.total == null) return <span>还没算出这天的 S 总分</span>;
   return (
-    <div style={{ maxWidth: 360 }}>
+    <div>
       <Title>S 总分 {num(s.total)} → {s.s_tier}（{withQ ? "含问答" : "问答留空"}）</Title>
       <Row name="C 值 ×40%" value={num(s.c_score)} note={`C=${num(s.c_value_used)}`} />
       <Row name="皮肤组 ×35%" value={num(s.skin_group_score)} note={`原始分 ${num(s.skin_group_raw)}`} />
@@ -103,7 +113,7 @@ export function SExplain({ s, withQ }: { s: STotalOut | null | undefined; withQ:
       <Foot>
         <Row name="合计" value={num(s.total)} note={s.s_tier ?? ""} />
         {!withQ && (
-          <div style={{ marginTop: 4, opacity: 0.8 }}>
+          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 460, whiteSpace: "normal" }}>
             问答留空时皮肤组/毛发组都按 0 分算，所以这是这一天的下限，只有 C 值那 40% 在起作用
           </div>
         )}
@@ -125,7 +135,7 @@ export function DeltaExplain({ r }: { r: TrackingRow }) {
   const done = tasks.filter((t) => t.status === "APPROVED" || t.status === "SUBMITTED").length;
   const partial = tasks.length > 0 && done < tasks.length;
   return (
-    <div style={{ maxWidth: 380 }}>
+    <div style={{ maxWidth: 460 }}>
       <Title>AI 版 vs 人工版 C 值</Title>
       <Row name="AI 版" value={num(r.c_ai?.c_value)} note={r.c_ai?.c_tier ?? ""} />
       <Row name="人工版" value={num(r.c_human?.c_value)} note={r.c_human?.c_tier ?? ""} />
@@ -159,7 +169,7 @@ export function ScratchExplain({ r }: { r: TrackingRow }) {
   const wear = st.valid_wear_hours as number | undefined;
   const ratio = r.baseline_count && n != null ? n / r.baseline_count : null;
   return (
-    <div style={{ maxWidth: 340 }}>
+    <div style={{ maxWidth: 460 }}>
       <Title>这天的抓挠</Title>
       <Row name="次数" value={`${num(n)} 次`} />
       <Row name="总时长" value={`${num(min)} 分`} note={n ? `平均每次 ${num(((min ?? 0) * 60) / n)} 秒` : undefined} />

@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
-import { CExplain, DeltaExplain, SExplain, ScratchExplain } from "@/components/ScoreExplain";
+import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
@@ -622,7 +622,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               const m = r.stats?.total_duration_min as number | undefined;
               if (n == null) return "—";
               return (
-                <Tooltip title={<ScratchExplain r={r} />}>
+                <Tooltip {...EXPLAIN_TOOLTIP} title={<ScratchExplain r={r} />}>
                   <span>{`${n} 次 / ${fmt(m, 1)} 分`}</span>
                 </Tooltip>
               );
@@ -648,7 +648,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             sorter: (a: TrackingRow, b: TrackingRow) => (a.c_value ?? -1) - (b.c_value ?? -1),
             render: (_: unknown, r: TrackingRow) =>
               r.c_value == null ? "—" : (
-                <Tooltip title={<CExplain side={r.c_source === "human" ? r.c_human : r.c_ai} source={r.c_source} />}>
+                <Tooltip {...EXPLAIN_TOOLTIP} title={<CExplain side={r.c_source === "human" ? r.c_human : r.c_ai} source={r.c_source} />}>
                   <Space size={4}>
                     <b>{r.c_value}</b>
                     <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>
@@ -661,7 +661,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             title: "AI / 人工",
             width: 120,
             render: (_: unknown, r: TrackingRow) => (
-              <Tooltip title={<DeltaExplain r={r} />}>
+              <Tooltip {...EXPLAIN_TOOLTIP} title={<DeltaExplain r={r} />}>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
                   {r.delta_c != null && <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>（Δ{r.delta_c > 0 ? "+" : ""}{r.delta_c}）</span>}
@@ -695,7 +695,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) => (
-              <Tooltip title={<SExplain s={r.s_no_q} withQ={false} />}>
+              <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_no_q} withQ={false} />}>
                 <span>{sTag(r.s_no_q)}</span>
               </Tooltip>
             ),
@@ -706,7 +706,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_with_q?.total ?? -1) - (b.s_with_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) =>
               r.s_with_q ? (
-                <Tooltip title={<SExplain s={r.s_with_q} withQ />}>
+                <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_with_q} withQ />}>
                   <span>{sTag(r.s_with_q)}</span>
                 </Tooltip>
               ) : (
