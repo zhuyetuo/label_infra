@@ -467,8 +467,12 @@ export default function AnnotationWorkspace({
 
   // 紧凑模式下通道名画进图里，没有额外的标题行，height 本身已含时间轴
   const CHANNEL_CHROME_PX = 4;
+  // 六条一定要塞进一屏的话，一条就只剩十几像素——曲线压成一条线，什么都看不出来，
+  // 等于白展开。所以给一条波形定一个"还看得清"的下限，剩下的宁可让波形区自己滚：
+  // 看得清的三条 + 滚一下，比六条糊成六道杠有用
+  const MIN_ROW_PX = 86;
   const expandedRowHeight = Math.max(
-    40,
+    MIN_ROW_PX,
     Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
   );
 
