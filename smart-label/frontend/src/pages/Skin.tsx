@@ -435,13 +435,17 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const [wsTask, setWsTask] = useState<Task | null>(null);
   const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
   const [wsLoading, setWsLoading] = useState<number | null>(null);
+  // 这次开着页面期间看过哪几个时段，列表里标出来，好接着往下看
+  const [viewed, setViewed] = useState<Set<number>>(new Set());
   const openWorkspace = async (taskId: number) => {
     setWsLoading(taskId);
     try {
       const t = await getTask(taskId);
       setWsLabels(await listLabels(t.project_id));
       setWsTask(t);
-      setCheckFor(null);
+      setViewed((prev) => new Set(prev).add(taskId));
+      // 故意不关时段选择弹窗：工作台盖在它上面，关掉工作台就露出列表，
+      // 可以接着看下一个时段，不用从跟踪表重新点进来
     } finally {
       setWsLoading(null);
     }
@@ -668,7 +672,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
-          逐条跳转/循环看视频就能核对是不是真有这么多。
+          逐条跳转/循环看视频就能核对是不是真有这么多。看完关掉工作台会回到这个列表，可以接着看下一段。
         </Typography.Paragraph>
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
@@ -690,6 +694,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 t.scratch_segments ? <Tag color="red">{t.scratch_segments} 段</Tag> : <Typography.Text type="secondary">0</Typography.Text>,
             },
             { title: "状态", width: 110, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
+            {
+              title: "",
+              width: 70,
+              render: (_: unknown, t) => (viewed.has(t.task_id) ? <Tag color="blue">已看过</Tag> : null),
+            },
             {
               title: "操作",
               width: 100,
