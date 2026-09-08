@@ -818,6 +818,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         scroll={{ x: "max-content" }}
         onChange={trackSort.onTableChange}
         components={trackWidth.components}
+        tableLayout={trackWidth.tableLayout}
         columns={trackWidth.applyResize<TrackingRow>(trackSort.applySort<TrackingRow>([
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           {
@@ -1127,6 +1128,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           scroll={{ y: "60vh", x: "max-content" }}
           onChange={pickSort.onTableChange}
           components={pickWidth.components}
+          tableLayout={pickWidth.tableLayout}
           columns={pickWidth.applyResize<TrackingRow["tasks_detail"][number]>(
             pickSort.applySort<TrackingRow["tasks_detail"][number]>([
             {
