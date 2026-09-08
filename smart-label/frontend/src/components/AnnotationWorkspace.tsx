@@ -891,8 +891,10 @@ export default function AnnotationWorkspace({
         <Collapse
           size="small"
           className="ws-segs"
-          // 按内容撑开、不压缩：一屏放不下就整体往下溢出，由弹窗 body 滚动查看
-          style={{ marginTop: 8, flex: "0 0 auto" }}
+          // 占满视频下面剩余的高度，列表在自己里面滚——以前是整块往下溢出、
+          // 由弹窗 body 滚动，结果想看列表最后几条就得把视频滚出屏幕。复看这件事
+          // 本来就是"对着画面看这一条对不对"，两样东西必须同时在眼前
+          style={{ marginTop: 8 }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           // 展开哪些面板记成用户的习惯，不用每开一个任务重点一遍
