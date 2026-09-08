@@ -48,6 +48,23 @@
   max-height: 100vh;
 }
 
+/* IMU 波形这块也用 Collapse，跟下面两个面板长一样。它跟它们不同的是内部要能
+   撑开（展开全部波形时波形区要吃掉剩余高度），所以 Collapse 的内容层也得是 flex，
+   不然高度传不下去，波形区会塌成 0。 */
+.ws-imu > .ant-collapse-item,
+.ws-imu .ant-collapse-content,
+.ws-imu .ant-collapse-content-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ws-imu > .ant-collapse-item {
+  flex: 1 1 auto;
+}
+.ws-imu .ant-collapse-content-box {
+  padding: 8px !important;
+}
+
 /* 片段/候选列表：占满视频下面剩下的高度，在自己里面滚。
    以前是这一块按内容撑开、整体溢出到弹窗 body，于是想看列表最后几条就得把
    视频一起滚出屏幕——而复看恰恰是"对着画面看这一条对不对"，两样必须同时在眼前。
