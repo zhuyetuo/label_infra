@@ -12,9 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
-from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.label import LabelDefinition
-from app.models.review import ReviewRecord
 from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
@@ -23,6 +21,7 @@ from app.services.ai_prelabel_service import get_progress as get_prelabel_progre
 from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.task_scope import visible_project_ids
+from app.services.task_service import purge_task_children
 from app.schemas.project import (
     ProjectAssignRequest,
     ProjectAssignResult,
@@ -173,9 +172,10 @@ async def ai_prelabel_history(project_id: int, db: AsyncSession = Depends(get_db
 @router.delete("/{project_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     """
-    删项目会把它下面的任务、标注结果、审核记录、标签一起删掉，不可恢复。
-    外键都指向上一层，所以顺序是：标签条目 -> 标注记录 -> 审核记录 -> 任务
-    -> 标签定义 -> 项目，不能直接删项目。
+    删项目会把它下面的任务、标注结果、候选、审核记录、标签一起删掉，不可恢复。
+    外键都指向上一层，不能直接删项目：任务下面那几张表由 purge_task_children
+    统一按顺序清（跟删任务共用一份，免得再出现"一边加了新表另一边漏掉"），
+    这里只管任务本身、标签定义、项目。
     """
     project = await db.get(Project, project_id)
     if project is None:
@@ -184,22 +184,8 @@ async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     task_ids = (
         (await db.execute(select(Task.id).where(Task.project_id == project_id))).scalars().all()
     )
-    record_ids: list[int] = []
     if task_ids:
-        record_ids = (
-            (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids))))
-            .scalars()
-            .all()
-        )
-    if record_ids:
-        await db.execute(
-            delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids))
-        )
-    if task_ids:
-        await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
-        await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
-        # 子任务的 parent 指向本项目内的任务，先断开再删，避免自引用外键挡住
-        await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
+        await purge_task_children(db, task_ids)
         await db.execute(delete(Task).where(Task.project_id == project_id))
     label_count = (
         await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == project_id))

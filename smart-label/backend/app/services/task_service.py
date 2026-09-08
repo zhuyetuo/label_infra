@@ -1,15 +1,17 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.ai_candidate import AiCandidate
 from app.models.annotation import (
     AnnotationLabelItem,
     AnnotationRecord,
     LabelItemSource,
     RecordSourceType,
 )
+from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.services.dog_name_service import dog_label, imu_dog_map
@@ -46,6 +48,32 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
         }
         for sid, code, dur, rows_n in rows.all()
     }
+
+
+async def purge_task_children(db: AsyncSession, task_ids: list[int]) -> None:
+    """
+    删任务前先把挂在它下面的东西按外键顺序清干净。
+
+    删项目和删任务两个入口都要做同一件事，之前各写各的，结果加了 ai_candidates
+    这张表之后两边都漏了它——删项目直接 500（外键 1451）。所以统一到这里，
+    以后再挂新表只改这一处。
+
+    顺序（子指向父，从最里层往外删）：
+      标签条目 → 候选（标签条目的 from_candidate_id 指向它，必须后于条目）
+      → 标注记录 → 审核记录 → 断开子任务的 parent → 任务本身（调用方删）
+    """
+    if not task_ids:
+        return
+    record_ids = (
+        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars().all()
+    )
+    if record_ids:
+        await db.execute(delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids)))
+    await db.execute(delete(AiCandidate).where(AiCandidate.task_id.in_(task_ids)))
+    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
+    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
+    # 子任务的 parent 指向要删的任务，先断开，免得自引用外键挡住
+    await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
 
 
 async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
