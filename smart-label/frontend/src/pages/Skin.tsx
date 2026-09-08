@@ -1145,6 +1145,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             {
               title: "疑似抓挠",
               width: 210,
+              // 挑下一段来看时，先看"还剩几条没确认"最多的那几段——排完序直接从
+              // 上往下做。并列的按总数排，候选多的那段值得先看
+              sorter: (a, b) =>
+                a.cand_pending - b.cand_pending ||
+                a.cand_pending + a.cand_confirmed + a.cand_relabeled + a.cand_rejected + a.cand_uncertain -
+                  (b.cand_pending + b.cand_confirmed + b.cand_relabeled + b.cand_rejected + b.cand_uncertain),
               // 正式片段之外模型可能漏掉的那些。这里主要看"还剩几条没看"，
               // 以及看完的结论：补成抓挠 / 改成别的类别（人纠正过的误报）/ 排除
               render: (_: unknown, t) => {
