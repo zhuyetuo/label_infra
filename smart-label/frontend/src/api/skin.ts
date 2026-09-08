@@ -31,7 +31,19 @@ export interface CInputs {
 }
 export interface CResult {
   total: number; tier: string; red_flags: string[]; has_baseline: boolean; max_possible: number;
-  components: Record<"delta" | "cluster" | "persistence" | "interruption", { score: number; max: number; red_flag: boolean; by?: string | null; ratio?: number | null; counted?: boolean }>;
+  components: Record<
+    "delta" | "cluster" | "persistence" | "interruption",
+    {
+      score: number;
+      max: number;
+      red_flag: boolean;
+      by?: string | null;
+      ratio?: number | null;
+      counted?: boolean;
+      /** 这一项为什么是这个分（label_service 按规则生成，前端不重算） */
+      note?: string | null;
+    }
+  >;
 }
 export interface SResult {
   total: number; c_tier: string; s_tier: string; c_score: number; c_value_used: number; c_missing: boolean;
@@ -64,7 +76,13 @@ export interface LinkRow {
   tasks: { total: number; approved: number; submitted: number; in_progress: number; pending: number; rejected: number; no_ai: number };
   ai_mode: string[]; ai: LinkSide | null; human: LinkSide | null; human_status: "complete" | "partial" | "none";
 }
-export interface LinkResult { rows: LinkRow[]; warnings: string[]; from_cache?: boolean }
+export interface LinkResult {
+  rows: LinkRow[];
+  warnings: string[];
+  from_cache?: boolean;
+  /** 这批数字是什么时候算的（缓存读的是库里最后一次更新时间） */
+  computed_at?: string | null;
+}
 export interface WeeklyRow { id: number; imu: string; dog_name: string | null; report_date: string; data: Record<string, string | number>; updated_at: string | null }
 
 export const getSkinOptions = () => request.get<never, SkinOptions>("/skin/options");

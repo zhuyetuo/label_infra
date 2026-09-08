@@ -50,21 +50,31 @@ export function CExplain({ side, source }: { side: CSide | null | undefined; sou
   return (
     <div style={{ maxWidth: 360 }}>
       <Title>C 值 {num(d.total)} / {d.max_possible} → {d.tier}（{who}）</Title>
+      {/* note 由 label_service 生成：里面写明命中了哪一档，比在前端拼一遍安全 */}
       <Row
         name="变化幅度"
         value={`${num(c.delta.score)} / ${c.delta.max}`}
         note={
-          c.delta.counted === false
+          c.delta.note ??
+          (c.delta.counted === false
             ? "没有基线，这项不计分"
-            : `按${c.delta.by ?? "次数"}比基线 ${c.delta.ratio != null ? `${c.delta.ratio.toFixed(2)} 倍` : ""}`
+            : `按${c.delta.by ?? "次数"}比基线 ${c.delta.ratio != null ? `${c.delta.ratio.toFixed(2)} 倍` : ""}`)
         }
       />
-      <Row name="聚集程度" value={`${num(c.cluster.score)} / ${c.cluster.max}`} note={`聚集时段 ${num(cin.cluster_count)} 个`} />
-      <Row name="持续程度" value={`${num(c.persistence.score)} / ${c.persistence.max}`} note={`连续 ${num(cin.persistence_days)} 天`} />
+      <Row
+        name="聚集程度"
+        value={`${num(c.cluster.score)} / ${c.cluster.max}`}
+        note={c.cluster.note ?? `聚集时段 ${num(cin.cluster_count)} 个`}
+      />
+      <Row
+        name="持续程度"
+        value={`${num(c.persistence.score)} / ${c.persistence.max}`}
+        note={c.persistence.note ?? `连续 ${num(cin.persistence_days)} 天`}
+      />
       <Row
         name="中断影响"
         value={`${num(c.interruption.score)} / ${c.interruption.max}`}
-        note={`打断睡眠 ${num(cin.zd)} 次${cin.long_scratch ? "、有长时间抓挠" : ""}`}
+        note={c.interruption.note ?? `打断睡眠 ${num(cin.zd)} 次${cin.long_scratch ? "、有长时间抓挠" : ""}`}
       />
       <Foot>
         <Row name="合计" value={num(d.total)} note={`≥50 判 C2，≥30 判 C1，否则 C0`} />
@@ -98,6 +108,44 @@ export function SExplain({ s, withQ }: { s: STotalOut | null | undefined; withQ:
           </div>
         )}
         {s.red_flags?.length ? <div style={{ marginTop: 4 }}>🚩 {s.red_flags.join("、")} —— 直接判 S2</div> : null}
+      </Foot>
+    </div>
+  );
+}
+
+/**
+ * AI 版 / 人工版两个 C 值和它们的差。
+ *
+ * 这一列最容易被误读成"模型错得离谱"：人工版只统计**已提交/已通过**任务里的
+ * 抓挠，这天还有一半时段没审核通过，人工版当然只看得见一部分片段，次数少、
+ * C 值自然低。差得多不一定是模型有问题，先看这天审完了几个时段。
+ */
+export function DeltaExplain({ r }: { r: TrackingRow }) {
+  const tasks = r.tasks_detail ?? [];
+  const done = tasks.filter((t) => t.status === "APPROVED" || t.status === "SUBMITTED").length;
+  const partial = tasks.length > 0 && done < tasks.length;
+  return (
+    <div style={{ maxWidth: 380 }}>
+      <Title>AI 版 vs 人工版 C 值</Title>
+      <Row name="AI 版" value={num(r.c_ai?.c_value)} note={r.c_ai?.c_tier ?? ""} />
+      <Row name="人工版" value={num(r.c_human?.c_value)} note={r.c_human?.c_tier ?? ""} />
+      <Row name="Δ（人工−AI）" value={r.delta_c != null ? (r.delta_c > 0 ? `+${r.delta_c}` : String(r.delta_c)) : "—"} />
+      <Foot>
+        <div style={{ opacity: 0.85 }}>
+          AI 版 = 稳定版预标注的原始结果，人改了也不受影响；人工版 = 已提交/已通过任务里当前的片段。
+        </div>
+        {tasks.length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            这天 {tasks.length} 个时段，已提交/通过 {done} 个。
+            {partial && (
+              <b>
+                {" "}
+                剩下 {tasks.length - done} 个还没审，人工版只看得见已通过那部分的抓挠，次数天然偏少、C 值偏低
+                —— 差得多不代表模型错，等这天全部审完再比。
+              </b>
+            )}
+          </div>
+        )}
       </Foot>
     </div>
   );

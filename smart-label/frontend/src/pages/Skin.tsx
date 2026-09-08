@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
-import { CExplain, SExplain, ScratchExplain } from "@/components/ScoreExplain";
+import { CExplain, DeltaExplain, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
@@ -661,10 +661,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             title: "AI / 人工",
             width: 120,
             render: (_: unknown, r: TrackingRow) => (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
-                {r.delta_c != null && <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>（Δ{r.delta_c > 0 ? "+" : ""}{r.delta_c}）</span>}
-              </Typography.Text>
+              <Tooltip title={<DeltaExplain r={r} />}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
+                  {r.delta_c != null && <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>（Δ{r.delta_c > 0 ? "+" : ""}{r.delta_c}）</span>}
+                </Typography.Text>
+              </Tooltip>
             ),
           },
           {
@@ -989,7 +991,9 @@ function LinkTab(p: {
         <Button type="primary" loading={loading} onClick={pull}>重新拉取</Button>
         {data && !loading && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}；
+            共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}
+            {/* 过几天再看这张表，得知道它是不是还反映当前的标注 */}
+            {data.computed_at && <>，数据算于 <b>{data.computed_at}</b></>}；
             标注有更新、或者改了上面的条件，再点「重新拉取」
           </Typography.Text>
         )}
