@@ -1194,8 +1194,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                     <Tag color="warning">还差候选</Tag>
                   </Tooltip>
                 ) : viewed.has(t.task_id) ? (
-                  <Tooltip title="看过但还没下结论">
-                    <Tag color="processing">看到一半</Tag>
+                  <Tooltip title="打开看过，还没下结论">
+                    <Tag color="processing">查看中</Tag>
                   </Tooltip>
                 ) : (
                   <Tag>没看过</Tag>
