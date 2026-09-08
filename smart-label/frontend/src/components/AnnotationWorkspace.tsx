@@ -235,6 +235,7 @@ export default function AnnotationWorkspace({
         ai_confidence: null,
         ai_confirmed: false,
         uncertain: false,
+        uncertain_reason: null,
         created_by: null,
       },
     ]);
@@ -291,6 +292,7 @@ export default function AnnotationWorkspace({
         ai_confidence: i.origin_item_id == null ? i.ai_confidence : undefined,
         ai_confirmed: i.ai_confirmed,
         uncertain: i.uncertain,
+        uncertain_reason: i.uncertain_reason,
       }))
     );
   };
@@ -324,6 +326,7 @@ export default function AnnotationWorkspace({
           origin_item_id: null,
           source_type: "ai_generated",
           uncertain: false,
+          uncertain_reason: null,
           is_modified: false,
           ai_confidence: it.confidence,
           ai_confirmed: false,
@@ -533,6 +536,19 @@ export default function AnnotationWorkspace({
     >
       <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
+        {readOnly && onClaim && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 6 }}
+            message="只读：要逐条确认、改类别（比如其实是甩身体）、或标成待定，先点右下角「认领并修改」"
+            action={
+              <Button size="small" type="primary" onClick={onClaim}>
+                认领并修改
+              </Button>
+            }
+          />
+        )}
         {loopRange && (
           <Alert
             type="info"

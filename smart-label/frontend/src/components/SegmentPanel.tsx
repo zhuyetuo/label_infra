@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { BarChartOutlined, CheckOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
 
-type SourceFilter = "all" | "ai" | "ai_pending" | "ai_confirmed" | "ai_modified" | "human" | "uncertain";
+type SourceFilter =
+  | "all"
+  | "ai"
+  | "ai_pending"
+  | "ai_confirmed"
+  | "ai_modified"
+  | "human"
+  | "uncertain"
+  | "uncertain_no_view"
+  | "uncertain_ambiguous";
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
@@ -15,8 +24,18 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "ai_confirmed", label: "AI 已确认" },
   { value: "ai_modified", label: "AI 已纠正" },
   { value: "human", label: "人工" },
-  { value: "uncertain", label: "待定" },
+  { value: "uncertain", label: "待定（全部）" },
+  { value: "uncertain_no_view", label: "待定·没画面" },
+  { value: "uncertain_ambiguous", label: "待定·看不清" },
 ];
+
+// 待定的两种情况。都不进训练集，分开记是为了知道"以后回看还有没有救"：
+// 没画面的除非补拍否则永远定不了，看不清的换个视角/放慢也许还能定。
+const UNCERTAIN_KINDS = [
+  { value: "no_view", short: "没画面", label: "画面里没拍到狗", hint: "镜头里根本没有狗，无从判断" },
+  { value: "ambiguous", short: "看不清", label: "拍到了但看不准", hint: "像抓挠又不太像，定不下来" },
+] as const;
+const kindOf = (v: string | null) => UNCERTAIN_KINDS.find((k) => k.value === v);
 
 // 比这个短的空白不算"漏预测"（模型按窗口出结果，窗口边界处零点几秒的缝很正常）
 const GAP_MIN_MS = 500;
@@ -83,7 +102,9 @@ interface Props {
   /** 改类别/起止/确认状态。改类别或起止时调用方负责把 AI 片段标成"已纠正"并清掉确认 */
   onUpdate: (
     ids: number[],
-    patch: Partial<Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed" | "uncertain">>
+    patch: Partial<
+      Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed" | "uncertain" | "uncertain_reason">
+    >
   ) => void;
   onDelete: (id: number) => void;
   /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
@@ -152,8 +173,10 @@ export default function SegmentPanel({
         if (filterSource === "ai_confirmed" && st !== "confirmed") return false;
         if (filterSource === "ai_modified" && st !== "modified") return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
+        if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
+        if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
         // 「待定」是单独一类，别混进别的来源的筛选结果里
-        if (filterSource !== "uncertain" && filterSource !== "all" && i.uncertain) return false;
+        if (!filterSource.startsWith("uncertain") && filterSource !== "all" && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
@@ -480,12 +503,14 @@ export default function SegmentPanel({
             width: 100,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
-              if (i.uncertain)
+              if (i.uncertain) {
+                const k = kindOf(i.uncertain_reason);
                 return (
-                  <Tooltip title="拿不准：留着当记录，但不参与模型训练">
-                    <Tag color="purple">待定</Tag>
+                  <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
+                    <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
                   </Tooltip>
                 );
+              }
               if (st === "pending") return <Tag color="orange">AI 待确认</Tag>;
               if (st === "confirmed") return <Tag color="green">AI 已确认</Tag>;
               if (st === "modified") return <Tag color="blue">AI 已纠正</Tag>;
@@ -518,15 +543,26 @@ export default function SegmentPanel({
                   {/* 拿不准（画面里没拍到狗、动作看不清）：既不能确认成这个类别，
                       删掉又可惜。标成「待定」留着，导出训练集时这段时间会被整个
                       挖掉，不会被当成负样本用 */}
+                  {/* 定不下来的两种情况分开记，都不进训练集 */}
                   {!readOnly && !i.uncertain && (
-                    <Tooltip title="看不清 / 拿不准：留着记录，但不进训练集">
-                      <Button size="small" type="link" onClick={() => onUpdate([i.id], { uncertain: true })}>
-                        待定
+                    <Dropdown
+                      menu={{
+                        items: UNCERTAIN_KINDS.map((k) => ({ key: k.value, label: k.label })),
+                        onClick: ({ key }) => onUpdate([i.id], { uncertain: true, uncertain_reason: key }),
+                      }}
+                    >
+                      <Button size="small" type="link">
+                        待定 <DownOutlined style={{ fontSize: 10 }} />
                       </Button>
-                    </Tooltip>
+                    </Dropdown>
                   )}
                   {!readOnly && i.uncertain && (
-                    <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onUpdate([i.id], { uncertain: false })}>
+                    <Button
+                      size="small"
+                      type="link"
+                      style={{ color: "#999" }}
+                      onClick={() => onUpdate([i.id], { uncertain: false, uncertain_reason: null })}
+                    >
                       取消待定
                     </Button>
                   )}

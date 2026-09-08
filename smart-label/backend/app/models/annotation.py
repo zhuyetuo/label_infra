@@ -83,6 +83,13 @@ class AnnotationLabelItem(Base):
     uncertain: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0", comment="待定：拿不准，不参与训练"
     )
+    # 待定的两种情况，复看时想知道是哪一种：
+    #   no_view    画面里根本没拍到狗，无从判断
+    #   ambiguous  拍到了，但动作像抓挠又不太像
+    # 两种都不进训练集，区别只在"以后补拍/回看还有没有救"
+    uncertain_reason: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="待定原因：no_view / ambiguous"
+    )
 
     # 实际标注这一条的用户；AI生成的为 NULL；任务被中途转手也能按人追溯
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
