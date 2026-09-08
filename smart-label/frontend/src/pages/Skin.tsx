@@ -1062,6 +1062,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           canConfirm && wsTask && wsTask.status !== "APPROVED"
             ? async () => {
                 await confirmScratch(wsTask);
+                // 确认完这一段的活就干完了，直接回到挑段落的列表接着看下一段，
+                // 不用再手动点 X（「整份通过」本来就是这么做的）
+                setWsTask(null);
               }
             : undefined
         }
@@ -1167,7 +1170,19 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               render: (_: unknown, t) =>
                 t.scratch_segments ? <Tag color="red">{t.scratch_segments} 段</Tag> : <Typography.Text type="secondary">0</Typography.Text>,
             },
-            { title: "状态", width: 90, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
+            {
+              // 叫「任务状态」跟右边「人工复看」区分开：一个是任务在流程里走到哪，
+              // 一个是我这一趟看了什么。以前都叫「状态」，很容易混
+              title: (
+                <Tooltip title="任务在标注流程里的状态。「抓挠确认无误」只认抓挠这一类，认完会把任务放回待认领——别的类别（活动/睡觉…）还没人审，谁都可以接着标。要连它们一起认、把任务关掉，用「整份通过」">
+                  <span style={{ cursor: "help" }}>任务状态</span>
+                </Tooltip>
+              ),
+              key: "status",
+              width: 100,
+              dataIndex: "status",
+              render: (v: string) => <TaskStatusTag status={v as never} />,
+            },
             {
               title: "人工复看",
               key: "review",
