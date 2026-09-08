@@ -8,10 +8,16 @@ timeserieslabels}），写到 NAS 的 data_train/<name>/merged_tmp.json，旁边
 新增的、从候选里确认的，都已经是同一张表里的正式片段；被排除的候选和被删掉的误报
 所占的时间，本来就被活动/睡觉这些状态片段覆盖着，天然是负样本，不用单独处理。
 
-例外是标了「待定」的片段（画面里没拍到狗、动作看不清，既不能确认也不舍得删）：
-它们不导出，而且要把那段时间从别的片段里挖掉。只是"不导出待定条"是不够的——
-那段时间通常还压着一条"活动/睡觉"，不挖的话等于把一段可能是抓挠的数据当成负样本
-喂给模型，比不要这段数据更糟。
+例外有两种，处理办法一样——挖洞：
+
+1. 标了「待定」的片段（画面里没拍到狗、动作看不清，既不能确认也不舍得删）。
+   只是"不导出待定条"是不够的：那段时间通常还压着一条"活动/睡觉"，不挖的话
+   等于把一段可能是抓挠的数据当成负样本喂给模型，比不要这段数据更糟。
+2. 采集时掉的数据（蓝牙断连，六轴全写 0 占帧对齐的位置，或者写 MISSING）。
+   现场用 BLE 收数据才会这样，线上设备是先存本地硬盘再回传，不会缺帧——所以
+   这是采集期的临时噪声，绝不能进训练集。AI 结果 JSON 里记着这些时间段
+   （missing 字段），这里读出来一并挖掉。注意是挖时间段、不是丢 CSV 行：行还
+   得留着，不然工作台上看视频会跳帧、波形跟时间轴对不上。
 """
 
 from __future__ import annotations
@@ -31,7 +37,8 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
-from app.services.ai_prelabel_service import PrelabelError, _csv_start_of
+from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
+from app.services.skin_link_service import _read_ai_json
 
 TRAIN_DIR = "data_train"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -125,7 +132,21 @@ async def export_dataset(
         else:
             items_by_task.setdefault(task_id, []).append((label_id, int(s_ms), int(e_ms)))
 
+    def _missing_holes(sample: Sample, csv_start: datetime) -> list[tuple[int, int]]:
+        """AI 结果里记的掉数据时间段，换算成相对 CSV 起点的毫秒。"""
+        data = _read_ai_json(ai_label_relpath(sample.imu_csv_path)) if sample.imu_csv_path else None
+        out: list[tuple[int, int]] = []
+        for m in (data or {}).get("missing") or []:
+            a, b = parse_ts(m.get("start_ts")), parse_ts(m.get("end_ts"))
+            if a and b and b > a:
+                out.append((
+                    int(round((a - csv_start).total_seconds() * 1000)),
+                    int(round((b - csv_start).total_seconds() * 1000)),
+                ))
+        return out
+
     n_holes = sum(len(v) for v in holes_by_task.values())
+    n_missing_ms = 0
 
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
@@ -143,7 +164,10 @@ async def export_dataset(
             warnings.append(f"任务 #{task.id}：{e}")
             continue
         result = []
-        holes = _merge(holes_by_task.get(task.id) or [])
+        # 「待定」和「采集时掉数据」都要挖掉，合成一组洞一起处理
+        missing = await asyncio.to_thread(_missing_holes, sample, csv_start)
+        n_missing_ms += sum(b - a for a, b in missing)
+        holes = _merge((holes_by_task.get(task.id) or []) + missing)
         for label_id, s_ms, e_ms in sorted(items, key=lambda x: x[1]):
             if e_ms <= s_ms:
                 continue
@@ -175,8 +199,9 @@ async def export_dataset(
         "name": name, "date_from": date_from.isoformat(), "date_to": date_to.isoformat(),
         "project_id": project_id, "include_submitted": include_submitted,
         "n_tasks": len(ls_tasks), "n_segments": n_segments, "total_hours": round(total_sec / 3600, 2),
-        # 有多少段被判「待定」而挖掉了，导出后能对得上账
+        # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,
+        "missing_excluded_min": round(n_missing_ms / 60000, 1),
         "labels": dict(label_counter), "warnings": warnings[:50],
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "export_json": os.path.join(rel_dir, "merged_tmp.json"),
