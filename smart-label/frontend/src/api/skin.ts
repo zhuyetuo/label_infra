@@ -99,6 +99,10 @@ export const skinMlPredictS = (b: { rows: MlRow[]; date_label: string; imu: stri
 
 export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number; include_drafts?: boolean; refresh?: boolean }) =>
   request.get<never, LinkResult>("/skin/link/stats", { params: p, timeout: 300_000 });
+/** 标注平台上现在有任务的数据覆盖范围。每日跟踪表的日期默认跟着它走 */
+export const getSkinDataRange = () =>
+  request.get<never, { date_from: string | null; date_to: string | null }>("/skin/data-range");
+
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>
   request.post<never, SkinRecord>("/skin/records", body);

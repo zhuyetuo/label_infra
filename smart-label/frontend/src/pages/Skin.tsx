@@ -16,6 +16,7 @@ import { approveWholeTask, confirmScratchOnly } from "@/utils/confirmTask";
 import { listLabels } from "@/api/labels";
 import type { LabelDefinition, Task } from "@/types";
 import {
+  getSkinDataRange,
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
   type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
@@ -299,13 +300,7 @@ function QuestionnaireTab(p: {
 // ── 趋势图表：跟跟踪表共用同一套筛选条件（localStorage 同一个 key），只看图 ──
 
 function ChartsTab() {
-  const [f, setF] = useState(loadTrackFilter);
-  const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
-    setF((prev) => {
-      const next = { ...prev, ...patch };
-      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
+  const { f, setFilter, dataRange, offRange, alignToProjects } = useTrackFilter();
   const { data, isFetching } = useQuery({
     queryKey: ["skin-tracking", f.from, f.to, f.cPrefer],
     queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to, c_prefer: f.cPrefer === "ai" ? "ai" : "human" }),
@@ -340,9 +335,17 @@ function ChartsTab() {
       <Space wrap style={{ marginBottom: 12 }}>
         <DatePicker.RangePicker
           value={[dayjs(f.from), dayjs(f.to)]}
-          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
+          // 自己动过日期就不再自动跟着项目走了，尊重用户的选择
+          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD"), autoRange: false })}
           allowClear={false}
         />
+        {offRange && (
+          <Tooltip title={`标注平台上现在有任务的数据是 ${dataRange?.date_from} ~ ${dataRange?.date_to}。这张表的行来自历史算过的结果，项目删了行还在，所以两边可能对不上`}>
+            <Button size="small" onClick={alignToProjects}>
+              跟项目对齐
+            </Button>
+          </Tooltip>
+        )}
         <Select
           mode="multiple"
           allowClear
@@ -425,6 +428,8 @@ const loadTrackFilter = (): {
    *   compare 两版并排 + 差值 —— 看模型准不准、差在哪
    */
   cPrefer: "human" | "ai" | "compare";
+  /** 日期还没被用户自己调过：跟着"标注平台上现在有任务的范围"走 */
+  autoRange?: boolean;
 } => {
   try {
     const raw = localStorage.getItem(TRACK_FILTER_KEY);
@@ -436,8 +441,45 @@ const loadTrackFilter = (): {
     onlyTriggered: false,
     dogs: [] as string[],
     cPrefer: "human" as const,
+    // 没存过筛选：等 /skin/data-range 回来，用"现在真的有任务的范围"覆盖上面
+    // 那个近 30 天。上面的值只是它没回来之前的占位
+    autoRange: true,
   };
 };
+
+/**
+ * 跟踪表/趋势图共用的筛选条件（同一个 localStorage key）。
+ *
+ * 日期默认跟着「标注平台上现在有任务的范围」走：这两张表的行来自
+ * skin_daily_stats——「项目联动」算完存下来的历史结果，项目删了行还在，
+ * 不框一下就会看到一堆早就没有项目的日子，让人以为数据是凭空冒出来的。
+ * 用户自己动过日期之后就不再自动跟了（autoRange=false）。
+ */
+function useTrackFilter() {
+  const [f, setF] = useState(loadTrackFilter);
+  const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
+    setF((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  const { data: dataRange } = useQuery({ queryKey: ["skin-data-range"], queryFn: getSkinDataRange });
+  useEffect(() => {
+    if (!dataRange?.date_from || !dataRange.date_to) return;
+    setF((prev) => {
+      if (!prev.autoRange) return prev;
+      const next = { ...prev, from: dataRange.date_from!, to: dataRange.date_to! };
+      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, [dataRange]);
+  const offRange =
+    !!dataRange?.date_from && !!dataRange.date_to && (f.from !== dataRange.date_from || f.to !== dataRange.date_to);
+  const alignToProjects = () =>
+    dataRange?.date_from && dataRange.date_to &&
+    setFilter({ from: dataRange.date_from, to: dataRange.date_to, autoRange: true });
+  return { f, setF, setFilter, dataRange, offRange, alignToProjects };
+}
 
 // 复看进度（看过 / 抓挠已确认 / 整份已通过）记在浏览器本地，按任务 id 存。
 // 这几件事都是"我这个人做到哪了"，不是任务本身的状态，没必要落库；只留最近
@@ -469,13 +511,8 @@ function saveTaskMark(key: string, prev: Set<number>, taskId: number): Set<numbe
 function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
   const userId = useAuthStore((st) => st.userInfo?.id);
   const role = useAuthStore((st) => st.userInfo?.role);
-  const [f, setF] = useState(loadTrackFilter);
-  const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
-    setF((prev) => {
-      const next = { ...prev, ...patch };
-      try { localStorage.setItem(TRACK_FILTER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
+  const { f, setFilter, dataRange, offRange, alignToProjects } = useTrackFilter();
+
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
   // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
   // 标完回来这份是打开弹窗那一刻的快照，改了什么都看不见，非刷新页面不可
@@ -583,9 +620,17 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       <Space wrap style={{ marginBottom: 8 }}>
         <DatePicker.RangePicker
           value={[dayjs(f.from), dayjs(f.to)]}
-          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD") })}
+          // 自己动过日期就不再自动跟着项目走了，尊重用户的选择
+          onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format("YYYY-MM-DD"), to: v[1].format("YYYY-MM-DD"), autoRange: false })}
           allowClear={false}
         />
+        {offRange && (
+          <Tooltip title={`标注平台上现在有任务的数据是 ${dataRange?.date_from} ~ ${dataRange?.date_to}。这张表的行来自历史算过的结果，项目删了行还在，所以两边可能对不上`}>
+            <Button size="small" onClick={alignToProjects}>
+              跟项目对齐
+            </Button>
+          </Tooltip>
+        )}
         <Select
           mode="multiple"
           allowClear
