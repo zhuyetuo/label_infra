@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.review import ReviewRecord
 from app.models.project import Project
@@ -280,6 +281,25 @@ async def list_tasks(
         for task_id, label_id, n, n_pending in rows.all():
             label_counts.setdefault(task_id, {})[label_id] = {"n": int(n), "ai_pending": int(n_pending or 0)}
 
+    # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
+    # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，
+    # 其实底下压着十几条待判断的候选。两个数一起给：待确认多少、总共多少。
+    cand_counts: dict[int, dict[str, int]] = {}
+    if task_ids:
+        rows = await db.execute(
+            select(
+                AiCandidate.task_id,
+                func.count(AiCandidate.id),
+                func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)),
+            )
+            .join(Task, Task.id == AiCandidate.task_id)
+            .join(scope, scope.c.id == Task.id)
+            .where(AiCandidate.round_no == Task.round_no)
+            .group_by(AiCandidate.task_id)
+        )
+        for task_id, n, n_pending in rows.all():
+            cand_counts[task_id] = {"n": int(n), "pending": int(n_pending or 0)}
+
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
     review_comments: dict[int, str | None] = {}
@@ -326,6 +346,8 @@ async def list_tasks(
                 "has_draft": draft_counts.get(t.id, 0) > 0,
                 "draft_item_count": draft_counts.get(t.id, 0),
                 "label_counts": label_counts.get(t.id, {}),
+                "cand_count": cand_counts.get(t.id, {}).get("n", 0),
+                "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 "review_comment": review_comments.get(t.id),
                 **briefs.get(t.sample_id, {}),
                 "assigned_to_name": user_names.get(t.assigned_to) if t.assigned_to is not None else None,

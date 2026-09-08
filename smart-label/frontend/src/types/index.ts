@@ -66,6 +66,9 @@ export interface Task {
   draft_item_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
   label_counts?: Record<number, { n: number; ai_pending: number }>;
+  /** 「疑似抓挠」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
+  cand_count?: number;
+  cand_pending?: number;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */
