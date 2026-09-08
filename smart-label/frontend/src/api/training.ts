@@ -15,6 +15,10 @@ export interface TrainDataset {
   n_uncertain_excluded?: number;
   /** 采集掉数据挖掉了多少分钟 */
   missing_excluded_min?: number;
+  /** 同类别压在一起、并成一段的次数 */
+  n_merged_overlaps?: number;
+  /** 不同类别压在一起的处数（矛盾标注，要回工作台改） */
+  n_label_conflicts?: number;
   n_tasks: number;
   n_segments: number;
   total_hours: number;
