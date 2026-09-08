@@ -444,9 +444,10 @@ export default function Training() {
                 </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="类别冲突">
-                <Tooltip title="同一段时间标了两个类别（比如既是活动又是抓挠）。不能替人决定谁对，下面「跳过的任务 / 提示」里列了出来，回工作台改">
+                <Tooltip title="同一段时间标了两个类别（比如既是活动又是抓挠）。不能替人决定谁对，重叠那一小段已经从两边都挖掉了，各自剩下的部分照常用；下面「跳过的任务 / 提示」里逐条列了出来，回工作台改起止">
                   <span style={{ cursor: "help", color: dsDetail.n_label_conflicts ? "#cf1322" : undefined }}>
                     {dsDetail.n_label_conflicts ?? 0} 处
+                    {!!dsDetail.label_conflict_excluded_sec && `（挖掉 ${dsDetail.label_conflict_excluded_sec} 秒）`}
                   </span>
                 </Tooltip>
               </Descriptions.Item>

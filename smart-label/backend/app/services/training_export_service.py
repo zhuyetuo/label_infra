@@ -199,6 +199,7 @@ async def export_dataset(
     # 同类别重叠并掉了几段、不同类别压在一起有几处，导出后能对上账
     n_merged_overlaps = 0
     n_conflicts = 0
+    n_conflict_ms = 0
 
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
@@ -234,21 +235,31 @@ async def export_dataset(
             n_merged_overlaps += len(spans) - len(merged)
             merged_items.extend((label_id, a_ms, b_ms) for a_ms, b_ms in merged)
 
-        # 不同类别压在一起是矛盾标注（同一段时间既是活动又是抓挠），不能替人决定
-        # 谁对，如实报出来让人回去改
+        # 不同类别压在一起是矛盾标注（同一段时间既是活动又是抓挠）。两条都导出的话，
+        # 同一批数据行会以两个类别各进一次，模型学到的是纯噪声——比不要这段更糟。
+        # 不能替人决定谁对，所以按跟「待定」一样的办法：把重叠那一小段从两边都挖掉，
+        # 各自剩下的部分照常用。宁可少一点数据，也不喂矛盾的。
         ordered = sorted(merged_items, key=lambda x: x[1])
+        conflict_spans: list[tuple[int, int]] = []
         for i in range(len(ordered) - 1):
             l1, a1, b1 = ordered[i]
             for l2, a2, b2 in ordered[i + 1 :]:
                 if a2 >= b1:
                     break
-                if l1 != l2 and n_conflicts < 30:
+                if l1 == l2:
+                    continue
+                lo, hi = a2, min(b1, b2)
+                conflict_spans.append((lo, hi))
+                n_conflicts += 1
+                if len(warnings) < 200:
                     warnings.append(
                         f"任务 #{task.id}：{label_names.get(l1, l1)} 和 {label_names.get(l2, l2)} "
-                        f"在 {a2}~{min(b1, b2)}ms 重叠，同一段时间标了两个类别"
+                        f"在 {lo}~{hi}ms 重叠，两边都挖掉了这一小段——回工作台改一下起止"
                     )
-                if l1 != l2:
-                    n_conflicts += 1
+        if conflict_spans:
+            merged_conflicts = _merge(conflict_spans)
+            n_conflict_ms += sum(b - a for a, b in merged_conflicts)
+            holes = _merge(holes + merged_conflicts)
 
         for label_id, s_ms, e_ms in ordered:
             if e_ms <= s_ms:
@@ -287,6 +298,8 @@ async def export_dataset(
         "n_merged_overlaps": n_merged_overlaps,
         # 不同类别压在一起的处数：这是矛盾标注，得回工作台改
         "n_label_conflicts": n_conflicts,
+        # 因为类别冲突挖掉了多少秒
+        "label_conflict_excluded_sec": round(n_conflict_ms / 1000, 1),
         "n_tasks": len(ls_tasks), "n_segments": n_segments, "total_hours": round(total_sec / 3600, 2),
         # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,
