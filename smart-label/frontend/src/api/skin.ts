@@ -163,6 +163,7 @@ export interface TrackingRow {
     cand_confirmed: number;
     cand_relabeled: number;
     cand_rejected: number;
+    cand_uncertain: number;
   }[];
   c_ai: CSide | null;
   c_human: CSide | null;

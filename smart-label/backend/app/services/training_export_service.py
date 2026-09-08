@@ -13,6 +13,8 @@ timeserieslabels}），写到 NAS 的 data_train/<name>/merged_tmp.json，旁边
 1. 标了「待定」的片段（画面里没拍到狗、动作看不清，既不能确认也不舍得删）。
    只是"不导出待定条"是不够的：那段时间通常还压着一条"活动/睡觉"，不挖的话
    等于把一段可能是抓挠的数据当成负样本喂给模型，比不要这段数据更糟。
+1b. 标了「待定」的**候选**（疑似抓挠里人看完拿不准的那些）。它本来就不在草稿里，
+   但同样不能让那段时间以"活动/睡觉"的身份混成负样本，一并挖掉。
 2. 采集时掉的数据（蓝牙断连，六轴全写 0 占帧对齐的位置，或者写 MISSING）。
    现场用 BLE 收数据才会这样，线上设备是先存本地硬盘再回传，不会缺帧——所以
    这是采集期的临时噪声，绝不能进训练集。AI 结果 JSON 里记着这些时间段
@@ -33,6 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
@@ -132,6 +135,20 @@ async def export_dataset(
         else:
             items_by_task.setdefault(task_id, []).append((label_id, int(s_ms), int(e_ms)))
 
+    # 候选里被标成「待定」的：不在草稿里，但那段时间同样不能当负样本用
+    cand_holes: dict[int, list[tuple[int, int]]] = {}
+    cand_rows = await db.execute(
+        select(AiCandidate.task_id, AiCandidate.start_time_ms, AiCandidate.end_time_ms)
+        .join(Task, Task.id == AiCandidate.task_id)
+        .where(
+            AiCandidate.task_id.in_(task_ids),
+            AiCandidate.round_no == Task.round_no,
+            AiCandidate.status == CandidateStatus.uncertain,
+        )
+    )
+    for tid, s_ms, e_ms in cand_rows.all():
+        cand_holes.setdefault(tid, []).append((int(s_ms), int(e_ms)))
+
     def _missing_holes(sample: Sample, csv_start: datetime) -> list[tuple[int, int]]:
         """AI 结果里记的掉数据时间段，换算成相对 CSV 起点的毫秒。"""
         data = _read_ai_json(ai_label_relpath(sample.imu_csv_path)) if sample.imu_csv_path else None
@@ -145,7 +162,7 @@ async def export_dataset(
                 ))
         return out
 
-    n_holes = sum(len(v) for v in holes_by_task.values())
+    n_holes = sum(len(v) for v in holes_by_task.values()) + sum(len(v) for v in cand_holes.values())
     n_missing_ms = 0
 
     ls_tasks: list[dict] = []
@@ -167,7 +184,7 @@ async def export_dataset(
         # 「待定」和「采集时掉数据」都要挖掉，合成一组洞一起处理
         missing = await asyncio.to_thread(_missing_holes, sample, csv_start)
         n_missing_ms += sum(b - a for a, b in missing)
-        holes = _merge((holes_by_task.get(task.id) or []) + missing)
+        holes = _merge((holes_by_task.get(task.id) or []) + (cand_holes.get(task.id) or []) + missing)
         for label_id, s_ms, e_ms in sorted(items, key=lambda x: x[1]):
             if e_ms <= s_ms:
                 continue

@@ -254,7 +254,13 @@ async def daily_tracking(
     # 「疑似抓挠」候选的处理进度：还剩几条没看、确认成抓挠几条、改成别的类别
     # 几条（那是人纠正过的误报）、排除几条。复看漏检主要看这几个数
     cand_counts: dict[int, dict] = defaultdict(
-        lambda: {"cand_pending": 0, "cand_confirmed": 0, "cand_relabeled": 0, "cand_rejected": 0}
+        lambda: {
+            "cand_pending": 0,
+            "cand_confirmed": 0,
+            "cand_relabeled": 0,
+            "cand_rejected": 0,
+            "cand_uncertain": 0,
+        }
     )
     if task_rows:
         rows_cand = await db.execute(
@@ -267,6 +273,8 @@ async def daily_tracking(
                 cand_counts[tid]["cand_pending"] += 1
             elif st == CandidateStatus.rejected:
                 cand_counts[tid]["cand_rejected"] += 1
+            elif st == CandidateStatus.uncertain:
+                cand_counts[tid]["cand_uncertain"] += 1
             elif decided_label is not None and decided_label not in scratch_label_ids:
                 cand_counts[tid]["cand_relabeled"] += 1
             else:

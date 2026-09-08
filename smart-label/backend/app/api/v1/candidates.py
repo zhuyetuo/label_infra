@@ -35,6 +35,7 @@ def _out(c: AiCandidate) -> dict:
         "status": c.status.value, "decided_by": c.decided_by,
         # 确认成了哪个类别（空 = 就是抓挠）：列表里要显示「已确认 → 甩身体」
         "decided_label_id": c.decided_label_id,
+        "uncertain_reason": c.uncertain_reason,
         "decided_at": c.decided_at.isoformat() if c.decided_at else None,
     }
 
@@ -65,8 +66,9 @@ async def list_candidates(
 
 
 class DecideIn(BaseModel):
-    decision: str  # confirmed / rejected / pending
+    decision: str  # confirmed / rejected / uncertain / pending
     label_id: int | None = None  # 确认时写进草稿用哪个标签，留空按 label_name 找
+    uncertain_reason: str | None = None  # 待定时是哪一种：no_view / ambiguous
 
 
 @router.post("/{candidate_id}/decide")
@@ -76,8 +78,10 @@ async def decide(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if body.decision not in ("confirmed", "rejected", "pending"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "decision 只能是 confirmed/rejected/pending")
+    if body.decision not in ("confirmed", "rejected", "uncertain", "pending"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "decision 只能是 confirmed/rejected/uncertain/pending"
+        )
     cand = await db.get(AiCandidate, candidate_id)
     if cand is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "候选不存在")
@@ -125,6 +129,8 @@ async def decide(
     cand.status = CandidateStatus(body.decision)
     # 记下确认成了哪个类别：抓挠以外的说明是"人纠正过的误报"，统计里要分开看
     cand.decided_label_id = label_id if body.decision == "confirmed" else None
+    # 待定原因；不是待定就清掉，别留个孤零零的原因在库里
+    cand.uncertain_reason = body.uncertain_reason if body.decision == "uncertain" else None
     cand.decided_by = user.id if body.decision != "pending" else None
     cand.decided_at = datetime.now(UTC).replace(tzinfo=None) if body.decision != "pending" else None
     await db.commit()

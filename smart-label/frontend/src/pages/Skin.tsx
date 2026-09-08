@@ -996,7 +996,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               // 正式片段之外模型可能漏掉的那些。这里主要看"还剩几条没看"，
               // 以及看完的结论：补成抓挠 / 改成别的类别（人纠正过的误报）/ 排除
               render: (_: unknown, t) => {
-                const total = t.cand_pending + t.cand_confirmed + t.cand_relabeled + t.cand_rejected;
+                const total =
+                  t.cand_pending + t.cand_confirmed + t.cand_relabeled + t.cand_rejected + t.cand_uncertain;
                 if (!total) return <Typography.Text type="secondary">无</Typography.Text>;
                 return (
                   <Space size={4} wrap>
@@ -1009,6 +1010,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                     {t.cand_relabeled > 0 && (
                       <Tooltip title="其实是别的动作（多半是甩身体），已按那个类别记下——既是那类的正例，也是抓挠的难负样本">
                         <Tag color="blue">改类别 {t.cand_relabeled}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.cand_uncertain > 0 && (
+                      <Tooltip title="看了也拿不准（没画面 / 看不清）；不进训练集，也不算抓挠">
+                        <Tag color="purple">待定 {t.cand_uncertain}</Tag>
                       </Tooltip>
                     )}
                     {t.cand_rejected > 0 && <Tag>排除 {t.cand_rejected}</Tag>}
