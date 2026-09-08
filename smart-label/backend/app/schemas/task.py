@@ -58,6 +58,8 @@ class LabelItemIn(BaseModel):
     ai_confirmed: bool | None = None
     # 待定：拿不准，保留记录但不参与训练。不传 = 保持库里原值
     uncertain: bool | None = None
+    # 待定原因：no_view（画面里没拍到狗）/ ambiguous（拍到了但看不准）
+    uncertain_reason: str | None = None
 
 
 class LabelItemOut(LabelItemIn):
@@ -69,6 +71,7 @@ class LabelItemOut(LabelItemIn):
     ai_confidence: float | None
     ai_confirmed: bool
     uncertain: bool
+    uncertain_reason: str | None
     created_by: int | None
 
 

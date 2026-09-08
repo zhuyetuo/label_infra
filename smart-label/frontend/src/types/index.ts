@@ -88,6 +88,8 @@ export interface LabelItem {
   ai_confirmed: boolean;
   /** 待定：看了拿不准（画面里没拍到、动作看不清），留着但不进训练集 */
   uncertain: boolean;
+  /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
+  uncertain_reason: string | null;
   created_by: number | null;
 }
 

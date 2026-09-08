@@ -215,6 +215,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 origin.ai_confirmed = incoming.ai_confirmed
             if incoming.uncertain is not None:
                 origin.uncertain = incoming.uncertain
+                # 取消待定就把原因一起清掉，别留个孤零零的原因在库里
+                origin.uncertain_reason = incoming.uncertain_reason if incoming.uncertain else None
         else:
             new_item = AnnotationLabelItem(
                 annotation_record_id=record.id,
@@ -228,6 +230,7 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 else None,
                 ai_confirmed=bool(incoming.ai_confirmed) and incoming.source_type == LabelItemSource.ai_generated,
                 uncertain=bool(incoming.uncertain),
+                uncertain_reason=incoming.uncertain_reason if incoming.uncertain else None,
                 created_by=user.id,
             )
             db.add(new_item)
