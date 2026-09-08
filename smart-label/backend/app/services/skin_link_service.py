@@ -39,6 +39,9 @@ _logger = logging.getLogger(__name__)
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
 _TS_FMT = "%Y-%m-%d %H:%M:%S.%f"
 HUMAN_STATUSES = (TaskStatus.SUBMITTED, TaskStatus.APPROVED)
+# 预读 NAS 上的 AI JSON / CSV 头时同时开几个：太少还是慢，太多会把 NAS 和默认
+# 线程池（默认就 40 个槽）占满，反过来卡住别的请求
+_IO_CONCURRENCY = 16
 
 
 class SkinLinkError(Exception):
@@ -143,11 +146,67 @@ async def collect_link_stats(
     counts: dict[tuple, dict] = defaultdict(lambda: {"total": 0, "approved": 0, "submitted": 0, "in_progress": 0, "pending": 0, "rejected": 0, "no_ai": 0})
     ai_modes: dict[tuple, set] = defaultdict(set)
 
+    # 两趟并发预读，别在主循环里一个样本一个样本地 await 磁盘。选两周就是一百多个
+    # 样本，串行读 NAS 时每份都要等一个网络往返，「重新拉取」要跑好几分钟；这里
+    # 并发起来（限流是怕把 NAS 打满，也怕线程池被占光），主循环变成纯内存聚合。
+    valid = [s for s in samples if key_of(s)[1] is not None]
     for s in samples:
-        key = key_of(s)
-        if key[1] is None:
+        if key_of(s)[1] is None:
             warnings.append(f"样本 {s.sample_code} 编号里没有 _imu 后缀，跳过")
-            continue
+
+    sem = asyncio.Semaphore(_IO_CONCURRENCY)
+
+    async def _guarded(fn, *a):
+        async with sem:
+            return await asyncio.to_thread(fn, *a)
+
+    ai_data: dict[int, dict | None] = {}
+    # 没登记 CSV 路径的样本连 AI JSON 的路径都拼不出来，直接当没有
+    with_csv = [s for s in valid if s.imu_csv_path]
+    for s, res in zip(
+        with_csv,
+        await asyncio.gather(
+            *(_guarded(_read_ai_json, ai_label_relpath(s.imu_csv_path)) for s in with_csv), return_exceptions=True
+        ),
+    ):
+        if isinstance(res, BaseException):
+            warnings.append(f"样本 {s.sample_code} 的 AI 结果读不出来：{type(res).__name__}: {res}")
+            ai_data[s.id] = None
+        else:
+            ai_data[s.id] = res
+
+    # 第二趟：哪些样本还需要 CSV 起点（有人工片段要换算，或者没 AI JSON 拿不到佩戴时段）
+    def _span_of(data: dict | None) -> tuple[datetime, datetime] | None:
+        if not data:
+            return None
+        ts = [t for t in (parse_ts(w.get("ts")) for w in data.get("windows") or []) if t is not None]
+        return (min(ts), max(ts)) if ts else None
+
+    spans_by_sample = {s.id: _span_of(ai_data.get(s.id)) for s in valid}
+    need_start = [
+        s
+        for s in valid
+        if spans_by_sample[s.id] is None
+        or any(items_by_task.get(t.id) for t in tasks_by_sample.get(s.id, []))
+    ]
+
+    async def _start_of(s: Sample):
+        async with sem:
+            return await _csv_start_of(s)
+
+    csv_starts: dict[int, datetime | None] = {}
+    for s, res in zip(need_start, await asyncio.gather(*(_start_of(s) for s in need_start), return_exceptions=True)):
+        if isinstance(res, PrelabelError):
+            warnings.append(f"样本 {s.sample_code}：{res}")
+            csv_starts[s.id] = None
+        elif isinstance(res, BaseException):
+            warnings.append(f"样本 {s.sample_code} 读时间戳失败：{type(res).__name__}: {res}")
+            csv_starts[s.id] = None
+        else:
+            csv_starts[s.id] = res
+
+    for s in valid:
+        key = key_of(s)
         s_tasks = tasks_by_sample.get(s.id, [])
         c = counts[key]
         c["total"] += len(s_tasks)
@@ -163,18 +222,10 @@ async def collect_link_stats(
             else:
                 c["pending"] += 1
 
-        try:
-            data = await asyncio.to_thread(_read_ai_json, ai_label_relpath(s.imu_csv_path))
-        except Exception as e:  # noqa: BLE001 单个样本的 AI JSON 有问题不该让整张表打不开
-            warnings.append(f"样本 {s.sample_code} 的 AI 结果读不出来：{type(e).__name__}: {e}")
-            data = None
-        span: tuple[datetime, datetime] | None = None
+        data = ai_data.get(s.id)
+        span = spans_by_sample.get(s.id)
         if data:
             ai_modes[key].add(str(data.get("mode") or "raw"))
-            ts = [parse_ts(w.get("ts")) for w in data.get("windows") or []]
-            ts = [t for t in ts if t is not None]
-            if ts:
-                span = (min(ts), max(ts))
             for seg in (data.get("segments") or {}).get(scratch_label) or []:
                 st, en = parse_ts(seg.get("start_ts")), parse_ts(seg.get("end_ts"))
                 if st is None or en is None or en <= st:
@@ -187,15 +238,7 @@ async def collect_link_stats(
             c["no_ai"] += 1
 
         # 人工片段要 CSV 起点换算绝对时间；没有 AI JSON 时佩戴时段也靠它
-        need_csv_start = any(items_by_task.get(t.id) for t in s_tasks) or span is None
-        csv_start: datetime | None = None
-        if need_csv_start:
-            try:
-                csv_start = await _csv_start_of(s)
-            except PrelabelError as e:
-                warnings.append(f"样本 {s.sample_code}：{e}")
-            except Exception as e:  # noqa: BLE001 读 CSV 时间戳失败同理，记一条继续
-                warnings.append(f"样本 {s.sample_code} 读时间戳失败：{type(e).__name__}: {e}")
+        csv_start = csv_starts.get(s.id)
         if span is None and csv_start is not None and s.video_duration_sec:
             span = (csv_start, csv_start + timedelta(seconds=int(s.video_duration_sec)))
         if span is not None:
