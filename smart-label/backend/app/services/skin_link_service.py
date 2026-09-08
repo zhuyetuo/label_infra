@@ -300,7 +300,8 @@ async def collect_link_stats(
             # 人工完整 = 这天所有任务都已通过；部分 = 有提交/通过但没全通过
             "human_status": "complete" if c["total"] and human_all == c["total"] else ("partial" if human_done else "none"),
         })
-    return {"rows": out_rows, "warnings": warnings}
+    # 这一趟是刚算的，界面上要显示"上次拉取时间"
+    return {"rows": out_rows, "warnings": warnings, "computed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
 # ── 落库 & 用全部历史天数算基线 ──────────────────────────────────────────
@@ -438,4 +439,6 @@ async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: dat
         entry["human_status"] = "complete" if total and approved == total else ("partial" if done else "none")
     out = [by_key[k] for k in sorted(by_key)]
     msg = [] if out else [f"{date_from} ~ {date_to} 还没算过，点「重新拉取」算一次（之后就一直存着，不用再算）"]
-    return {"rows": out, "warnings": msg, "from_cache": True}
+    # 这批数字是什么时候拉的——过了几天再看这张表，得知道它是不是还反映当前的标注
+    last = max((r.updated_at for r in rows if r.updated_at), default=None)
+    return {"rows": out, "warnings": msg, "from_cache": True, "computed_at": last.isoformat(sep=" ", timespec="seconds") if last else None}
