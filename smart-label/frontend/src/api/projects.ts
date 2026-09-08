@@ -58,6 +58,9 @@ export interface PrelabelRun {
   batch_size: number;
   avg_sec_per_task: number | null;
   unmatched_labels: string[];
+  /** 这一批用的哪个版本（stable / viterbi / raw）和哪个模型文件 */
+  mode?: string | null;
+  model_path?: string | null;
   error_message: string | null;
 }
 

@@ -263,6 +263,10 @@ class PrelabelProgress:
     # 光等 AI 服务回结果花了多久（不含资格检查/落盘/写库），慢了好判断是哪边的问题
     ai_wait_sec: float = 0.0
     batches_done: int = 0
+    # 这一批是用哪个版本、哪个模型跑的。换了模型重跑之后要能对得上——不然历史
+    # 记录里两行数字差很多，也说不清是模型变了还是数据变了
+    mode: str | None = None
+    model_path: str | None = None
 
     def tick(self) -> None:
         if self.started_at is None:
@@ -363,6 +367,8 @@ async def _record_run(progress: PrelabelProgress) -> None:
         "ai_wait_sec": round(progress.ai_wait_sec, 1),
         "batches": progress.batches_done,
         "batch_size": settings.algo_infer_batch_size,
+        "mode": progress.mode,
+        "model_path": progress.model_path,
         "avg_sec_per_task": round(progress.elapsed_sec / progress.succeeded, 2) if progress.succeeded else None,
         "unmatched_labels": progress.unmatched_labels,
         "error_message": progress.error_message,
@@ -504,6 +510,10 @@ async def _run_project(
         for r in results:
             if isinstance(r, dict) and r.get("sample_id") is not None:
                 by_sample[int(r["sample_id"])] = r
+            # AI 服务在每条结果里回了实际用的模型和版本，记下来（各批都一样，存一份就够）
+            if isinstance(r, dict):
+                progress.model_path = progress.model_path or r.get("model_path")
+                progress.mode = progress.mode or r.get("mode")
 
         # 3) 逐个写库
         for p in prepared:
