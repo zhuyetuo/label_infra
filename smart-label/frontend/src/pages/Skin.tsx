@@ -1245,14 +1245,29 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                     <Tag color="blue">已看过</Tag>
                   ) : null;
                 if (!t.confirmed && !t.relabeled && !un) {
+                  // 这一段 AI 根本没标出抓挠：不存在"没复看"这回事，也没有几段可数。
+                  // 人认过了就是「确认没有抓挠」——跟有片段时的「抓挠已确认」对应，
+                  // 一格里只留一个结论，不要「没有抓挠片段 + 抓挠已确认」这样两条
+                  // 各说一半
+                  if (t.scratch_segments === 0) {
+                    if (approved.has(t.task_id) || t.status === "APPROVED") return progress;
+                    if (scratchOk.has(t.task_id)) {
+                      return (
+                        <Tooltip title="这一段 AI 没标出抓挠，人看过、确认确实没有">
+                          <Tag color="cyan">确认没有抓挠</Tag>
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Space size={4} wrap>
+                        <Typography.Text type="secondary">没有抓挠片段</Typography.Text>
+                        {progress}
+                      </Space>
+                    );
+                  }
                   return (
                     <Space size={4} wrap>
-                      {/* 这一列讲的是"AI 标的抓挠人看完是什么结论"。这一段 AI 根本
-                          没标出抓挠时，不存在"没复看"这回事——写「未复看」会让人
-                          以为还有活没干，其实这里本来就没东西可看 */}
-                      <Typography.Text type="secondary">
-                        {t.scratch_segments === 0 ? "没有抓挠片段" : "未复看"}
-                      </Typography.Text>
+                      <Typography.Text type="secondary">未复看</Typography.Text>
                       {progress}
                     </Space>
                   );
