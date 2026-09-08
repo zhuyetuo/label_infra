@@ -501,6 +501,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     try {
       const n = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
       setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
+      // 确认过抓挠的任务现在也算进人工版了，顺手重算这一天再刷新跟踪表
+      if (checkFor?.date) {
+        await skinLinkStats({ date_from: checkFor.date, date_to: checkFor.date });
+        await refetch();
+      }
       // 确认完任务已经放回待认领，工作台里那份状态得跟上（不然底部按钮
       // 还按"标注中"渲染）
       setWsTask((cur) => (cur && cur.id === task.id ? { ...cur, status: "PENDING_ASSIGN", locked_by: null } : cur));
@@ -840,7 +845,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         footer={null}
         // 一天最多二十几行，一行要放"时间段 + 段数 + 状态 + 三个操作"，
         // 720 挤得时间段要折行；给到 1000 上限一屏宽，一行一行看着不累
-        width="min(1000px, 96vw)"
+        width="min(1180px, 96vw)"
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
@@ -877,6 +882,38 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 t.scratch_segments ? <Tag color="red">{t.scratch_segments} 段</Tag> : <Typography.Text type="secondary">0</Typography.Text>,
             },
             { title: "状态", width: 110, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
+            {
+              title: "人工复看",
+              width: 230,
+              // 光看「9 段」不知道人看过没有、看完是什么结论。这几个数就是结论：
+              // 确认了几段、改走几段（比如其实是甩身体）、待定几段（分两种原因）
+              render: (_: unknown, t) => {
+                const un = t.uncertain_no_view + t.uncertain_ambiguous;
+                if (!t.confirmed && !t.relabeled && !un) {
+                  return <Typography.Text type="secondary">未复看</Typography.Text>;
+                }
+                return (
+                  <Space size={4} wrap>
+                    {t.confirmed > 0 && <Tag color="green">确认 {t.confirmed}</Tag>}
+                    {t.relabeled > 0 && (
+                      <Tooltip title="本来是 AI 标的抓挠，人看完改成了别的类别（比如甩身体）">
+                        <Tag color="blue">改走 {t.relabeled}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.uncertain_no_view > 0 && (
+                      <Tooltip title="画面里没拍到狗，无从判断；不进训练集，也不算人定的抓挠">
+                        <Tag color="purple">没画面 {t.uncertain_no_view}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.uncertain_ambiguous > 0 && (
+                      <Tooltip title="拍到了但像抓挠又不太像（可能被遮挡）；不进训练集，也不算人定的抓挠">
+                        <Tag color="purple">看不清 {t.uncertain_ambiguous}</Tag>
+                      </Tooltip>
+                    )}
+                  </Space>
+                );
+              },
+            },
             {
               title: "",
               width: 110,

@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.skin_daily import SkinDailyStat
@@ -120,9 +120,35 @@ async def collect_link_stats(
     ).scalars().all()
     scratch_label_ids = set(label_rows)
 
-    # 人工片段：默认只认已提交/已通过（有人复核过）；include_drafts=True 时把
-    # 标注中、待认领里已经存了草稿的也算进来——自己一个人玩、不走审核流程时用
-    human_tasks = tasks if include_drafts else [t for t in tasks if t.status in HUMAN_STATUSES]
+    # 人工片段算哪些任务：
+    #  - 已提交/已通过：走完了流程，肯定算
+    #  - 「抓挠已确认」：从皮肤评估复看时只确认抓挠、不整份通过，任务还停在
+    #    待认领。人明明看过了，人工版却当没这回事——这正是"确认了半天数字不动"
+    #    的原因。所以只要这个任务当前轮的抓挠被人碰过（确认过 / 改过 / 标了
+    #    待定），就算它有人工介入
+    #  - include_drafts=True 时更宽：这天所有任务都算，自己一个人玩不走审核流程时用
+    reviewed_task_ids: set[int] = set()
+    if tasks and scratch_label_ids:
+        rows = await db.execute(
+            select(AnnotationRecord.task_id)
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .where(
+                AnnotationRecord.task_id.in_([t.id for t in tasks]),
+                AnnotationRecord.round_no == Task.round_no,
+                AnnotationLabelItem.label_id.in_(scratch_label_ids),
+                (AnnotationLabelItem.ai_confirmed.is_(True))
+                | (AnnotationLabelItem.is_modified.is_(True))
+                | (AnnotationLabelItem.uncertain.is_(True))
+                | (AnnotationLabelItem.source_type == LabelItemSource.human_added),
+            )
+            .distinct()
+        )
+        reviewed_task_ids = {tid for (tid,) in rows.all()}
+    human_tasks = (
+        tasks if include_drafts
+        else [t for t in tasks if t.status in HUMAN_STATUSES or t.id in reviewed_task_ids]
+    )
     items_by_task: dict[int, list[tuple[int, int]]] = defaultdict(list)
     if human_tasks and scratch_label_ids:
         rows = await db.execute(
@@ -147,7 +173,7 @@ async def collect_link_stats(
     wear_spans: dict[tuple, list] = defaultdict(list)
     # 掉数据的时间段：算有效佩戴时从佩戴时段里扣掉
     missing_spans: dict[tuple, list] = defaultdict(list)
-    counts: dict[tuple, dict] = defaultdict(lambda: {"total": 0, "approved": 0, "submitted": 0, "in_progress": 0, "pending": 0, "rejected": 0, "no_ai": 0})
+    counts: dict[tuple, dict] = defaultdict(lambda: {"total": 0, "approved": 0, "submitted": 0, "in_progress": 0, "pending": 0, "rejected": 0, "no_ai": 0, "reviewed": 0})
     ai_modes: dict[tuple, set] = defaultdict(set)
 
     # 两趟并发预读，别在主循环里一个样本一个样本地 await 磁盘。选两周就是一百多个
@@ -226,6 +252,8 @@ async def collect_link_stats(
         c = counts[key]
         c["total"] += len(s_tasks)
         for t in s_tasks:
+            if t.id in reviewed_task_ids:
+                c["reviewed"] += 1
             if t.status == TaskStatus.APPROVED:
                 c["approved"] += 1
             elif t.status == TaskStatus.SUBMITTED:
@@ -285,7 +313,11 @@ async def collect_link_stats(
         if counts[k]["total"] - counts[k]["no_ai"] > 0 or ai_events.get(k):
             ai_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in ai_events.get(k, [])], "wear_seconds": wear})
         # 人工版：默认要有任务提交/通过；include_drafts 时只要这天有任务就出一行
-        has_human = counts[k]["total"] > 0 if include_drafts else counts[k]["approved"] + counts[k]["submitted"] > 0
+        has_human = (
+            counts[k]["total"] > 0
+            if include_drafts
+            else counts[k]["approved"] + counts[k]["submitted"] + counts[k]["reviewed"] > 0
+        )
         if has_human:
             human_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in human_events.get(k, [])], "wear_seconds": wear})
 

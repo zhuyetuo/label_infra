@@ -32,7 +32,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.dog import Dog
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
@@ -201,20 +201,46 @@ async def daily_tracking(
             )
         ).scalars().all()
     )
+    # 每个任务的人工复看结果：AI 标的抓挠里，确认了几段、判成待定几段（分两种
+    # 原因）、还有几段本来是 AI 标的抓挠、被人改成别的类别（比如其实是甩身体）。
+    # 光看「9 段」不知道人看过没有、看完是什么结论，这几个数就是给这个的。
     seg_counts: dict[int, int] = {}
+    review_counts: dict[int, dict] = defaultdict(
+        lambda: {"confirmed": 0, "uncertain_no_view": 0, "uncertain_ambiguous": 0, "relabeled": 0}
+    )
     if task_rows and scratch_label_ids:
+        task_ids_all = [t[0] for t in task_rows]
         rows_c = await db.execute(
-            select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
+            select(
+                AnnotationRecord.task_id,
+                AnnotationLabelItem.label_id,
+                AnnotationLabelItem.source_type,
+                AnnotationLabelItem.is_modified,
+                AnnotationLabelItem.ai_confirmed,
+                AnnotationLabelItem.uncertain,
+                AnnotationLabelItem.uncertain_reason,
+            )
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
             .join(Task, Task.id == AnnotationRecord.task_id)
             .where(
-                AnnotationRecord.task_id.in_([t[0] for t in task_rows]),
+                AnnotationRecord.task_id.in_(task_ids_all),
                 AnnotationRecord.round_no == Task.round_no,
-                AnnotationLabelItem.label_id.in_(scratch_label_ids),
             )
-            .group_by(AnnotationRecord.task_id)
         )
-        seg_counts = {tid: int(n) for tid, n in rows_c.all()}
+        for tid, label_id, source, modified, confirmed, uncertain, reason in rows_c.all():
+            is_scratch = label_id in scratch_label_ids
+            is_ai = source == LabelItemSource.ai_generated
+            if is_scratch:
+                seg_counts[tid] = seg_counts.get(tid, 0) + 1
+                if uncertain:
+                    key = "uncertain_no_view" if reason == "no_view" else "uncertain_ambiguous"
+                    review_counts[tid][key] += 1
+                elif confirmed:
+                    review_counts[tid]["confirmed"] += 1
+            elif is_ai and modified:
+                # AI 给的、被人改过、现在不是抓挠了——「甩身体误判成抓挠」这类。
+                # 严格说也可能是别的类别之间互改，但复看时人只动抓挠这一类，够用
+                review_counts[tid]["relabeled"] += 1
 
     tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for tid, status, code, sdate, dur in task_rows:
@@ -227,6 +253,7 @@ async def daily_tracking(
                 "sample_code": code,
                 "status": status.value if hasattr(status, "value") else str(status),
                 "scratch_segments": seg_counts.get(tid, 0),
+                **review_counts[tid],
                 # 前端要拿它把「09:00:14 ~ ?」补成「09:00:14 ~ 10:00:00」
                 "video_duration_sec": dur,
             }
