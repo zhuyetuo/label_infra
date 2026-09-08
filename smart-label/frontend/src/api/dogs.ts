@@ -64,9 +64,10 @@ export const addMeasurement = (
 export const deleteMeasurement = (dogId: number, id: number) =>
   request.delete<never, null>(`/dogs/${dogId}/measurements/${id}`);
 
-/** 一张狗档案照片。token 是签名的，直接拼进 <img src> 用 */
+/** 一张照片或一段视频。token 是签名的，直接拼进 <img>/<video> 的 src 用 */
 export interface DogPhoto {
   filename: string;
+  kind: "image" | "video";
   size_bytes: number;
   uploaded_at: string;
   token: string;
@@ -77,12 +78,14 @@ export const listDogPhotos = (dogId: number) => request.get<never, DogPhoto[]>(`
 export const uploadDogPhoto = (dogId: number, file: File) => {
   const fd = new FormData();
   fd.append("file", file);
-  return request.post<never, { filename: string; token: string }>(`/dogs/${dogId}/photos`, fd);
+  // 关掉超时：全局是 15s，几百 MB 的视频从局域网传上去也不止 15s，
+  // 不关的话大文件必然在传到一半时被 axios 掐断
+  return request.post<never, { filename: string; token: string }>(`/dogs/${dogId}/photos`, fd, { timeout: 0 });
 };
 
 export const deleteDogPhoto = (dogId: number, filename: string) =>
   request.delete<never, null>(`/dogs/${dogId}/photos/${encodeURIComponent(filename)}`);
 
-/** <img> 带不了 Authorization 头，所以图片走 URL 里的签名 token */
+/** <img>/<video> 带不了 Authorization 头，所以走 URL 里的签名 token；后端支持 Range，视频能拖进度条 */
 export const dogPhotoUrl = (dogId: number, filename: string, token: string) =>
   `/api/v1/dogs/${dogId}/photos/${encodeURIComponent(filename)}/stream?token=${token}`;
