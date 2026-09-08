@@ -59,6 +59,11 @@ class SampleMediaOut(BaseModel):
     video3_id: int | None
     csv_id: int | None
     video_fps: float | None
+    # 播不了的时候要能说清是哪一步缺：样本上压根没登记这一路视频（采集/归档就没有
+    # 这个文件），还是登记了但媒体库里找不到（文件没传上 NAS，或者传了没被扫到）。
+    # 只给一句「没有找到可播放的视频」的话，没人知道该去哪儿查
+    video_paths: list[str | None] = []
+    video_missing_in_library: list[str] = []
 
 
 class ScanStartResult(BaseModel):

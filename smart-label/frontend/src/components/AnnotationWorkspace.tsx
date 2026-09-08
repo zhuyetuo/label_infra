@@ -101,6 +101,8 @@ export default function AnnotationWorkspace({
 
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
+  // 没视频时用来解释是缺哪一步：样本上就没登记，还是登记了但媒体库里找不到
+  const [videoWhy, setVideoWhy] = useState<string | null>(null);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
@@ -167,6 +169,7 @@ export default function AnnotationWorkspace({
   useEffect(() => {
     if (taskId == null || sampleId == null) {
       setVideos([]);
+      setVideoWhy(null);
       setHasCsv(false);
       setFps(null);
       setItems([]);
@@ -189,6 +192,13 @@ export default function AnnotationWorkspace({
         vids.push({ label, url: mediaStreamUrl(id, token) });
       }
       setVideos(vids);
+      setVideoWhy(
+        vids.length > 0
+          ? null
+          : media.video_missing_in_library.length > 0
+            ? `样本上登记了 ${media.video_missing_in_library.length} 路视频，但媒体库里没有这些文件：${media.video_missing_in_library.join("、")}。多半是没传上 NAS，或者传了还没被扫到——去「样本」页点一次「立即扫描」再看。`
+            : "这个样本上就没有登记视频文件。采集/归档时这一路只上传了 IMU 数据（比如 imu4 那种只传 csv 的），或者视频还没归档过来。IMU 波形和片段列表照常能用，只是没法对着画面核对。"
+      );
       setHasCsv(media.csv_id != null);
       setFps(media.video_fps);
       if (media.csv_id != null) {
@@ -658,7 +668,20 @@ export default function AnnotationWorkspace({
             shrinkToFit={chartExpanded}
           />
         ) : (
-          !loading && <Empty description="没有找到可播放的视频" />
+          !loading && (
+            <Empty
+              description={
+                <div style={{ maxWidth: 560, margin: "0 auto" }}>
+                  <div>没有找到可播放的视频</div>
+                  {videoWhy && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {videoWhy}
+                    </Typography.Text>
+                  )}
+                </div>
+              }
+            />
+          )
         )}
 
         {!readOnly && (

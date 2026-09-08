@@ -29,6 +29,10 @@ export interface SampleMedia {
   video3_id: number | null;
   csv_id: number | null;
   video_fps: number | null;
+  /** 样本上登记的三路视频相对路径（没登记就是 null）——播不了时用来说清楚缺哪一步 */
+  video_paths: (string | null)[];
+  /** 登记了路径但媒体库里没有这条：文件没传上 NAS，或者传了还没被扫到 */
+  video_missing_in_library: string[];
 }
 
 export const getSampleMedia = (sampleId: number) =>
