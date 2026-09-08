@@ -24,9 +24,7 @@ interface ImuSeries {
   gyro_z: number[];
 }
 
-export type ChannelSet = "all" | "acc" | "gyro";
-
-const ALL_CHANNELS: { key: keyof Omit<ImuSeries, "t">; label: string; color: string }[] = [
+const CHANNELS: { key: keyof Omit<ImuSeries, "t">; label: string; color: string }[] = [
   { key: "acc_x", label: "Acc X", color: "#e74c3c" },
   { key: "acc_y", label: "Acc Y", color: "#2ecc71" },
   { key: "acc_z", label: "Acc Z", color: "#3498db" },
@@ -34,16 +32,6 @@ const ALL_CHANNELS: { key: keyof Omit<ImuSeries, "t">; label: string; color: str
   { key: "gyro_y", label: "Gyro Y", color: "#1abc9c" },
   { key: "gyro_z", label: "Gyro Z", color: "#9b59b6" },
 ];
-
-// 一屏放六条的话一条只剩十几像素，什么都看不出来。多数时候只关心其中一组：
-// 抓挠看陀螺仪（后腿高频往复），姿态/静止看加速度。分组之后三条各自能拿到
-// 两倍多的高度，才谈得上"看得清"
-const channelsOf = (set: ChannelSet) =>
-  set === "acc"
-    ? ALL_CHANNELS.slice(0, 3)
-    : set === "gyro"
-      ? ALL_CHANNELS.slice(3)
-      : ALL_CHANNELS;
 
 const getMeta = (sampleId: number) => request.get<never, ImuMeta>(`/imu/${sampleId}/meta`);
 const getSeries = (sampleId: number, startMs: number, endMs: number, maxPoints = 1500) =>
@@ -98,8 +86,6 @@ interface Props {
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
   /** 紧凑模式：通道名画进图里而不是单独占一行标题，六轴同屏时能省下不少高度 */
   compact?: boolean;
-  /** 画哪几条：全部六条 / 只看加速度 / 只看陀螺仪 */
-  channelSet?: ChannelSet;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -126,9 +112,7 @@ export default function ImuChart({
   onCreateSegment,
   onResizeSegment,
   compact,
-  channelSet = "all",
 }: Props) {
-  const CHANNELS = channelsOf(channelSet);
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -348,7 +332,7 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus, compact, channelSet]);
+  }, [sampleId, rowHeight, bus, compact]);
 
   return (
     <div>
