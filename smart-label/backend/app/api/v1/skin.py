@@ -11,13 +11,14 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.sample import Sample
+from app.models.skin_daily import SkinDailyStat
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.task import Task
 from app.models.user import User, UserRole
@@ -127,6 +128,59 @@ async def data_range(db: AsyncSession = Depends(get_db)):
         "date_from": row[0].isoformat() if row[0] else None,
         "date_to": row[1].isoformat() if row[1] else None,
     })
+
+
+class PurgeDailyStats(BaseModel):
+    """清理存下来的每日统计。不传日期就是"全部范围里的孤儿天"。"""
+
+    date_from: _dt.date | None = None
+    date_to: _dt.date | None = None
+    # 只清"已经没有任务的天"。默认开着：这是唯一一种删了不会影响现有数据解读的清法
+    only_orphan: bool = True
+    dry_run: bool = False
+
+
+@router.post("/daily-stats/purge")
+async def purge_daily_stats(
+    body: PurgeDailyStats,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.super_admin)),
+):
+    """
+    删掉「项目联动」存下来的日统计。
+
+    为什么需要这个：跟踪表的行就是这张表，项目删了这些行还在，于是会看到一堆
+    早就没有项目的日子。
+
+    **删之前先想一下基线**：基线是这只狗「所有算过的天」的中位数，删掉一部分天
+    会让剩下那些天的 C 值跟着变。所以默认只删 only_orphan——已经没有任何任务的
+    那些天，它们本来也复看不了、算不出人工版，留着只是噪声。要按日期范围硬删
+    也行，但那是会动到基线的操作，前端得说清楚。
+
+    dry_run=True 只数不删，用来在确认框里显示"会删掉几行、哪几天"。
+    """
+    q = select(SkinDailyStat.id, SkinDailyStat.stat_date)
+    if body.date_from:
+        q = q.where(SkinDailyStat.stat_date >= body.date_from)
+    if body.date_to:
+        q = q.where(SkinDailyStat.stat_date <= body.date_to)
+    rows = (await db.execute(q)).all()
+
+    if body.only_orphan:
+        # 现在还有任务的采集日；这些天不动
+        live = set(
+            (
+                await db.execute(select(Sample.session_date).join(Task, Task.sample_id == Sample.id).distinct())
+            ).scalars()
+        )
+        rows = [r for r in rows if r[1] not in live]
+
+    ids = [r[0] for r in rows]
+    dates = sorted({r[1].isoformat() for r in rows})
+    if ids and not body.dry_run:
+        await db.execute(delete(SkinDailyStat).where(SkinDailyStat.id.in_(ids)))
+        await db.commit()
+    return ok({"deleted": len(ids), "dates": dates, "dry_run": body.dry_run})
 
 
 # ── 透传：规则/统计/ML ─────────────────────────────────────────────────
