@@ -113,6 +113,8 @@ export default function AnnotationWorkspace({
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   // 「疑似抓挠」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
   const [candControlsHost, setCandControlsHost] = useState<HTMLSpanElement | null>(null);
+  // 「已标注片段」那排筛选同理
+  const [segControlsHost, setSegControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
   const [prelabeling, setPrelabeling] = useState(false);
   // 稳定版（平滑合并）/ 调试版（逐窗口原始输出），默认稳定版
@@ -970,9 +972,15 @@ export default function AnnotationWorkspace({
           items={[
             {
               key: "segs",
-              label: `已标注片段（${items.length}）`,
+              label: (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  已标注片段（{items.length}）
+                  <span ref={setSegControlsHost} style={{ display: "inline-flex" }} />
+                </span>
+              ),
               children: (
                 <SegmentPanel
+                  controlsPortalTarget={segControlsHost}
                   items={items}
                   labels={labels}
                   readOnly={readOnly}

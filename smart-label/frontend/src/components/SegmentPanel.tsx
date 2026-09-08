@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
@@ -127,6 +128,11 @@ interface Props {
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
   /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
   initialFilterLabels?: number[];
+  /**
+   * 筛选那一排渲染到哪儿。给了就 portal 到折叠面板的标题行上，跟
+   * 「已标注片段（38）」拼一行——工作台里高度是最紧的资源，这排单独占一行不值当
+   */
+  controlsPortalTarget?: HTMLElement | null;
 }
 
 export default function SegmentPanel({
@@ -145,6 +151,7 @@ export default function SegmentPanel({
   dupIds,
   onCreate,
   initialFilterLabels,
+  controlsPortalTarget,
 }: Props) {
   const isLooping = (startMs: number, endMs: number) =>
     loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
@@ -309,9 +316,10 @@ export default function SegmentPanel({
       ),
     }));
 
-  return (
-    <div>
-      <Space wrap size={8} style={{ marginBottom: 8 }}>
+  // 筛选那一排：给了 portal 目标就挂到折叠面板标题行上，跟「已标注片段（38）」
+  // 拼一行。工作台里高度最紧，这一排单独占一行不值当
+  const toolbar = (
+    <Space wrap size={8} onClick={(e) => e.stopPropagation()}>
         <Select
           mode="multiple"
           allowClear
@@ -402,7 +410,12 @@ export default function SegmentPanel({
             </Button>
           </Popconfirm>
         )}
-      </Space>
+    </Space>
+  );
+
+  return (
+    <div>
+      {controlsPortalTarget ? createPortal(toolbar, controlsPortalTarget) : <div style={{ marginBottom: 8 }}>{toolbar}</div>}
 
       {showStats && (
         <div style={{ marginBottom: 8, padding: 8, background: "#fafafa", borderRadius: 4 }}>
