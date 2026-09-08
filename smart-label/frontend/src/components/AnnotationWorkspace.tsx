@@ -787,21 +787,22 @@ export default function AnnotationWorkspace({
             flexDirection: "column",
           }}
         >
-          {/* 折起来之后只留这一行，视频区自动占满剩下的高度 */}
-          <Button
-            type="text"
+          {/* 用 Collapse 而不是自己写一个折叠按钮：下面「已标注片段」「疑似抓挠」
+              都是 Collapse，这块原来是一个光秃秃的文字按钮，三块并排看着不像一套东西。
+              折起来之后只留标题这一行，视频区自动占满剩下的高度 */}
+          <Collapse
             size="small"
-            style={{ alignSelf: "flex-start", paddingLeft: 0 }}
-            onClick={() => {
-              setImuOpen((v) => {
-                saveBool(IMU_OPEN_KEY, !v);
-                return !v;
-              });
+            className="ws-imu"
+            activeKey={imuOpen ? ["imu"] : []}
+            onChange={(keys) => {
+              const open = (keys as string[]).includes("imu");
+              saveBool(IMU_OPEN_KEY, open);
+              setImuOpen(open);
             }}
-          >
-            {imuOpen ? "▾" : "▸"} IMU 波形
-          </Button>
-          {imuOpen && (hasCsv && sampleId != null ? (
+            items={[{
+              key: "imu",
+              label: "IMU 波形",
+              children: (hasCsv && sampleId != null ? (
             <>
               <Space style={{ marginBottom: 8 }}>
                 <Segmented
@@ -892,9 +893,11 @@ export default function AnnotationWorkspace({
                 </div>
               )}
             </>
-          ) : (
-            !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
-          ))}
+              ) : (
+                !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
+              )),
+            }]}
+          />
         </div>
 
         <Collapse
