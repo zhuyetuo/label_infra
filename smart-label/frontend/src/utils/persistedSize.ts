@@ -58,3 +58,21 @@ export function saveKeys(key: string, keys: string[]): void {
     // 存不了就算了
   }
 }
+
+// 记一个纯文本的选择（比如上次用的预标注版本）。跟上面几个一样：存不进去
+// （隐私模式/禁用存储）就当没有，不能让它当掉页面。
+export function getSavedText(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveText(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // 存不了就算了
+  }
+}
