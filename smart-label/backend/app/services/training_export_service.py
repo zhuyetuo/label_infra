@@ -200,6 +200,7 @@ async def export_dataset(
     n_merged_overlaps = 0
     n_conflicts = 0
     n_conflict_ms = 0
+    conflicts: list[dict] = []
 
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
@@ -251,11 +252,18 @@ async def export_dataset(
                 lo, hi = a2, min(b1, b2)
                 conflict_spans.append((lo, hi))
                 n_conflicts += 1
-                if len(warnings) < 200:
-                    warnings.append(
-                        f"任务 #{task.id}：{label_names.get(l1, l1)} 和 {label_names.get(l2, l2)} "
-                        f"在 {lo}~{hi}ms 重叠，两边都挖掉了这一小段——回工作台改一下起止"
-                    )
+                # 结构化记一份：前端要按这个直接把工作台开到出问题的时刻，
+                # 不能让人拿着一句话回去自己找
+                if len(conflicts) < 200:
+                    conflicts.append({
+                        "task_id": task.id,
+                        "sample_code": sample.sample_code,
+                        "label_a": label_names.get(l1, str(l1)),
+                        "label_b": label_names.get(l2, str(l2)),
+                        "start_ms": lo,
+                        "end_ms": hi,
+                        "seconds": round((hi - lo) / 1000, 2),
+                    })
         if conflict_spans:
             merged_conflicts = _merge(conflict_spans)
             n_conflict_ms += sum(b - a for a, b in merged_conflicts)
@@ -273,6 +281,10 @@ async def export_dataset(
                         "start": _fmt(csv_start + timedelta(milliseconds=a_ms)),
                         "end": _fmt(csv_start + timedelta(milliseconds=b_ms)),
                         "timeserieslabels": [name_],
+                        # 相对 CSV 起点的毫秒：核对时「去修」要拿它把工作台开到
+                        # 这一刻。训练那边只读上面三个 key，多带两个不影响
+                        "start_ms": a_ms,
+                        "end_ms": b_ms,
                     },
                 })
                 label_counter[name_] += 1
@@ -300,6 +312,7 @@ async def export_dataset(
         "n_label_conflicts": n_conflicts,
         # 因为类别冲突挖掉了多少秒
         "label_conflict_excluded_sec": round(n_conflict_ms / 1000, 1),
+        "conflicts": conflicts,
         "n_tasks": len(ls_tasks), "n_segments": n_segments, "total_hours": round(total_sec / 3600, 2),
         # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,
@@ -361,6 +374,9 @@ def read_segments(name: str, limit: int = 5000) -> dict:
                     "start": start,
                     "end": end,
                     "seconds": sec,
+                    # 老数据集没有这两个字段，前端要能忍
+                    "start_ms": v.get("start_ms"),
+                    "end_ms": v.get("end_ms"),
                 })
     return {"total": total, "truncated": total > len(rows), "rows": rows}
 

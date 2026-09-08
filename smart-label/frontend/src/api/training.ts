@@ -21,6 +21,16 @@ export interface TrainDataset {
   n_label_conflicts?: number;
   /** 因为类别冲突挖掉了多少秒 */
   label_conflict_excluded_sec?: number;
+  /** 类别冲突的明细：前端按它把工作台开到出问题的时刻 */
+  conflicts?: {
+    task_id: number;
+    sample_code: string;
+    label_a: string;
+    label_b: string;
+    start_ms: number;
+    end_ms: number;
+    seconds: number;
+  }[];
   n_tasks: number;
   n_segments: number;
   total_hours: number;
@@ -63,6 +73,9 @@ export interface DatasetSegment {
   start: string;
   end: string;
   seconds: number | null;
+  /** 相对 CSV 起点的毫秒；老数据集没有 */
+  start_ms?: number | null;
+  end_ms?: number | null;
 }
 
 export const getDatasetSegments = (name: string) =>

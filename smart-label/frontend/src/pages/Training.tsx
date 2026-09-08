@@ -6,7 +6,12 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
+import { useAuthStore } from "@/stores/authStore";
+import { claimTask, getTask } from "@/api/tasks";
+import { listLabels } from "@/api/labels";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import ModelCompare from "@/components/ModelCompare";
+import type { LabelDefinition, Task } from "@/types";
 import {
   type DatasetCheck,
   checkDataset,
@@ -71,6 +76,24 @@ export default function Training() {
     enabled: dsDetail != null,
   });
   const [segLabel, setSegLabel] = useState<string | null>(null);
+  // 核对数据集时发现要改起止，直接把工作台开在这一页——不然得记下任务号，
+  // 切到项目/任务页翻出来，再拖进度条找那一刻
+  const [wsTask, setWsTask] = useState<Task | null>(null);
+  const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
+  const [wsSeekMs, setWsSeekMs] = useState<number | null>(null);
+  const [wsOpening, setWsOpening] = useState<number | null>(null);
+  const userId = useAuthStore((st) => st.userInfo?.id);
+  const openTask = async (taskId: number, seekMs?: number | null) => {
+    setWsOpening(taskId);
+    try {
+      const t = await getTask(taskId);
+      setWsLabels(await listLabels(t.project_id));
+      setWsSeekMs(seekMs ?? null);
+      setWsTask(t);
+    } finally {
+      setWsOpening(null);
+    }
+  };
   // 体检要扫全量片段做两两比对，比列明细贵，所以点了才跑
   const [checking, setChecking] = useState(false);
   const [checkRes, setCheckRes] = useState<DatasetCheck | null>(null);
@@ -412,6 +435,25 @@ export default function Training() {
         </Space>
       </Modal>
 
+      {/* 改完关掉就回到详情弹窗接着核对下一条；导出文件不会自动跟着变，
+          得重新导一次——按钮上的说明写了 */}
+      <AnnotationWorkspace
+        task={wsTask}
+        labels={wsLabels}
+        initialSeekMs={wsSeekMs}
+        readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
+        onClaim={
+          wsTask && wsTask.status !== "APPROVED"
+            ? async () => {
+                const t = await claimTask(wsTask.id);
+                setWsTask(t);
+              }
+            : undefined
+        }
+        onClose={() => setWsTask(null)}
+        onSubmitted={() => setWsTask(null)}
+      />
+
       <Modal
         title={`数据集详情 - ${dsDetail?.name ?? ""}`}
         open={dsDetail != null}
@@ -467,6 +509,68 @@ export default function Training() {
                 </Typography.Text>
               </Descriptions.Item>
             </Descriptions>
+            {(dsDetail.conflicts?.length ?? 0) > 0 && (
+              <>
+                <Typography.Text strong style={{ display: "block", marginTop: 12 }}>
+                  类别冲突（{dsDetail.n_label_conflicts ?? 0} 处，共挖掉{" "}
+                  {dsDetail.label_conflict_excluded_sec ?? 0} 秒）
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  同一段时间标了两个类别，重叠那一小段两边都没要。点「去修」直接把工作台开到那一刻，
+                  改完起止重新导一次就能拿回来。
+                </Typography.Text>
+                {/* 挖掉一两秒无所谓，挖掉一大截就不是"边角料"了，得回去改 */}
+                {(dsDetail.label_conflict_excluded_sec ?? 0) > dsDetail.total_hours * 3600 * 0.05 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginTop: 4 }}
+                    message={`挖掉的时间占了这份数据的 ${(
+                      ((dsDetail.label_conflict_excluded_sec ?? 0) / (dsDetail.total_hours * 3600)) *
+                      100
+                    ).toFixed(1)}%，建议先把起止改开再导`}
+                  />
+                )}
+                <Table
+                  style={{ marginTop: 4 }}
+                  size="small"
+                  rowKey={(r) => `${r.task_id}-${r.start_ms}`}
+                  dataSource={dsDetail.conflicts}
+                  pagination={{ pageSize: 8, size: "small" }}
+                  scroll={{ x: "max-content", y: 220 }}
+                  columns={[
+                    { title: "任务", dataIndex: "task_id", width: 80 },
+                    { title: "样本", dataIndex: "sample_code", ellipsis: true },
+                    {
+                      title: "两个类别",
+                      width: 160,
+                      render: (_, r) => (
+                        <>
+                          <Tag>{r.label_a}</Tag>
+                          <Tag>{r.label_b}</Tag>
+                        </>
+                      ),
+                    },
+                    { title: "挖掉(秒)", dataIndex: "seconds", width: 90 },
+                    {
+                      title: "",
+                      width: 80,
+                      render: (_, r) => (
+                        <Button
+                          size="small"
+                          type="link"
+                          loading={wsOpening === r.task_id}
+                          onClick={() => openTask(r.task_id, r.start_ms)}
+                        >
+                          去修
+                        </Button>
+                      ),
+                    },
+                  ]}
+                />
+              </>
+            )}
+
             {/* 重复和重叠都是"看汇总数字看不出来、进了训练才吃亏"的毛病，
                 单独给个体检 */}
             <div style={{ marginTop: 12 }}>
@@ -583,6 +687,21 @@ export default function Training() {
                   dataIndex: "seconds",
                   width: 100,
                   sorter: (a, b) => (a.seconds ?? 0) - (b.seconds ?? 0),
+                },
+                {
+                  title: "",
+                  width: 80,
+                  // 按时长排一下，长得离谱的那几条多半是起止没调好，就地点开改
+                  render: (_, r) => (
+                    <Button
+                      size="small"
+                      type="link"
+                      loading={wsOpening === r.task_id}
+                      onClick={() => openTask(r.task_id, r.start_ms)}
+                    >
+                      去修
+                    </Button>
+                  ),
                 },
               ]}
             />
