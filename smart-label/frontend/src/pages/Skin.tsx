@@ -1247,7 +1247,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 if (!t.confirmed && !t.relabeled && !un) {
                   return (
                     <Space size={4} wrap>
-                      <Typography.Text type="secondary">未复看</Typography.Text>
+                      {/* 这一列讲的是"AI 标的抓挠人看完是什么结论"。这一段 AI 根本
+                          没标出抓挠时，不存在"没复看"这回事——写「未复看」会让人
+                          以为还有活没干，其实这里本来就没东西可看 */}
+                      <Typography.Text type="secondary">
+                        {t.scratch_segments === 0 ? "没有抓挠片段" : "未复看"}
+                      </Typography.Text>
                       {progress}
                     </Space>
                   );
