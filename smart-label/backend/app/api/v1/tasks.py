@@ -92,27 +92,27 @@ async def bulk_create_tasks(
     if not body.sample_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
 
-    existing_ids = set((await db.execute(select(Sample.id).where(Sample.id.in_(body.sample_ids)))).scalars().all())
+    # IN 列表不能一次塞几千个：MySQL 的 range optimizer 有内存上限
+    # （range_optimizer_max_mem_size，默认 8MB），超了它就放弃区间优化改走扫描，
+    # 日志里刷一堆 "Range optimization was not done" 而且慢。分批查。
+    existing_ids: set[int] = set()
+    for i in range(0, len(body.sample_ids), 1000):
+        chunk = body.sample_ids[i : i + 1000]
+        existing_ids |= set((await db.execute(select(Sample.id).where(Sample.id.in_(chunk)))).scalars())
     missing = set(body.sample_ids) - existing_ids
     if missing:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"样本不存在: {sorted(missing)}")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"样本不存在: {sorted(missing)[:50]}")
 
+    # 这个项目下已经有任务的样本。按 project_id 一次查完再在内存里筛，比拿几千个
+    # sample_id 去 IN 快得多——project_id 上有索引，而且一个项目的任务数本来就有限
     already_has_task = set(
-        (
-            await db.execute(
-                select(Task.sample_id).where(
-                    Task.project_id == body.project_id, Task.sample_id.in_(body.sample_ids)
-                )
-            )
-        )
-        .scalars()
-        .all()
+        (await db.execute(select(Task.sample_id).where(Task.project_id == body.project_id))).scalars()
     )
 
     # 一次几百上千个样本很常见（十几天一起建项目时更是上万）。逐个 db.add 是走
     # ORM 的工作单元，几千行会明显慢；这里直接一条 executemany 插进去。
-    # 建完再按 (项目, 样本) 查一次 id——上面已经把"这个项目下已有任务的样本"排掉了，
-    # 所以查出来的就是这一批新建的。MySQL 没有 RETURNING，多这一次查询免不了。
+    # MySQL 没有 RETURNING，插完还得再查一次拿 id：同样按 project_id 查（不用
+    # IN 几千个 sample_id），再在内存里挑出这一批新建的。
     new_sample_ids = [sid for sid in body.sample_ids if sid not in already_has_task]
     created = len(new_sample_ids)
     new_task_ids: list[int] = []
@@ -133,18 +133,25 @@ async def bulk_create_tasks(
             ],
         )
         await db.commit()
-        new_task_ids = list(
-            (
+        wanted = set(new_sample_ids)
+        new_task_ids = [
+            tid
+            for tid, sid in (
                 await db.execute(
-                    select(Task.id).where(
-                        Task.project_id == body.project_id, Task.sample_id.in_(new_sample_ids)
-                    )
+                    select(Task.id, Task.sample_id).where(Task.project_id == body.project_id)
                 )
-            ).scalars()
-        )
-    # "AI预标注+人工修改"类型：建完直接后台批量跑 AI，项目页能看到进度
+            ).all()
+            if sid in wanted
+        ]
+    # "AI预标注+人工修改"类型：建完直接后台批量跑 AI，项目页能看到进度。
+    # 这个项目本来就没有任务的话（新建项目最常见），直接说"整个项目"，别拿几千个
+    # task_id 去 IN——那又是一次超出 range optimizer 内存上限的大查询
     if body.task_type == TaskType.ai_assisted and new_task_ids:
-        await start_project_prelabel(body.project_id, task_ids=new_task_ids, mode=body.infer_mode)
+        await start_project_prelabel(
+            body.project_id,
+            task_ids=None if not already_has_task else new_task_ids,
+            mode=body.infer_mode,
+        )
 
     skipped = sorted(already_has_task)
     return ok(
