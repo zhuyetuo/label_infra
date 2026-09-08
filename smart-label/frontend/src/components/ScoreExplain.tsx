@@ -19,16 +19,19 @@ const num = (v: unknown, digits = 1) =>
  * 并让宽度跟着内容走（max-content），短的不留白、长的到 560 才折。
  */
 export const EXPLAIN_TOOLTIP = {
-  overlayStyle: { maxWidth: 560 },
-  overlayInnerStyle: { width: "max-content", maxWidth: 560 },
+  overlayStyle: { maxWidth: 760 },
+  overlayInnerStyle: { width: "max-content", maxWidth: 760 },
 } as const;
 
 function Row({ name, value, note }: { name: string; value: string; note?: string }) {
   return (
-    <div style={{ display: "flex", gap: 10, lineHeight: "20px", whiteSpace: "nowrap" }}>
-      <span style={{ flex: "0 0 76px", opacity: 0.75 }}>{name}</span>
-      <span style={{ flex: "0 0 66px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{value}</span>
-      {note && <span style={{ opacity: 0.65 }}>{note}</span>}
+    // 名字和分数不换行；说明允许折行——一行放不下时宁可折两行，也不能被裁掉半句
+    <div style={{ display: "flex", gap: 10, lineHeight: "20px", alignItems: "baseline" }}>
+      <span style={{ flex: "0 0 76px", opacity: 0.75, whiteSpace: "nowrap" }}>{name}</span>
+      <span style={{ flex: "0 0 66px", textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+        {value}
+      </span>
+      {note && <span style={{ opacity: 0.65, whiteSpace: "normal" }}>{note}</span>}
     </div>
   );
 }
@@ -89,10 +92,10 @@ export function CExplain({ side, source }: { side: CSide | null | undefined; sou
       <Foot>
         <Row name="合计" value={num(d.total)} note={`≥50 判 C2，≥30 判 C1，否则 C0`} />
         {d.red_flags?.length ? (
-          <div style={{ marginTop: 4, maxWidth: 460, whiteSpace: "normal" }}>🚩 {d.red_flags.join("、")} —— 红旗直接判 C2，不看总分</div>
+          <div style={{ marginTop: 4, maxWidth: 660, whiteSpace: "normal" }}>🚩 {d.red_flags.join("、")} —— 红旗直接判 C2，不看总分</div>
         ) : null}
         {d.has_baseline === false && (
-          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 460, whiteSpace: "normal" }}>
+          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 660, whiteSpace: "normal" }}>
             ⚠️ 还没有个人基线，「变化幅度」不计分，上限只有 70 分，会偏低；这是「信息不足」，不是「确实没变化」
           </div>
         )}
@@ -113,7 +116,7 @@ export function SExplain({ s, withQ }: { s: STotalOut | null | undefined; withQ:
       <Foot>
         <Row name="合计" value={num(s.total)} note={s.s_tier ?? ""} />
         {!withQ && (
-          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 460, whiteSpace: "normal" }}>
+          <div style={{ marginTop: 4, opacity: 0.8, maxWidth: 660, whiteSpace: "normal" }}>
             问答留空时皮肤组/毛发组都按 0 分算，所以这是这一天的下限，只有 C 值那 40% 在起作用
           </div>
         )}
@@ -135,7 +138,7 @@ export function DeltaExplain({ r }: { r: TrackingRow }) {
   const done = tasks.filter((t) => t.status === "APPROVED" || t.status === "SUBMITTED").length;
   const partial = tasks.length > 0 && done < tasks.length;
   return (
-    <div style={{ maxWidth: 460 }}>
+    <div style={{ maxWidth: 660 }}>
       <Title>AI 版 vs 人工版 C 值</Title>
       <Row name="AI 版" value={num(r.c_ai?.c_value)} note={r.c_ai?.c_tier ?? ""} />
       <Row name="人工版" value={num(r.c_human?.c_value)} note={r.c_human?.c_tier ?? ""} />
@@ -169,7 +172,7 @@ export function ScratchExplain({ r }: { r: TrackingRow }) {
   const wear = st.valid_wear_hours as number | undefined;
   const ratio = r.baseline_count && n != null ? n / r.baseline_count : null;
   return (
-    <div style={{ maxWidth: 460 }}>
+    <div style={{ maxWidth: 660 }}>
       <Title>这天的抓挠</Title>
       <Row name="次数" value={`${num(n)} 次`} />
       <Row name="总时长" value={`${num(min)} 分`} note={n ? `平均每次 ${num(((min ?? 0) * 60) / n)} 秒` : undefined} />
