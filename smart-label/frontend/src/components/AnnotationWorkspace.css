@@ -48,6 +48,17 @@
   max-height: 100vh;
 }
 
+/* 片段/候选列表：占满视频下面剩下的高度，在自己里面滚。
+   以前是这一块按内容撑开、整体溢出到弹窗 body，于是想看列表最后几条就得把
+   视频一起滚出屏幕——而复看恰恰是"对着画面看这一条对不对"，两样必须同时在眼前。
+   min-height 兜底：视频再高也要给列表留出能看见几行的位置。 */
+.ws-segs {
+  flex: 1 1 auto;
+  min-height: 140px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* 片段表格自己的滚动条滚到头之后，滚轮不要"接着"把外面的 body 带着一起滚；
    鼠标在表格里就只滚表格，想滚外面把鼠标移出去 */
 .ws-segs .ant-table-body,
