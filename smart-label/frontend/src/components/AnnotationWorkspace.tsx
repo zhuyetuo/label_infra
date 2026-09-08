@@ -72,7 +72,13 @@ const HOTKEYS = "1234567890qwertyasdfgh".split("");
 // 卡住"一条通道 + 顶部说明 + 底部日期行"的高度，刚好够，多出来的部分往下滚
 // 才看得到，不占视频的地盘。
 const CHART_VIEWPORT_PX = 185;
+// 展开全部默认高一些：那个模式本来就是为了一眼扫六条
+const CHART_EXPANDED_PX = 520;
+// 两个模式各记各的高度：单条波形只看一条，拖到刚好一条的高度；展开全部要看六条，
+// 拖得高得多。共用一个值的话，来回切模式就得来回拖
+const CHART_MODE_KEY = "smart-label:chart-expanded";
 const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
+const CHART_EXPANDED_HEIGHT_KEY = "smart-label:chart-area-height-expanded";
 const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 // IMU 波形整块的展开/折叠，和下面两个面板的展开状态：都记成用户的习惯
 const IMU_OPEN_KEY = "smart-label:imu-open";
@@ -117,16 +123,25 @@ export default function AnnotationWorkspace({
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
   // 默认只露一条波形把高度让给视频；想通盘看六轴时切到"展开全部"，
   // 波形区改为占满剩余高度，视频相应缩小
-  const [chartExpanded, setChartExpanded] = useState(false);
+  // 用哪个模式也记住：不然每开一个任务都要重新点一次「展开全部」
+  const [chartExpanded, setChartExpanded] = useState(() => getSavedBool(CHART_MODE_KEY, false));
   // 展开时要"一屏看全六轴"，所以行高不能写死，得按波形区实际拿到多少高度算
   const chartBoxRef = useRef<HTMLDivElement | null>(null);
   const [chartBoxH, setChartBoxH] = useState(0);
   // 单条波形模式下这块区域的高度，可以拖底边把手调整；跟视频区一样记到
   // localStorage，下次打开别的任务不用重新拖
-  const [chartHeight, setChartHeight] = useState(() => getSavedHeight(CHART_HEIGHT_KEY) ?? CHART_VIEWPORT_PX);
+  const [singleHeight, setSingleHeight] = useState(() => getSavedHeight(CHART_HEIGHT_KEY) ?? CHART_VIEWPORT_PX);
+  const [expandedHeight, setExpandedHeight] = useState(
+    () => getSavedHeight(CHART_EXPANDED_HEIGHT_KEY) ?? CHART_EXPANDED_PX
+  );
   // 单条波形模式下滚轮很容易不小心把波形区滚到别的通道去，锁住之后波形区不响应
   // 滚动，想看别的通道再解锁。是否锁定记住成用户的习惯，下次打开别的任务沿用。
   const [chartScrollLocked, setChartScrollLocked] = useState(() => getSavedBool(CHART_SCROLL_LOCK_KEY, false));
+  // 当前模式用哪一份高度。切模式 = 换一份记忆，互不影响
+  const chartHeight = chartExpanded ? expandedHeight : singleHeight;
+  const setChartHeight = chartExpanded ? setExpandedHeight : setSingleHeight;
+  const chartHeightKey = chartExpanded ? CHART_EXPANDED_HEIGHT_KEY : CHART_HEIGHT_KEY;
+  const chartHeightDefault = chartExpanded ? CHART_EXPANDED_PX : CHART_VIEWPORT_PX;
   // 复看抓挠时波形其实用得不多（主要看视频），可以整块折起来把地方让给视频；
   // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
   const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
@@ -501,7 +516,7 @@ export default function AnnotationWorkspace({
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      saveHeight(CHART_HEIGHT_KEY, latest);
+      saveHeight(chartHeightKey, latest);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -841,7 +856,11 @@ export default function AnnotationWorkspace({
                             size="small"
                             options={["单条波形", "展开全部"]}
                             value={chartExpanded ? "展开全部" : "单条波形"}
-                            onChange={(v) => setChartExpanded(v === "展开全部")}
+                            onChange={(v) => {
+                              const next = v === "展开全部";
+                              setChartExpanded(next);
+                              saveBool(CHART_MODE_KEY, next);
+                            }}
                           />
                         </>
                       )}
@@ -902,8 +921,8 @@ export default function AnnotationWorkspace({
                     <div
                       onMouseDown={handleChartResizeStart}
                       onDoubleClick={() => {
-                        setChartHeight(CHART_VIEWPORT_PX);
-                        saveHeight(CHART_HEIGHT_KEY, null);
+                        setChartHeight(chartHeightDefault);
+                        saveHeight(chartHeightKey, null);
                       }}
                       title="拖拽调整波形区域高度，双击恢复默认"
                       className="ws-chart-grip"
