@@ -37,3 +37,24 @@ export function saveBool(key: string, value: boolean): void {
     // 存不了就算了，不影响当前这次的使用
   }
 }
+
+// 面板的展开/折叠：每个人的看法不一样（有人主要看波形，有人只看片段列表），
+// 记下来，下次打开别的任务还是自己上次那套，不用每个任务重新点一遍。
+export function getSavedKeys(key: string, fallback: string[]): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveKeys(key: string, keys: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(keys));
+  } catch {
+    // 存不了就算了
+  }
+}

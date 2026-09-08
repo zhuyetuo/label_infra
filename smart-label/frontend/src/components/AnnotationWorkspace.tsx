@@ -30,7 +30,7 @@ import { TimeBus } from "@/utils/timeBus";
 import { useAuthStore } from "@/stores/authStore";
 import { INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
-import { getSavedBool, getSavedHeight, saveBool, saveHeight } from "@/utils/persistedSize";
+import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -74,6 +74,9 @@ const HOTKEYS = "1234567890qwertyasdfgh".split("");
 const CHART_VIEWPORT_PX = 185;
 const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
+// IMU 波形整块的展开/折叠，和下面两个面板的展开状态：都记成用户的习惯
+const IMU_OPEN_KEY = "smart-label:imu-open";
+const PANELS_KEY = "smart-label:ws-panels";
 
 // 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
 // 时间点不用手填毫秒，所见即所得。
@@ -120,6 +123,10 @@ export default function AnnotationWorkspace({
   // 单条波形模式下滚轮很容易不小心把波形区滚到别的通道去，锁住之后波形区不响应
   // 滚动，想看别的通道再解锁。是否锁定记住成用户的习惯，下次打开别的任务沿用。
   const [chartScrollLocked, setChartScrollLocked] = useState(() => getSavedBool(CHART_SCROLL_LOCK_KEY, false));
+  // 复看抓挠时波形其实用得不多（主要看视频），可以整块折起来把地方让给视频；
+  // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
+  const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
+  const [panelKeys, setPanelKeys] = useState<string[]>(() => getSavedKeys(PANELS_KEY, ["segs"]));
 
   const [items, setItems] = useState<LabelItem[]>([]);
   // 疑似抓挠候选：不在草稿里，单独一张表，人工逐条确认/排除
@@ -687,13 +694,27 @@ export default function AnnotationWorkspace({
           // 让会自适应量尺寸的视频区独自让出高度。
           style={{
             marginTop: 4,
-            flex: chartExpanded ? 1 : "0 0 auto",
+            flex: chartExpanded && imuOpen ? 1 : "0 0 auto",
             minHeight: 0,
             display: "flex",
             flexDirection: "column",
           }}
         >
-          {hasCsv && sampleId != null ? (
+          {/* 折起来之后只留这一行，视频区自动占满剩下的高度 */}
+          <Button
+            type="text"
+            size="small"
+            style={{ alignSelf: "flex-start", paddingLeft: 0 }}
+            onClick={() => {
+              setImuOpen((v) => {
+                saveBool(IMU_OPEN_KEY, !v);
+                return !v;
+              });
+            }}
+          >
+            {imuOpen ? "▾" : "▸"} IMU 波形
+          </Button>
+          {imuOpen && (hasCsv && sampleId != null ? (
             <>
               <Space style={{ marginBottom: 8 }}>
                 <Segmented
@@ -786,7 +807,7 @@ export default function AnnotationWorkspace({
             </>
           ) : (
             !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
-          )}
+          ))}
         </div>
 
         <Collapse
@@ -796,7 +817,13 @@ export default function AnnotationWorkspace({
           style={{ marginTop: 8, flex: "0 0 auto" }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
-          defaultActiveKey={readOnly ? ["segs"] : []}
+          // 展开哪些面板记成用户的习惯，不用每开一个任务重点一遍
+          activeKey={panelKeys}
+          onChange={(keys) => {
+            const next = Array.isArray(keys) ? keys : [keys];
+            setPanelKeys(next as string[]);
+            saveKeys(PANELS_KEY, next as string[]);
+          }}
           items={[
             {
               key: "segs",
