@@ -4,6 +4,17 @@ Label Studio 导出格式（单 csv：data.csv + annotations[].result[].value{st
 timeserieslabels}），写到 NAS 的 data_train/<name>/merged_tmp.json，旁边一份 meta.json
 记录范围和数量。imu_train/label_service 的 /train 接 export_json 后自己整理进仓库目录。
 
+两种取法（scope）：
+  approved   —— 只取审核通过（可选加上已提交）的任务，整份都算数。最稳，但一份
+                标注得从头到尾审完才用得上。
+  reviewed   —— 不看任务状态，只取**人碰过的那些片段**（确认过 / 改过 / 人工加的、
+                包括从「疑似抓挠」确认上来的）。人工复看是很费时间的事，实际总是
+                「这个任务只审了抓挠」「那个任务审了一半」，等整份审完再用，攒不出
+                数据集。按片段取就能一点一点往里加。
+                安全性来自导出格式本身：labelstudio_to_custom 只提取被标注区间里的
+                行，没标注的时间根本不会进数据集——所以"没人看过的 AI 片段不导出"
+                不会变成"把它当负样本"，那段时间是直接不参与训练。
+
 数据来源只有一种：任务当前轮的片段。审核通过的任务里 AI 片段被确认/纠正过、人工
 新增的、从候选里确认的，都已经是同一张表里的正式片段；被排除的候选和被删掉的误报
 所占的时间，本来就被活动/睡觉这些状态片段覆盖着，天然是负样本，不用单独处理。
@@ -36,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.ai_candidate import AiCandidate, CandidateStatus
-from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
@@ -94,22 +105,30 @@ def _fmt(t: datetime) -> str:
 
 async def export_dataset(
     db: AsyncSession, name: str, date_from: date, date_to: date, project_id: int | None = None,
-    include_submitted: bool = False,
+    include_submitted: bool = False, scope: str = "approved",
 ) -> dict:
     if not _NAME_RE.match(name):
         raise TrainingExportError("数据集名只能用字母/数字/下划线/横线，1–64 位")
-    statuses = [TaskStatus.APPROVED] + ([TaskStatus.SUBMITTED] if include_submitted else [])
+    if scope not in ("approved", "reviewed"):
+        raise TrainingExportError("scope 只能是 approved 或 reviewed")
+    only_reviewed = scope == "reviewed"
     q = (
         select(Task, Sample)
         .join(Sample, Sample.id == Task.sample_id)
-        .where(Task.status.in_(statuses), Sample.session_date >= date_from, Sample.session_date <= date_to)
+        .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
         .order_by(Task.id)
     )
+    if not only_reviewed:
+        # 整份取：任务本身得审过
+        statuses = [TaskStatus.APPROVED] + ([TaskStatus.SUBMITTED] if include_submitted else [])
+        q = q.where(Task.status.in_(statuses))
     if project_id is not None:
         q = q.where(Task.project_id == project_id)
     rows = (await db.execute(q)).all()
     if not rows:
-        raise TrainingExportError("这段日期里没有审核通过的任务")
+        raise TrainingExportError(
+            "这段日期里没有任务" if only_reviewed else "这段日期里没有审核通过的任务"
+        )
 
     label_names = dict(
         (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name))).all()
@@ -124,16 +143,28 @@ async def export_dataset(
             AnnotationLabelItem.start_time_ms,
             AnnotationLabelItem.end_time_ms,
             AnnotationLabelItem.uncertain,
+            AnnotationLabelItem.ai_confirmed,
+            AnnotationLabelItem.is_modified,
+            AnnotationLabelItem.source_type,
         )
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
         .join(Task, Task.id == AnnotationRecord.task_id)
         .where(AnnotationRecord.task_id.in_(task_ids), AnnotationRecord.round_no == Task.round_no)
     )
-    for task_id, label_id, s_ms, e_ms, uncertain in item_rows.all():
+    n_skipped_untouched = 0
+    for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source in item_rows.all():
         if uncertain:
+            # 「待定」永远挖洞，跟怎么取无关：那段时间既不能当正例也不能当负例
             holes_by_task.setdefault(task_id, []).append((int(s_ms), int(e_ms)))
-        else:
-            items_by_task.setdefault(task_id, []).append((label_id, int(s_ms), int(e_ms)))
+            continue
+        if only_reviewed:
+            # 人碰过才算数：确认过、改过、或者本来就是人加的（含从候选确认上来的）。
+            # 没人看过的纯 AI 片段跳过——它只是模型自己的输出，拿去训练就是自我强化
+            touched = bool(confirmed) or bool(modified) or source == LabelItemSource.human_added
+            if not touched:
+                n_skipped_untouched += 1
+                continue
+        items_by_task.setdefault(task_id, []).append((label_id, int(s_ms), int(e_ms)))
 
     # 候选里被标成「待定」的：不在草稿里，但那段时间同样不能当负样本用
     cand_holes: dict[int, list[tuple[int, int]]] = {}
@@ -215,6 +246,9 @@ async def export_dataset(
     meta = {
         "name": name, "date_from": date_from.isoformat(), "date_to": date_to.isoformat(),
         "project_id": project_id, "include_submitted": include_submitted,
+        "scope": scope,
+        # 按片段取时跳过了多少条"没人看过的 AI 片段"，导出后能对上账
+        "n_untouched_skipped": n_skipped_untouched,
         "n_tasks": len(ls_tasks), "n_segments": n_segments, "total_hours": round(total_sec / 3600, 2),
         # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,

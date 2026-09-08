@@ -46,6 +46,8 @@ class DatasetExportIn(BaseModel):
     project_id: int | None = None
     # 只用「已通过」最稳；赶时间可以把「待审核」也算上，但那部分还没人复核
     include_submitted: bool = False
+    # approved = 整份审完的任务才算；reviewed = 不看任务状态，只取人碰过的片段
+    scope: str = "approved"
 
 
 @router.get("/datasets")
@@ -62,7 +64,8 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
     """
     try:
         meta = await export_dataset(
-            db, body.name, body.date_from, body.date_to, body.project_id, body.include_submitted
+            db, body.name, body.date_from, body.date_to, body.project_id, body.include_submitted,
+            scope=body.scope,
         )
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
