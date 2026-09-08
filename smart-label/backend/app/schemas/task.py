@@ -56,6 +56,8 @@ class LabelItemIn(BaseModel):
     ai_confidence: float | None = None
     # AI 片段人工确认状态。不传 = 保持库里原值（但类别/起止被改动时会自动清成 False）
     ai_confirmed: bool | None = None
+    # 待定：拿不准，保留记录但不参与训练。不传 = 保持库里原值
+    uncertain: bool | None = None
 
 
 class LabelItemOut(LabelItemIn):
@@ -66,6 +68,7 @@ class LabelItemOut(LabelItemIn):
     is_modified: bool
     ai_confidence: float | None
     ai_confirmed: bool
+    uncertain: bool
     created_by: int | None
 
 

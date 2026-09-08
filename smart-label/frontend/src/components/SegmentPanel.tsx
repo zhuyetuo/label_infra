@@ -6,7 +6,7 @@ import type { LabelDefinition, LabelItem } from "@/types";
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
 
-type SourceFilter = "all" | "ai" | "ai_pending" | "ai_confirmed" | "ai_modified" | "human";
+type SourceFilter = "all" | "ai" | "ai_pending" | "ai_confirmed" | "ai_modified" | "human" | "uncertain";
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
@@ -15,6 +15,7 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "ai_confirmed", label: "AI 已确认" },
   { value: "ai_modified", label: "AI 已纠正" },
   { value: "human", label: "人工" },
+  { value: "uncertain", label: "待定" },
 ];
 
 // 比这个短的空白不算"漏预测"（模型按窗口出结果，窗口边界处零点几秒的缝很正常）
@@ -33,8 +34,10 @@ export function formatMs(ms: number): string {
 const fmtDur = (ms: number) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}min` : `${(ms / 1000).toFixed(2)}s`);
 
 const isAi = (i: LabelItem) => i.source_type === "ai_generated";
+// 「待定」压过 AI 的确认状态：人已经看过并给了结论（只是结论是"拿不准"），
+// 不该再算进「AI 待确认」里催人确认
 const aiState = (i: LabelItem): "pending" | "confirmed" | "modified" | null =>
-  !isAi(i) ? null : i.is_modified ? "modified" : i.ai_confirmed ? "confirmed" : "pending";
+  i.uncertain || !isAi(i) ? null : i.is_modified ? "modified" : i.ai_confirmed ? "confirmed" : "pending";
 
 function confColor(c: number): string {
   if (c >= 0.8) return "green";
@@ -78,7 +81,10 @@ interface Props {
   onLoop?: (range: { startMs: number; endMs: number } | null) => void;
   loopRange?: { startMs: number; endMs: number } | null;
   /** 改类别/起止/确认状态。改类别或起止时调用方负责把 AI 片段标成"已纠正"并清掉确认 */
-  onUpdate: (ids: number[], patch: Partial<Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed">>) => void;
+  onUpdate: (
+    ids: number[],
+    patch: Partial<Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed" | "uncertain">>
+  ) => void;
   onDelete: (id: number) => void;
   /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
@@ -145,6 +151,9 @@ export default function SegmentPanel({
         if (filterSource === "ai_pending" && st !== "pending") return false;
         if (filterSource === "ai_confirmed" && st !== "confirmed") return false;
         if (filterSource === "ai_modified" && st !== "modified") return false;
+        if (filterSource === "uncertain" && !i.uncertain) return false;
+        // 「待定」是单独一类，别混进别的来源的筛选结果里
+        if (filterSource !== "uncertain" && filterSource !== "all" && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
@@ -192,6 +201,7 @@ export default function SegmentPanel({
 
   const cov = useMemo(() => coverage(items, durationMs), [items, durationMs]);
   const pendingTotal = items.filter((i) => aiState(i) === "pending").length;
+  const uncertainTotal = items.filter((i) => i.uncertain).length;
   const pendingInView = filtered.filter((i) => aiState(i) === "pending");
 
   const openEditor = (i: LabelItem) => {
@@ -277,6 +287,7 @@ export default function SegmentPanel({
             <>
               显示 {filtered.length} / 共 {items.length}
               {pendingTotal > 0 && <>，AI 待确认 {pendingTotal}</>}
+              {uncertainTotal > 0 && <>，待定 {uncertainTotal}（不进训练集）</>}
             </>
           )}
         </Typography.Text>
@@ -469,6 +480,12 @@ export default function SegmentPanel({
             width: 100,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
+              if (i.uncertain)
+                return (
+                  <Tooltip title="拿不准：留着当记录，但不参与模型训练">
+                    <Tag color="purple">待定</Tag>
+                  </Tooltip>
+                );
               if (st === "pending") return <Tag color="orange">AI 待确认</Tag>;
               if (st === "confirmed") return <Tag color="green">AI 已确认</Tag>;
               if (st === "modified") return <Tag color="blue">AI 已纠正</Tag>;
@@ -477,7 +494,7 @@ export default function SegmentPanel({
           },
           {
             title: "操作",
-            width: 230,
+            width: 300,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
               return (
@@ -496,6 +513,21 @@ export default function SegmentPanel({
                   {!readOnly && st === "confirmed" && (
                     <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onUpdate([i.id], { ai_confirmed: false })}>
                       撤销
+                    </Button>
+                  )}
+                  {/* 拿不准（画面里没拍到狗、动作看不清）：既不能确认成这个类别，
+                      删掉又可惜。标成「待定」留着，导出训练集时这段时间会被整个
+                      挖掉，不会被当成负样本用 */}
+                  {!readOnly && !i.uncertain && (
+                    <Tooltip title="看不清 / 拿不准：留着记录，但不进训练集">
+                      <Button size="small" type="link" onClick={() => onUpdate([i.id], { uncertain: true })}>
+                        待定
+                      </Button>
+                    </Tooltip>
+                  )}
+                  {!readOnly && i.uncertain && (
+                    <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onUpdate([i.id], { uncertain: false })}>
+                      取消待定
                     </Button>
                   )}
                   {!readOnly && (

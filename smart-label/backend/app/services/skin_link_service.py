@@ -133,6 +133,8 @@ async def collect_link_stats(
                 AnnotationRecord.task_id.in_([t.id for t in human_tasks]),
                 AnnotationRecord.round_no == Task.round_no,
                 AnnotationLabelItem.label_id.in_(scratch_label_ids),
+                # 「待定」是"人看了但拿不准"，不算人已经定下来的抓挠
+                AnnotationLabelItem.uncertain.is_(False),
             )
         )
         for task_id, s_ms, e_ms in rows.all():

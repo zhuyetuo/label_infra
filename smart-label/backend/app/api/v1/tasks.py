@@ -239,7 +239,9 @@ async def list_tasks(
             (
                 (AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
                 & (AnnotationLabelItem.ai_confirmed.is_(False))
-                & (AnnotationLabelItem.is_modified.is_(False)),
+                & (AnnotationLabelItem.is_modified.is_(False))
+                # 标了「待定」的已经处理过了（人看了，拿不准），不该再催着确认
+                & (AnnotationLabelItem.uncertain.is_(False)),
                 1,
             ),
             else_=0,

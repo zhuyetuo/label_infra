@@ -228,6 +228,7 @@ export default function AnnotationWorkspace({
         is_modified: false,
         ai_confidence: null,
         ai_confirmed: false,
+        uncertain: false,
         created_by: null,
       },
     ]);
@@ -283,6 +284,7 @@ export default function AnnotationWorkspace({
         source_type: i.origin_item_id == null ? i.source_type : undefined,
         ai_confidence: i.origin_item_id == null ? i.ai_confidence : undefined,
         ai_confirmed: i.ai_confirmed,
+        uncertain: i.uncertain,
       }))
     );
   };
@@ -315,6 +317,7 @@ export default function AnnotationWorkspace({
           end_time_ms: it.end_time_ms,
           origin_item_id: null,
           source_type: "ai_generated",
+          uncertain: false,
           is_modified: false,
           ai_confidence: it.confidence,
           ai_confirmed: false,

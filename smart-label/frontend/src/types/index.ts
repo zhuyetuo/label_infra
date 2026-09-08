@@ -86,6 +86,8 @@ export interface LabelItem {
   ai_confidence: number | null;
   /** AI 片段是否已被人工确认为正确；人工画的恒为 false */
   ai_confirmed: boolean;
+  /** 待定：看了拿不准（画面里没拍到、动作看不清），留着但不进训练集 */
+  uncertain: boolean;
   created_by: number | null;
 }
 

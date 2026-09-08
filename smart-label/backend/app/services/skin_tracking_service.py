@@ -156,7 +156,7 @@ async def daily_tracking(
     # 顺带带上每个任务里「抓挠」片段有几段，好挑哪一段去看
     task_rows = (
         await db.execute(
-            select(Task.id, Task.status, Sample.sample_code, Sample.session_date)
+            select(Task.id, Task.status, Sample.sample_code, Sample.session_date, Sample.video_duration_sec)
             .join(Sample, Sample.id == Task.sample_id)
             .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
             .order_by(Sample.sample_code)
@@ -187,7 +187,7 @@ async def daily_tracking(
         seg_counts = {tid: int(n) for tid, n in rows_c.all()}
 
     tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for tid, status, code, sdate in task_rows:
+    for tid, status, code, sdate, dur in task_rows:
         imu = _imu_of(code)
         if imu is None or sdate is None:
             continue
@@ -197,6 +197,8 @@ async def daily_tracking(
                 "sample_code": code,
                 "status": status.value if hasattr(status, "value") else str(status),
                 "scratch_segments": seg_counts.get(tid, 0),
+                # 前端要拿它把「09:00:14 ~ ?」补成「09:00:14 ~ 10:00:00」
+                "video_duration_sec": dur,
             }
         )
     imu_dog_map = imu_dog_map or {}
