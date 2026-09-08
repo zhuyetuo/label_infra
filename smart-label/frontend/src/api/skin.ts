@@ -176,5 +176,5 @@ export interface TrackingRow {
 }
 export interface TrackingResult { rows: TrackingRow[]; warnings: string[]; trigger_tiers: string[] }
 
-export const skinDailyTracking = (p: { date_from: string; date_to: string }) =>
+export const skinDailyTracking = (p: { date_from: string; date_to: string; c_prefer?: "human" | "ai" }) =>
   request.get<never, TrackingResult>("/skin/daily-tracking", { params: p, timeout: 300_000 });
