@@ -22,6 +22,8 @@ class SampleOut(BaseModel):
     video_resolution: str | None
     imu_sample_rate_hz: int | None
     imu_row_count: int | None
+    # 这份 CSV 的实际采样率（导入时量的）。混着两种数据时要按它处理
+    sample_hz: float | None = None
     total_size_bytes: int | None
     import_status: ImportStatus
     import_error: str | None

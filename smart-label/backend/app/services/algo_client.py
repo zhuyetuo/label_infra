@@ -27,10 +27,16 @@ def _mode(mode: str | None) -> str:
     return mode if mode in ("raw", "stable", "viterbi") else settings.algo_infer_mode
 
 
-async def infer(imu_csv_path: str, sample_id: int | None = None, mode: str | None = None) -> dict:
-    """同步调用 algo_service /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。"""
+async def infer(
+    imu_csv_path: str, sample_id: int | None = None, mode: str | None = None, device_hz: float | None = None
+) -> dict:
+    """同步调用 algo_service /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。
+
+    device_hz 是这份 CSV 的实际采样率：8-11 之前的数据采集端就已经降到 16Hz 存了，
+    8-11 起才是 50Hz 原始流。不传的话 AI 服务用它的全局默认值，对另一种就是错的。
+    """
     url = f"{_base_url()}/api/v1/label/infer"
-    payload = {"path": imu_csv_path, "sample_id": sample_id, "mode": _mode(mode)}
+    payload = {"path": imu_csv_path, "sample_id": sample_id, "mode": _mode(mode), "device_hz": device_hz}
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)

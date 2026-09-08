@@ -1,7 +1,9 @@
 """ffprobe 探测视频元信息，供样本导入时填充 duration/fps/resolution。失败不抛异常，返回 None。"""
 
+import csv
 import json
 import subprocess
+from datetime import datetime
 
 
 def probe_video(path: str) -> dict | None:
@@ -31,6 +33,62 @@ def probe_video(path: str) -> dict | None:
         }
     except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, IndexError, ValueError):
         return None
+
+
+def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
+    """
+    量一下这份 CSV 的采样率（Hz）。
+
+    为什么要量：整套流程原来假设所有样本都是同一个采样率（label_service 的
+    DEVICE_HZ，默认 50）。但 8-11 之前的数据是采集端就已经从 100Hz 降到 16Hz
+    存下来的，8-11 起才是 50Hz 原始流——两种混在一起，按 50Hz 去跑 16Hz 的文件，
+    重采样和特征窗口全是错的，模型输出没有意义。所以导入时就记下来，后面
+    该按哪个频率处理、哪些不该混着训练，才有依据。
+
+    取前几百行相邻时间戳差值的中位数：用中位数而不是首尾平均，是因为中间掉数据
+    的那种缝会把平均值拉偏，中位数不受影响。
+    """
+    fmts = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S.%f")
+
+    def _parse(v: str) -> datetime | None:
+        v = v.strip()
+        for f in fmts:
+            try:
+                return datetime.strptime(v, f)
+            except ValueError:
+                continue
+        return None
+
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            try:
+                next(reader)  # 表头
+            except StopIteration:
+                return None
+            ts: list[datetime] = []
+            for row in reader:
+                if not row or not row[0]:
+                    continue
+                t = _parse(row[0])
+                if t is not None:
+                    ts.append(t)
+                if len(ts) >= probe_rows:
+                    break
+    except OSError:
+        return None
+    if len(ts) < 10:
+        return None
+    deltas = [
+        (ts[i + 1] - ts[i]).total_seconds() for i in range(len(ts) - 1) if (ts[i + 1] - ts[i]).total_seconds() > 0
+    ]
+    if not deltas:
+        return None
+    deltas.sort()
+    median = deltas[len(deltas) // 2]
+    if median <= 0:
+        return None
+    return round(1.0 / median, 1)
 
 
 def count_csv_rows(path: str) -> int | None:
