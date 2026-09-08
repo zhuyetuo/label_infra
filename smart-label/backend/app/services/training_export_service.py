@@ -270,6 +270,51 @@ async def export_dataset(
     return meta
 
 
+def read_segments(name: str, limit: int = 5000) -> dict:
+    """
+    把导出文件里的片段摊平成一张表，用来核对"这份数据集到底装了什么"。
+
+    读的就是最终喂给训练的那份 merged_tmp.json，不是重新从数据库算——要核对的
+    正是"落到文件里的是什么"，重算一遍等于换了个东西看。
+    """
+    if not _NAME_RE.match(name):
+        raise TrainingExportError("数据集名不合法")
+    path = os.path.join(settings.nas_root, TRAIN_DIR, name, "merged_tmp.json")
+    if not os.path.isfile(path):
+        raise TrainingExportError("这个数据集没有导出文件")
+    with open(path, encoding="utf-8") as f:
+        tasks = json.load(f)
+
+    rows: list[dict] = []
+    total = 0
+    for t in tasks:
+        code = (t.get("data") or {}).get("sample_code") or ""
+        for ann in t.get("annotations") or []:
+            for seg in ann.get("result") or []:
+                total += 1
+                if len(rows) >= limit:
+                    continue
+                v = seg.get("value") or {}
+                labels = v.get("timeserieslabels") or []
+                start, end = v.get("start") or "", v.get("end") or ""
+                sec = None
+                try:
+                    a_ = datetime.strptime(start, "%Y-%m-%d %H:%M:%S.%f")
+                    b_ = datetime.strptime(end, "%Y-%m-%d %H:%M:%S.%f")
+                    sec = round((b_ - a_).total_seconds(), 2)
+                except ValueError:
+                    pass
+                rows.append({
+                    "task_id": t.get("id"),
+                    "sample_code": code,
+                    "label": labels[0] if labels else "",
+                    "start": start,
+                    "end": end,
+                    "seconds": sec,
+                })
+    return {"total": total, "truncated": total > len(rows), "rows": rows}
+
+
 def delete_dataset(name: str) -> None:
     """删掉 NAS 上这个数据集目录。名字先过一遍白名单，别让 ../ 之类的跑出去。"""
     if not _NAME_RE.match(name):

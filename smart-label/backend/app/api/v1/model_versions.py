@@ -30,6 +30,7 @@ from app.services.training_export_service import (
     delete_dataset,
     export_dataset,
     list_datasets,
+    read_segments,
 )
 
 router = APIRouter(
@@ -76,6 +77,15 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return ok(meta)
+
+
+@router.get("/datasets/{name}/segments")
+async def dataset_segments(name: str, limit: int = 5000):
+    """这份导出里到底装了哪些片段——直接读最终喂给训练的那个 json。"""
+    try:
+        return ok(await asyncio.to_thread(read_segments, name, limit))
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/datasets/{name}")

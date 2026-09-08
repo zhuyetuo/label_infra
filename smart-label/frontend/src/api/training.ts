@@ -49,6 +49,21 @@ export const exportDataset = (body: {
   scope?: "approved" | "reviewed";
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
 
+/** 导出文件里的片段（用来核对这份数据集到底装了什么） */
+export interface DatasetSegment {
+  task_id: number;
+  sample_code: string;
+  label: string;
+  start: string;
+  end: string;
+  seconds: number | null;
+}
+
+export const getDatasetSegments = (name: string) =>
+  request.get<never, { total: number; truncated: boolean; rows: DatasetSegment[] }>(
+    `/model-versions/datasets/${encodeURIComponent(name)}/segments`
+  );
+
 /** 删掉 NAS 上这份导出（data_train/<名字>/）。训练记录不动 */
 export const deleteDataset = (name: string) =>
   request.delete<never, null>(`/model-versions/datasets/${encodeURIComponent(name)}`);
