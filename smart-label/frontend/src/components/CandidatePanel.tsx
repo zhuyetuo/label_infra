@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
-import { DownOutlined, RetweetOutlined } from "@ant-design/icons";
+import { createPortal } from "react-dom";
+import { Button, Dropdown, Empty, Pagination, Popconfirm, Radio, Space, Table, Tag, Tooltip, message } from "antd";
+import { DownOutlined, QuestionCircleOutlined, RetweetOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 
@@ -29,6 +30,12 @@ interface Props {
   scratchLabelIds?: number[];
   /** 撤回已经做过的判断，回到「待确认」。确认过的还要把带上去的那条片段一起收回 */
   onUndo?: (c: AiCandidate) => Promise<void>;
+  /**
+   * 筛选/分页这排控件渲染到哪儿。给了就 portal 到折叠面板的标题行上，
+   * 跟「疑似抓挠（17 待确认 / 17）」拼一行——工作台里高度是最紧的资源，
+   * 一排筛选、一排说明、一排分页三行下来，能看的片段就剩四五条
+   */
+  controlsPortalTarget?: HTMLElement | null;
 }
 
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
@@ -50,8 +57,12 @@ export default function CandidatePanel({
   labels = [],
   scratchLabelIds = [],
   onUndo,
+  controlsPortalTarget,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
+  // 自己管分页：翻页控件要挪到标题行上去，就不能用 Table 自带的那个
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
   const [busy, setBusy] = useState<number | null>(null);
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
   // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
@@ -72,6 +83,12 @@ export default function CandidatePanel({
     () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending" || justDecided.has(c.id))),
     [candidates, filter, justDecided]
   );
+  // 筛选变了、或者处理完剩下的不够这一页了，把页码收回来，别停在空页上
+  useEffect(() => {
+    const max = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    setPage((p) => Math.min(p, max));
+  }, [rows.length, filter]);
+  const pageRows = useMemo(() => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [rows, page]);
 
 
   const decide = async (
@@ -122,38 +139,69 @@ export default function CandidatePanel({
   const isLooping = (c: AiCandidate) =>
     loopRange != null && loopRange.startMs === c.start_time_ms && loopRange.endMs === c.end_time_ms;
 
+  // 筛选、说明、翻页挤在一起放标题行上；说明本身收进问号里——它只在第一次
+  // 用的时候有用，天天占一整行不值当
+  const controls = (
+    // 这排东西 portal 到折叠面板标题上，点它们不能顺带把面板折起来
+    <Space size={6} onClick={(e) => e.stopPropagation()}>
+      <Radio.Group
+        size="small"
+        optionType="button"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        options={[
+          { label: `待确认 ${pendingCount}`, value: "pending" },
+          { label: `全部 ${candidates.length}`, value: "all" },
+        ]}
+      />
+      {justDecided.size > 0 && filter === "pending" && (
+        <Tooltip title="刚处理过的这几条暂时留着不受筛选影响，方便核对；核对完可以收起来">
+          <Button size="small" onClick={() => setJustDecided(new Set())}>
+            收起刚处理的 {justDecided.size} 条
+          </Button>
+        </Tooltip>
+      )}
+      {rows.length > PAGE_SIZE && (
+        <Pagination
+          size="small"
+          simple
+          current={page}
+          pageSize={PAGE_SIZE}
+          total={rows.length}
+          onChange={setPage}
+        />
+      )}
+      <Tooltip
+        title={
+          <div style={{ lineHeight: 1.7 }}>
+            正式片段之外、模型可能漏掉的抓挠。看一眼视频：
+            <br />
+            是抓挠就「确认是抓挠」；
+            <br />
+            其实是别的动作就「改成别的」——比单纯排除有用，等于给了那个类别一个正例，
+            同时是抓挠最缺的难负样本；
+            <br />
+            都不是就「排除」；
+            <br />
+            看了也拿不准就「待定」（那段时间不进训练集）。
+            <br />
+            这几种都会成为下次训练的数据。
+          </div>
+        }
+      >
+        <QuestionCircleOutlined style={{ color: "#999", cursor: "help" }} />
+      </Tooltip>
+    </Space>
+  );
+
   return (
     <div>
-      <Space wrap style={{ marginBottom: 8 }}>
-        <Radio.Group
-          size="small"
-          optionType="button"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          options={[
-            { label: `待确认 ${pendingCount}`, value: "pending" },
-            { label: `全部 ${candidates.length}`, value: "all" },
-          ]}
-        />
-        {justDecided.size > 0 && filter === "pending" && (
-          <Tooltip title="刚处理过的这几条暂时留着不受筛选影响，方便核对；核对完可以收起来">
-            <Button size="small" onClick={() => setJustDecided(new Set())}>
-              收起刚处理的 {justDecided.size} 条
-            </Button>
-          </Tooltip>
-        )}
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          正式片段之外、模型可能漏掉的抓挠。看一眼视频：是抓挠就「确认」，其实是别的动作就「改成别的」
-          （比如甩身体——比单纯排除有用，等于给了那个类别一个正例，同时是抓挠最缺的难负样本），
-          都不是就「排除」；看了也拿不准就「待定」（那段时间不进训练集）。
-          两种都会成为下次训练的数据。
-        </Typography.Text>
-      </Space>
+      {controlsPortalTarget ? createPortal(controls, controlsPortalTarget) : <div style={{ marginBottom: 8 }}>{controls}</div>}
       <Table
         size="small"
         rowKey="id"
-        dataSource={rows}
-        pagination={rows.length > 10 ? { pageSize: 10 } : false}
+        dataSource={pageRows}
+        pagination={false}
         scroll={{ x: 720, y: 220 }}
         locale={{
           emptyText: candidates.length ? (

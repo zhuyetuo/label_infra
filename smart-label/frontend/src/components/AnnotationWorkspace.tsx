@@ -105,6 +105,8 @@ export default function AnnotationWorkspace({
   const [videoWhy, setVideoWhy] = useState<string | null>(null);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
+  // 「疑似抓挠」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
+  const [candControlsHost, setCandControlsHost] = useState<HTMLSpanElement | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
   const [prelabeling, setPrelabeling] = useState(false);
   // 稳定版（平滑合并）/ 调试版（逐窗口原始输出），默认稳定版
@@ -947,9 +949,15 @@ export default function AnnotationWorkspace({
             },
             {
               key: "cands",
-              label: `疑似抓挠（${candidates.filter((c) => c.status === "pending").length} 待确认 / ${candidates.length}）`,
+              label: (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  疑似抓挠（{candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
+                  <span ref={setCandControlsHost} style={{ display: "inline-flex" }} />
+                </span>
+              ),
               children: (
                 <CandidatePanel
+                  controlsPortalTarget={candControlsHost}
                   candidates={candidates}
                   labels={labels}
                   scratchLabelIds={focusIds.length ? focusIds : scratchIds}
