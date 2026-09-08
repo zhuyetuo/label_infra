@@ -11,13 +11,15 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.sample import Sample
 from app.models.skin import SkinRecord, SkinWeeklyRow
+from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services.skin_link_service import SkinLinkError, collect_link_stats, read_stored_link_stats
@@ -102,6 +104,29 @@ async def get_daily_tracking(
         return ok(await daily_tracking(db, date_from, date_to, imu_map, c_prefer=c_prefer))
     except SkinTrackingError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+
+
+@router.get("/data-range")
+async def data_range(db: AsyncSession = Depends(get_db)):
+    """
+    标注平台上现在**有任务**的数据覆盖到哪天到哪天。
+
+    每日跟踪表的日期范围默认跟着它走。这两边很容易对不上：跟踪表的行来自
+    skin_daily_stats（「项目联动」算完存下来的历史结果），项目删了那些行还在，
+    于是会看到一堆早就没有项目的日子。默认框在"现在真的有任务的范围"里，
+    看到的就是当下这批数据。
+    """
+    row = (
+        await db.execute(
+            select(func.min(Sample.session_date), func.max(Sample.session_date)).join(
+                Task, Task.sample_id == Sample.id
+            )
+        )
+    ).one()
+    return ok({
+        "date_from": row[0].isoformat() if row[0] else None,
+        "date_to": row[1].isoformat() if row[1] else None,
+    })
 
 
 # ── 透传：规则/统计/ML ─────────────────────────────────────────────────
