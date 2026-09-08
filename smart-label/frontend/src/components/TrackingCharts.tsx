@@ -84,8 +84,22 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
     return { dogs: dogSet, dates: dateSet, series: s, baseline: b };
   }, [rows, metric]);
 
+  // 容器实际宽度。标签页之间来回切时组件并不卸载，图表可能是在「隐藏着」的时候
+  // 建的——那会儿 clientWidth 是 0，uPlot 就按 0 宽画了一张，切回来也不会自己
+  // 长回去（表现就是坐标轴文字竖着挤成一列、图整个是空的，非刷新不可）。所以
+  // 盯着容器尺寸：宽度为 0 时干脆不建，变了就 setSize。
+  const [hostW, setHostW] = useState(0);
   useEffect(() => {
-    if (!hostRef.current || dates.length === 0) return;
+    const el = hostRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHostW(el.clientWidth));
+    ro.observe(el);
+    setHostW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!hostRef.current || dates.length === 0 || hostW <= 0) return;
     plotRef.current?.destroy();
     const xs = dates.map((d) => new Date(`${d}T00:00:00`).getTime() / 1000);
     const data = [xs, ...series, ...(baseline ?? [])] as unknown as uPlot.AlignedData;
@@ -94,7 +108,7 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
 
     const plot = new uPlot(
       {
-        width: hostRef.current.clientWidth,
+        width: hostW,
         height,
         // 图例默认就在，>=2 条线时身份不能只靠颜色
         legend: { show: true, live: true },
@@ -127,14 +141,12 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
       hostRef.current
     );
     plotRef.current = plot;
-    const onResize = () => plot.setSize({ width: hostRef.current!.clientWidth, height });
-    window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("resize", onResize);
       plot.destroy();
       plotRef.current = null;
     };
-  }, [dogs, dates, series, baseline, palette, dark, height]);
+    // hostW 变了就重建/重设尺寸，窗口缩放和"从隐藏变可见"走的是同一条路
+  }, [dogs, dates, series, baseline, palette, dark, height, hostW]);
 
   if (!rows.length) return null;
   return <div className="tracking-charts"><div ref={hostRef} /></div>;
