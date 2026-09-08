@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Collapse, Input, Modal, Popconfirm, Progress, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Collapse, Input, Modal, Popconfirm, Progress, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import { LockOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  deleteSamplesBatch,
   getImportScanStatus,
   startImportScan,
   listSamples,
@@ -71,6 +72,9 @@ export default function Samples() {
   // 敏感隐私：标了之后标注员/审核员在任何地方都看不到这些样本和上面的任务，
   // 只有管理员/超级管理员能看能标；确认不敏感了可以解除。支持勾选一批一起标。
   const [sensitiveFilter, setSensitiveFilter] = useState<"全部" | "仅敏感" | "仅非敏感">("全部");
+  // 空 CSV：文件建出来了但一行数据都没写，打开就报「CSV 没有数据行」，也算不出
+  // 任何指标。行数为 null 是导入时没探到，不算空
+  const [onlyEmpty, setOnlyEmpty] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [markOpen, setMarkOpen] = useState(false);
   const [markNote, setMarkNote] = useState("");
@@ -80,6 +84,14 @@ export default function Samples() {
     await updateSample(sample.id, { is_sensitive: on });
     message.success(on ? "已标记为敏感，仅管理员可见" : "已解除敏感标记");
     qc.invalidateQueries({ queryKey: ["samples"] });
+  };
+
+  const removeSamples = async (ids: number[]) => {
+    const r = await deleteSamplesBatch(ids);
+    message.success(`已删除 ${r.deleted} 个样本${r.tasks_deleted ? `、${r.tasks_deleted} 个任务` : ""}`);
+    setSelected(new Set());
+    qc.invalidateQueries({ queryKey: ["samples"] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   };
 
   const applyBulk = async (on: boolean) => {
@@ -176,18 +188,20 @@ export default function Samples() {
   ];
 
   const sensitiveCount = useMemo(() => (data ?? []).filter((s) => s.is_sensitive).length, [data]);
+  const emptySamples = useMemo(() => (data ?? []).filter((s) => s.imu_row_count === 0), [data]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Sample[]>();
     for (const s of data ?? []) {
       if (sensitiveFilter === "仅敏感" && !s.is_sensitive) continue;
       if (sensitiveFilter === "仅非敏感" && s.is_sensitive) continue;
+      if (onlyEmpty && s.imu_row_count !== 0) continue;
       const key = s.session_date ?? "未知日期";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(s);
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
-  }, [data, sensitiveFilter]);
+  }, [data, sensitiveFilter, onlyEmpty]);
 
   const handleScan = async () => {
     const result = await startImportScan();
@@ -218,6 +232,23 @@ export default function Samples() {
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           敏感样本 {sensitiveCount} 个：仅管理员/超级管理员可见可标，其他人在项目、任务、审核里都看不到
         </Typography.Text>
+        {emptySamples.length > 0 && (
+          <>
+            <Checkbox checked={onlyEmpty} onChange={(e) => setOnlyEmpty(e.target.checked)}>
+              <span style={{ color: "#ff4d4f" }}>空 CSV {emptySamples.length}</span>
+            </Checkbox>
+            <Popconfirm
+              title={`删除这 ${emptySamples.length} 个空 CSV 样本？`}
+              description="文件建出来了但一行数据都没写，打开就报错、也算不出指标。会连同上面的任务、草稿、审核记录一起删；NAS 上的文件不动，只删数据库登记"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => removeSamples(emptySamples.map((s) => s.id))}
+            >
+              <Button size="small" danger>
+                删除空 CSV 样本
+              </Button>
+            </Popconfirm>
+          </>
+        )}
         {selected.size > 0 && (
           <>
             <Tag>已勾选 {selected.size}</Tag>
@@ -227,6 +258,16 @@ export default function Samples() {
             <Popconfirm title={`解除这 ${selected.size} 个样本的敏感标记？其他人将重新可见`} onConfirm={() => applyBulk(false)}>
               <Button size="small" loading={marking}>
                 解除敏感
+              </Button>
+            </Popconfirm>
+            <Popconfirm
+              title={`删除勾选的 ${selected.size} 个样本？`}
+              description="会连同上面的任务、草稿、审核记录一起删；NAS 上的文件不动，只删数据库登记。不可恢复"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => removeSamples([...selected])}
+            >
+              <Button size="small" danger>
+                删除样本
               </Button>
             </Popconfirm>
             <Button size="small" type="link" onClick={() => setSelected(new Set())}>

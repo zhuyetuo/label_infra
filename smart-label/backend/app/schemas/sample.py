@@ -47,6 +47,12 @@ class SampleSensitiveBulk(BaseModel):
     sensitive_note: str | None = None
 
 
+class SampleDeleteBulk(BaseModel):
+    """一批样本连同上面的任务一起删。"""
+
+    sample_ids: list[int]
+
+
 class SampleMediaOut(BaseModel):
     video1_id: int | None
     video2_id: int | None

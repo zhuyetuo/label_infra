@@ -17,6 +17,12 @@ export const setSamplesSensitive = (sampleIds: number[], isSensitive: boolean, n
     sensitive_note: note ?? null,
   });
 
+/** 删一批样本，连同它们上面的任务。NAS 上的文件不动，删的只是数据库登记 */
+export const deleteSamplesBatch = (sampleIds: number[]) =>
+  request.post<never, { deleted: number; tasks_deleted: number }>("/samples/batch-delete", {
+    sample_ids: sampleIds,
+  });
+
 export interface SampleMedia {
   video1_id: number | null;
   video2_id: number | null;
