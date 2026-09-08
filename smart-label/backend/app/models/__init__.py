@@ -6,6 +6,7 @@ from app.models.audit_log import AuditLog
 from app.models.background_job import BackgroundJob
 from app.models.clip import ClipJob
 from app.models.dog import Dog
+from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.media_file import MediaFile
@@ -21,6 +22,7 @@ from app.models.user import User
 
 __all__ = [
     "AiCandidate",
+    "SampleInferenceRun",
     "SkinDailyStat",
     "User",
     "Project",

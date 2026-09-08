@@ -30,6 +30,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelIt
 from app.models.audit_log import AuditLog
 
 _logger = logging.getLogger("smart-label.ai_prelabel")
+from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
@@ -198,6 +199,29 @@ async def _csv_start_of(sample: Sample) -> datetime:
     return csv_start
 
 
+def model_tag_of(model_path: str | None) -> str:
+    """模型文件名去掉后缀当标识：/app/results/scratch_rf_20260901.pkl → scratch_rf_20260901。
+    路径可能变（换个目录挂载），文件名一般不变，拿它当"这是哪个模型"最稳。"""
+    if not model_path:
+        return "unknown"
+    base = os.path.basename(str(model_path).replace("\\", "/"))
+    tag = os.path.splitext(base)[0] or "unknown"
+    # 要当目录名用，挑安全字符
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in tag)[:120]
+
+
+def versioned_ai_relpath(imu_csv_path: str, model_tag: str, mode: str) -> str:
+    """按 (模型, 版本) 分开存的路径：data_labeled_ai/_runs/<模型>/<版本>/<原层级>.json
+
+    以前一个样本只有一份结果，重跑就覆盖——换模型重跑一次，旧的当场没了，
+    "以前能识别出来的现在还行不行"根本没法回答。现在每份各存各的，谁也不盖谁。
+    放在 _runs/ 下面是为了跟原来那份"当前结果"分开，老代码不受影响。
+    """
+    rel = ai_label_relpath(imu_csv_path)
+    inside = os.path.relpath(rel, settings.ai_label_dir)
+    return os.path.join(settings.ai_label_dir, "_runs", model_tag, mode or "raw", inside)
+
+
 def ai_label_relpath(imu_csv_path: str) -> str:
     """AI 预标注 JSON 的 NAS 相对路径：放 data_labeled_ai/ 下，目录结构照搬
     data_raw/ 下面的层级（去掉 data_raw/ 前缀），文件名 = CSV 名 + _ai_label.json。
@@ -210,17 +234,90 @@ def ai_label_relpath(imu_csv_path: str) -> str:
     return os.path.join(settings.ai_label_dir, os.path.splitext(rel)[0] + "_ai_label.json")
 
 
-async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime) -> SampleInference:
-    """原始 JSON 落盘 NAS（data_labeled_ai/ 下，见 ai_label_relpath），再摊平换算。"""
-    relpath = ai_label_relpath(sample.imu_csv_path)
-    full_path = os.path.join(settings.nas_root, relpath)
+async def _record_run(sample: Sample, result: dict, relpath: str) -> None:
+    """把这一份结果登记进 sample_inference_runs，同 (样本, 模型, 版本) 覆盖自己那条。
+
+    索引单独存一张表，是为了后面"选两个模型对比"能直接查，不用去 NAS 上瞎扫目录。
+    登记失败不该影响预标注本身——结果 JSON 已经落盘了，大不了这次没记上。
+    """
+    segs = result.get("segments") or {}
+    label_counts = {k: len(v or []) for k, v in segs.items()}
+    try:
+        async with SessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(SampleInferenceRun).where(
+                        SampleInferenceRun.sample_id == sample.id,
+                        SampleInferenceRun.model_tag == model_tag_of(result.get("model_path")),
+                        SampleInferenceRun.mode == str(result.get("mode") or "raw"),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = SampleInferenceRun(
+                    sample_id=sample.id,
+                    model_tag=model_tag_of(result.get("model_path")),
+                    mode=str(result.get("mode") or "raw"),
+                    json_path=relpath,
+                )
+                db.add(row)
+            row.model_path = result.get("model_path")
+            row.json_path = relpath
+            row.n_windows = int(result.get("n_windows") or 0)
+            row.n_segments = sum(label_counts.values())
+            row.n_candidates = len(result.get("candidates") or [])
+            row.missing_seconds = float(result.get("missing_seconds") or 0.0)
+            row.label_counts = json.dumps(label_counts, ensure_ascii=False)
+            await db.commit()
+    except Exception:  # noqa: BLE001 记不上不影响预标注本身
+        _logger.exception("登记推理结果失败 sample=%s", sample.id)
+
+
+async def store_run_only(sample: Sample, result: dict) -> str:
+    """只把这一份结果按 (模型, 版本) 存起来并登记，不动"当前结果"、也不写任何草稿。
+
+    评测跑批用：拿几个模型对同一批数据各跑一遍纯粹是为了对比，不该顺手把
+    标注员正在看的草稿换掉——那是两件事。
+    """
+    ver_rel = versioned_ai_relpath(
+        sample.imu_csv_path, model_tag_of(result.get("model_path")), str(result.get("mode") or "raw")
+    )
+    full = os.path.join(settings.nas_root, ver_rel)
 
     def _write() -> None:
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
     await asyncio.to_thread(_write)
+    await _record_run(sample, result, ver_rel)
+    return ver_rel
+
+
+async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime) -> SampleInference:
+    """原始 JSON 落盘 NAS，再摊平换算。
+
+    写两份：
+      - data_labeled_ai/<原层级>.json —— "这个样本当前的结果"，皮肤联动、
+        工作台都读它，路径不变，老代码不受影响
+      - data_labeled_ai/_runs/<模型>/<版本>/... —— 按模型和版本各存一份，
+        重跑不覆盖，模型对比要用
+    """
+    relpath = ai_label_relpath(sample.imu_csv_path)
+    full_path = os.path.join(settings.nas_root, relpath)
+    ver_rel = versioned_ai_relpath(
+        sample.imu_csv_path, model_tag_of(result.get("model_path")), str(result.get("mode") or "raw")
+    )
+    ver_full = os.path.join(settings.nas_root, ver_rel)
+
+    def _write() -> None:
+        for path in (full_path, ver_full):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+
+    await asyncio.to_thread(_write)
+    await _record_run(sample, result, ver_rel)
     items, skipped = flatten_segments(result.get("segments") or {}, csv_start)
     cands = flatten_candidates(result.get("candidates") or [], csv_start)
     return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0),
