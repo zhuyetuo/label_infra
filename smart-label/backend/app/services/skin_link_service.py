@@ -352,6 +352,8 @@ async def _stats_with_full_baseline(
                 return {
                     "c_inputs": cin,
                     "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")},
+                    # 各项得分原样留着，前端 tooltip 要展示"这 85 分怎么来的"
+                    "c_detail": c,
                 }
             except SkinLinkError:
                 return None
@@ -379,12 +381,14 @@ async def _stats_with_full_baseline(
                 "stats": sr,
                 "c_inputs": (cres or {}).get("c_inputs"),
                 "c": (cres or {}).get("c") or {"total": None, "tier": None, "red_flags": []},
+                "c_detail": (cres or {}).get("c_detail"),
             }
             out[key] = item
             db_row = by_key.get(key)
             if db_row is not None:
                 db_row.stats = json.dumps(sr, ensure_ascii=False)
                 db_row.c_inputs = json.dumps(item["c_inputs"], ensure_ascii=False) if item["c_inputs"] else None
+                db_row.c_detail = json.dumps(item["c_detail"], ensure_ascii=False) if item["c_detail"] else None
                 db_row.c_value = item["c"].get("total")
                 db_row.c_tier = item["c"].get("tier")
         return out
@@ -415,6 +419,7 @@ async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: dat
             entry[r.source] = {
                 "stats": json.loads(r.stats),
                 "c_inputs": json.loads(r.c_inputs) if r.c_inputs else None,
+                "c_detail": json.loads(r.c_detail) if r.c_detail else None,
                 "c": {"total": r.c_value, "tier": r.c_tier, "red_flags": []},
             }
         if r.tasks:

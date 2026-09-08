@@ -43,6 +43,16 @@ _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
 
 
+def _loads(raw: str | None):
+    """库里存的是 JSON 字符串，坏了也不能让整张表打不开。"""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
 def _imu_of(sample_code: str) -> str | None:
     m = _IMU_RE.search(sample_code or "")
     return f"IMU{m.group(1)}" if m else None
@@ -207,7 +217,13 @@ async def daily_tracking(
     merged: dict[tuple[str, str], dict] = defaultdict(lambda: {"ai": None, "human": None, "stats": {}})
     for s in stats:
         key = (s.stat_date.isoformat(), s.imu)
-        merged[key][s.source] = {"c_value": s.c_value, "c_tier": s.c_tier}
+        merged[key][s.source] = {
+            "c_value": s.c_value,
+            "c_tier": s.c_tier,
+            # 算 C 用的那几个输入 + 各项得分，跟踪表 tooltip 要拿来讲"怎么来的"
+            "c_inputs": _loads(s.c_inputs),
+            "c_detail": _loads(s.c_detail),
+        }
         if s.stats and not merged[key]["stats"]:
             try:
                 merged[key]["stats"] = json.loads(s.stats)
@@ -219,7 +235,9 @@ async def daily_tracking(
         payload.update({k: (answers or {}).get(k) for k in _ANSWER_FIELDS})
         try:
             r = await _algo_post("s-total", payload)
-            return {"total": r.get("total"), "s_tier": r.get("s_tier"), "c_tier": r.get("c_tier")}
+            # 整份返回：除了总分/档位，还有 C/皮肤组/毛发组各自贡献了多少，
+            # 前端把它摊开成一行行的算式
+            return r
         except SkinTrackingError:
             return None
 
