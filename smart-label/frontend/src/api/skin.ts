@@ -152,6 +152,12 @@ export interface TrackingRow {
     status: string;
     scratch_segments: number;
     video_duration_sec: number | null;
+    /** 人工复看这个时段抓挠的结论：确认了几段、判待定几段（分两种原因）、
+     *  还有几段本来是 AI 标的抓挠被改成了别的类别 */
+    confirmed: number;
+    uncertain_no_view: number;
+    uncertain_ambiguous: number;
+    relabeled: number;
   }[];
   c_ai: CSide | null;
   c_human: CSide | null;
