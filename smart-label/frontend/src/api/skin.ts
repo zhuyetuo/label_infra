@@ -164,11 +164,13 @@ export interface TrackingRow {
     status: string;
     scratch_segments: number;
     video_duration_sec: number | null;
-    /** 人工复看这个时段抓挠的结论：确认了几段、判待定几段（分两种原因）、
+    /** 人工复看这个时段抓挠的结论：确认了几段、判待定几段（三种原因分开数）、
      *  还有几段本来是 AI 标的抓挠被改成了别的类别 */
     confirmed: number;
     uncertain_no_view: number;
     uncertain_ambiguous: number;
+    /** 是抓挠但起止要调/要拆细，暂时没时间弄 */
+    uncertain_needs_split: number;
     relabeled: number;
     /** 「疑似抓挠」候选的处理进度 */
     cand_pending: number;
@@ -176,6 +178,9 @@ export interface TrackingRow {
     cand_relabeled: number;
     cand_rejected: number;
     cand_uncertain: number;
+    cand_uncertain_no_view: number;
+    cand_uncertain_ambiguous: number;
+    cand_uncertain_needs_split: number;
   }[];
   c_ai: CSide | null;
   c_human: CSide | null;

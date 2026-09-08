@@ -210,12 +210,23 @@ async def daily_tracking(
             )
         ).scalars().all()
     )
-    # 每个任务的人工复看结果：AI 标的抓挠里，确认了几段、判成待定几段（分两种
-    # 原因）、还有几段本来是 AI 标的抓挠、被人改成别的类别（比如其实是甩身体）。
+    # 每个任务的人工复看结果：AI 标的抓挠里，确认了几段、判成待定几段（三种原因
+    # 分开数）、还有几段本来是 AI 标的抓挠、被人改成别的类别（比如其实是甩身体）。
     # 光看「9 段」不知道人看过没有、看完是什么结论，这几个数就是给这个的。
+    #
+    # 待定必须分原因，因为三种的后续动作完全不同：没画面的除非补拍否则永远定不了，
+    # 不用再看；看不清的换个人/换个视角也许能定；要细切的是已经确定是抓挠、只是
+    # 起止要调，纯粹是排期问题。混成一个「待定 3」的话，人还得逐条点进去才知道
+    # 哪些值得回头再看。
     seg_counts: dict[int, int] = {}
     review_counts: dict[int, dict] = defaultdict(
-        lambda: {"confirmed": 0, "uncertain_no_view": 0, "uncertain_ambiguous": 0, "relabeled": 0}
+        lambda: {
+            "confirmed": 0,
+            "uncertain_no_view": 0,
+            "uncertain_ambiguous": 0,
+            "uncertain_needs_split": 0,
+            "relabeled": 0,
+        }
     )
     if task_rows and scratch_label_ids:
         task_ids_all = [t[0] for t in task_rows]
@@ -242,7 +253,11 @@ async def daily_tracking(
             if is_scratch:
                 seg_counts[tid] = seg_counts.get(tid, 0) + 1
                 if uncertain:
-                    key = "uncertain_no_view" if reason == "no_view" else "uncertain_ambiguous"
+                    # 老数据里没有 needs_split，reason 认不出来的一律算「看不清」
+                    key = {
+                        "no_view": "uncertain_no_view",
+                        "needs_split": "uncertain_needs_split",
+                    }.get(reason or "", "uncertain_ambiguous")
                     review_counts[tid][key] += 1
                 elif confirmed:
                     review_counts[tid]["confirmed"] += 1
@@ -260,21 +275,36 @@ async def daily_tracking(
             "cand_relabeled": 0,
             "cand_rejected": 0,
             "cand_uncertain": 0,
+            # 跟片段那边一样按原因拆开，理由见上面
+            "cand_uncertain_no_view": 0,
+            "cand_uncertain_ambiguous": 0,
+            "cand_uncertain_needs_split": 0,
         }
     )
     if task_rows:
         rows_cand = await db.execute(
-            select(AiCandidate.task_id, AiCandidate.status, AiCandidate.decided_label_id)
+            select(
+                AiCandidate.task_id,
+                AiCandidate.status,
+                AiCandidate.decided_label_id,
+                AiCandidate.uncertain_reason,
+            )
             .join(Task, Task.id == AiCandidate.task_id)
             .where(AiCandidate.task_id.in_([t[0] for t in task_rows]), AiCandidate.round_no == Task.round_no)
         )
-        for tid, st, decided_label in rows_cand.all():
+        for tid, st, decided_label, cand_reason in rows_cand.all():
             if st == CandidateStatus.pending:
                 cand_counts[tid]["cand_pending"] += 1
             elif st == CandidateStatus.rejected:
                 cand_counts[tid]["cand_rejected"] += 1
             elif st == CandidateStatus.uncertain:
                 cand_counts[tid]["cand_uncertain"] += 1
+                cand_counts[tid][
+                    {
+                        "no_view": "cand_uncertain_no_view",
+                        "needs_split": "cand_uncertain_needs_split",
+                    }.get(cand_reason or "", "cand_uncertain_ambiguous")
+                ] += 1
             elif decided_label is not None and decided_label not in scratch_label_ids:
                 cand_counts[tid]["cand_relabeled"] += 1
             else:

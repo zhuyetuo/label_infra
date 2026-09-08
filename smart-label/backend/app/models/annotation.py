@@ -86,9 +86,11 @@ class AnnotationLabelItem(Base):
     # 待定的两种情况，复看时想知道是哪一种：
     #   no_view    画面里根本没拍到狗，无从判断
     #   ambiguous  拍到了，但动作像抓挠又不太像
+    #   needs_split 确实是抓挠，但这一段里混了甩身体/走路，起止要调、要拆细，
+    #              暂时没时间弄——跟前两种不一样，这个是排期问题不是判断问题
     # 两种都不进训练集，区别只在"以后补拍/回看还有没有救"
     uncertain_reason: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, comment="待定原因：no_view / ambiguous"
+        String(16), nullable=True, comment="待定原因：no_view / ambiguous / needs_split"
     )
     # 这条是从哪个「疑似抓挠」候选确认上来的。留着是为了能退回去：人当时可能
     # 走神点错了，回头发现不对，删掉之后那条候选也该回到「待确认」重新判断，
