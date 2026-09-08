@@ -477,7 +477,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       return next;
     });
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
-  const [checkFor, setCheckFor] = useState<TrackingRow | null>(null);
+  // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
+  // 标完回来这份是打开弹窗那一刻的快照，改了什么都看不见，非刷新页面不可
+  const [checkKey, setCheckKey] = useState<{ date: string; dog_name: string } | null>(null);
   // 复看标注直接在这一页开工作台，关掉就回到跟踪表——跳去任务页的话关掉会落在
   // 任务列表，还得自己切回来
   const [wsTask, setWsTask] = useState<Task | null>(null);
@@ -564,6 +566,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const rows = all.filter(
     (r) => (!f.onlyTriggered || r.question_triggered) && (f.dogs.length === 0 || f.dogs.includes(r.dog_name))
   );
+  // 弹窗里那张表始终跟着最新查询结果走，标完回来数字就是新的
+  const checkFor = checkKey ? all.find((r) => r.date === checkKey.date && r.dog_name === checkKey.dog_name) ?? null : null;
 
   const sTag = (s: TrackingRow["s_no_q"]) =>
     s && s.total != null ? (
@@ -790,7 +794,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             // 片段列表会默认筛到「抓挠」，直接核对是不是真有这么多
             render: (_: unknown, r: TrackingRow) =>
               r.tasks_detail?.length ? (
-                <Button size="small" type="link" onClick={() => setCheckFor(r)}>
+                <Button size="small" type="link" onClick={() => setCheckKey({ date: r.date, dog_name: r.dog_name })}>
                   查看标注
                 </Button>
               ) : (
@@ -848,7 +852,15 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         labels={wsLabels}
         focusLabelName="抓挠"
         readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
-        onClose={() => setWsTask(null)}
+        onClose={() => {
+          setWsTask(null);
+          // 在工作台里确认/改类别/标待定之后，这一天的数字和复看进度都变了；
+          // 关掉就顺手重算这一天再刷新，别让人以为"改了没生效"
+          void (async () => {
+            if (checkKey?.date) await skinLinkStats({ date_from: checkKey.date, date_to: checkKey.date }).catch(() => {});
+            refetch();
+          })();
+        }}
         onSubmitted={() => setWsTask(null)}
         // 两个结论都给：只认抓挠 / 连活动睡觉一起认。名字写清楚各自认的是什么
         approveText="整份通过"
@@ -891,9 +903,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         }
       />
       <Modal
-        title={`${checkFor?.date ?? ""} ${checkFor?.dog_name ?? ""} —— 挑一段去复看抓挠`}
-        open={checkFor != null}
-        onCancel={() => setCheckFor(null)}
+        title={`${checkKey?.date ?? ""} ${checkKey?.dog_name ?? ""} —— 挑一段去复看抓挠`}
+        open={checkKey != null}
+        onCancel={() => setCheckKey(null)}
         footer={null}
         // 一天最多二十几行，一行要放"时间段 + 段数 + 状态 + 三个操作"，
         // 720 挤得时间段要折行；给到 1000 上限一屏宽，一行一行看着不累
