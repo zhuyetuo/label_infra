@@ -179,10 +179,23 @@ async def collect_link_stats(
     # 两趟并发预读，别在主循环里一个样本一个样本地 await 磁盘。选两周就是一百多个
     # 样本，串行读 NAS 时每份都要等一个网络往返，「重新拉取」要跑好几分钟；这里
     # 并发起来（限流是怕把 NAS 打满，也怕线程池被占光），主循环变成纯内存聚合。
-    valid = [s for s in samples if key_of(s)[1] is not None]
+    # 空 CSV 的样本（采集时文件建出来了但一行数据都没写）在这里就要排掉。
+    # 这一页读的是**样本表**，不是任务表——项目里把「无 CSV 任务」删掉只是删了任务，
+    # 样本还在，所以以前每次拉取都还会撞上它们，然后为每一个报一条"AI 结果读不出来 /
+    # 读时间戳失败"。它们本来就没有数据，算不出任何东西，跳过就是了。
+    # row_count 为 None 是导入时没统计到，不能当成空，照常处理。
+    empty = [s for s in samples if s.imu_row_count == 0]
+    valid = [s for s in samples if key_of(s)[1] is not None and s.imu_row_count != 0]
     for s in samples:
         if key_of(s)[1] is None:
             warnings.append(f"样本 {s.sample_code} 编号里没有 _imu 后缀，跳过")
+    if empty:
+        # 汇总成一条：几十个空文件刷几十条警告，真正要看的问题会被淹掉
+        warnings.append(
+            f"跳过 {len(empty)} 个空 CSV 样本（文件在但没有数据行，算不出任何指标）："
+            + "、".join(s.sample_code for s in empty[:5])
+            + ("…" if len(empty) > 5 else "")
+        )
 
     sem = asyncio.Semaphore(_IO_CONCURRENCY)
 
