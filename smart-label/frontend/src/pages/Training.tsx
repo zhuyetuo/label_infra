@@ -6,6 +6,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
+import ModelCompare from "@/components/ModelCompare";
 import {
   activateModel, exportDataset, listDatasets, listModelVersions, refreshModelVersion, submitTrain,
   type ModelVersion, type TrainDataset,
@@ -128,6 +129,11 @@ export default function Training() {
       />
       <Tabs
         items={[
+          {
+            key: "cmp",
+            label: "模型对比",
+            children: <ModelCompare />,
+          },
           {
             key: "ds",
             label: "训练数据集",

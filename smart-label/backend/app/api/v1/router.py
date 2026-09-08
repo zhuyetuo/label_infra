@@ -11,6 +11,7 @@ from app.api.v1 import (
     labels,
     material,
     media,
+    model_eval,
     model_versions,
     projects,
     reviews,
@@ -37,6 +38,7 @@ api_router.include_router(imu.router)
 api_router.include_router(clips.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(dogs.router)
+api_router.include_router(model_eval.router)
 api_router.include_router(model_versions.router)
 api_router.include_router(model_versions.callback_router)
 api_router.include_router(tooth.router)
