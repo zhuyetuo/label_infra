@@ -11,7 +11,7 @@ import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { claimTask, getTask } from "@/api/tasks";
-import { confirmTaskThrough } from "@/utils/confirmTask";
+import { approveWholeTask, confirmScratchOnly } from "@/utils/confirmTask";
 import { listLabels } from "@/api/labels";
 import type { LabelDefinition, Task } from "@/types";
 import {
@@ -420,6 +420,33 @@ const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean; 
   return { from: dayjs().subtract(29, "day").format("YYYY-MM-DD"), to: dayjs().format("YYYY-MM-DD"), onlyTriggered: false, dogs: [] as string[] };
 };
 
+// 复看进度（看过 / 抓挠已确认 / 整份已通过）记在浏览器本地，按任务 id 存。
+// 这几件事都是"我这个人做到哪了"，不是任务本身的状态，没必要落库；只留最近
+// 这些条，免得无限长下去。
+const VIEWED_KEY = "smart-label:skin-viewed";
+const SCRATCH_OK_KEY = "smart-label:skin-scratch-ok";
+const APPROVED_KEY = "smart-label:skin-approved";
+const MARKS_MAX = 3000;
+
+function loadTaskMarks(key: string): Set<number> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || "[]");
+    return new Set(Array.isArray(raw) ? raw.filter((x) => typeof x === "number") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveTaskMark(key: string, prev: Set<number>, taskId: number): Set<number> {
+  const next = new Set(prev).add(taskId);
+  try {
+    // Set 保持插入顺序，超了就从最早的开始丢
+    const arr = [...next];
+    localStorage.setItem(key, JSON.stringify(arr.slice(-MARKS_MAX)));
+  } catch { /* 存不进去就算了，页面照常用 */ }
+  return next;
+}
+
 function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
   const userId = useAuthStore((st) => st.userInfo?.id);
   const role = useAuthStore((st) => st.userInfo?.role);
@@ -437,15 +464,16 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const [wsTask, setWsTask] = useState<Task | null>(null);
   const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
   const [wsLoading, setWsLoading] = useState<number | null>(null);
-  // 这次开着页面期间看过哪几个时段，列表里标出来，好接着往下看
-  const [viewed, setViewed] = useState<Set<number>>(new Set());
+  // 看过哪几个时段，列表里标出来，好接着往下看。记到 localStorage：
+  // 复看是分好几次做的，切去别的页面再回来不该从头再认一遍哪些看过了
+  const [viewed, setViewed] = useState<Set<number>>(() => loadTaskMarks(VIEWED_KEY));
   const openWorkspace = async (taskId: number) => {
     setWsLoading(taskId);
     try {
       const t = await getTask(taskId);
       setWsLabels(await listLabels(t.project_id));
       setWsTask(t);
-      setViewed((prev) => new Set(prev).add(taskId));
+      setViewed((prev) => saveTaskMark(VIEWED_KEY, prev, taskId));
       // 故意不关时段选择弹窗：工作台盖在它上面，关掉工作台就露出列表，
       // 可以接着看下一个时段，不用从跟踪表重新点进来
     } finally {
@@ -456,22 +484,45 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   // 只给管理员/超管：别的角色后端本来也不让自己标自己审。
   const canConfirm = role === "admin" || role === "super_admin";
   const [confirming, setConfirming] = useState<number | null>(null);
-  // 这次确认过哪几个时段，列表里立刻标出来（跟踪表的数字要等重新拉取才动）
-  const [confirmed, setConfirmed] = useState<Set<number>>(new Set());
-  const confirmTask = async (task: Task, date?: string) => {
+  // 复看过/确认过哪几个时段，跟「已看过」一样记到 localStorage，切走再回来还在
+  const [scratchOk, setScratchOk] = useState<Set<number>>(() => loadTaskMarks(SCRATCH_OK_KEY));
+  const [approved, setApproved] = useState<Set<number>>(() => loadTaskMarks(APPROVED_KEY));
+
+  // 这天这只狗底下的任务都在同一个项目里，标签按项目取一次就够
+  const scratchIdsOf = async (projectId: number) =>
+    (await listLabels(projectId))
+      .filter((l) => l.display_name === "抓挠" || l.code === "抓挠")
+      .map((l) => l.id);
+
+  /** 「抓挠没标错」：只确认抓挠这一类的 AI 片段，别的类别和候选都不动 */
+  const confirmScratch = async (task: Task) => {
     setConfirming(task.id);
     try {
-      await confirmTaskThrough(task, userId);
-      setConfirmed((prev) => new Set(prev).add(task.id));
-      // 确认完这一天的「人工版」数字就变了，顺手只重算这一天再刷新跟踪表——
-      // 不用让人自己想着去「项目联动」点重新拉取
+      const n = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
+      setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
+      message.success(n ? `已确认 ${n} 段抓挠` : "这段里的抓挠之前就确认过了");
+    } catch (e) {
+      message.error(`确认失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setConfirming(null);
+    }
+  };
+
+  /** 「整份通过」：连活动/睡觉一起认，任务就此审核通过 */
+  const approveTask = async (task: Task, date?: string) => {
+    setConfirming(task.id);
+    try {
+      await approveWholeTask(task, userId);
+      setApproved((prev) => saveTaskMark(APPROVED_KEY, prev, task.id));
+      // 通过之后这天的「人工版」数字才会变（联动只认已提交/已通过的任务），
+      // 顺手只重算这一天再刷新跟踪表
       if (date) {
         await skinLinkStats({ date_from: date, date_to: date });
         await refetch();
       }
-      message.success(date ? "已确认通过，这天的数字已重算" : "已确认通过");
+      message.success(date ? "已通过，这天的数字已重算" : "已通过");
     } catch (e) {
-      message.error(`确认失败：${e instanceof Error ? e.message : String(e)}`);
+      message.error(`通过失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setConfirming(null);
     }
@@ -708,12 +759,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
         onClose={() => setWsTask(null)}
         onSubmitted={() => setWsTask(null)}
-        // 在这儿看的就是任务上的片段，看完直接下结论；「确认无误」= 认领+提交+通过
-        approveText="确认无误"
+        // 名字写清楚认的是全部类别，不是只认抓挠——只认抓挠走列表里的「抓挠没标错」
+        approveText="整份通过"
         onApprove={
           canConfirm && wsTask && wsTask.status !== "APPROVED"
             ? async () => {
-                await confirmTask(wsTask, checkFor?.date);
+                await approveTask(wsTask, checkFor?.date);
                 setWsTask(null);
               }
             : undefined
@@ -738,6 +789,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
           逐条跳转/循环看视频就能核对是不是真有这么多。看完关掉工作台会回到这个列表，可以接着看下一段。
+          <br />
+          看完有两种结论：<b>抓挠没标错</b> 只认这几段抓挠标得对（不碰活动/睡觉，也不碰「疑似抓挠」候选，
+          任务还是待认领）；<b>整份通过</b> 是连活动/睡觉一起认、任务就此审核通过——跟踪表里「人工版」的
+          次数/时长只有走这一步才会变。
         </Typography.Paragraph>
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
@@ -761,32 +816,45 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             { title: "状态", width: 110, dataIndex: "status", render: (v: string) => <TaskStatusTag status={v as never} /> },
             {
               title: "",
-              width: 70,
+              width: 110,
               render: (_: unknown, t) =>
-                confirmed.has(t.task_id) ? (
-                  <Tag color="green">已确认</Tag>
+                approved.has(t.task_id) || t.status === "APPROVED" ? (
+                  <Tag color="green">整份已通过</Tag>
+                ) : scratchOk.has(t.task_id) ? (
+                  <Tag color="cyan">抓挠已确认</Tag>
                 ) : viewed.has(t.task_id) ? (
                   <Tag color="blue">已看过</Tag>
                 ) : null,
             },
             {
               title: "操作",
-              width: 170,
+              width: 260,
               render: (_: unknown, t) => (
                 <Space size={4}>
                   <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
                     查看标注
                   </Button>
-                  {/* 看过了、觉得 AI 标得没问题，在这儿一键推到「已通过」，
-                      不用绕去任务页认领提交、再去审核页通过 */}
-                  {canConfirm && !confirmed.has(t.task_id) && t.status !== "APPROVED" && (
+                  {/* 两个结论说的不是一回事，分开两个按钮：别让人以为点一下
+                      就把活动/睡觉和「疑似抓挠」候选也一并认了 */}
+                  {canConfirm && !scratchOk.has(t.task_id) && t.status !== "APPROVED" && (
                     <Popconfirm
-                      title="确认这一段的抓挠标注无误？"
-                      description="会认领并提交这个任务，然后直接通过"
-                      onConfirm={async () => confirmTask(await getTask(t.task_id), checkFor?.date)}
+                      title="这几段抓挠标得对？"
+                      description="只把这个时段里 AI 标的「抓挠」标成已确认；活动/睡觉和「疑似抓挠」候选都不动，任务状态也不变"
+                      onConfirm={async () => confirmScratch(await getTask(t.task_id))}
                     >
                       <Button size="small" type="link" loading={confirming === t.task_id}>
-                        确认无误
+                        抓挠没标错
+                      </Button>
+                    </Popconfirm>
+                  )}
+                  {canConfirm && t.status !== "APPROVED" && !approved.has(t.task_id) && (
+                    <Popconfirm
+                      title="整份标注都通过？"
+                      description="连活动/睡觉一起认，任务提交并审核通过。跟踪表的「人工版」数字只有走这一步才会变"
+                      onConfirm={async () => approveTask(await getTask(t.task_id), checkFor?.date)}
+                    >
+                      <Button size="small" type="link" loading={confirming === t.task_id}>
+                        整份通过
                       </Button>
                     </Popconfirm>
                   )}
