@@ -213,6 +213,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 origin.ai_confirmed = bool(incoming.ai_confirmed)
             elif incoming.ai_confirmed is not None:
                 origin.ai_confirmed = incoming.ai_confirmed
+            if incoming.uncertain is not None:
+                origin.uncertain = incoming.uncertain
         else:
             new_item = AnnotationLabelItem(
                 annotation_record_id=record.id,
@@ -225,6 +227,7 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 if incoming.source_type == LabelItemSource.ai_generated
                 else None,
                 ai_confirmed=bool(incoming.ai_confirmed) and incoming.source_type == LabelItemSource.ai_generated,
+                uncertain=bool(incoming.uncertain),
                 created_by=user.id,
             )
             db.add(new_item)

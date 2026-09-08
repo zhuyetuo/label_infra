@@ -748,7 +748,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           columns={[
             {
               title: "时间段",
-              render: (_: unknown, t) => sampleDisplayName(t.sample_code, null, null),
+              render: (_: unknown, t) => sampleDisplayName(t.sample_code, t.video_duration_sec, null),
             },
             {
               title: "抓挠片段",

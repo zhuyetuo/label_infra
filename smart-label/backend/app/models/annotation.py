@@ -77,6 +77,12 @@ class AnnotationLabelItem(Base):
     ai_confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0", comment="AI标签是否已被人工确认为正确"
     )
+    # 「待定」：看了也拿不准（画面里没拍到狗、动作看不清），既不能确认成抓挠也不
+    # 舍得删。留着当记录，但不进训练集——导出时这段时间会从所有片段里挖掉，
+    # 免得它以"活动/睡觉"的身份混成负样本，教坏模型
+    uncertain: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", comment="待定：拿不准，不参与训练"
+    )
 
     # 实际标注这一条的用户；AI生成的为 NULL；任务被中途转手也能按人追溯
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)

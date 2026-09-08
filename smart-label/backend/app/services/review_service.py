@@ -91,6 +91,7 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 is_modified=item.is_modified,
                 ai_confidence=item.ai_confidence,
                 ai_confirmed=item.ai_confirmed,
+                uncertain=item.uncertain,
                 created_by=item.created_by,
             )
         )
