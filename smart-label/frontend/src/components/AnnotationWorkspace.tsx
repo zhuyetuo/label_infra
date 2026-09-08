@@ -24,14 +24,13 @@ import CandidatePanel from "@/components/CandidatePanel";
 import { decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
-import type { ChannelSet } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
 import { useAuthStore } from "@/stores/authStore";
 import { INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
-import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys, getSavedText, saveText } from "@/utils/persistedSize";
+import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -77,7 +76,6 @@ const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 const CHART_SCROLL_LOCK_KEY = "smart-label:chart-scroll-locked";
 // IMU 波形整块的展开/折叠，和下面两个面板的展开状态：都记成用户的习惯
 const IMU_OPEN_KEY = "smart-label:imu-open";
-const CHANNEL_SET_KEY = "smart-label:imu-channel-set";
 const PANELS_KEY = "smart-label:ws-panels";
 
 // 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
@@ -132,11 +130,6 @@ export default function AnnotationWorkspace({
   // 复看抓挠时波形其实用得不多（主要看视频），可以整块折起来把地方让给视频；
   // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
   const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
-  // 画哪几条：六条同屏一条只剩十几像素，多数时候只关心其中一组——抓挠看陀螺仪，
-  // 姿态/静止看加速度。分组之后三条各自能拿到两倍多的高度
-  const [channelSet, setChannelSet] = useState<ChannelSet>(
-    () => (getSavedText(CHANNEL_SET_KEY, "all") as ChannelSet) || "all"
-  );
   const [panelKeys, setPanelKeys] = useState<string[]>(() => getSavedKeys(PANELS_KEY, ["segs"]));
 
   const [items, setItems] = useState<LabelItem[]>([]);
@@ -478,10 +471,9 @@ export default function AnnotationWorkspace({
   // 等于白展开。所以给一条波形定一个"还看得清"的下限，剩下的宁可让波形区自己滚：
   // 看得清的三条 + 滚一下，比六条糊成六道杠有用
   const MIN_ROW_PX = 86;
-  const nChannels = channelSet === "all" ? 6 : 3;
   const expandedRowHeight = Math.max(
     MIN_ROW_PX,
-    Math.floor((chartBoxH - 24) / nChannels) - CHANNEL_CHROME_PX
+    Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
   );
 
   // 拖波形区（单条波形模式）底边的把手改高度，跟视频区的把手一个用法；
@@ -838,21 +830,6 @@ export default function AnnotationWorkspace({
                             value={chartExpanded ? "展开全部" : "单条波形"}
                             onChange={(v) => setChartExpanded(v === "展开全部")}
                           />
-                          <Tooltip title="六条同屏一条只剩十几像素。抓挠主要看陀螺仪（后腿高频往复），姿态和静止看加速度——只看一组，三条各自能高一倍多">
-                            <Segmented
-                              size="small"
-                              options={[
-                                { label: "六轴", value: "all" },
-                                { label: "加速度", value: "acc" },
-                                { label: "陀螺仪", value: "gyro" },
-                              ]}
-                              value={channelSet}
-                              onChange={(v) => {
-                                setChannelSet(v as ChannelSet);
-                                saveText(CHANNEL_SET_KEY, v as string);
-                              }}
-                            />
-                          </Tooltip>
                         </>
                       )}
                       {imuView === "曲线图" && !chartExpanded && (
@@ -877,39 +854,35 @@ export default function AnnotationWorkspace({
             <>
               {imuView === "曲线图" ? (
                 // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
-                // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏），
-                // 六条通道全部渲染在里面，往下滚就能看到其余五条。
-                // 展开全部模式：盒子改成 flex:1 占满剩余高度，六条一次性铺开不用滚。
+                // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏）。
+                // 两种模式都是这个盒子，底边可以拖：展开全部原来是 flex:1 占满剩余
+                // 高度，结果高度由别人（视频、片段面板）决定，想让波形高一点只能
+                // 去改别的地方。给个能拖的高度，要多高自己说了算。
                 <>
                   <div
                     ref={chartBoxRef}
                     className="ws-charts"
-                    style={
-                      chartExpanded
-                        ? { flex: 1, minHeight: 0 }
-                        : {
-                            flex: "0 0 auto",
-                            height: chartHeight,
-                            // 锁定时不响应滚动，停在当前看到的通道，不会被无意的滚轮带走
-                            overflowY: chartScrollLocked ? "hidden" : "auto",
-                          }
-                    }
+                    style={{
+                      flex: "0 0 auto",
+                      height: chartHeight,
+                      // 锁定时不响应滚动，停在当前看到的通道，不会被无意的滚轮带走
+                      overflowY: chartScrollLocked ? "hidden" : "auto",
+                    }}
                   >
                     <ImuChart
                       sampleId={sampleId}
                       bus={bus}
                       rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+                      key={chartExpanded ? "expanded" : "single"}
                       compact={chartExpanded}
-                      channelSet={channelSet}
                       segments={segments}
                       activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                       onCreateSegment={readOnly ? undefined : handleCreateFromChart}
                       onResizeSegment={readOnly ? undefined : handleResizeFromChart}
                     />
                   </div>
-                  {!chartExpanded && (
-                    // 单条波形模式才有这个把手：展开全部时波形区本来就占满剩余高度，
-                    // 没有"再拖大"的空间
+                  {(
+                    // 两种模式都给这个把手：波形要多高是看数据的人说了算
                     <div
                       onMouseDown={handleChartResizeStart}
                       onDoubleClick={() => {
@@ -950,7 +923,9 @@ export default function AnnotationWorkspace({
           // 占满视频下面剩余的高度，列表在自己里面滚——以前是整块往下溢出、
           // 由弹窗 body 滚动，结果想看列表最后几条就得把视频滚出屏幕。复看这件事
           // 本来就是"对着画面看这一条对不对"，两样东西必须同时在眼前
-          style={{ marginTop: 8 }}
+          // 两个面板都收起来时不要再占着剩余高度：CSS 里写死 flex:1 的话，
+          // 折叠了照样撑着一大片空白，看着像页面坏了
+          style={{ marginTop: 8, flex: panelKeys.length ? "1 1 auto" : "0 0 auto" }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           // 展开哪些面板记成用户的习惯，不用每开一个任务重点一遍
