@@ -62,10 +62,7 @@
   min-height: 0;
   flex: 1 1 auto;
 }
-/* 撑爆时按面板边界裁掉，宁可里面自己滚，也不要溢出去压住别的面板 */
-.ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden) {
-  overflow: hidden;
-}
+
 .ws-imu .ant-collapse-content-box {
   padding: 8px !important;
 }
