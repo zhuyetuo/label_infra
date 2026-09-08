@@ -22,6 +22,8 @@ class Dog(Base):
     # 这只狗戴的是哪个机位（IMU1…）。样本编号里只有机位号，皮肤评估那边的
     # 「比熊-BB」又是另一套叫法，靠这一列把两边对上
     imu: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="机位号，如 IMU1")
+    # 这只狗在哪个场所：影棚 / 狗场。以前塞在备注里，没法按场所筛选和统计
+    site: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="场所：影棚 / 狗场")
     # 别名，逗号分隔。NAS 上的照片目录名常常是另一种写法（bibi / Bali / 露露），
     # 匹配照片时任一别名对上就算同一只
     aliases: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="别名，逗号分隔")

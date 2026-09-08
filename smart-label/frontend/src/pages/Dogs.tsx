@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs";
 import { listSamples } from "@/api/samples";
@@ -13,8 +13,12 @@ interface FormValues {
   breed?: string;
   imu?: string;
   aliases?: string;
+  site?: string;
   remark?: string;
 }
+
+// 现在就这两个场所，做成可选可填：以后开新场地直接输，不用改代码
+const SITES = ["影棚", "狗场"];
 
 // 狗档案：现在主要靠样本扫描时按文件名里的 dog 编号自动建档（采集端还没开始
 // 带这个信息之前基本是空的），这里补一套手动管理 + 每只狗的样本总览（按
@@ -35,6 +39,31 @@ export default function Dogs() {
   };
 
   const samplesOf = (dogId: number) => samples?.filter((s) => s.dog_id === dogId) ?? [];
+
+  // 总预览：一眼看清每个场所有几只狗、登记齐了没有、有没有数据。
+  // 「已登记」= 名字填了的：编号是扫描自动建的，名字得人补，没补的那些在
+  // 皮肤评估那边就对不上照片目录，是要盯着补完的
+  const overview = useMemo(() => {
+    const list = dogs ?? [];
+    const bySite = new Map<string, Dog[]>();
+    for (const d of list) {
+      const key = (d.site || "").trim() || "未填场所";
+      bySite.set(key, [...(bySite.get(key) ?? []), d]);
+    }
+    const stat = (ds: Dog[]) => ({
+      total: ds.length,
+      named: ds.filter((d) => (d.name || "").trim()).length,
+      withSamples: ds.filter((d) => samplesOf(d.id).length > 0).length,
+      samples: ds.reduce((n, d) => n + samplesOf(d.id).length, 0),
+    });
+    return {
+      all: stat(list),
+      sites: [...bySite.entries()]
+        // 未填的排最后，其余按狗多的在前
+        .sort((a, b) => (a[0] === "未填场所" ? 1 : b[0] === "未填场所" ? -1 : b[1].length - a[1].length))
+        .map(([site, ds]) => ({ site, ...stat(ds) })),
+    };
+  }, [dogs, samples]);
   const tasksOfSample = (sampleId: number) => tasks?.filter((t) => t.sample_id === sampleId) ?? [];
 
   const openCreate = () => {
@@ -51,6 +80,7 @@ export default function Dogs() {
       breed: dog.breed ?? undefined,
       imu: dog.imu ?? undefined,
       aliases: dog.aliases ?? undefined,
+      site: dog.site ?? undefined,
       remark: dog.remark ?? undefined,
     });
     setOpen(true);
@@ -63,6 +93,7 @@ export default function Dogs() {
         breed: values.breed,
         imu: values.imu,
         aliases: values.aliases,
+        site: values.site,
         remark: values.remark,
       });
       message.success("已保存");
@@ -87,9 +118,44 @@ export default function Dogs() {
           新建狗档案
         </Button>
       </Space>
+
+      {/* 总预览 + 按场所分开看：现在影棚和狗场各有一批狗，混在一张表里
+          既数不清哪边有几只，也看不出哪些还没登记名字 */}
+      <Space wrap align="start" style={{ marginBottom: 12 }}>
+        <Card size="small" styles={{ body: { padding: "8px 16px" } }}>
+          <Space size={24}>
+            <Statistic title="狗总数" value={overview.all.total} valueStyle={{ fontSize: 20 }} />
+            <Statistic
+              title="已登记名字"
+              value={overview.all.named}
+              suffix={`/ ${overview.all.total}`}
+              valueStyle={{ fontSize: 20 }}
+            />
+            <Statistic title="有数据的" value={overview.all.withSamples} valueStyle={{ fontSize: 20 }} />
+            <Statistic title="样本总数" value={overview.all.samples} valueStyle={{ fontSize: 20 }} />
+          </Space>
+        </Card>
+        {overview.sites.map((s) => (
+          <Card key={s.site} size="small" title={s.site} styles={{ body: { padding: "8px 16px" } }}>
+            <Space size={20}>
+              <Statistic title="狗" value={s.total} valueStyle={{ fontSize: 18 }} />
+              <Statistic
+                title="已登记"
+                value={s.named}
+                suffix={`/ ${s.total}`}
+                valueStyle={{ fontSize: 18, color: s.named < s.total ? "#fa8c16" : undefined }}
+              />
+              <Statistic title="样本" value={s.samples} valueStyle={{ fontSize: 18 }} />
+            </Space>
+          </Card>
+        ))}
+      </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         狗编号（dog_code）现在主要靠样本扫描时从文件名里自动识别建档，采集端还没开始带这个信息之前基本用不上；
         新建/手动关联样本是在文件名规则落地前的过渡办法。点左侧箭头能展开看这只狗每天的样本和标注进度。
+        <br />
+        现在影棚和狗场各有一批狗，「场所」这一列可以筛；上面几张卡片是各场所的总览，
+        「已登记」是填了名字的——编号是扫描时自动建的，名字得人补，没补的在皮肤评估那边对不上照片目录。
         <br />
         同一只狗在三个地方叫法不一样：样本编号里只有<b>机位号</b>（_imu1）、皮肤评估用的是「比熊-BB」这种
         「品种-名字」、NAS 上的照片目录又常写成 bibi / Bali。这一页就是把它们对上的地方：
@@ -118,6 +184,14 @@ export default function Dogs() {
               v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-"),
           },
           { title: "别名（照片目录名）", dataIndex: "aliases", render: (v: string | null) => v || "-" },
+          {
+            title: "场所",
+            dataIndex: "site",
+            width: 100,
+            filters: [...SITES.map((x) => ({ text: x, value: x })), { text: "未填", value: "" }],
+            onFilter: (v, d: Dog) => (d.site ?? "") === v,
+            render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>),
+          },
           { title: "备注", dataIndex: "remark", render: (v: string | null) => v || "-" },
           {
             title: "样本数",
@@ -174,6 +248,9 @@ export default function Dogs() {
             tooltip="NAS 照片目录名、拼音、小名等，逗号分隔。皮肤评估靠它把照片跟这只狗对上"
           >
             <Input placeholder="bibi, BB, 比比" />
+          </Form.Item>
+          <Form.Item name="site" label="场所" tooltip="这只狗在哪个场地。以前写在备注里，单独一列才能按场所筛选和统计">
+            <Select allowClear placeholder="影棚 / 狗场" options={SITES.map((x) => ({ value: x, label: x }))} />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} />
