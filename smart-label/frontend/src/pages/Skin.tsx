@@ -10,7 +10,8 @@ import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingChar
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
-import { getTask } from "@/api/tasks";
+import { claimTask, getTask } from "@/api/tasks";
+import { confirmTaskThrough } from "@/utils/confirmTask";
 import { listLabels } from "@/api/labels";
 import type { LabelDefinition, Task } from "@/types";
 import {
@@ -421,6 +422,7 @@ const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean; 
 
 function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string) => void }) {
   const userId = useAuthStore((st) => st.userInfo?.id);
+  const role = useAuthStore((st) => st.userInfo?.role);
   const [f, setF] = useState(loadTrackFilter);
   const setFilter = (patch: Partial<ReturnType<typeof loadTrackFilter>>) =>
     setF((prev) => {
@@ -448,6 +450,30 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       // 可以接着看下一个时段，不用从跟踪表重新点进来
     } finally {
       setWsLoading(null);
+    }
+  };
+  // 复看的时候就地确认，不用再跑去任务页认领、提交，再去审核页通过一遍。
+  // 只给管理员/超管：别的角色后端本来也不让自己标自己审。
+  const canConfirm = role === "admin" || role === "super_admin";
+  const [confirming, setConfirming] = useState<number | null>(null);
+  // 这次确认过哪几个时段，列表里立刻标出来（跟踪表的数字要等重新拉取才动）
+  const [confirmed, setConfirmed] = useState<Set<number>>(new Set());
+  const confirmTask = async (task: Task, date?: string) => {
+    setConfirming(task.id);
+    try {
+      await confirmTaskThrough(task, userId);
+      setConfirmed((prev) => new Set(prev).add(task.id));
+      // 确认完这一天的「人工版」数字就变了，顺手只重算这一天再刷新跟踪表——
+      // 不用让人自己想着去「项目联动」点重新拉取
+      if (date) {
+        await skinLinkStats({ date_from: date, date_to: date });
+        await refetch();
+      }
+      message.success(date ? "已确认通过，这天的数字已重算" : "已确认通过");
+    } catch (e) {
+      message.error(`确认失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setConfirming(null);
     }
   };
   const { data, isFetching, refetch } = useQuery({
@@ -647,9 +673,29 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               // 只有「需要问答」或者已经填过的才给入口
               if (!r.question_triggered && !r.has_answers) return <Typography.Text type="secondary">—</Typography.Text>;
               return (
-                <Button size="small" type={r.question_triggered && !r.has_answers ? "primary" : "link"} onClick={() => p.onGotoQ(r.date, r.dog_name)}>
-                  {r.has_answers ? "改问答" : "去填问答"}
-                </Button>
+                <Space size={4}>
+                  <Button size="small" type={r.question_triggered && !r.has_answers ? "primary" : "link"} onClick={() => p.onGotoQ(r.date, r.dog_name)}>
+                    {r.has_answers ? "改问答" : "去填问答"}
+                  </Button>
+                  {/* 填错了、或者只是随手测试填的，删掉整份重新填一遍，
+                      比在表单里一项项改回去干净 */}
+                  {r.has_answers && r.record_id != null && (
+                    <Popconfirm
+                      title="清空这天的问答？"
+                      description="这份记录会被删掉，S 总分（含问答）跟着没有，可以重新填一遍"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={async () => {
+                        await deleteSkinRecord(r.record_id as number);
+                        await refetch();
+                        message.success("已清空，可以重新填了");
+                      }}
+                    >
+                      <Button size="small" type="link" danger>
+                        清空
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
               );
             },
           },
@@ -662,6 +708,25 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
         onClose={() => setWsTask(null)}
         onSubmitted={() => setWsTask(null)}
+        // 在这儿看的就是任务上的片段，看完直接下结论；「确认无误」= 认领+提交+通过
+        approveText="确认无误"
+        onApprove={
+          canConfirm && wsTask && wsTask.status !== "APPROVED"
+            ? async () => {
+                await confirmTask(wsTask, checkFor?.date);
+                setWsTask(null);
+              }
+            : undefined
+        }
+        // 发现 AI 标错了几段，就地认领改，改完再确认
+        onClaim={
+          canConfirm && wsTask && (wsTask.status === "PENDING_ASSIGN" || wsTask.status === "REJECTED")
+            ? async () => {
+                const t = await claimTask(wsTask.id);
+                setWsTask(t);
+              }
+            : undefined
+        }
       />
       <Modal
         title={`${checkFor?.date ?? ""} ${checkFor?.dog_name ?? ""} —— 挑一段去复看抓挠`}
@@ -697,15 +762,35 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             {
               title: "",
               width: 70,
-              render: (_: unknown, t) => (viewed.has(t.task_id) ? <Tag color="blue">已看过</Tag> : null),
+              render: (_: unknown, t) =>
+                confirmed.has(t.task_id) ? (
+                  <Tag color="green">已确认</Tag>
+                ) : viewed.has(t.task_id) ? (
+                  <Tag color="blue">已看过</Tag>
+                ) : null,
             },
             {
               title: "操作",
-              width: 100,
+              width: 170,
               render: (_: unknown, t) => (
-                <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
-                  查看标注
-                </Button>
+                <Space size={4}>
+                  <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
+                    查看标注
+                  </Button>
+                  {/* 看过了、觉得 AI 标得没问题，在这儿一键推到「已通过」，
+                      不用绕去任务页认领提交、再去审核页通过 */}
+                  {canConfirm && !confirmed.has(t.task_id) && t.status !== "APPROVED" && (
+                    <Popconfirm
+                      title="确认这一段的抓挠标注无误？"
+                      description="会认领并提交这个任务，然后直接通过"
+                      onConfirm={async () => confirmTask(await getTask(t.task_id), checkFor?.date)}
+                    >
+                      <Button size="small" type="link" loading={confirming === t.task_id}>
+                        确认无误
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
               ),
             },
           ]}

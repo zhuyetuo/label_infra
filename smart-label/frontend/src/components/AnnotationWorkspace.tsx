@@ -46,6 +46,10 @@ interface Props {
   /** 审核员看完可以直接在这里下结论，省得关掉再回列表点 */
   onApprove?: () => void | Promise<void>;
   onReject?: () => void;
+  /** 「通过」按钮上写什么（皮肤复看那边叫「确认无误」，语义更贴那个场景） */
+  approveText?: string;
+  /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
+  onClaim?: () => void | Promise<void>;
 }
 
 interface VideoSrc {
@@ -76,6 +80,8 @@ export default function AnnotationWorkspace({
   onSubmitted,
   onApprove,
   onReject,
+  approveText,
+  onClaim,
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
@@ -352,6 +358,17 @@ export default function AnnotationWorkspace({
     }
   };
 
+  const handleSubmitAndApprove = async () => {
+    if (taskId == null || !onApprove) return;
+    setSaving(true);
+    try {
+      await persist();
+      await onApprove();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   useEffect(() => {
     const el = chartBoxRef.current;
     if (!el || !chartExpanded) return;
@@ -443,16 +460,18 @@ export default function AnnotationWorkspace({
         readOnly ? (
           // 注意：这里必须给 null 而不是 undefined。footer 传 undefined 时
           // antd 会当成"没设置"，渲染它默认的 取消/确定 两个按钮。
-          onApprove || onReject ? (
+          onApprove || onReject || onClaim ? (
             <Space>
               {onReject && (
                 <Button danger onClick={onReject}>
                   驳回
                 </Button>
               )}
+              {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
+              {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
               {onApprove && (
                 <Popconfirm title="确认通过这份标注？" onConfirm={onApprove}>
-                  <Button type="primary">通过</Button>
+                  <Button type="primary">{approveText ?? "通过"}</Button>
                 </Popconfirm>
               )}
             </Space>
@@ -463,10 +482,19 @@ export default function AnnotationWorkspace({
               存草稿
             </Button>
             <Popconfirm title="确认提交？提交后进入审核队列，不能再改" onConfirm={handleSubmit}>
-              <Button type="primary" loading={saving}>
+              <Button type={onApprove ? "default" : "primary"} loading={saving}>
                 提交
               </Button>
             </Popconfirm>
+            {/* 自己标自己过（管理员的常规操作）：存草稿 + 提交 + 通过一步到位。
+                先落草稿再交给外面走审核链，不然刚改的几段不算数 */}
+            {onApprove && (
+              <Popconfirm title="存草稿并直接通过？（不再进审核队列）" onConfirm={handleSubmitAndApprove}>
+                <Button type="primary" loading={saving}>
+                  {approveText ?? "提交并通过"}
+                </Button>
+              </Popconfirm>
+            )}
           </Space>
         )
       }
