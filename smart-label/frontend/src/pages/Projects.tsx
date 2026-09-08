@@ -814,6 +814,7 @@ export default function Projects() {
                 locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
                 onChange={taskSort.onTableChange}
                 components={taskWidth.components}
+                tableLayout={taskWidth.tableLayout}
                 // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
                 scroll={{ x: "max-content" }}
                 columns={taskWidth.applyResize<Task>(taskSort.applySort<Task>([

@@ -335,6 +335,7 @@ export default function Samples() {
                 columns={width.applyResize<Sample>(sort.applySort<Sample>(columns))}
                 onChange={sort.onTableChange}
                 components={width.components}
+                tableLayout={width.tableLayout}
                 // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
                 scroll={{ x: "max-content" }}
                 // antd 默认点三下是 升序 -> 降序 -> 取消排序（回到原始顺序），第三种

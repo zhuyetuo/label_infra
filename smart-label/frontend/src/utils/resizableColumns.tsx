@@ -118,11 +118,19 @@ export function useResizableColumns(storageKey: string) {
   const components = { header: { cell: ResizableTitle } };
 
   /**
+   * 必须跟 components 一起挂到 Table 上，否则拖了看不出变化。
+   *
+   * rc-table 默认只有「固定表头 / 有省略号列 / 有固定列」时才用 table-layout: fixed，
+   * 别的情况是 auto——auto 布局下列宽只是建议值，内容撑得开就撑，拖窄了没反应。
+   */
+  const tableLayout = "fixed" as const;
+
+  /**
    * 给每列接上拖动。没写 width 的列跳过——它本来就是"剩下的宽度都给我"，
    * 给它一个固定值反而会把布局锁死。
    */
-  const applyResize = <T,>(columns: ColumnsType<T>): ColumnsType<T> =>
-    columns.map((c, i) => {
+  const applyResize = <T,>(columns: ColumnsType<T>): ColumnsType<T> => {
+    const sized = columns.map((c, i) => {
       // 很多列既没有 key 也没有 dataIndex（内容是 render 拼出来的，比如「人工复看」
       // 「疑似抓挠」）——恰恰是这些列最需要调宽。退回用列的位置当 key：
       // 这几张表的列是写死的，顺序不会变
@@ -136,6 +144,12 @@ export function useResizableColumns(storageKey: string) {
         onHeaderCell: () => ({ width, onResize: (w: number) => save(key, w) }) as never,
       };
     });
+    // 末尾补一列没有宽度的空列专门吃剩余空间。
+    // 不补的话：表格最小宽度是容器的 100%，而每列都写死了宽度，多出来的空间会
+    // 按比例摊回到所有列上——于是把某一列拖窄，省下来的宽度立刻又被均摊回去，
+    // 看起来就是"拖不动"。有这么一列兜着，缩窄才真的缩得下去。
+    return [...sized, { key: "__slack__", title: "", render: () => null }] as ColumnsType<T>;
+  };
 
-  return { components, applyResize, reset, hasCustom: Object.keys(widths).length > 0 };
+  return { components, tableLayout, applyResize, reset, hasCustom: Object.keys(widths).length > 0 };
 }

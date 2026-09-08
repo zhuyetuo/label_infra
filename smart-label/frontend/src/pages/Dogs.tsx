@@ -241,6 +241,7 @@ export default function Dogs() {
         }}
         onChange={dogSort.onTableChange}
         components={dogWidth.components}
+        tableLayout={dogWidth.tableLayout}
         // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
         scroll={{ x: "max-content" }}
         columns={dogWidth.applyResize<Dog>(dogSort.applySort<Dog>([
