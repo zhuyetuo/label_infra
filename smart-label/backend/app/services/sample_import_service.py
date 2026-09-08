@@ -51,6 +51,23 @@ from app.models.user import User
 from app.services.sample_dedupe_service import merge_duplicate_samples
 from app.utils.ffprobe import count_csv_rows, measure_csv_hz, probe_video
 
+# MySQL 的 range optimizer 有 8MB 内存上限（range_optimizer_max_mem_size），
+# IN 列表长到几千个元素就会放弃走索引范围、退化成全表扫，日志里刷一堆
+# "Range optimization was not done for this query"。全量扫描时 candidates
+# 有好几万个（旧数据是 10s 一个片段，一天就上万个文件），所以这里的 IN 一律分批。
+_IN_CHUNK = 1000
+
+
+async def _scalars_in_chunks(db: AsyncSession, column, values) -> set:
+    """按 column IN (...) 查一列值，自己分批，返回查到的集合。"""
+    vals = list(values)
+    found: set = set()
+    for i in range(0, len(vals), _IN_CHUNK):
+        chunk = vals[i : i + _IN_CHUNK]
+        found |= set((await db.execute(select(column).where(column.in_(chunk)))).scalars())
+    return found
+
+
 # 第4段 dog 编号是可选的，现在的采集端还没带这个，得兼容没有这一段的旧文件名
 _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)(?:_dog([A-Za-z0-9]+))?", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
@@ -235,11 +252,7 @@ async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
             wanted[csv_rel] = MediaFileType.raw_imu_csv
     if not wanted:
         return 0
-    have = set(
-        (
-            await db.execute(select(MediaFile.relative_path).where(MediaFile.relative_path.in_(wanted.keys())))
-        ).scalars()
-    )
+    have = await _scalars_in_chunks(db, MediaFile.relative_path, wanted.keys())
     missing = {p: t for p, t in wanted.items() if p not in have}
     if not missing:
         return 0
@@ -355,14 +368,8 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         return
 
     # 一次性批量查询已存在的 sample_code / media_files，避免每个session单独往返数据库
-    existing_codes = set(
-        (await db.execute(select(Sample.sample_code).where(Sample.sample_code.in_(candidates.keys())))).scalars()
-    )
-    existing_media_paths = set(
-        (
-            await db.execute(select(MediaFile.relative_path).where(MediaFile.relative_path.in_(all_candidate_paths)))
-        ).scalars()
-    )
+    existing_codes = await _scalars_in_chunks(db, Sample.sample_code, candidates.keys())
+    existing_media_paths = await _scalars_in_chunks(db, MediaFile.relative_path, all_candidate_paths)
 
     new_session_keys = [k for k in candidates if k not in existing_codes]
     _progress.skipped_existing += len(candidates) - len(new_session_keys)
