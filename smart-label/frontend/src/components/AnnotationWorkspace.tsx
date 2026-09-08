@@ -23,7 +23,7 @@ import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
 import { decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
-import ImuChart, { type ChartSegment } from "@/components/ImuChart";
+import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
@@ -845,6 +845,7 @@ export default function AnnotationWorkspace({
                           />
                         </>
                       )}
+                      {imuView === "曲线图" && <ImuChartHint />}
                       {imuView === "曲线图" && !chartExpanded && (
                         <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
                           <Button
@@ -886,6 +887,9 @@ export default function AnnotationWorkspace({
                       sampleId={sampleId}
                       bus={bus}
                       rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+                      // 展开全部时六条共用最下面那一条时间轴：六条各画一条，
+                      // 光轴就吃掉一百多像素，而横轴本来就是同一条时间线
+                      timeAxisOnlyLast={chartExpanded}
                       key={chartExpanded ? "expanded" : "single"}
                       segments={segments}
                       activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
