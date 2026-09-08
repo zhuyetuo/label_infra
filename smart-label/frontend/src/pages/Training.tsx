@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import ModelCompare from "@/components/ModelCompare";
 import {
+  deleteDataset,
   activateModel, exportDataset, listDatasets, listModelVersions, refreshModelVersion, submitTrain,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -195,7 +196,7 @@ export default function Training() {
                     { title: "导出时间", dataIndex: "exported_at", width: 160 },
                     {
                       title: "操作",
-                      width: 150,
+                      width: 200,
                       render: (_, d: TrainDataset) => (
                         <Space size={0}>
                           <Button size="small" type="link" onClick={() => setDsDetail(d)}>
@@ -204,6 +205,20 @@ export default function Training() {
                           <Button size="small" type="link" onClick={() => setTrainFor(d)}>
                             用它训练
                           </Button>
+                          <Popconfirm
+                            title={`删除数据集「${d.name}」？`}
+                            description="删的是 NAS 上这份导出；已经用它训过的模型和训练记录都不受影响"
+                            okButtonProps={{ danger: true }}
+                            onConfirm={async () => {
+                              await deleteDataset(d.name);
+                              message.success("已删除");
+                              qc.invalidateQueries({ queryKey: ["train-datasets"] });
+                            }}
+                          >
+                            <Button size="small" type="link" danger>
+                              删除
+                            </Button>
+                          </Popconfirm>
                         </Space>
                       ),
                     },

@@ -20,7 +20,7 @@ import { aiPrelabel, getAiLabelInfo, getSampleMedia, type AiLabelInfo } from "@/
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
-import { decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
+import { repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -197,6 +197,9 @@ export default function AnnotationWorkspace({
     setLoading(true);
     setImuView("曲线图");
     (async () => {
+      // 打开就先补一次：有一版前端的顺序会把刚从候选确认出来的片段又删掉，
+      // 这一步按候选行把丢掉的补回来。没有缺的就是个空操作
+      await repairCandidateItems(taskId).catch(() => undefined);
       const media = await getSampleMedia(sampleId);
       const entries: [string, number | null][] = [
         ["视角1", media.video1_id],
@@ -1029,13 +1032,15 @@ export default function AnnotationWorkspace({
                   onSeek={(ms) => bus.seek(ms / 1000)}
                   onLoop={setLoop}
                   loopRange={loopRange}
+                  // 判断之前先落库，判断之后再拉。顺序反了会丢东西：
+                  //   先判断再存 → 存的是本地这份（还不知道后端刚写的那条），
+                  //               那条会被当成"删掉的条目"清掉；
+                  //   先拉再存   → 把还没保存的本地改动整个盖掉。
+                  onBeforeDecide={async () => {
+                    if (!readOnly && taskId != null) await persist();
+                  }}
                   onDecided={async () => {
                     if (taskId == null) return;
-                    // 先把本地改动落库！确认候选是后端直接往草稿里写一条，写完这边
-                    // 必须重新拉草稿才看得到——可重新拉会把还没保存的改动（刚点的
-                    // 通过、待定、改类别）整个盖掉，等于白干一遍。所以顺序是：
-                    // 先存自己的，再拉合并后的结果
-                    if (!readOnly) await persist();
                     const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
                     setItems(draft.items);
                     setCandidates(cs);
