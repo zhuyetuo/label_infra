@@ -243,6 +243,9 @@ export default function Projects() {
   const [createTaskType, setCreateTaskType] = useState<"from_scratch" | "ai_assisted">("ai_assisted");
   const [createAssignee, setCreateAssignee] = useState<number | null>(null);
   const [nameAuto, setNameAuto] = useState(true);
+  // 一次勾十几天的样本，然后每天各建一个项目。以前只能一天一天来：勾样本、
+  // 起名、建、再重开弹窗——十几天就是十几遍同样的操作
+  const [perDate, setPerDate] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const openCreate = () => {
@@ -253,6 +256,7 @@ export default function Projects() {
     // 默认指派给自己（管理员/超管建项目大多是自己先调试），不想要就在下拉里清掉进公共池
     setCreateAssignee(isAdmin ? (userId ?? null) : null);
     setNameAuto(true);
+    setPerDate(false);
     setOpen(true);
   };
 
@@ -267,7 +271,8 @@ export default function Projects() {
   const updateCreateSelected = (updater: (prev: Set<number>) => Set<number>) => {
     setCreateSelected((prev) => {
       const next = updater(prev);
-      if (nameAuto) form.setFieldsValue({ name: defaultNameFor(next) });
+      // 「每天各建一个」时名字由日期决定，别被这里的自动填名盖掉
+      if (nameAuto && !perDate) form.setFieldsValue({ name: defaultNameFor(next) });
       return next;
     });
   };
@@ -282,6 +287,45 @@ export default function Projects() {
     setCreating(true);
     try {
       let projectId = editing?.id;
+      // 每天一个项目：按样本的采集日期分组，一组建一个，名字就用那天的日期。
+      // 中间某天失败（比如重名）不影响别的天，最后一起报
+      if (!editing && perDate && createSelected.size > 0) {
+        const byDate = new Map<string, number[]>();
+        for (const smp of samples ?? []) {
+          if (!createSelected.has(smp.id)) continue;
+          const d = smp.session_date ?? "未知日期";
+          byDate.set(d, [...(byDate.get(d) ?? []), smp.id]);
+        }
+        const ids: number[] = [];
+        const failed: string[] = [];
+        for (const [date, sampleIds] of [...byDate.entries()].sort()) {
+          try {
+            const created = await createProject({ name: date, description: values.description });
+            ids.push(created.id);
+            if (templateId != null) await applyLabelTemplate(templateId, created.id);
+            await bulkCreateTasks({
+              project_id: created.id,
+              sample_ids: sampleIds,
+              task_type: createTaskType,
+              infer_mode: createTaskType === "ai_assisted" ? createInferMode : null,
+              assigned_to: createAssignee ?? undefined,
+            });
+          } catch (e) {
+            failed.push(`${date}（${e instanceof Error ? e.message : String(e)}）`);
+          }
+        }
+        message.success(
+          `已建 ${ids.length} 个项目${failed.length ? `，${failed.length} 天失败` : ""}` +
+            (createTaskType === "ai_assisted" ? "，AI 预标注已在后台开始" : ""),
+          6
+        );
+        if (failed.length) message.error(`没建成的：${failed.join("；")}`, 10);
+        if (createTaskType === "ai_assisted" && ids.length) setTimeout(() => pollPrelabel(ids), 800);
+        setOpen(false);
+        form.resetFields();
+        refresh();
+        return;
+      }
       if (editing) {
         await updateProject(editing.id, values);
         message.success("已保存");
@@ -1364,13 +1408,42 @@ export default function Projects() {
               </div>
             </Form.Item>
           )}
+          {!editing && (
+            <Form.Item style={{ marginBottom: 8 }}>
+              <Checkbox
+                checked={perDate}
+                onChange={(e) => {
+                  setPerDate(e.target.checked);
+                  // 分开建的时候名字是每天各自的日期，这里的输入框用不上；
+                  // 但表单的必填校验还在，填个占位让它过
+                  if (e.target.checked) form.setFieldsValue({ name: "（按日期分别命名）" });
+                  else form.setFieldsValue({ name: defaultNameFor(createSelected) });
+                }}
+              >
+                每天各建一个项目
+              </Checkbox>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                勾了之后，选中的样本按采集日期分组，一天一个项目、名字就是那天的日期；
+                标注模式、模型版本、指派、标签模板每个项目都一样
+              </Typography.Text>
+            </Form.Item>
+          )}
           <Form.Item
             name="name"
             label="项目名"
             rules={[{ required: true }]}
-            extra={!editing && nameAuto ? "默认用选中样本的日期目录名，可以改" : undefined}
+            extra={
+              editing
+                ? undefined
+                : perDate
+                  ? `会建 ${new Set((samples ?? []).filter((x) => createSelected.has(x.id)).map((x) => x.session_date ?? "未知日期")).size} 个项目，名字分别是各自的日期`
+                  : nameAuto
+                    ? "默认用选中样本的日期目录名，可以改"
+                    : undefined
+            }
           >
             <Input
+              disabled={!editing && perDate}
               placeholder={editing ? undefined : "先勾样本会自动填成日期，或自己起名"}
               onChange={() => setNameAuto(false)}
             />
