@@ -759,8 +759,16 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
         onClose={() => setWsTask(null)}
         onSubmitted={() => setWsTask(null)}
-        // 名字写清楚认的是全部类别，不是只认抓挠——只认抓挠走列表里的「抓挠没标错」
+        // 两个结论都给：只认抓挠 / 连活动睡觉一起认。名字写清楚各自认的是什么
         approveText="整份通过"
+        confirmScratchText="抓挠没标错"
+        onConfirmScratch={
+          canConfirm && wsTask && wsTask.status !== "APPROVED"
+            ? async () => {
+                await confirmScratch(wsTask);
+              }
+            : undefined
+        }
         onApprove={
           canConfirm && wsTask && wsTask.status !== "APPROVED"
             ? async () => {

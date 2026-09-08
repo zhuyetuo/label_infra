@@ -50,6 +50,10 @@ interface Props {
   approveText?: string;
   /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
   onClaim?: () => void | Promise<void>;
+  /** 只认某一类（皮肤复看那边是「抓挠」）标得对，不动别的类别和任务状态 */
+  onConfirmScratch?: () => void | Promise<void>;
+  /** 上面那个按钮写什么 */
+  confirmScratchText?: string;
 }
 
 interface VideoSrc {
@@ -82,6 +86,8 @@ export default function AnnotationWorkspace({
   onReject,
   approveText,
   onClaim,
+  onConfirmScratch,
+  confirmScratchText,
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
@@ -361,6 +367,19 @@ export default function AnnotationWorkspace({
     }
   };
 
+  // 只认某一类：外面把草稿改完了，这里重新拉一遍，列表上的「AI 待确认」
+  // 立刻变成「AI 已确认」，不用关掉再进来
+  const handleConfirmScratch = async () => {
+    if (taskId == null || !onConfirmScratch) return;
+    setSaving(true);
+    try {
+      await onConfirmScratch();
+      setItems((await getDraft(taskId)).items);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSubmitAndApprove = async () => {
     if (taskId == null || !onApprove) return;
     setSaving(true);
@@ -469,6 +488,16 @@ export default function AnnotationWorkspace({
                 <Button danger onClick={onReject}>
                   驳回
                 </Button>
+              )}
+              {/* 只认这一类标得对——比「整份通过」窄得多，所以是单独一个按钮 */}
+              {onConfirmScratch && (
+                <Popconfirm
+                  title={`${confirmScratchText ?? "只认这一类"}？`}
+                  description="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动"
+                  onConfirm={handleConfirmScratch}
+                >
+                  <Button loading={saving}>{confirmScratchText ?? "只认这一类"}</Button>
+                </Popconfirm>
               )}
               {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
               {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
