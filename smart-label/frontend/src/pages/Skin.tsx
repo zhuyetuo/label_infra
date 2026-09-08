@@ -590,7 +590,20 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         scroll={{ x: "max-content" }}
         columns={[
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
-          { title: "狗", width: 150, render: (_: unknown, r: TrackingRow) => `${r.dog_name}（${r.imu}）` },
+          {
+            title: "狗",
+            width: 110,
+            // PM 那边的狗名是「品种-名字」，全写出来再加机位号就三行了。列表里
+            // 只留名字（一眼能认），品种和机位号放 tooltip
+            render: (_: unknown, r: TrackingRow) => {
+              const short = r.dog_name.includes("-") ? r.dog_name.split("-").slice(-1)[0] : r.dog_name;
+              return (
+                <Tooltip title={`${r.dog_name}（${r.imu}）`}>
+                  <span style={{ whiteSpace: "nowrap" }}>{short}</span>
+                </Tooltip>
+              );
+            },
+          },
           {
             title: "有效佩戴",
             width: 120,
