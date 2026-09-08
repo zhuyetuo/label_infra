@@ -455,7 +455,12 @@ export default function AnnotationWorkspace({
       // 服务端草稿，不先存的话刚改的类别会被覆盖回去
       if (!readOnly) await persist();
       await onConfirmScratch();
-      setItems((await getDraft(taskId)).items);
+      // 重新拉草稿不等它：确认完多半就关掉这个任务去看下一段了，为一次
+      // 「可能根本用不上」的刷新让人多转一圈不值当。工作台留着不关的话，
+      // 它回来时再把片段更新上
+      void getDraft(taskId)
+        .then((d) => setItems(d.items))
+        .catch(() => {});
     } finally {
       setSaving(false);
     }

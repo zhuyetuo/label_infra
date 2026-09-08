@@ -665,11 +665,14 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const [scratchOk, setScratchOk] = useState<Set<number>>(() => loadTaskMarks(SCRATCH_OK_KEY));
   const [approved, setApproved] = useState<Set<number>>(() => loadTaskMarks(APPROVED_KEY));
 
-  // 这天这只狗底下的任务都在同一个项目里，标签按项目取一次就够
-  const scratchIdsOf = async (projectId: number) =>
-    (await listLabels(projectId))
-      .filter((l) => l.display_name === "抓挠" || l.code === "抓挠")
-      .map((l) => l.id);
+  // 这天这只狗底下的任务都在同一个项目里，标签按项目取一次就够。
+  // 打开工作台时已经把这个项目的标签拉下来了（wsLabels），能用就不再多一次请求——
+  // 复看是一段接一段点的，每次都白等一个往返
+  const scratchIdsOf = async (projectId: number) => {
+    const cached = wsLabels.length && wsTask?.project_id === projectId ? wsLabels : null;
+    const all = cached ?? (await listLabels(projectId));
+    return all.filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id);
+  };
 
   /** 「抓挠没标错」：只确认抓挠这一类的 AI 片段，别的类别和候选都不动 */
   const confirmScratch = async (task: Task) => {
@@ -677,10 +680,19 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     try {
       const r = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
       setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
-      // 确认过抓挠的任务现在也算进人工版了，顺手重算这一天再刷新跟踪表
+      // 重算这一天不等它：那一步要把当天所有样本的 AI 结果从 NAS 上读一遍，
+      // 几秒起步，而它只影响跟踪表里的数字——复看的人这会儿要的是"下一段"。
+      // 放到后台跑，算完自己刷新；这一段自己的状态（抓挠已确认）上面已经记下了
       if (checkFor?.date) {
-        await skinLinkStats({ date_from: checkFor.date, date_to: checkFor.date });
-        await refetch();
+        const day = checkFor.date;
+        void (async () => {
+          try {
+            await skinLinkStats({ date_from: day, date_to: day });
+            await refetch();
+          } catch {
+            // 后台重算失败不打扰复看的人；下次拉取/关掉工作台时还会再算
+          }
+        })();
       }
       // 确认完任务已经放回待认领，工作台里那份状态得跟上（不然底部按钮
       // 还按"标注中"渲染）
