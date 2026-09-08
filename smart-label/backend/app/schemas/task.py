@@ -30,6 +30,10 @@ class TaskOut(BaseModel):
     draft_item_count: int = 0
     # 当前轮各类别的段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的
     label_counts: dict[int, dict[str, int]] = {}
+    # 「疑似抓挠」候选：不在 annotation_records 里，label_counts 统计不到，
+    # 单独给两个数，否则一个"抓挠 0 段"的任务看着像没事干，其实压着十几条待判断的
+    cand_count: int = 0
+    cand_pending: int = 0
     # 被驳回时审核员写的意见，方便标注员知道要改什么
     review_comment: str | None = None
     # 样本编号和指派人名字：标注员/审核员拿不到 /samples 和 /users，列表里只能看
