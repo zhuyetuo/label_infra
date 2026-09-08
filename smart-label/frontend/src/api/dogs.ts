@@ -20,6 +20,8 @@ export interface Dog {
   latest_neck_cm: number | null;
   latest_measured_on: string | null;
   n_measurements: number;
+  /** NAS 上存了几张照片 */
+  n_photos: number;
   created_at: string;
 }
 
@@ -61,3 +63,26 @@ export const addMeasurement = (
 ) => request.post<never, DogMeasurement>(`/dogs/${dogId}/measurements`, body);
 export const deleteMeasurement = (dogId: number, id: number) =>
   request.delete<never, null>(`/dogs/${dogId}/measurements/${id}`);
+
+/** 一张狗档案照片。token 是签名的，直接拼进 <img src> 用 */
+export interface DogPhoto {
+  filename: string;
+  size_bytes: number;
+  uploaded_at: string;
+  token: string;
+}
+
+export const listDogPhotos = (dogId: number) => request.get<never, DogPhoto[]>(`/dogs/${dogId}/photos`);
+
+export const uploadDogPhoto = (dogId: number, file: File) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return request.post<never, { filename: string; token: string }>(`/dogs/${dogId}/photos`, fd);
+};
+
+export const deleteDogPhoto = (dogId: number, filename: string) =>
+  request.delete<never, null>(`/dogs/${dogId}/photos/${encodeURIComponent(filename)}`);
+
+/** <img> 带不了 Authorization 头，所以图片走 URL 里的签名 token */
+export const dogPhotoUrl = (dogId: number, filename: string, token: string) =>
+  `/api/v1/dogs/${dogId}/photos/${encodeURIComponent(filename)}/stream?token=${token}`;

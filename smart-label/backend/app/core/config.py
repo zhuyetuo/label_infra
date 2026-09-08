@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     oral_dir: str = "口腔验证"
     # 皮肤瘙痒问诊照片，目录结构跟口腔一样（{日期-ok}/{狗}/*.jpg）
     skin_photo_dir: str = "颈圈算法验证/皮肤瘙痒/视频问诊"
+    # 狗档案照片：存在可写的 ai_data 那个 NAS 上，不能放素材库——素材库是只读挂载的
+    dog_photo_dir: str = "dog_photos"
 
     # --- 皮肤评估 ---
     # C 值到了哪些档位就该去做问答（PM 规则里没写死，按「C1/C2 才需要问」实现）
