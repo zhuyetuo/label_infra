@@ -202,7 +202,10 @@ export default function CandidatePanel({
         rowKey="id"
         dataSource={pageRows}
         pagination={false}
-        scroll={{ x: 720, y: 220 }}
+        // 只留横向滚动：给了 y 之后表格自己会出一条纵向滚动条，跟外面那条
+        // 套在一起——鼠标在表格里滚的是里面那条，想滚整页还得把鼠标挪出去。
+        // 一页就十条，让它整个铺开，纵向交给外层那一条
+        scroll={{ x: 720 }}
         locale={{
           emptyText: candidates.length ? (
             <Empty description="没有待确认的候选" image={Empty.PRESENTED_IMAGE_SIMPLE} />
