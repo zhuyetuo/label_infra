@@ -266,7 +266,7 @@ export default function CandidatePanel({
                 {onLoop &&
                   (isLooping(c) ? (
                     <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
-                      停止
+                      停止播放
                     </Button>
                   ) : (
                     <Button
@@ -275,7 +275,7 @@ export default function CandidatePanel({
                       icon={<RetweetOutlined />}
                       onClick={() => onLoop({ startMs: c.start_time_ms, endMs: c.end_time_ms })}
                     >
-                      循环
+                      循环播放
                     </Button>
                   ))}
                 {!readOnly && c.status === "pending" && (
