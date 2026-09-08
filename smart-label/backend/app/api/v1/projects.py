@@ -19,7 +19,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services.ai_prelabel_service import get_progress as get_prelabel_progress
 from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
-from app.services.ai_prelabel_service import start_project_prelabel
+from app.services.ai_prelabel_service import cancel_project_prelabel, start_project_prelabel
 from app.services.task_scope import visible_project_ids
 from app.services.task_service import purge_task_children
 from app.schemas.project import (
@@ -161,6 +161,19 @@ async def ai_prelabel_status(project_id: int, db: AsyncSession = Depends(get_db)
                 finished_at=finished,
             )
     return ok(progress)
+
+
+@router.post("/{project_id}/ai-prelabel/cancel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def ai_prelabel_cancel(project_id: int):
+    """
+    停掉正在跑的批量预标注。
+
+    已经发给 AI 服务的那一批停不下来（那边进程池正在算，中途撤回只会留下一半
+    写进草稿一半没写的烂摊子），所以是「这一批跑完就停」——几十秒内会停。
+    已经写好的草稿保留，剩下没跑的任务下次再跑。
+    """
+    stopped = cancel_project_prelabel(project_id)
+    return ok({"stopped": stopped}, msg="正在停止，当前这一批跑完就停" if stopped else "这个项目没有在跑的预标注")
 
 
 @router.get("/{project_id}/ai-prelabel/history")

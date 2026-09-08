@@ -26,6 +26,7 @@ import {
   createProject,
   deleteProject,
   getProjectPrelabelHistory,
+  cancelProjectPrelabel,
   getProjectPrelabelStatus,
   listProjects,
   startProjectPrelabel,
@@ -1015,10 +1016,27 @@ export default function Projects() {
                         />
                         {/* 已用时长从 0 秒精确计，跑完就知道总共花了多久；剩余时间按已完成
                             速率估，第一批还没回来之前没有数据，先显示"预估中" */}
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          已用 {fmtClock(pp.elapsed_sec)} ·{" "}
-                          {pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "预估中…"}
-                        </Typography.Text>
+                        <Space size={4}>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            已用 {fmtClock(pp.elapsed_sec)} ·{" "}
+                            {pp.estimated_remaining_sec != null ? `预计还需 ${fmtEta(pp.estimated_remaining_sec)}` : "预估中…"}
+                          </Typography.Text>
+                          {/* 一跑就是几十分钟，选错版本/挑错项目只能干等着实在难受。
+                              已经发给 AI 的那一批撤不回来（中途停会留下写一半的草稿），
+                              所以是"跑完这批就停"，几十秒内生效 */}
+                          <Popconfirm
+                            title="停止预标注？"
+                            description="当前这一批跑完就停，已经写好的草稿保留；剩下没跑的任务下次再跑"
+                            onConfirm={async () => {
+                              await cancelProjectPrelabel(p.id);
+                              message.success("正在停止，当前这一批跑完就停");
+                            }}
+                          >
+                            <Button size="small" danger type="link" style={{ padding: 0 }}>
+                              停止
+                            </Button>
+                          </Popconfirm>
+                        </Space>
                       </div>
                     </Tooltip>
                   )}
@@ -1182,7 +1200,15 @@ export default function Projects() {
               return (
                 <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    上一次/当前：{pp.status === "running" ? "进行中" : pp.status === "done" ? "已完成" : "出错"}，
+                    上一次/当前：
+                    {pp.status === "running"
+                      ? "进行中"
+                      : pp.status === "done"
+                        ? "已完成"
+                        : pp.status === "cancelled"
+                          ? "已停止（剩下的没跑）"
+                          : "出错"}
+                    ，
                     {pp.processed}/{pp.total}，成功 {pp.succeeded}，跳过 {pp.skipped}，失败 {pp.failed}，
                     {pp.status === "running" ? "已用" : "总耗时"} {fmtClock(pp.elapsed_sec)}（其中等 AI {fmtClock(pp.ai_wait_sec)}）
                     {pp.status === "running" && (

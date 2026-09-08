@@ -339,7 +339,7 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
 
 @dataclass
 class PrelabelProgress:
-    status: str = "idle"  # idle | running | done | error
+    status: str = "idle"  # idle | running | done | cancelled | error
     project_id: int = 0
     total: int = 0
     processed: int = 0
@@ -392,6 +392,9 @@ _running: set[int] = set()
 # 正在跑的时候又来了新任务（比如批量导入又导了一批"AI预标注+人工修改"），先记下来，
 # 这一轮跑完接着跑，不丢
 _queued: dict[int, dict] = {}
+# 点了「取消」的项目。一批已经发给 AI 服务的没法半路撤回（那边进程池在跑），
+# 所以是"这一批跑完就停"，不再发下一批——几十秒内会停下来
+_cancelled: set[int] = set()
 
 
 def get_progress(project_id: int) -> PrelabelProgress:
@@ -400,6 +403,20 @@ def get_progress(project_id: int) -> PrelabelProgress:
 
 def is_running(project_id: int) -> bool:
     return project_id in _running
+
+
+def cancel_project_prelabel(project_id: int) -> bool:
+    """请求停止。返回 False = 这个项目本来就没在跑。
+
+    已经发出去的那一批还得等它回来（AI 服务那边进程池正在算，中途撤回只会留下
+    一半写一半没写的烂摊子），但排队的后续批次和排在后面的整轮请求会被丢掉。
+    """
+    if project_id not in _running:
+        _queued.pop(project_id, None)
+        return False
+    _cancelled.add(project_id)
+    _queued.pop(project_id, None)
+    return True
 
 
 async def start_project_prelabel(
@@ -430,13 +447,15 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
         while True:
             async with SessionLocal() as db:
                 await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode)
+            if project_id in _cancelled:
+                break
             nxt = _queued.pop(project_id, None)
             if not nxt:
                 break
             task_ids = None if nxt["all"] else sorted(nxt["task_ids"])
             overwrite_ai = nxt["overwrite_ai"]
             mode = nxt.get("mode")
-        progress.status = "done"
+        progress.status = "cancelled" if project_id in _cancelled else "done"
     except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩
         progress.status = "error"
         progress.error_message = f"{type(exc).__name__}: {exc}"
@@ -446,6 +465,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
         progress.current_task_id = None
         progress.current_sample_code = None
         _running.discard(project_id)
+        _cancelled.discard(project_id)
         await _record_run(progress)
 
 
@@ -558,6 +578,11 @@ async def _run_project(
     size = max(1, settings.algo_infer_batch_size)
     chunks = [tasks[i : i + size] for i in range(0, len(tasks), size)]
     for ci, chunk in enumerate(chunks):
+        # 取消只在批与批之间生效：一批已经发出去了就等它回来，不然会留下
+        # 一半写进草稿一半没写的烂摊子
+        if project_id in _cancelled:
+            progress.log(f"已取消，剩下 {len(chunks) - ci} 批没跑")
+            break
         progress.current_task_id = None
         progress.current_sample_code = f"第 {ci + 1}/{len(chunks)} 批（{len(chunk)} 个并行）"
 
