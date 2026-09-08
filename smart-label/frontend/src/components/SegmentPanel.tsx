@@ -160,12 +160,12 @@ export default function SegmentPanel({
     onLoop ? (
       isLooping(startMs, endMs) ? (
         <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
-          停止
+          停止播放
         </Button>
       ) : (
         <Tooltip title="只循环播放这一段，反复看起止对不对">
           <Button size="small" type="link" icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
-            循环
+            循环播放
           </Button>
         </Tooltip>
       )

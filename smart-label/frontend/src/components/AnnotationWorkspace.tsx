@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
   Button,
   Empty,
   Modal,
@@ -685,19 +684,8 @@ export default function AnnotationWorkspace({
     >
       <div className={`ws-body${chartExpanded && imuOpen ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
-        {loopRange && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 6 }}
-            message={`正在循环播放 ${formatMs(loopRange.startMs)} ~ ${formatMs(loopRange.endMs)}（严格按标注起止，停止后视频暂停）`}
-            action={
-              <Button size="small" onClick={() => setLoop(null)}>
-                停止循环
-              </Button>
-            }
-          />
-        )}
+        {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
+            「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
         {videos.length > 0 ? (
           <SyncedVideoGroup
             videos={videos}
