@@ -18,6 +18,10 @@
 .ws-chan {
   position: relative;
 }
+/* 波形之间只留一条细缝，够肉眼分出是几张图就行 */
+.ws-chan + .ws-chan {
+  margin-top: 2px;
+}
 .ws-chan__name {
   position: absolute;
   left: 6px;
