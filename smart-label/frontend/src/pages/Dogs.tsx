@@ -5,6 +5,7 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import DogMeasurements from "@/components/DogMeasurements";
+import DogPhotos from "@/components/DogPhotos";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs";
 import { listSamples } from "@/api/samples";
@@ -42,6 +43,8 @@ export default function Dogs() {
   const [siteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Dog | null>(null);
+  // 照片单独开弹窗：展开行里已经有体重记录和时间轴了，再塞图会很长
+  const [photoDog, setPhotoDog] = useState<Dog | null>(null);
   const [form] = Form.useForm<FormValues>();
 
   const refresh = () => {
@@ -285,6 +288,17 @@ export default function Dogs() {
             width: 100,
             render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>),
           },
+          {
+            title: "照片",
+            width: 90,
+            sorter: (a: Dog, b: Dog) => a.n_photos - b.n_photos,
+            // 认狗用的档案照，存在可写的那块 NAS 上（跟只读的素材库相册不是一回事）
+            render: (_: unknown, d: Dog) => (
+              <Button size="small" type="link" style={{ padding: 0 }} onClick={(e) => { e.stopPropagation(); setPhotoDog(d); }}>
+                {d.n_photos > 0 ? `${d.n_photos} 张` : "上传"}
+              </Button>
+            ),
+          },
           { title: "备注", dataIndex: "remark", render: (v: string | null) => v || "-" },
           {
             title: "样本数",
@@ -359,6 +373,23 @@ export default function Dogs() {
             {editing ? "保存" : "创建"}
           </Button>
         </Form>
+      </Modal>
+
+      <Modal
+        title={photoDog ? `照片 - ${photoDog.name || photoDog.dog_code}` : ""}
+        open={!!photoDog}
+        onCancel={() => setPhotoDog(null)}
+        footer={null}
+        width={760}
+        destroyOnClose
+      >
+        {photoDog && (
+          <DogPhotos
+            dogId={photoDog.id}
+            // 传/删完刷新档案列表，那一列的张数才跟着变
+            onChange={() => qc.invalidateQueries({ queryKey: ["dogs"] })}
+          />
+        )}
       </Modal>
     </div>
   );

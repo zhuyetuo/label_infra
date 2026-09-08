@@ -4,7 +4,10 @@
 关联到某只狗（采集端还没在文件名里带 dog 编号之前，只能靠这个手动关联）。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+import os
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import BigInteger, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +21,17 @@ from app.models.sample import Sample
 from app.models.user import User, UserRole
 from app.schemas.dog import DogCreate, DogOut, DogUpdate, MeasurementIn, MeasurementOut
 from app.schemas.envelope import ok
+from app.services import dog_photo_service as dog_photos
+from app.services.range_stream import stream_file
 
 router = APIRouter(
     prefix="/dogs", tags=["dogs"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))]
 )
+# 图片流不能挂在需要 Bearer 的路由上：<img src> 带不了请求头，靠 URL 里的签名 token
+stream_router = APIRouter(prefix="/dogs", tags=["dogs"])
+
+_CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                  ".webp": "image/webp", ".bmp": "image/bmp"}
 
 
 def age_text(birth: date | None, today: date | None = None) -> str | None:
@@ -66,6 +76,8 @@ async def _decorate(db: AsyncSession, dogs: list[Dog]) -> list[dict]:
         for r in rows:
             counts[r.dog_id] = counts.get(r.dog_id, 0) + 1
             latest[r.dog_id] = r  # 按日期升序遍历，最后留下的就是最新那条
+    # NAS 上数一遍照片：走线程池，别让 listdir 卡住事件循环
+    n_photos = await asyncio.to_thread(dog_photos.count_photos, [d.dog_code for d in dogs]) if dogs else {}
     for d in dogs:
         item = DogOut.model_validate(d).model_dump()
         m = latest.get(d.id)
@@ -75,9 +87,62 @@ async def _decorate(db: AsyncSession, dogs: list[Dog]) -> list[dict]:
             latest_neck_cm=m.neck_cm if m else None,
             latest_measured_on=m.measured_on if m else None,
             n_measurements=counts.get(d.id, 0),
+            n_photos=n_photos.get(d.dog_code, 0),
         )
         out.append(item)
     return out
+
+
+@router.get("/{dog_id}/photos")
+async def list_dog_photos(dog_id: int, db: AsyncSession = Depends(get_db)):
+    """这只狗的照片。每条带一个签名 token，前端直接拿去请求图片流。"""
+    dog = await db.get(Dog, dog_id)
+    if dog is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
+    return ok(await asyncio.to_thread(dog_photos.list_photos, dog.dog_code))
+
+
+@router.post("/{dog_id}/photos")
+async def upload_dog_photo(dog_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    dog = await db.get(Dog, dog_id)
+    if dog is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
+    data = await file.read()
+    try:
+        name = await asyncio.to_thread(dog_photos.save_photo, dog.dog_code, file.filename or "photo.jpg", data)
+    except dog_photos.DogPhotoError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    return ok({"filename": name, "token": dog_photos.issue_token(dog.dog_code, name)})
+
+
+@router.delete("/{dog_id}/photos/{filename}")
+async def delete_dog_photo(dog_id: int, filename: str, db: AsyncSession = Depends(get_db)):
+    dog = await db.get(Dog, dog_id)
+    if dog is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
+    try:
+        await asyncio.to_thread(dog_photos.delete_photo, dog.dog_code, filename)
+    except (dog_photos.DogPhotoError, OSError) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+    return ok(msg="已删除")
+
+
+@stream_router.get("/{dog_id}/photos/{filename}/stream")
+async def stream_dog_photo(
+    dog_id: int, filename: str, token: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """图片是 <img> 直接来取的，带不上登录态，所以走签名 token（跟素材库一个做法）。"""
+    dog = await db.get(Dog, dog_id)
+    if dog is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
+    if not dog_photos.verify_token(dog.dog_code, filename, token):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "token 无效或已过期")
+    try:
+        full = await asyncio.to_thread(dog_photos.resolve, dog.dog_code, filename)
+    except dog_photos.DogPhotoError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+    ext = os.path.splitext(full)[1].lower()
+    return await stream_file(request, full, _CONTENT_TYPES.get(ext, "application/octet-stream"))
 
 
 @router.get("/{dog_id}/measurements")
