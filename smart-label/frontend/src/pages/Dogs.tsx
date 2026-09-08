@@ -13,6 +13,7 @@ import { listTasks } from "@/api/tasks";
 import { TASK_STATUS_META } from "@/utils/taskStatus";
 import { getSavedText, saveText } from "@/utils/persistedSize";
 import { usePersistedSort } from "@/utils/persistedSort";
+import { useResizableColumns } from "@/utils/resizableColumns";
 import type { Sample, TaskStatus } from "@/types";
 
 interface FormValues {
@@ -48,6 +49,7 @@ export default function Dogs() {
   const [photoDog, setPhotoDog] = useState<Dog | null>(null);
   // 排序记住：按体重/年龄/照片数排过一次，切走再回来还是那个顺序
   const dogSort = usePersistedSort("dogs-sort");
+  const dogWidth = useResizableColumns("dogs-widths");
   const [form] = Form.useForm<FormValues>();
 
   const refresh = () => {
@@ -145,6 +147,13 @@ export default function Dogs() {
         <Button type="primary" onClick={openCreate}>
           新建狗档案
         </Button>
+        {dogWidth.hasCustom && (
+          <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
+            <Button size="small" type="link" onClick={dogWidth.reset}>
+              恢复列宽
+            </Button>
+          </Tooltip>
+        )}
       </Space>
 
       {/* 说明在前、卡片在后：卡片高度不一，夹在文字中间会把段落顶得七零八落 */}
@@ -231,7 +240,10 @@ export default function Dogs() {
           ),
         }}
         onChange={dogSort.onTableChange}
-        columns={dogSort.applySort<Dog>([
+        components={dogWidth.components}
+        // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
+        scroll={{ x: "max-content" }}
+        columns={dogWidth.applyResize<Dog>(dogSort.applySort<Dog>([
           { title: "编号", dataIndex: "dog_code", width: 120 },
           { title: "名字", dataIndex: "name", render: (v: string | null) => v || "-" },
           { title: "品种", dataIndex: "breed", render: (v: string | null) => v || "-" },
@@ -334,7 +346,7 @@ export default function Dogs() {
               </Space>
             ),
           },
-        ])}
+        ]))}
       />
 
       <Modal
