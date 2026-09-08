@@ -642,16 +642,16 @@ export default function AnnotationWorkspace({
                 </Popconfirm>
               )}
               {onConfirmScratch && (
-                <Popconfirm
-                  title={`${confirmScratchText ?? "只认这一类"}？`}
-                  description="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动"
-                  onConfirm={handleConfirmScratch}
-                  disabled={!!onClaim}
-                >
-                  <Button disabled={!!onClaim} type={onClaim ? "default" : "primary"} loading={saving}>
+                <Tooltip title="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动">
+                  <Button
+                    disabled={!!onClaim}
+                    type={onClaim ? "default" : "primary"}
+                    loading={saving}
+                    onClick={handleConfirmScratch}
+                  >
                     {confirmScratchText ?? "只认这一类"}
                   </Button>
-                </Popconfirm>
+                </Tooltip>
               )}
             </Space>
           ) : null
@@ -677,16 +677,15 @@ export default function AnnotationWorkspace({
                 </Button>
               </Popconfirm>
             )}
+            {/* 不做二次确认：这一步只把这一类的 AI 片段标成已确认，改错了随时能
+                再改回来，不是不可逆的操作。而复看是一段接一段地做，每段多点一次
+                「确定」纯属白花力气 */}
             {onConfirmScratch && (
-              <Popconfirm
-                title={`${confirmScratchText ?? "只认这一类"}？`}
-                description="先存草稿（刚改的类别/待定都会存下），再把这一类的 AI 片段标成已确认；别的类别和任务状态不动"
-                onConfirm={handleConfirmScratch}
-              >
-                <Button type="primary" loading={saving}>
+              <Tooltip title="先存草稿（刚改的类别/待定都会存下），再把这一类的 AI 片段标成已确认；别的类别和任务状态不动">
+                <Button type="primary" loading={saving} onClick={handleConfirmScratch}>
                   {confirmScratchText ?? "只认这一类"}
                 </Button>
-              </Popconfirm>
+              </Tooltip>
             )}
           </Space>
         )
