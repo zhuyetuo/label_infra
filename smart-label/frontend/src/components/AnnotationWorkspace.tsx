@@ -890,17 +890,9 @@ export default function AnnotationWorkspace({
                         saveHeight(CHART_HEIGHT_KEY, null);
                       }}
                       title="拖拽调整波形区域高度，双击恢复默认"
-                      style={{
-                        flex: "0 0 auto",
-                        height: 8,
-                        margin: "2px 0",
-                        cursor: "row-resize",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
+                      className="ws-chart-grip"
                     >
-                      <div style={{ width: 40, height: 3, borderRadius: 2, background: "#d9d9d9" }} />
+                      <div className="ws-chart-grip__bar" />
                     </div>
                   )}
                 </>
@@ -925,7 +917,12 @@ export default function AnnotationWorkspace({
           // 本来就是"对着画面看这一条对不对"，两样东西必须同时在眼前
           // 两个面板都收起来时不要再占着剩余高度：CSS 里写死 flex:1 的话，
           // 折叠了照样撑着一大片空白，看着像页面坏了
-          style={{ marginTop: 8, flex: panelKeys.length ? "1 1 auto" : "0 0 auto" }}
+          // minHeight 也要跟着：写死 140 的话，两个面板都收起来时下面还是空一块
+          style={{
+            marginTop: 8,
+            flex: panelKeys.length ? "1 1 auto" : "0 0 auto",
+            minHeight: panelKeys.length ? 140 : 0,
+          }}
           // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
           // 审核就是来看这些片段的，默认展开
           // 展开哪些面板记成用户的习惯，不用每开一个任务重点一遍
