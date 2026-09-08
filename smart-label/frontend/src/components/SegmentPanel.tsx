@@ -160,11 +160,31 @@ export default function SegmentPanel({
   const [editStart, setEditStart] = useState(0);
   const [editEnd, setEditEnd] = useState(0);
 
+  // 刚在这一屏改过的片段（改了类别、或标了待定）。筛选着「抓挠」时把一条改成
+  // 「甩身体」，它立刻就不满足筛选条件了——要是直接消失，人根本确认不了自己
+  // 刚才改成了什么。这里把这些 id 记下来，无视筛选一直显示，直到手动收起。
+  const [justEdited, setJustEdited] = useState<Set<number>>(new Set());
+  const update: Props["onUpdate"] = (ids, patch) => {
+    // 只有"会让它从当前筛选里掉出去"的改动才需要留住；确认/取消确认不算
+    if (patch.label_id != null || patch.uncertain != null) {
+      setJustEdited((prev) => new Set([...prev, ...ids]));
+    }
+    onUpdate(ids, patch);
+  };
+  // 换任务时工作台会先把 items 清空再灌新的，借这个时机清掉，别把上一个任务的
+  // id 带过来（片段 id 是全局唯一的，串不了行，但计数会不对）
+  const empty = items.length === 0;
+  useEffect(() => {
+    if (empty) setJustEdited(new Set());
+  }, [empty]);
+
   const sorted = useMemo(() => [...items].sort((a, b) => a.start_time_ms - b.start_time_ms), [items]);
 
   const filtered = useMemo(
     () =>
       sorted.filter((i) => {
+        // 刚改过的一律留着，好让人核对自己改成了什么
+        if (justEdited.has(i.id)) return true;
         if (filterLabels.length && !filterLabels.includes(i.label_id)) return false;
         const st = aiState(i);
         if (filterSource === "ai" && !st) return false;
@@ -181,7 +201,7 @@ export default function SegmentPanel({
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
       }),
-    [sorted, filterLabels, filterSource, minConf, maxConf]
+    [sorted, filterLabels, filterSource, minConf, maxConf, justEdited]
   );
 
   // 按类别统计：数量、总时长、置信度范围、待确认/已确认/已纠正/人工各多少
@@ -238,7 +258,7 @@ export default function SegmentPanel({
     const s = Math.round(editStart * 1000);
     const e = Math.round(editEnd * 1000);
     if (e <= s) return;
-    onUpdate([editing.id], { start_time_ms: s, end_time_ms: e });
+    update([editing.id], { start_time_ms: s, end_time_ms: e });
     setEditing(null);
   };
 
@@ -311,13 +331,21 @@ export default function SegmentPanel({
               显示 {filtered.length} / 共 {items.length}
               {pendingTotal > 0 && <>，AI 待确认 {pendingTotal}</>}
               {uncertainTotal > 0 && <>，待定 {uncertainTotal}（不进训练集）</>}
+              {justEdited.size > 0 && <>，刚改 {justEdited.size}</>}
             </>
           )}
         </Typography.Text>
+        {justEdited.size > 0 && (
+          <Tooltip title="改过类别/标了待定的那几条现在无视筛选一直显示，核对完可以收起来">
+            <Button size="small" onClick={() => setJustEdited(new Set())}>
+              收起刚改的 {justEdited.size} 条
+            </Button>
+          </Tooltip>
+        )}
         {!readOnly && pendingInView.length > 0 && (
           <Popconfirm
             title={`把当前筛出来的 ${pendingInView.length} 段 AI 预测全部标为"确认正确"？`}
-            onConfirm={() => onUpdate(pendingInView.map((i) => i.id), { ai_confirmed: true })}
+            onConfirm={() => update(pendingInView.map((i) => i.id), { ai_confirmed: true })}
           >
             <Button size="small" icon={<CheckOutlined />}>
               当前筛选全部通过
@@ -454,7 +482,7 @@ export default function SegmentPanel({
                   value={i.label_id}
                   style={{ width: 140 }}
                   options={labelOptions}
-                  onChange={(v) => onUpdate([i.id], { label_id: v })}
+                  onChange={(v) => update([i.id], { label_id: v })}
                   title="改类别"
                 />
               ),
@@ -503,18 +531,37 @@ export default function SegmentPanel({
             width: 100,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
+              // 刚改过的：说清楚它为什么还留在这儿（已经不符合当前筛选了）
+              const justTag = justEdited.has(i.id) ? (
+                <Tooltip title="刚改过，暂时不受筛选影响，方便你核对">
+                  <Tag color="gold" style={{ marginLeft: 4 }}>刚改</Tag>
+                </Tooltip>
+              ) : null;
               if (i.uncertain) {
                 const k = kindOf(i.uncertain_reason);
                 return (
-                  <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
-                    <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
-                  </Tooltip>
+                  <>
+                    <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
+                      <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
+                    </Tooltip>
+                    {justTag}
+                  </>
                 );
               }
-              if (st === "pending") return <Tag color="orange">AI 待确认</Tag>;
-              if (st === "confirmed") return <Tag color="green">AI 已确认</Tag>;
-              if (st === "modified") return <Tag color="blue">AI 已纠正</Tag>;
-              return <Tag>人工</Tag>;
+              return (
+                <>
+                  {st === "pending" ? (
+                    <Tag color="orange">AI 待确认</Tag>
+                  ) : st === "confirmed" ? (
+                    <Tag color="green">AI 已确认</Tag>
+                  ) : st === "modified" ? (
+                    <Tag color="blue">AI 已纠正</Tag>
+                  ) : (
+                    <Tag>人工</Tag>
+                  )}
+                  {justTag}
+                </>
+              );
             },
           },
           {
@@ -530,13 +577,13 @@ export default function SegmentPanel({
                   {loopButton(i.start_time_ms, i.end_time_ms)}
                   {!readOnly && st === "pending" && (
                     <Tooltip title="AI 预测正确，确认通过">
-                      <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => onUpdate([i.id], { ai_confirmed: true })}>
+                      <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => update([i.id], { ai_confirmed: true })}>
                         通过
                       </Button>
                     </Tooltip>
                   )}
                   {!readOnly && st === "confirmed" && (
-                    <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onUpdate([i.id], { ai_confirmed: false })}>
+                    <Button size="small" type="link" style={{ color: "#999" }} onClick={() => update([i.id], { ai_confirmed: false })}>
                       撤销
                     </Button>
                   )}
@@ -548,7 +595,7 @@ export default function SegmentPanel({
                     <Dropdown
                       menu={{
                         items: UNCERTAIN_KINDS.map((k) => ({ key: k.value, label: k.label })),
-                        onClick: ({ key }) => onUpdate([i.id], { uncertain: true, uncertain_reason: key }),
+                        onClick: ({ key }) => update([i.id], { uncertain: true, uncertain_reason: key }),
                       }}
                     >
                       <Button size="small" type="link">
@@ -561,7 +608,7 @@ export default function SegmentPanel({
                       size="small"
                       type="link"
                       style={{ color: "#999" }}
-                      onClick={() => onUpdate([i.id], { uncertain: false, uncertain_reason: null })}
+                      onClick={() => update([i.id], { uncertain: false, uncertain_reason: null })}
                     >
                       取消待定
                     </Button>
