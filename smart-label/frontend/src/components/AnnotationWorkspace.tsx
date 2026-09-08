@@ -459,6 +459,13 @@ export default function AnnotationWorkspace({
       title={
         <Space wrap style={{ width: "100%" }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
+          {/* 一个画面里同时有四只狗，这条 IMU 是谁身上的必须一眼看见，
+              不然逐条确认时很容易确认成别的狗的动作 */}
+          {task?.dog_label && (
+            <Tag color="purple" style={{ fontSize: 14, padding: "2px 10px", fontWeight: 600 }}>
+              🐕 {task.dog_label}
+            </Tag>
+          )}
           <Tag>
             样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : sampleId}
             {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}

@@ -71,6 +71,8 @@ export interface Task {
   video_duration_sec?: number | null;
   /** IMU CSV 数据行数，0 = 空文件，打开工作台会报"CSV 没有数据行" */
   imu_row_count?: number | null;
+  /** 这条样本是哪只狗的：「小满（IMU4）」。画面里同时有四只狗，不写清楚没法确认 */
+  dog_label?: string | null;
   assigned_to_name?: string | null;
   assigned_to_role?: UserRole | null;
 }
