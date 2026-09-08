@@ -27,6 +27,8 @@ interface Props {
   labels?: { id: number; display_name: string; color?: string | null }[];
   /** 「抓挠」在这个项目里的标签 id，下拉里要把它排掉（那是「确认是抓挠」干的事） */
   scratchLabelIds?: number[];
+  /** 撤回已经做过的判断，回到「待确认」。确认过的还要把带上去的那条片段一起收回 */
+  onUndo?: (c: AiCandidate) => Promise<void>;
 }
 
 // 跟正式片段上的「待定」同一套：没画面的除非补拍否则永远定不了，看不清的
@@ -45,6 +47,7 @@ export default function CandidatePanel({
   onDecided,
   labels = [],
   scratchLabelIds = [],
+  onUndo,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const [busy, setBusy] = useState<number | null>(null);
@@ -99,6 +102,20 @@ export default function CandidatePanel({
   // 排除只是记一笔"不是抓挠"，标成甩身体则给了模型一个正例，同时天然成为抓挠
   // 的难负样本——正是最缺的那种训练数据
   const otherLabels = labels.filter((l) => !scratchLabelIds.includes(l.id));
+
+  // 点错了、或者看完视频改主意了，得能退回去重判——不然只能去「已标注片段」
+  // 那边找到对应的条目再退回候选，绕一大圈；排除/待定的更是根本没有入口
+  const undo = async (c: AiCandidate) => {
+    if (!onUndo) return;
+    setBusy(c.id);
+    try {
+      await onUndo(c);
+      setJustDecided((prev) => new Set(prev).add(c.id));
+      message.success("已撤回，可以重新判断");
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const isLooping = (c: AiCandidate) =>
     loopRange != null && loopRange.startMs === c.start_time_ms && loopRange.endMs === c.end_time_ms;
@@ -273,6 +290,21 @@ export default function CandidatePanel({
                       </Button>
                     </Popconfirm>
                   </>
+                )}
+                {!readOnly && c.status !== "pending" && onUndo && (
+                  <Popconfirm
+                    title="撤回这次判断？"
+                    description={
+                      c.status === "confirmed"
+                        ? "这一段会回到「待确认」，之前带到「已标注片段」的那条也一起收回"
+                        : "这一段会回到「待确认」，重新判断"
+                    }
+                    onConfirm={() => undo(c)}
+                  >
+                    <Button size="small" type="link" loading={busy === c.id}>
+                      撤回
+                    </Button>
+                  </Popconfirm>
                 )}
               </Space>
             ),
