@@ -17,7 +17,7 @@ import {
 } from "antd";
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
-import { aiPrelabel, getSampleMedia } from "@/api/samples";
+import { aiPrelabel, getAiLabelInfo, getSampleMedia, type AiLabelInfo } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
@@ -28,7 +28,7 @@ import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
 import { useAuthStore } from "@/stores/authStore";
-import { INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
+import { INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
@@ -131,6 +131,8 @@ export default function AnnotationWorkspace({
   const [items, setItems] = useState<LabelItem[]>([]);
   // 疑似抓挠候选：不在草稿里，单独一张表，人工逐条确认/排除
   const [candidates, setCandidates] = useState<AiCandidate[]>([]);
+  // 现在这份 AI 结果是哪个版本/哪个模型跑的
+  const [aiInfo, setAiInfo] = useState<AiLabelInfo | null>(null);
   const [labelId, setLabelId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -194,6 +196,7 @@ export default function AnnotationWorkspace({
       const draft = await getDraft(taskId);
       setItems(draft.items);
       listCandidates(taskId).then(setCandidates).catch(() => setCandidates([]));
+      getAiLabelInfo(sampleId).then(setAiInfo).catch(() => setAiInfo(null));
       setLoading(false);
     })();
   }, [taskId, sampleId]);
@@ -320,6 +323,8 @@ export default function AnnotationWorkspace({
     setPrelabeling(true);
     try {
       const res = await aiPrelabel(sampleId, prelabelMode, taskId ?? undefined);
+      // 重新跑过了，标签上的版本/模型/时间也得跟着变
+      getAiLabelInfo(sampleId).then(setAiInfo).catch(() => {});
       const byName = new Map<string, number>();
       labels.forEach((l) => {
         byName.set(l.display_name, l.id);
@@ -681,6 +686,24 @@ export default function AnnotationWorkspace({
                     onChange={(e) => setPrelabelMode(e.target.value)}
                     options={INFER_MODE_OPTIONS}
                   />
+                </Tooltip>
+              )}
+              {/* 项目页批量跑过之后，这些片段到底出自哪个模型完全看不出来；换了
+                  模型重跑更是。把结果 JSON 里记的版本/模型/时间摆出来 */}
+              {aiInfo?.exists && (
+                <Tooltip
+                  title={
+                    <div style={{ whiteSpace: "normal" }}>
+                      现在这些 AI 片段是 {aiInfo.generated_at} 跑的
+                      {aiInfo.model_path ? <>，模型 {aiInfo.model_path}</> : null}
+                      {aiInfo.missing_seconds ? <>；其中掉数据 {Math.round(aiInfo.missing_seconds)} 秒已挖掉</> : null}
+                    </div>
+                  }
+                >
+                  <Tag style={{ marginLeft: 4 }}>
+                    当前：{aiInfo.mode ? INFER_MODE_LABEL[aiInfo.mode] ?? aiInfo.mode : "未知版本"}
+                    {aiInfo.model_path ? ` · ${aiInfo.model_path.split("/").slice(-1)[0]}` : ""}
+                  </Tag>
                 </Tooltip>
               )}
             </Space>

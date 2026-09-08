@@ -46,6 +46,18 @@ export interface PrelabelResult {
 
 /** 同步调用 AI 服务推理，可能要等几十秒，超时放宽 */
 /** mode：stable=稳定版（平滑合并后的片段，少而可信）/ raw=调试版（模型逐窗口原始输出） */
+/** 这个样本现在的 AI 结果是哪个版本、哪个模型跑的、什么时候跑的 */
+export interface AiLabelInfo {
+  exists: boolean;
+  mode?: string | null;
+  model_path?: string | null;
+  n_windows?: number | null;
+  missing_seconds?: number | null;
+  generated_at?: string | null;
+}
+export const getAiLabelInfo = (sampleId: number) =>
+  request.get<never, AiLabelInfo>(`/samples/${sampleId}/ai-label-info`);
+
 export const aiPrelabel = (sampleId: number, mode: "stable" | "viterbi" | "raw" = "stable", taskId?: number) =>
   request.post<never, PrelabelResult>(`/samples/${sampleId}/ai-prelabel`, undefined, {
     timeout: 180_000,

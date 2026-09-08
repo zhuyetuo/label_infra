@@ -4,6 +4,11 @@
 "不想等，立刻扫一次"的快捷方式，不是唯一入口。
 """
 
+import asyncio
+import json
+import os
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +31,7 @@ from app.schemas.sample import (
     ScanProgressOut,
     ScanStartResult,
 )
-from app.services.ai_prelabel_service import PrelabelError, infer_sample, replace_candidates
+from app.services.ai_prelabel_service import PrelabelError, ai_label_relpath, infer_sample, replace_candidates
 from app.services.sample_import_service import get_progress, start_scan_background
 from app.services.task_scope import apply_task_scope
 
@@ -122,6 +127,41 @@ async def get_sample_media(
             video_fps=sample.video_fps,
         ).model_dump()
     )
+
+
+@scoped_router.get("/{sample_id}/ai-label-info")
+async def ai_label_info(sample_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    这个样本现在的 AI 结果是哪个版本、哪个模型跑的、什么时候跑的。
+
+    工作台上「AI 预标注」旁边要显示这个：项目页批量跑过之后，标注员看到的片段
+    到底出自哪个模型并不明显，换了模型重跑更是完全看不出来。信息就在 NAS 上那份
+    结果 JSON 里（mode / model_path），顺带用文件修改时间当"什么时候跑的"。
+    """
+    sample = await db.get(Sample, sample_id)
+    if sample is None or not sample.imu_csv_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在或没有 IMU CSV")
+    relpath = ai_label_relpath(sample.imu_csv_path)
+    full = os.path.join(settings.nas_root, relpath)
+
+    def _read() -> dict:
+        if not os.path.isfile(full):
+            return {"exists": False}
+        try:
+            with open(full, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {"exists": False}
+        return {
+            "exists": True,
+            "mode": data.get("mode"),
+            "model_path": data.get("model_path"),
+            "n_windows": data.get("n_windows"),
+            "missing_seconds": data.get("missing_seconds"),
+            "generated_at": datetime.fromtimestamp(os.path.getmtime(full)).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    return ok(await asyncio.to_thread(_read))
 
 
 @scoped_router.post("/{sample_id}/ai-prelabel")
