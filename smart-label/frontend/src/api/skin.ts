@@ -103,6 +103,14 @@ export const skinLinkStats = (p: { date_from: string; date_to: string; project_i
 export const getSkinDataRange = () =>
   request.get<never, { date_from: string | null; date_to: string | null }>("/skin/data-range");
 
+/** 清理「项目联动」存下来的日统计。dry_run 只数不删，用来在确认框里显示影响面 */
+export const purgeSkinDailyStats = (b: {
+  date_from?: string | null;
+  date_to?: string | null;
+  only_orphan?: boolean;
+  dry_run?: boolean;
+}) => request.post<never, { deleted: number; dates: string[]; dry_run: boolean }>("/skin/daily-stats/purge", b);
+
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>
   request.post<never, SkinRecord>("/skin/records", body);

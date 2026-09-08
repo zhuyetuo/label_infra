@@ -17,6 +17,7 @@ import { listLabels } from "@/api/labels";
 import type { LabelDefinition, Task } from "@/types";
 import {
   getSkinDataRange,
+  purgeSkinDailyStats,
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
   type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
@@ -448,6 +449,106 @@ const loadTrackFilter = (): {
 };
 
 /**
+ * 清理存下来的日统计。
+ *
+ * 为什么要单独确认一次：基线是这只狗「所有算过的天」的中位数，删掉一部分天，
+ * 剩下那些天的 C 值会跟着变。所以默认只清「已经没有任务的天」——那些天本来
+ * 也复看不了、算不出人工版，留着只是噪声；按日期范围硬删是会动基线的操作，
+ * 单独勾一下，并且先 dry_run 数一遍给人看。
+ */
+function PurgeStatsButton({ from, to, onDone }: { from: string; to: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [onlyOrphan, setOnlyOrphan] = useState(true);
+  const [useRange, setUseRange] = useState(false);
+  const [preview, setPreview] = useState<{ deleted: number; dates: string[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const body = () => ({
+    date_from: useRange ? from : null,
+    date_to: useRange ? to : null,
+    only_orphan: onlyOrphan,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    let dead = false;
+    setPreview(null);
+    purgeSkinDailyStats({ ...body(), dry_run: true }).then((r) => {
+      if (!dead) setPreview(r);
+    });
+    return () => { dead = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onlyOrphan, useRange, from, to]);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await purgeSkinDailyStats(body());
+      message.success(`已清理 ${r.deleted} 行，涉及 ${r.dates.length} 天`);
+      setOpen(false);
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button size="small" danger onClick={() => setOpen(true)}>
+        清理历史结果
+      </Button>
+      <Modal
+        open={open}
+        title="清理存下来的日统计"
+        onCancel={() => setOpen(false)}
+        okText={preview?.deleted ? `删除 ${preview.deleted} 行` : "没有要删的"}
+        okButtonProps={{ danger: true, disabled: !preview?.deleted, loading: busy }}
+        onOk={run}
+        width={560}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          跟踪表和趋势图的行就是这张表——「项目联动」点「重新拉取」时算完存下来的。
+          删项目不会动它，所以会看到早就没有项目的日子。
+        </Typography.Paragraph>
+        <Space direction="vertical">
+          <Checkbox checked={onlyOrphan} onChange={(e) => setOnlyOrphan(e.target.checked)}>
+            只清「已经没有任务的天」（推荐）
+          </Checkbox>
+          <Checkbox checked={useRange} onChange={(e) => setUseRange(e.target.checked)}>
+            只清当前日期范围内的（{from} ~ {to}）；不勾就是全部历史
+          </Checkbox>
+        </Space>
+        {!onlyOrphan && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="这样会删到还有任务的天"
+            description="基线是这只狗「所有算过的天」的中位数，删掉一部分天，剩下那些天的 C 值会跟着变。真要删的话，删完记得回「项目联动」重新拉取一次。"
+          />
+        )}
+        <div style={{ marginTop: 12 }}>
+          {preview == null ? (
+            <Spin size="small" />
+          ) : preview.deleted === 0 ? (
+            <Typography.Text type="secondary">没有符合条件的记录</Typography.Text>
+          ) : (
+            <Typography.Text>
+              会删掉 <b>{preview.deleted}</b> 行，涉及 <b>{preview.dates.length}</b> 天：
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {" "}
+                {preview.dates.slice(0, 8).join("、")}
+                {preview.dates.length > 8 ? `…（共 ${preview.dates.length} 天）` : ""}
+              </Typography.Text>
+            </Typography.Text>
+          )}
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+/**
  * 跟踪表/趋势图共用的筛选条件（同一个 localStorage key）。
  *
  * 日期默认跟着「标注平台上现在有任务的范围」走：这两张表的行来自
@@ -660,6 +761,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           />
         </Tooltip>
         <Button loading={isFetching} onClick={() => refetch()}>刷新</Button>
+        {role === "super_admin" && <PurgeStatsButton from={f.from} to={f.to} onDone={() => refetch()} />}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
           （
