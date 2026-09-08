@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Button, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
-import { RetweetOutlined } from "@ant-design/icons";
+import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { DownOutlined, RetweetOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 
@@ -23,9 +23,22 @@ interface Props {
   loopRange?: { startMs: number; endMs: number } | null;
   /** 确认/排除之后刷新列表；确认时还要把新片段拉进草稿，所以一并重载草稿 */
   onDecided: (c: AiCandidate, decision: AiCandidate["status"]) => void;
+  /** 项目里的标签，给「改成别的类别」用 */
+  labels?: { id: number; display_name: string }[];
+  /** 「抓挠」在这个项目里的标签 id，下拉里要把它排掉（那是「确认是抓挠」干的事） */
+  scratchLabelIds?: number[];
 }
 
-export default function CandidatePanel({ candidates, readOnly, onSeek, onLoop, loopRange, onDecided }: Props) {
+export default function CandidatePanel({
+  candidates,
+  readOnly,
+  onSeek,
+  onLoop,
+  loopRange,
+  onDecided,
+  labels = [],
+  scratchLabelIds = [],
+}: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const [busy, setBusy] = useState<number | null>(null);
 
@@ -35,16 +48,27 @@ export default function CandidatePanel({ candidates, readOnly, onSeek, onLoop, l
   );
   const pendingCount = candidates.filter((c) => c.status === "pending").length;
 
-  const decide = async (c: AiCandidate, decision: AiCandidate["status"]) => {
+  const decide = async (c: AiCandidate, decision: AiCandidate["status"], labelId?: number, labelName?: string) => {
     setBusy(c.id);
     try {
-      await decideCandidate(c.id, decision);
-      message.success(decision === "confirmed" ? "已确认，已加入标注片段" : "已排除");
+      await decideCandidate(c.id, decision, labelId);
+      message.success(
+        decision !== "confirmed"
+          ? "已排除"
+          : labelName
+            ? `已标成「${labelName}」，加入标注片段`
+            : "已确认，已加入标注片段"
+      );
       onDecided(c, decision);
     } finally {
       setBusy(null);
     }
   };
+
+  // 候选里常有"其实是别的动作"的段（甩身体最多）。标成那个类别比「排除」有用：
+  // 排除只是记一笔"不是抓挠"，标成甩身体则给了模型一个正例，同时天然成为抓挠
+  // 的难负样本——正是最缺的那种训练数据
+  const otherLabels = labels.filter((l) => !scratchLabelIds.includes(l.id));
 
   const isLooping = (c: AiCandidate) =>
     loopRange != null && loopRange.startMs === c.start_time_ms && loopRange.endMs === c.end_time_ms;
@@ -63,7 +87,9 @@ export default function CandidatePanel({ candidates, readOnly, onSeek, onLoop, l
           ]}
         />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          正式片段之外、模型可能漏掉的抓挠。看一眼视频，是就「确认」（变成正式片段），不是就「排除」。
+          正式片段之外、模型可能漏掉的抓挠。看一眼视频：是抓挠就「确认」，其实是别的动作就「改成别的」
+          （比如甩身体——比单纯排除有用，等于给了那个类别一个正例，同时是抓挠最缺的难负样本），
+          都不是就「排除」。
           两种都会成为下次训练的数据。
         </Typography.Text>
       </Space>
@@ -150,6 +176,21 @@ export default function CandidatePanel({ candidates, readOnly, onSeek, onLoop, l
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
                       确认是抓挠
                     </Button>
+                    {otherLabels.length > 0 && (
+                      <Dropdown
+                        menu={{
+                          items: otherLabels.map((l) => ({ key: String(l.id), label: l.display_name })),
+                          onClick: ({ key }) => {
+                            const l = otherLabels.find((x) => String(x.id) === key);
+                            if (l) decide(c, "confirmed", l.id, l.display_name);
+                          },
+                        }}
+                      >
+                        <Button size="small" type="link" loading={busy === c.id}>
+                          改成别的 <DownOutlined style={{ fontSize: 10 }} />
+                        </Button>
+                      </Dropdown>
+                    )}
                     <Popconfirm title="排除这一段？" onConfirm={() => decide(c, "rejected")}>
                       <Button size="small" type="link" danger loading={busy === c.id}>
                         排除

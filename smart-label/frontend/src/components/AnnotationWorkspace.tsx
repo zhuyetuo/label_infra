@@ -209,6 +209,11 @@ export default function AnnotationWorkspace({
         : [],
     [focusLabelName, labels]
   );
+  // 「抓挠」在这个项目里的标签 id：候选面板的「改成别的」要把它排掉
+  const scratchIds = useMemo(
+    () => labels.filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id),
+    [labels]
+  );
   const colorOf = (id: number) =>
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
   const nameOf = (id: number) => labelById.get(id)?.display_name ?? `#${id}`;
@@ -818,6 +823,8 @@ export default function AnnotationWorkspace({
               children: (
                 <CandidatePanel
                   candidates={candidates}
+                  labels={labels}
+                  scratchLabelIds={focusIds.length ? focusIds : scratchIds}
                   readOnly={readOnly}
                   onSeek={(ms) => bus.seek(ms / 1000)}
                   onLoop={setLoop}
