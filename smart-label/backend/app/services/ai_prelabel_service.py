@@ -607,10 +607,12 @@ async def _run_project(
         for r in results:
             if isinstance(r, dict) and r.get("sample_id") is not None:
                 by_sample[int(r["sample_id"])] = r
-            # AI 服务在每条结果里回了实际用的模型和版本，记下来（各批都一样，存一份就够）
-            if isinstance(r, dict):
-                progress.model_path = progress.model_path or r.get("model_path")
-                progress.mode = progress.mode or r.get("mode")
+            # AI 服务回的模型/版本在 result 里面，不在这一层——之前直接读外层，
+            # 拿到的永远是 None，历史记录那一列就一直是「—」
+            payload = r.get("result") if isinstance(r, dict) else None
+            if isinstance(payload, dict):
+                progress.model_path = progress.model_path or payload.get("model_path")
+                progress.mode = progress.mode or payload.get("mode")
 
         # 3) 逐个写库
         for p in prepared:

@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Progress,
   Radio,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -44,6 +45,7 @@ import {
   releaseTask,
   reopenTask,
 } from "@/api/tasks";
+import { getSavedText, saveText } from "@/utils/persistedSize";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
@@ -55,6 +57,10 @@ import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { INFER_MODE_HINT, INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
+
+// 上次用的预标注版本：用惯哪个就默认哪个，省得每次重选
+const PRELABEL_MODE_KEY = "smart-label:prelabel-mode";
+const CREATE_MODE_KEY = "smart-label:create-infer-mode";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -118,9 +124,14 @@ export default function Projects() {
   // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
   const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
   const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
-  const [prelabelMode, setPrelabelMode] = useState<InferMode>("stable");
+  // 记住上次用的版本：用惯哪个就默认哪个，不用每次重选
+  const [prelabelMode, setPrelabelMode] = useState<InferMode>(
+    () => (getSavedText(PRELABEL_MODE_KEY, "stable") as InferMode)
+  );
   // 新建项目 / 批量导入时 ai_assisted 自动跑预标注用哪个版本
-  const [createInferMode, setCreateInferMode] = useState<InferMode>("stable");
+  const [createInferMode, setCreateInferMode] = useState<InferMode>(
+    () => (getSavedText(CREATE_MODE_KEY, "stable") as InferMode)
+  );
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
 
@@ -1141,18 +1152,23 @@ export default function Projects() {
               直接写进任务草稿。标注员打开任务时就已经有 AI 框了，只需要确认或纠正。
               已提交、已通过、被驳回、以及已经有人工标注的任务不会被碰。
             </Typography.Paragraph>
-            <Space>
-              <Typography.Text>版本：</Typography.Text>
-              <Radio.Group
-                optionType="button"
-                buttonStyle="solid"
+            {/* 三个按钮挤在一行文字旁边会被压得换行；Segmented 是一整条，
+                自己占一行，说明另起一行 */}
+            <div>
+              <Typography.Text style={{ marginRight: 8 }}>版本：</Typography.Text>
+              <Segmented
                 size="small"
                 value={prelabelMode}
-                onChange={(e) => setPrelabelMode(e.target.value)}
+                onChange={(v) => {
+                  setPrelabelMode(v as InferMode);
+                  saveText(PRELABEL_MODE_KEY, String(v));
+                }}
                 options={INFER_MODE_OPTIONS}
               />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{INFER_MODE_HINT[prelabelMode]}</Typography.Text>
-            </Space>
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {INFER_MODE_HINT[prelabelMode]}
+            </Typography.Text>
             <Checkbox checked={prelabelOverwrite} onChange={(e) => setPrelabelOverwrite(e.target.checked)}>
               连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
             </Checkbox>
@@ -1310,7 +1326,7 @@ export default function Projects() {
                   ]}
                 />
                 {createTaskType === "ai_assisted" && (
-                  <Select style={{ width: 130 }} value={createInferMode} onChange={setCreateInferMode} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+                  <Select style={{ width: 130 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
                 )}
                 <Select
                   style={{ width: 200 }}
@@ -1469,7 +1485,7 @@ export default function Projects() {
             ]}
           />
           {bulkTaskType === "ai_assisted" && (
-            <Select style={{ width: 130 }} value={createInferMode} onChange={setCreateInferMode} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+            <Select style={{ width: 130 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
           )}
           <Typography.Text>指派给</Typography.Text>
           <Select
