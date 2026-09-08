@@ -47,6 +47,7 @@ import {
   reopenTask,
 } from "@/api/tasks";
 import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
+import { usePersistedSort } from "@/utils/persistedSort";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
@@ -429,6 +430,8 @@ export default function Projects() {
   // 超级管理员看原始编号，其他人看"哪天 几点~几点"
   const sampleName = (id: number) => sampleDisplayName(String(sampleCode(id)), durationOf(id), role);
   // CSV 行数 0 = 空文件；null 是导入时没统计到，不当成"没数据"
+  // 排序记住：任务表常按「片段数 / 样本」排着找活干，切走再回来不用重排
+  const taskSort = usePersistedSort("project-tasks-sort");
   const noCsv = (t: Task) => {
     const n = t.imu_row_count ?? samples?.find((s) => s.id === t.sample_id)?.imu_row_count;
     return n === 0;
@@ -799,7 +802,8 @@ export default function Projects() {
                 // 只在升/降之间切，不要 antd 默认第三档"取消排序"（看着像乱序）
                 sortDirections={["ascend", "descend", "ascend"]}
                 locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
-                columns={[
+                onChange={taskSort.onTableChange}
+                columns={taskSort.applySort<Task>([
                   { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
                   {
                     title: "样本",
@@ -830,6 +834,7 @@ export default function Projects() {
                   },
                   {
                     title: "总时长",
+                    key: "duration",
                     width: 110,
                     // 按时长排，想先挑短的就点一下
                     sorter: (a: Task, b: Task) => (durationOf(a.sample_id) ?? 0) - (durationOf(b.sample_id) ?? 0),
@@ -877,6 +882,8 @@ export default function Projects() {
                     title: f.labels.length
                       ? `片段（按${f.labels.map((id) => projLabels.find((l) => l.id === id)?.display_name ?? id).join("+")}排序）`
                       : "片段",
+                    // 标题会随「含类别」筛选变，不能拿它当 key——记住的排序会认不出来
+                    key: "segments",
                     width: 260,
                     sorter: (a: Task, b: Task) => segCount(a, f.labels) - segCount(b, f.labels),
                     sortDirections: ["descend", "ascend", "descend"],
@@ -965,7 +972,7 @@ export default function Projects() {
                       );
                     },
                   },
-                ]}
+                ])}
               />
               </>
             );
