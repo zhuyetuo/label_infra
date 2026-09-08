@@ -1,7 +1,22 @@
-import { useMemo, useState } from "react";
-import { Button, Empty, Image, Modal, Popconfirm, Space, Spin, Tag, Typography, Upload, message } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Empty, Image, Modal, Popconfirm, Progress, Space, Spin, Tag, Typography, Upload, message } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { deleteDogPhoto, dogPhotoUrl, listDogPhotos, uploadDogPhoto, type DogPhoto } from "@/api/dogs";
+
+// 从剪贴板贴进来的图往往没有文件名（或者叫 image.png 之类），后端是按后缀判类型的，
+// 没后缀会被直接挡掉——这里按 MIME 补一个，顺便给个带时间的名字，不然一天贴十张
+// 全叫 image.png，在 NAS 上看不出哪张是哪张
+const MIME_EXT: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/bmp": ".bmp",
+  "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+};
+
+function namedForUpload(f: File, i: number): File {
+  const hasExt = /\.[A-Za-z0-9]{2,4}$/.test(f.name || "");
+  if (f.name && hasExt) return f;
+  const ext = MIME_EXT[f.type] ?? "";
+  return new File([f], `粘贴${i + 1}${ext}`, { type: f.type });
+}
 
 /**
  * 一只狗的照片和视频：看 + 传 + 删。
@@ -18,7 +33,11 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
     queryKey: ["dog-photos", dogId],
     queryFn: () => listDogPhotos(dogId),
   });
-  const [busy, setBusy] = useState(false);
+  // 一次可以扔一堆（选多个 / 拖一把 / 粘贴），排队一个一个传：
+  // 并发传几百 MB 的视频只会互相抢带宽，还容易把 NAS 写爆
+  const [queue, setQueue] = useState<{ done: number; total: number; name: string } | null>(null);
+  const running = useRef(false);
+  const pending = useRef<File[]>([]);
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
   const [playing, setPlaying] = useState<DogPhoto | null>(null);
 
@@ -27,20 +46,50 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
   // 索引得按「只算图片」来编，不然翻到视频那一张会是空白
   const images = useMemo(() => items.filter((p) => p.kind === "image"), [items]);
 
-  const doUpload = async (file: File) => {
-    setBusy(true);
-    try {
-      await uploadDogPhoto(dogId, file);
-      message.success("上传好了");
+  const enqueue = useCallback(
+    async (files: File[]) => {
+      const ok = files.filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"));
+      if (!ok.length) return;
+      pending.current.push(...ok.map((f, i) => namedForUpload(f, i)));
+      if (running.current) return; // 已经有一批在传，新来的接在后面
+      running.current = true;
+      let done = 0;
+      let failed = 0;
+      const total = () => done + failed + pending.current.length;
+      while (pending.current.length) {
+        const f = pending.current.shift()!;
+        setQueue({ done: done + failed, total: total(), name: f.name });
+        try {
+          await uploadDogPhoto(dogId, f);
+          done += 1;
+        } catch (e) {
+          failed += 1;
+          message.error(`${f.name} 传不上去：${(e as Error).message}`);
+        }
+      }
+      running.current = false;
+      setQueue(null);
+      if (done) message.success(`上传好了 ${done} 个${failed ? `，${failed} 个失败` : ""}`);
+      // 传完一次性刷新，不要每传一个刷一次
       await refetch();
       onChange?.();
-    } catch (e) {
-      message.error(`传不上去：${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-    return false; // 交给我们自己传，antd 别再发一次
-  };
+    },
+    [dogId, refetch, onChange]
+  );
+
+  // Ctrl+V 直接贴：从聊天窗口、截图工具、文件管理器复制过来的图和视频都能进
+  // （复制文件时 clipboardData.files 就是那些文件本身）。
+  // 组件是 destroyOnClose 挂载的，所以监听整个窗口不会串到别的页面上
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (!files.length) return;
+      e.preventDefault();
+      enqueue(files);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [enqueue]);
 
   const remove = async (p: DogPhoto) => {
     await deleteDogPhoto(dogId, p.filename);
@@ -52,16 +101,39 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
 
   return (
     <div>
-      <Space style={{ marginBottom: 8 }}>
-        <Upload multiple accept="image/*,video/*" showUploadList={false} beforeUpload={(f) => doUpload(f as File)}>
-          <Button type="primary" loading={busy}>
-            传照片 / 视频
-          </Button>
-        </Upload>
+      <Upload.Dragger
+        multiple
+        accept="image/*,video/*"
+        showUploadList={false}
+        disabled={!!queue}
+        style={{ marginBottom: 12, padding: "8px 0" }}
+        // antd 每个文件调一次 beforeUpload，但每次都把整批 fileList 给我们——
+        // 只在第一个文件上整批入队，不然一批 10 个文件会排出 55 个任务
+        beforeUpload={(f, fileList) => {
+          if (f === fileList[0]) enqueue(fileList as unknown as File[]);
+          return false; // 我们自己传，antd 别再发一次
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 15 }}>
+          <b>Ctrl+V 粘贴</b>，或者把文件拖进来，也可以点这里挑
+        </p>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          图片 jpg/png/webp/bmp 单张 20MB；视频 mp4/mov/webm 单个 500MB。存在 NAS 上，按狗编号分目录
+          图片和视频可以混在一起一次传多个。图片 jpg/png/webp/bmp 单张 20MB；视频 mp4/mov/webm 单个 500MB
         </Typography.Text>
-      </Space>
+      </Upload.Dragger>
+
+      {queue && (
+        <Space style={{ marginBottom: 8 }} size={8}>
+          <Progress
+            size="small"
+            style={{ width: 160 }}
+            percent={queue.total ? Math.round((queue.done / queue.total) * 100) : 0}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            正在传第 {queue.done + 1} / {queue.total} 个：{queue.name}
+          </Typography.Text>
+        </Space>
+      )}
 
       {isLoading ? (
         <Spin />
