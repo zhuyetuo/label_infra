@@ -569,22 +569,6 @@ export default function AnnotationWorkspace({
           {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
           <span ref={setControlsHost} style={{ display: "inline-flex" }} />
         </Space>
-        {readOnly && (
-          // 「只读」和「认领并修改」说的是同一件事（现在改不了 / 想改点这里），
-          // 放在最右边单独成一组。marginRight 给右上角那个关闭 X 让位
-          <Space style={{ flex: "0 0 auto", marginRight: 36 }}>
-            <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-              只读
-            </Tag>
-            {onClaim && (
-              <Tooltip title="现在是只读。要逐条确认、改类别（比如其实是甩身体）、或标成待定，先认领">
-                <Button size="small" type="primary" onClick={onClaim}>
-                  认领并修改
-                </Button>
-              </Tooltip>
-            )}
-          </Space>
-        )}
         </div>
       }
       open={taskId != null}
@@ -606,6 +590,13 @@ export default function AnnotationWorkspace({
           // antd 会当成"没设置"，渲染它默认的 取消/确定 两个按钮。
           onApprove || onReject || onClaim || onReopen ? (
             <Space>
+              {/* 只读标志挪到这里跟按钮放一起：它说的就是"要动手先点右边那个"，
+                  以前在标题栏右上角，跟底部这排是同一件事说了两遍 */}
+              {onClaim && (
+                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                  只读
+                </Tag>
+              )}
               {onReject && (
                 <Button danger onClick={onReject}>
                   驳回
@@ -613,7 +604,14 @@ export default function AnnotationWorkspace({
               )}
               {/* 只认这一类标得对——比「整份通过」窄得多，所以是单独一个按钮 */}
               {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
-              {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
+              {/* 没认领之前只有这一件事能做，所以它是主按钮，右边两个结论置灰 */}
+              {onClaim && (
+                <Tooltip title="要逐条确认、改类别（比如其实是甩身体）、或标成待定，先认领">
+                  <Button type="primary" onClick={onClaim}>
+                    认领并修改
+                  </Button>
+                </Tooltip>
+              )}
               {/* 已通过的任务是锁死的，要改只能退回重标：轮次+1，这一轮的片段
                   原样带到新一轮，不用从头标 */}
               {onReopen && (
@@ -628,8 +626,19 @@ export default function AnnotationWorkspace({
               {/* 从皮肤评估进来时只看抓挠，这时该高亮的是「抓挠确认无误」，
                   「整份通过」退成次要——它认的是全部类别，在这个场景下高亮会误导 */}
               {onApprove && (
-                <Popconfirm title="确认通过这份标注？（连活动/睡觉等全部类别一起认）" onConfirm={onApprove}>
-                  <Button type={onConfirmScratch ? "default" : "primary"}>{approveText ?? "通过"}</Button>
+                <Popconfirm
+                  title="确认通过这份标注？（连活动/睡觉等全部类别一起认）"
+                  onConfirm={onApprove}
+                  disabled={!!onClaim}
+                >
+                  <Button
+                    // 能认领却还没认领时置灰：这时候唯一该点的是「认领并修改」。
+                    // 审核页那种"只审不改"的场景没有 onClaim，不受影响
+                    disabled={!!onClaim}
+                    type={onConfirmScratch ? "default" : "primary"}
+                  >
+                    {approveText ?? "通过"}
+                  </Button>
                 </Popconfirm>
               )}
               {onConfirmScratch && (
@@ -637,8 +646,9 @@ export default function AnnotationWorkspace({
                   title={`${confirmScratchText ?? "只认这一类"}？`}
                   description="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动"
                   onConfirm={handleConfirmScratch}
+                  disabled={!!onClaim}
                 >
-                  <Button type="primary" loading={saving}>
+                  <Button disabled={!!onClaim} type={onClaim ? "default" : "primary"} loading={saving}>
                     {confirmScratchText ?? "只认这一类"}
                   </Button>
                 </Popconfirm>
