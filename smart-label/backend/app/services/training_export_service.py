@@ -196,6 +196,9 @@ async def export_dataset(
 
     n_holes = sum(len(v) for v in holes_by_task.values()) + sum(len(v) for v in cand_holes.values())
     n_missing_ms = 0
+    # 同类别重叠并掉了几段、不同类别压在一起有几处，导出后能对上账
+    n_merged_overlaps = 0
+    n_conflicts = 0
 
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
@@ -217,7 +220,37 @@ async def export_dataset(
         missing = await asyncio.to_thread(_missing_holes, sample, csv_start)
         n_missing_ms += sum(b - a for a, b in missing)
         holes = _merge((holes_by_task.get(task.id) or []) + (cand_holes.get(task.id) or []) + missing)
-        for label_id, s_ms, e_ms in sorted(items, key=lambda x: x[1]):
+
+        # 同一类别里压在一起的段先并掉。会出现是因为「疑似抓挠」补上来的段常常跟
+        # 已有的 AI 段覆盖同一次抓挠，只是起止差几百毫秒——不并的话重叠那部分的
+        # 数据行会被导两遍，等于给这一段偷偷加了权。标签是"这段时间是什么"，
+        # 两段都说是抓挠，并成一段是等价的，不丢信息。
+        by_label: dict[int, list[tuple[int, int]]] = {}
+        for label_id, s_ms, e_ms in items:
+            by_label.setdefault(label_id, []).append((s_ms, e_ms))
+        merged_items: list[tuple[int, int, int]] = []
+        for label_id, spans in by_label.items():
+            merged = _merge(spans)
+            n_merged_overlaps += len(spans) - len(merged)
+            merged_items.extend((label_id, a_ms, b_ms) for a_ms, b_ms in merged)
+
+        # 不同类别压在一起是矛盾标注（同一段时间既是活动又是抓挠），不能替人决定
+        # 谁对，如实报出来让人回去改
+        ordered = sorted(merged_items, key=lambda x: x[1])
+        for i in range(len(ordered) - 1):
+            l1, a1, b1 = ordered[i]
+            for l2, a2, b2 in ordered[i + 1 :]:
+                if a2 >= b1:
+                    break
+                if l1 != l2 and n_conflicts < 30:
+                    warnings.append(
+                        f"任务 #{task.id}：{label_names.get(l1, l1)} 和 {label_names.get(l2, l2)} "
+                        f"在 {a2}~{min(b1, b2)}ms 重叠，同一段时间标了两个类别"
+                    )
+                if l1 != l2:
+                    n_conflicts += 1
+
+        for label_id, s_ms, e_ms in ordered:
             if e_ms <= s_ms:
                 continue
             name_ = label_names.get(label_id, str(label_id))
@@ -250,6 +283,10 @@ async def export_dataset(
         "scope": scope,
         # 按片段取时跳过了多少条"没人看过的 AI 片段"，导出后能对上账
         "n_untouched_skipped": n_skipped_untouched,
+        # 同类别压在一起并掉了几段（「疑似抓挠」补上来的常跟已有 AI 段覆盖同一次动作）
+        "n_merged_overlaps": n_merged_overlaps,
+        # 不同类别压在一起的处数：这是矛盾标注，得回工作台改
+        "n_label_conflicts": n_conflicts,
         "n_tasks": len(ls_tasks), "n_segments": n_segments, "total_hours": round(total_sec / 3600, 2),
         # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,

@@ -438,6 +438,18 @@ export default function Training() {
                 </Descriptions.Item>
               )}
               <Descriptions.Item label="待定挖掉">{dsDetail.n_uncertain_excluded ?? 0} 段</Descriptions.Item>
+              <Descriptions.Item label="同类别重叠并掉">
+                <Tooltip title="「疑似抓挠」补上来的段常跟已有 AI 段覆盖同一次动作，只是起止差几百毫秒。不并的话重叠那部分会被导两遍，等于偷偷加权">
+                  <span style={{ cursor: "help" }}>{dsDetail.n_merged_overlaps ?? 0} 段</span>
+                </Tooltip>
+              </Descriptions.Item>
+              <Descriptions.Item label="类别冲突">
+                <Tooltip title="同一段时间标了两个类别（比如既是活动又是抓挠）。不能替人决定谁对，下面「跳过的任务 / 提示」里列了出来，回工作台改">
+                  <span style={{ cursor: "help", color: dsDetail.n_label_conflicts ? "#cf1322" : undefined }}>
+                    {dsDetail.n_label_conflicts ?? 0} 处
+                  </span>
+                </Tooltip>
+              </Descriptions.Item>
               <Descriptions.Item label="掉数据挖掉">{dsDetail.missing_excluded_min ?? 0} 分钟</Descriptions.Item>
               <Descriptions.Item label="各类别段数" span={2}>
                 <Space size={4} wrap>
