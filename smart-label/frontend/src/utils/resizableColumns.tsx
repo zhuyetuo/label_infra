@@ -37,6 +37,7 @@ function ResizableTitle({ width, onResize, children, style, ...rest }: CellProps
   const startX = useRef(0);
   const startW = useRef(0);
   const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState(false);
 
   if (!width || !onResize) return <th {...rest} style={style}>{children}</th>;
 
@@ -66,6 +67,9 @@ function ResizableTitle({ width, onResize, children, style, ...rest }: CellProps
       <span
         onMouseDown={onMouseDown}
         onClick={(e) => e.stopPropagation()}
+        // 鼠标扫过时把把手显出来：不给点反馈的话，没人知道这里能拖
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
         style={{
           position: "absolute",
           top: 0,
@@ -74,7 +78,7 @@ function ResizableTitle({ width, onResize, children, style, ...rest }: CellProps
           height: "100%",
           cursor: "col-resize",
           // 拖的时候给一条可见的线，不然完全没有反馈
-          background: dragging ? "rgba(128,128,128,.45)" : "transparent",
+          background: dragging ? "rgba(128,128,128,.55)" : hover ? "rgba(128,128,128,.28)" : "transparent",
           zIndex: 1,
           userSelect: "none",
         }}
@@ -118,10 +122,13 @@ export function useResizableColumns(storageKey: string) {
    * 给它一个固定值反而会把布局锁死。
    */
   const applyResize = <T,>(columns: ColumnsType<T>): ColumnsType<T> =>
-    columns.map((c) => {
-      const key = sortKeyOf(c as never);
+    columns.map((c, i) => {
+      // 很多列既没有 key 也没有 dataIndex（内容是 render 拼出来的，比如「人工复看」
+      // 「疑似抓挠」）——恰恰是这些列最需要调宽。退回用列的位置当 key：
+      // 这几张表的列是写死的，顺序不会变
+      const key = sortKeyOf(c as never) ?? `#${i}`;
       const base = (c as { width?: number }).width;
-      if (!key || typeof base !== "number") return c;
+      if (typeof base !== "number") return c;
       const width = widths[key] ?? base;
       return {
         ...c,
