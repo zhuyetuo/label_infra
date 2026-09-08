@@ -64,6 +64,31 @@ export const getDatasetSegments = (name: string) =>
     `/model-versions/datasets/${encodeURIComponent(name)}/segments`
   );
 
+/** 数据集体检结果 */
+export interface DatasetCheck {
+  n_segments: number;
+  n_exact_dups: number;
+  exact_dups: { task_id: number; label: string; start: string; end: string; count: number }[];
+  n_overlaps: number;
+  overlaps: {
+    task_id: number;
+    sample_code: string;
+    label_a: string; start_a: string; end_a: string;
+    label_b: string; start_b: string; end_b: string;
+    overlap_sec: number;
+    same_label: boolean;
+  }[];
+  n_bad_range: number;
+  bad_range: DatasetSegment[];
+  n_shared_samples: number;
+  shared_samples: { sample_code: string; task_ids: number[] }[];
+}
+
+export const checkDataset = (name: string) =>
+  request.get<never, DatasetCheck>(`/model-versions/datasets/${encodeURIComponent(name)}/check`, {
+    timeout: 120_000,
+  });
+
 /** 删掉 NAS 上这份导出（data_train/<名字>/）。训练记录不动 */
 export const deleteDataset = (name: string) =>
   request.delete<never, null>(`/model-versions/datasets/${encodeURIComponent(name)}`);

@@ -8,6 +8,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import ModelCompare from "@/components/ModelCompare";
 import {
+  type DatasetCheck,
+  checkDataset,
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
@@ -60,6 +62,8 @@ export default function Training() {
   // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
   // 之前只是没地方看——尤其是 warnings，哪个任务因为什么被跳过全写在里面
   const [dsDetail, setDsDetail] = useState<TrainDataset | null>(null);
+  // 换一份数据集看，上一份的体检结果不能留着——数字对不上人会当成这一份的
+
   // 片段明细按需拉：一份数据集几千段，跟列表一起拉没必要
   const { data: dsSegs, isFetching: loadingSegs } = useQuery({
     queryKey: ["dataset-segments", dsDetail?.name],
@@ -67,6 +71,17 @@ export default function Training() {
     enabled: dsDetail != null,
   });
   const [segLabel, setSegLabel] = useState<string | null>(null);
+  // 体检要扫全量片段做两两比对，比列明细贵，所以点了才跑
+  const [checking, setChecking] = useState(false);
+  const [checkRes, setCheckRes] = useState<DatasetCheck | null>(null);
+  const runCheck = async (n: string) => {
+    setChecking(true);
+    try {
+      setCheckRes(await checkDataset(n));
+    } finally {
+      setChecking(false);
+    }
+  };
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
   useEffect(() => {
@@ -208,7 +223,15 @@ export default function Training() {
                       width: 200,
                       render: (_, d: TrainDataset) => (
                         <Space size={0}>
-                          <Button size="small" type="link" onClick={() => setDsDetail(d)}>
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => {
+                              setCheckRes(null);
+                              setSegLabel(null);
+                              setDsDetail(d);
+                            }}
+                          >
                             详情
                           </Button>
                           <Button size="small" type="link" onClick={() => setTrainFor(d)}>
@@ -431,6 +454,84 @@ export default function Training() {
                 </Typography.Text>
               </Descriptions.Item>
             </Descriptions>
+            {/* 重复和重叠都是"看汇总数字看不出来、进了训练才吃亏"的毛病，
+                单独给个体检 */}
+            <div style={{ marginTop: 12 }}>
+              <Button size="small" loading={checking} onClick={() => runCheck(dsDetail.name)}>
+                检查重复 / 重叠
+              </Button>
+              {checkRes && (
+                <div style={{ marginTop: 8 }}>
+                  <Space size={6} wrap>
+                    <Tag color={checkRes.n_exact_dups ? "red" : "green"}>
+                      完全重复 {checkRes.n_exact_dups}
+                    </Tag>
+                    <Tooltip title="同一个任务里两段时间压在一起。同类别的说明该合成一段；不同类别的是矛盾标注——同一段时间既是活动又是抓挠，模型学到的是噪声">
+                      <Tag color={checkRes.n_overlaps ? "orange" : "green"}>
+                        时间重叠 {checkRes.n_overlaps}
+                      </Tag>
+                    </Tooltip>
+                    <Tooltip title="同一个样本出现在两个任务里（同一份数据建了两次任务），两边都审过的话同一段时间会以两条记录进训练集">
+                      <Tag color={checkRes.n_shared_samples ? "orange" : "green"}>
+                        样本进了多个任务 {checkRes.n_shared_samples}
+                      </Tag>
+                    </Tooltip>
+                    <Tag color={checkRes.n_bad_range ? "red" : "green"}>起止异常 {checkRes.n_bad_range}</Tag>
+                  </Space>
+                  {checkRes.n_exact_dups === 0 &&
+                    checkRes.n_overlaps === 0 &&
+                    checkRes.n_shared_samples === 0 &&
+                    checkRes.n_bad_range === 0 && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 4 }}>
+                        没查出问题，{checkRes.n_segments} 段都是干净的
+                      </Typography.Text>
+                    )}
+                  {checkRes.overlaps.length > 0 && (
+                    <Table
+                      style={{ marginTop: 8 }}
+                      size="small"
+                      rowKey={(r) => `${r.task_id}-${r.start_a}-${r.start_b}`}
+                      dataSource={checkRes.overlaps}
+                      pagination={{ pageSize: 10, size: "small" }}
+                      scroll={{ x: "max-content", y: 240 }}
+                      columns={[
+                        { title: "任务", dataIndex: "task_id", width: 80 },
+                        {
+                          title: "两段",
+                          render: (_, r) => (
+                            <span>
+                              <Tag>{r.label_a}</Tag>
+                              {r.start_a.slice(11)} ~ {r.end_a.slice(11)}
+                              {" ／ "}
+                              <Tag>{r.label_b}</Tag>
+                              {r.start_b.slice(11)} ~ {r.end_b.slice(11)}
+                            </span>
+                          ),
+                        },
+                        { title: "重叠(秒)", dataIndex: "overlap_sec", width: 100 },
+                        {
+                          title: "类型",
+                          width: 110,
+                          render: (_, r) =>
+                            r.same_label ? <Tag>同类别</Tag> : <Tag color="red">不同类别</Tag>,
+                        },
+                      ]}
+                    />
+                  )}
+                  {checkRes.shared_samples.length > 0 && (
+                    <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+                      同一样本进了多个任务：
+                      {checkRes.shared_samples
+                        .slice(0, 10)
+                        .map((x) => `${x.sample_code}（任务 ${x.task_ids.join("/")}）`)
+                        .join("；")}
+                      {checkRes.shared_samples.length > 10 ? "…" : ""}
+                    </Typography.Paragraph>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* 到底装了什么：直接读最终喂给训练的那个 json，不是重算一遍 */}
             <Typography.Text strong style={{ display: "block", marginTop: 12 }}>
               片段明细（{dsSegs?.total ?? 0}）

@@ -315,6 +315,103 @@ def read_segments(name: str, limit: int = 5000) -> dict:
     return {"total": total, "truncated": total > len(rows), "rows": rows}
 
 
+def check_dataset(name: str, max_examples: int = 200) -> dict:
+    """
+    体检这份导出：有没有重复的段、有没有时间上压在一起的段。
+
+    为什么要查：
+      - 完全相同的段进两次 = 同一份数据在训练里被数了两遍，等于偷偷加权
+      - 同一任务里两段时间重叠：同类别的说明该合成一段；不同类别的是矛盾标注
+        （同一段时间既是活动又是抓挠），模型学到的是噪声
+      - 同一个样本出现在两个任务里（比如同一份数据建了两次任务），两边都审过的话
+        同一段时间会以两条记录进训练集——这是最难自己发现的一种重复
+
+    只看导出文件本身，不回数据库——要查的就是"喂给训练的这份有没有毛病"。
+    """
+    data = read_segments(name, limit=10**9)
+    rows = data["rows"]
+
+    def _t(v: str) -> datetime | None:
+        try:
+            return datetime.strptime(v, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            return None
+
+    exact: dict[tuple, int] = {}
+    bad_range: list[dict] = []
+    by_task: dict[int, list[dict]] = {}
+    by_sample: dict[str, set[int]] = {}
+    for r in rows:
+        key = (r["task_id"], r["label"], r["start"], r["end"])
+        exact[key] = exact.get(key, 0) + 1
+        if r["seconds"] is None or r["seconds"] <= 0:
+            bad_range.append(r)
+        by_task.setdefault(r["task_id"], []).append(r)
+        if r["sample_code"]:
+            by_sample.setdefault(r["sample_code"], set()).add(r["task_id"])
+
+    dup_rows = [
+        {"task_id": k[0], "label": k[1], "start": k[2], "end": k[3], "count": n}
+        for k, n in exact.items()
+        if n > 1
+    ]
+
+    overlaps: list[dict] = []
+    n_overlap_total = 0
+    for task_id, segs in by_task.items():
+        parsed = []
+        for r in segs:
+            a_, b_ = _t(r["start"]), _t(r["end"])
+            if a_ and b_ and b_ > a_:
+                parsed.append((a_, b_, r))
+        parsed.sort(key=lambda x: x[0])
+        for i in range(len(parsed) - 1):
+            a1, b1, r1 = parsed[i]
+            # 只跟后面那些"开始时间早于我结束时间"的比，排完序之后一撞上就可以停
+            for j in range(i + 1, len(parsed)):
+                a2, b2, r2 = parsed[j]
+                if a2 >= b1:
+                    break
+                sec = (min(b1, b2) - a2).total_seconds()
+                if sec <= 0:
+                    continue
+                # 完全一样的两条上面按「完全重复」报过了，这里不再当成重叠重复报一遍
+                if (
+                    r1["label"] == r2["label"]
+                    and r1["start"] == r2["start"]
+                    and r1["end"] == r2["end"]
+                ):
+                    continue
+                n_overlap_total += 1
+                if len(overlaps) < max_examples:
+                    overlaps.append({
+                        "task_id": task_id,
+                        "sample_code": r1["sample_code"],
+                        "label_a": r1["label"], "start_a": r1["start"], "end_a": r1["end"],
+                        "label_b": r2["label"], "start_b": r2["start"], "end_b": r2["end"],
+                        "overlap_sec": round(sec, 2),
+                        "same_label": r1["label"] == r2["label"],
+                    })
+
+    shared = [
+        {"sample_code": code, "task_ids": sorted(tids)}
+        for code, tids in by_sample.items()
+        if len(tids) > 1
+    ]
+
+    return {
+        "n_segments": len(rows),
+        "n_exact_dups": sum(n - 1 for n in exact.values() if n > 1),
+        "exact_dups": dup_rows[:max_examples],
+        "n_overlaps": n_overlap_total,
+        "overlaps": overlaps,
+        "n_bad_range": len(bad_range),
+        "bad_range": bad_range[:max_examples],
+        "shared_samples": shared[:max_examples],
+        "n_shared_samples": len(shared),
+    }
+
+
 def delete_dataset(name: str) -> None:
     """删掉 NAS 上这个数据集目录。名字先过一遍白名单，别让 ../ 之类的跑出去。"""
     if not _NAME_RE.match(name):

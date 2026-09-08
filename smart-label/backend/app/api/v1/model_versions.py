@@ -28,6 +28,7 @@ from app.services import algo_client
 from app.services.training_export_service import (
     TrainingExportError,
     delete_dataset,
+    check_dataset,
     export_dataset,
     list_datasets,
     read_segments,
@@ -84,6 +85,15 @@ async def dataset_segments(name: str, limit: int = 5000):
     """这份导出里到底装了哪些片段——直接读最终喂给训练的那个 json。"""
     try:
         return ok(await asyncio.to_thread(read_segments, name, limit))
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/datasets/{name}/check")
+async def dataset_check(name: str):
+    """体检：有没有完全重复的段、时间压在一起的段、同一个样本进了两个任务。"""
+    try:
+        return ok(await asyncio.to_thread(check_dataset, name))
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
