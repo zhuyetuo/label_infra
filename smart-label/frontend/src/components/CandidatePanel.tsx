@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, Dropdown, Empty, Pagination, Popconfirm, Radio, Space, Table, Tag, Tooltip, message } from "antd";
+import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, message } from "antd";
 import { DownOutlined, QuestionCircleOutlined, RetweetOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
@@ -60,9 +60,6 @@ export default function CandidatePanel({
   controlsPortalTarget,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
-  // 自己管分页：翻页控件要挪到标题行上去，就不能用 Table 自带的那个
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 10;
   const [busy, setBusy] = useState<number | null>(null);
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
   // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
@@ -83,12 +80,6 @@ export default function CandidatePanel({
     () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending" || justDecided.has(c.id))),
     [candidates, filter, justDecided]
   );
-  // 筛选变了、或者处理完剩下的不够这一页了，把页码收回来，别停在空页上
-  useEffect(() => {
-    const max = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-    setPage((p) => Math.min(p, max));
-  }, [rows.length, filter]);
-  const pageRows = useMemo(() => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [rows, page]);
 
 
   const decide = async (
@@ -161,16 +152,6 @@ export default function CandidatePanel({
           </Button>
         </Tooltip>
       )}
-      {rows.length > PAGE_SIZE && (
-        <Pagination
-          size="small"
-          simple
-          current={page}
-          pageSize={PAGE_SIZE}
-          total={rows.length}
-          onChange={setPage}
-        />
-      )}
       <Tooltip
         title={
           <div style={{ lineHeight: 1.7 }}>
@@ -200,7 +181,7 @@ export default function CandidatePanel({
       <Table
         size="small"
         rowKey="id"
-        dataSource={pageRows}
+        dataSource={rows}
         pagination={false}
         // 只留横向滚动：给了 y 之后表格自己会出一条纵向滚动条，跟外面那条
         // 套在一起——鼠标在表格里滚的是里面那条，想滚整页还得把鼠标挪出去。
