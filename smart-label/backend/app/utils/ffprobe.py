@@ -47,17 +47,36 @@ def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
 
     取前几百行相邻时间戳差值的中位数：用中位数而不是首尾平均，是因为中间掉数据
     的那种缝会把平均值拉偏，中位数不受影响。
+
+    第一列有两种写法，都得认：
+    - 降过采样的那批是可读的日期时间串（`2026-08-11 00:00:02.781`）；
+    - 采集端直接写的 raw 是 `pc_ms`，epoch 毫秒的浮点数（`1786424400488.073`）。
+      只按日期串解析的话 raw 全部量不出来，采样率就留空、推理退回全局默认值——
+      正好是这个字段要避免的事。
     """
     fmts = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S.%f")
 
-    def _parse(v: str) -> datetime | None:
+    def _parse(v: str) -> float | None:
+        """统一返回"秒"，不管原来是日期串还是 epoch 数字。"""
         v = v.strip()
         for f in fmts:
             try:
-                return datetime.strptime(v, f)
+                return datetime.strptime(v, f).timestamp()
             except ValueError:
                 continue
-        return None
+        try:
+            n = float(v)
+        except ValueError:
+            return None
+        # 纯数字得判断单位。用绝对量级判断最稳：当前的 epoch 秒是 1.8e9 这个量级，
+        # 毫秒 1.8e12，微秒 1.8e15，三者差着一千倍，不会认错。相邻差值判断不了——
+        # 50Hz 的毫秒间隔是 20，16Hz 的秒间隔是 0.06，两个都说得通。
+        a = abs(n)
+        if a >= 1e14:
+            return n / 1e6
+        if a >= 1e11:
+            return n / 1e3
+        return n
 
     try:
         with open(path, encoding="utf-8-sig", newline="") as f:
@@ -66,7 +85,7 @@ def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
                 next(reader)  # 表头
             except StopIteration:
                 return None
-            ts: list[datetime] = []
+            ts: list[float] = []
             for row in reader:
                 if not row or not row[0]:
                     continue
@@ -79,9 +98,7 @@ def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
         return None
     if len(ts) < 10:
         return None
-    deltas = [
-        (ts[i + 1] - ts[i]).total_seconds() for i in range(len(ts) - 1) if (ts[i + 1] - ts[i]).total_seconds() > 0
-    ]
+    deltas = [ts[i + 1] - ts[i] for i in range(len(ts) - 1) if ts[i + 1] - ts[i] > 0]
     if not deltas:
         return None
     deltas.sort()
