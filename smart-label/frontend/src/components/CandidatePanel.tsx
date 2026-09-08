@@ -51,16 +51,23 @@ export default function CandidatePanel({
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
   // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
   const [justDecided, setJustDecided] = useState<Set<number>>(new Set());
+  const pendingCount = candidates.filter((c) => c.status === "pending").length;
   const empty = candidates.length === 0;
   useEffect(() => {
     if (empty) setJustDecided(new Set());
   }, [empty]);
 
+  // 全处理完了就自动切到「全部」：不然这一块只剩一句"没有待确认的候选"，
+  // 刚才确认/改类别/待定的那几条全看不见了，回头想核对只能靠猜
+  useEffect(() => {
+    if (pendingCount === 0 && candidates.length > 0) setFilter("all");
+  }, [pendingCount, candidates.length]);
+
   const rows = useMemo(
     () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending" || justDecided.has(c.id))),
     [candidates, filter, justDecided]
   );
-  const pendingCount = candidates.filter((c) => c.status === "pending").length;
+
 
   const decide = async (
     c: AiCandidate,

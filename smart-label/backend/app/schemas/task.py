@@ -72,6 +72,7 @@ class LabelItemOut(LabelItemIn):
     ai_confirmed: bool
     uncertain: bool
     uncertain_reason: str | None
+    from_candidate_id: int | None
     created_by: int | None
 
 

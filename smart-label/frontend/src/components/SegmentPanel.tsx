@@ -107,6 +107,8 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
+  /** 从候选确认上来的片段：退回去重新判断（删掉这条 + 那条候选回到待确认） */
+  onReturnToCandidate?: (i: LabelItem) => void | Promise<void>;
   /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
   /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
@@ -125,6 +127,7 @@ export default function SegmentPanel({
   loopRange,
   onUpdate,
   onDelete,
+  onReturnToCandidate,
   onCreate,
   initialFilterLabels,
 }: Props) {
@@ -612,6 +615,20 @@ export default function SegmentPanel({
                     >
                       取消待定
                     </Button>
+                  )}
+                  {/* 从候选确认上来的：可能当时看走神点错了，回头发现不对，退回去
+                      比直接删好——那条候选会回到「待确认」重新判断，直接删的话
+                      它就永远消失了 */}
+                  {!readOnly && i.from_candidate_id != null && onReturnToCandidate && (
+                    <Popconfirm
+                      title="退回候选重新判断？"
+                      description="删掉这条片段，对应的「疑似抓挠」回到待确认"
+                      onConfirm={() => onReturnToCandidate(i)}
+                    >
+                      <Button size="small" type="link">
+                        退回候选
+                      </Button>
+                    </Popconfirm>
                   )}
                   {!readOnly && (
                     <Button size="small" danger type="link" onClick={() => onDelete(i.id)}>

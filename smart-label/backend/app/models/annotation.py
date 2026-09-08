@@ -90,6 +90,12 @@ class AnnotationLabelItem(Base):
     uncertain_reason: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment="待定原因：no_view / ambiguous"
     )
+    # 这条是从哪个「疑似抓挠」候选确认上来的。留着是为了能退回去：人当时可能
+    # 走神点错了，回头发现不对，删掉之后那条候选也该回到「待确认」重新判断，
+    # 而不是永远消失
+    from_candidate_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ai_candidates.id"), nullable=True, comment="从哪条候选确认来的"
+    )
 
     # 实际标注这一条的用户；AI生成的为 NULL；任务被中途转手也能按人追溯
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)

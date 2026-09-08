@@ -21,7 +21,7 @@ import { aiPrelabel, getSampleMedia } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
-import { listCandidates, type AiCandidate } from "@/api/candidates";
+import { decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -244,6 +244,7 @@ export default function AnnotationWorkspace({
         ai_confirmed: false,
         uncertain: false,
         uncertain_reason: null,
+        from_candidate_id: null,
         created_by: null,
       },
     ]);
@@ -335,6 +336,7 @@ export default function AnnotationWorkspace({
           source_type: "ai_generated",
           uncertain: false,
           uncertain_reason: null,
+          from_candidate_id: null,
           is_modified: false,
           ai_confidence: it.confidence,
           ai_confirmed: false,
@@ -812,6 +814,30 @@ export default function AnnotationWorkspace({
                   loopRange={loopRange}
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+                  onReturnToCandidate={async (i) => {
+                    if (i.from_candidate_id == null || taskId == null) return;
+                    // 先把候选放回「待确认」，再把这条片段从草稿里去掉并落库——
+                    // 只删片段不动候选的话，那条候选还挂着"已确认"，再也不会出现
+                    await decideCandidate(i.from_candidate_id, "pending");
+                    const next = items.filter((x) => x.id !== i.id);
+                    setItems(next);
+                    await saveDraft(
+                      taskId,
+                      next.map((x) => ({
+                        label_id: x.label_id,
+                        start_time_ms: x.start_time_ms,
+                        end_time_ms: x.end_time_ms,
+                        origin_item_id: x.origin_item_id ?? undefined,
+                        source_type: x.origin_item_id == null ? x.source_type : undefined,
+                        ai_confidence: x.origin_item_id == null ? x.ai_confidence : undefined,
+                        ai_confirmed: x.ai_confirmed,
+                        uncertain: x.uncertain,
+                        uncertain_reason: x.uncertain_reason,
+                      }))
+                    );
+                    setCandidates(await listCandidates(taskId));
+                    message.success("已退回候选，可以重新判断");
+                  }}
                   onCreate={readOnly ? undefined : appendItem}
                   initialFilterLabels={focusIds}
                 />

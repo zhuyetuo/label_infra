@@ -122,6 +122,8 @@ async def decide(
                 is_modified=False,
                 ai_confidence=cand.confidence,
                 ai_confirmed=False,
+                # 记住出处，回头点错了能退回候选重新判断
+                from_candidate_id=cand.id,
                 created_by=user.id,
             )
         )

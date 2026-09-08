@@ -92,6 +92,8 @@ export interface LabelItem {
   uncertain: boolean;
   /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
   uncertain_reason: string | null;
+  /** 从哪条「疑似抓挠」候选确认上来的；有值才能「退回候选」重新判断 */
+  from_candidate_id: number | null;
   created_by: number | null;
 }
 
