@@ -54,7 +54,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
-import { INFER_MODE_HINT, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
+import { INFER_MODE_HINT, INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -1130,6 +1130,8 @@ export default function Projects() {
         okText="开始"
         confirmLoading={prelabelStarting}
         okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite) === 0 }}
+        // 里面有版本选择 + 一张历史记录表，默认 520 宽两边都挤
+        width={880}
         destroyOnClose
       >
         {prelabelTarget && (
@@ -1218,6 +1220,26 @@ export default function Projects() {
                           </span>
                         </span>
                       ),
+                    },
+                    {
+                      title: "版本 / 模型",
+                      width: 190,
+                      // 换了模型重跑之后，两行数字差很多得说得清是模型变了还是数据变了
+                      render: (_, r: PrelabelRun) =>
+                        r.mode || r.model_path ? (
+                          <Space size={4}>
+                            {r.mode && <Tag>{INFER_MODE_LABEL[r.mode] ?? r.mode}</Tag>}
+                            {r.model_path && (
+                              <Tooltip title={r.model_path}>
+                                <span style={{ color: "#999", fontSize: 12 }}>
+                                  {r.model_path.split("/").slice(-1)[0]}
+                                </span>
+                              </Tooltip>
+                            )}
+                          </Space>
+                        ) : (
+                          <span style={{ color: "#999" }}>—</span>
+                        ),
                     },
                     { title: "总耗时", width: 80, render: (_, r: PrelabelRun) => fmtClock(r.elapsed_sec) },
                     { title: "等 AI", width: 80, render: (_, r: PrelabelRun) => fmtClock(r.ai_wait_sec) },
