@@ -784,7 +784,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         open={checkFor != null}
         onCancel={() => setCheckFor(null)}
         footer={null}
-        width={720}
+        // 一天最多二十几行，一行要放"时间段 + 段数 + 状态 + 三个操作"，
+        // 720 挤得时间段要折行；给到 1000 上限一屏宽，一行一行看着不累
+        width="min(1000px, 96vw)"
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
@@ -799,11 +801,17 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           rowKey="task_id"
           dataSource={checkFor?.tasks_detail ?? []}
           pagination={false}
-          scroll={{ y: 360 }}
+          scroll={{ y: "60vh" }}
           columns={[
             {
               title: "时间段",
-              render: (_: unknown, t) => sampleDisplayName(t.sample_code, t.video_duration_sec, null),
+              width: 220,
+              // 「09:00:14 ~ 10:00:00」不能折成三行，宽度给够并且不许换行
+              render: (_: unknown, t) => (
+                <span style={{ whiteSpace: "nowrap" }}>
+                  {sampleDisplayName(t.sample_code, t.video_duration_sec, null)}
+                </span>
+              ),
             },
             {
               title: "抓挠片段",
