@@ -98,14 +98,26 @@ def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
         return None
     if len(ts) < 10:
         return None
-    deltas = [ts[i + 1] - ts[i] for i in range(len(ts) - 1) if ts[i + 1] - ts[i] > 0]
-    if not deltas:
+    # 采样率 = 这段时间里有多少行，不是"相邻间隔的倒数"。
+    #
+    # raw 那批的 pc_ms 是 PC 收到数据的时刻，一次串口读里可能带回好几帧，于是
+    # 同一毫秒落进两三行，相邻差值长这样：0, 40, 0, 40...。原来为了躲时钟回拨
+    # 只留 > 0 的差值，把 0 全扔掉，中位数就成了 40ms —— 50Hz 的文件量出 25Hz，
+    # 三帧一组的量出 33Hz，正好是真值的 1/2、2/3。
+    #
+    # 所以 0 差值必须算进去。但也不能直接拿首尾平均：中间掉一段数据的缝会把
+    # 结果拉低。折中：先用非零差值的中位数定一个"正常间隔"，超过它 10 倍的当
+    # 数据缝剔掉，剩下的按 行数 / 总时长 算。
+    deltas = [d for d in (ts[i + 1] - ts[i] for i in range(len(ts) - 1)) if d >= 0]
+    nonzero = sorted(d for d in deltas if d > 0)
+    if not nonzero:
         return None
-    deltas.sort()
-    median = deltas[len(deltas) // 2]
-    if median <= 0:
+    gap_limit = nonzero[len(nonzero) // 2] * 10
+    kept = [d for d in deltas if d <= gap_limit]
+    span = sum(kept)
+    if span <= 0:
         return None
-    return round(1.0 / median, 1)
+    return round(len(kept) / span, 1)
 
 
 def count_csv_rows(path: str) -> int | None:
