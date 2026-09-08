@@ -5,7 +5,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -40,6 +40,7 @@ from app.services.task_service import (
     heartbeat,
     release_all_in_project,
     release_task,
+    purge_task_children,
     sample_brief,
     save_draft,
     submit_task,
@@ -155,22 +156,14 @@ async def reopen(
 
 async def _delete_tasks(db: AsyncSession, task_ids: list[int]) -> int:
     """
-    任务下面挂着标注记录/标签条目/审核记录，外键都指向 tasks，所以要按
-    标签条目 -> 标注记录 -> 审核记录 -> 任务 的顺序清掉，不能直接删任务。
+    任务下面挂着标注记录/标签条目/候选/审核记录，外键都指向 tasks，得先按顺序
+    清干净才能删任务本身——顺序统一放在 purge_task_children 里，删项目那边走的
+    是同一个（之前两边各写各的，加了候选表之后双双漏掉，删项目直接 500）。
     被它当作父任务的子任务不跟着删，只把 parent_task_id 置空，避免误伤已拆分的短任务。
     """
     if not task_ids:
         return 0
-    record_ids = (
-        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars().all()
-    )
-    if record_ids:
-        await db.execute(
-            delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids))
-        )
-    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
-    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
-    await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
+    await purge_task_children(db, task_ids)
     result = await db.execute(delete(Task).where(Task.id.in_(task_ids)))
     await db.commit()
     return result.rowcount
