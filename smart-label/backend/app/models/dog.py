@@ -1,6 +1,7 @@
+from datetime import date as _date
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, Date, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +25,8 @@ class Dog(Base):
     imu: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="机位号，如 IMU1")
     # 这只狗在哪个场所：影棚 / 狗场。以前塞在备注里，没法按场所筛选和统计
     site: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="场所：影棚 / 狗场")
+    # 存出生日期而不是年龄：年龄天天在长，存下来第二天就不对了
+    birth_date: Mapped[_date | None] = mapped_column(Date, nullable=True, comment="出生日期，年龄按它现算")
     # 别名，逗号分隔。NAS 上的照片目录名常常是另一种写法（bibi / Bali / 露露），
     # 匹配照片时任一别名对上就算同一只
     aliases: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="别名，逗号分隔")

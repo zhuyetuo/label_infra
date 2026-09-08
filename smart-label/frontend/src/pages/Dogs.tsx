@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
-import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tag, Typography, message } from "antd";
+import {
+  Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tag, Tooltip,
+  Typography, message,
+} from "antd";
+import dayjs from "dayjs";
+import DogMeasurements from "@/components/DogMeasurements";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs";
 import { listSamples } from "@/api/samples";
@@ -14,6 +19,8 @@ interface FormValues {
   imu?: string;
   aliases?: string;
   site?: string;
+  // DatePicker 给的是 dayjs 对象，提交时才转成 YYYY-MM-DD
+  birth_date?: import("dayjs").Dayjs | null;
   remark?: string;
 }
 
@@ -81,6 +88,7 @@ export default function Dogs() {
       imu: dog.imu ?? undefined,
       aliases: dog.aliases ?? undefined,
       site: dog.site ?? undefined,
+      birth_date: dog.birth_date ? dayjs(dog.birth_date) : undefined,
       remark: dog.remark ?? undefined,
     });
     setOpen(true);
@@ -94,11 +102,15 @@ export default function Dogs() {
         imu: values.imu,
         aliases: values.aliases,
         site: values.site,
+        birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : null,
         remark: values.remark,
       });
       message.success("已保存");
     } else {
-      await createDog(values);
+      await createDog({
+        ...values,
+        birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : undefined,
+      });
       message.success("已创建");
     }
     setOpen(false);
@@ -169,8 +181,25 @@ export default function Dogs() {
         dataSource={dogs}
         expandable={{
           expandRowByClick: true,
-          rowExpandable: (d: Dog) => samplesOf(d.id).length > 0,
-          expandedRowRender: (d: Dog) => <DogTimeline samples={samplesOf(d.id)} tasksOfSample={tasksOfSample} />,
+          // 以前只有"有样本"才能展开；现在展开里还有体重记录，没样本的狗也得能展开记
+          expandedRowRender: (d: Dog) => (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Typography.Text strong style={{ fontSize: 12 }}>
+                体重 / 颈围记录
+              </Typography.Text>
+              <div style={{ marginTop: 6, marginBottom: 12 }}>
+                <DogMeasurements dogId={d.id} />
+              </div>
+              {samplesOf(d.id).length > 0 && (
+                <>
+                  <Typography.Text strong style={{ fontSize: 12 }}>
+                    每天的样本和标注进度
+                  </Typography.Text>
+                  <DogTimeline samples={samplesOf(d.id)} tasksOfSample={tasksOfSample} />
+                </>
+              )}
+            </div>
+          ),
         }}
         columns={[
           { title: "编号", dataIndex: "dog_code", width: 120 },
@@ -184,6 +213,49 @@ export default function Dogs() {
               v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-"),
           },
           { title: "别名（照片目录名）", dataIndex: "aliases", render: (v: string | null) => v || "-" },
+          {
+            title: "年龄",
+            width: 110,
+            sorter: (a: Dog, b: Dog) => (a.birth_date ?? "9999").localeCompare(b.birth_date ?? "9999"),
+            // 存的是出生日期，年龄现算——存"3岁"的话明年就不对了，也没人会回来改
+            render: (_: unknown, d: Dog) =>
+              d.age_text ? (
+                <Tooltip title={`出生 ${d.birth_date}`}>
+                  <span>{d.age_text}</span>
+                </Tooltip>
+              ) : (
+                <Typography.Text type="secondary">未填生日</Typography.Text>
+              ),
+          },
+          {
+            title: "体重",
+            width: 130,
+            sorter: (a: Dog, b: Dog) => (a.latest_weight_kg ?? -1) - (b.latest_weight_kg ?? -1),
+            // 显示最新一次；体重会变，所以要带上是什么时候量的
+            render: (_: unknown, d: Dog) =>
+              d.latest_weight_kg == null ? (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ) : (
+                <Tooltip title={`${d.latest_measured_on} 量的，共 ${d.n_measurements} 次记录；展开这一行看变化`}>
+                  <Space size={4}>
+                    <span>{d.latest_weight_kg} kg</span>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {d.latest_measured_on?.slice(5)}
+                    </Typography.Text>
+                  </Space>
+                </Tooltip>
+              ),
+          },
+          {
+            title: "颈围",
+            width: 90,
+            render: (_: unknown, d: Dog) =>
+              d.latest_neck_cm == null ? (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ) : (
+                `${d.latest_neck_cm} cm`
+              ),
+          },
           {
             title: "场所",
             dataIndex: "site",
@@ -251,6 +323,13 @@ export default function Dogs() {
           </Form.Item>
           <Form.Item name="site" label="场所" tooltip="这只狗在哪个场地。以前写在备注里，单独一列才能按场所筛选和统计">
             <Select allowClear placeholder="影棚 / 狗场" options={SITES.map((x) => ({ value: x, label: x }))} />
+          </Form.Item>
+          <Form.Item
+            name="birth_date"
+            label="出生日期"
+            tooltip="存生日不存岁数——年龄天天在长，存「3岁」明年就不对了。列表里的年龄按它现算"
+          >
+            <DatePicker style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} />
