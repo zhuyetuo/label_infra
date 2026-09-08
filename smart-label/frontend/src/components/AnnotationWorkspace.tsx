@@ -674,7 +674,6 @@ export default function AnnotationWorkspace({
             fps={fps}
             fill
             controlsPortalTarget={controlsHost}
-            shrinkToFit={chartExpanded && imuOpen}
           />
         ) : (
           !loading && (
