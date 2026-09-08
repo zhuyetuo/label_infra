@@ -51,9 +51,12 @@
 /* IMU 波形这块也用 Collapse，跟下面两个面板长一样。它跟它们不同的是内部要能
    撑开（展开全部波形时波形区要吃掉剩余高度），所以 Collapse 的内容层也得是 flex，
    不然高度传不下去，波形区会塌成 0。 */
+/* :not(-hidden) 不能省：折叠时 antd 是靠 .ant-collapse-content-hidden 的
+   display:none 把内容藏起来的，而这条规则的选择器更具体，不排除掉的话
+   display:flex 会把它盖过去——面板收起来了内容还杵在那儿。 */
 .ws-imu > .ant-collapse-item,
-.ws-imu .ant-collapse-content,
-.ws-imu .ant-collapse-content-box {
+.ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden),
+.ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden) .ant-collapse-content-box {
   display: flex;
   flex-direction: column;
   min-height: 0;
