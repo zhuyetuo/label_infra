@@ -815,8 +815,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         onClaim={
           canConfirm && wsTask && (wsTask.status === "PENDING_ASSIGN" || wsTask.status === "REJECTED")
             ? async () => {
-                const t = await claimTask(wsTask.id);
-                setWsTask(t);
+                await claimTask(wsTask.id);
+                // 认领接口只回任务本身，不带样本简介（狗名/样本名/时长）——直接拿它
+                // 覆盖的话标题上那几个标签会整排消失。重新取一次，getTask 带简介
+                setWsTask(await getTask(wsTask.id));
               }
             : undefined
         }
