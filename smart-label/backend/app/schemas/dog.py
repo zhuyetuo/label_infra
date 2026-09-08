@@ -12,6 +12,7 @@ class DogOut(BaseModel):
     breed: str | None
     imu: str | None
     aliases: str | None
+    site: str | None
     remark: str | None
     created_at: datetime
 
@@ -22,6 +23,7 @@ class DogCreate(BaseModel):
     breed: str | None = None
     imu: str | None = None
     aliases: str | None = None
+    site: str | None = None
     remark: str | None = None
 
 
@@ -30,4 +32,5 @@ class DogUpdate(BaseModel):
     breed: str | None = None
     imu: str | None = None
     aliases: str | None = None
+    site: str | None = None
     remark: str | None = None
