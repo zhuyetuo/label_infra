@@ -144,10 +144,20 @@ export default function CandidatePanel({
           },
           {
             title: "状态",
-            width: 90,
+            width: 130,
             render: (_, c: AiCandidate) =>
-              c.status === "confirmed" ? <Tag color="green">已确认</Tag> :
-              c.status === "rejected" ? <Tag>已排除</Tag> : <Tag color="gold">待确认</Tag>,
+              // 改成别的类别的要写清楚改成了什么，不然「已确认」看着像确认成抓挠了
+              c.status === "confirmed" ? (
+                (() => {
+                  const other = otherLabels.find((l) => l.id === c.decided_label_id);
+                  return other ? <Tag color="blue">已改成 {other.display_name}</Tag> : <Tag color="green">已确认</Tag>;
+                })()
+              ) :
+              c.status === "rejected" ? (
+                <Tag>已排除</Tag>
+              ) : (
+                <Tag color="gold">待确认</Tag>
+              ),
           },
           {
             title: "操作",

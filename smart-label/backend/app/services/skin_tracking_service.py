@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.dog import Dog
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
@@ -250,6 +251,27 @@ async def daily_tracking(
                 # 严格说也可能是别的类别之间互改，但复看时人只动抓挠这一类，够用
                 review_counts[tid]["relabeled"] += 1
 
+    # 「疑似抓挠」候选的处理进度：还剩几条没看、确认成抓挠几条、改成别的类别
+    # 几条（那是人纠正过的误报）、排除几条。复看漏检主要看这几个数
+    cand_counts: dict[int, dict] = defaultdict(
+        lambda: {"cand_pending": 0, "cand_confirmed": 0, "cand_relabeled": 0, "cand_rejected": 0}
+    )
+    if task_rows:
+        rows_cand = await db.execute(
+            select(AiCandidate.task_id, AiCandidate.status, AiCandidate.decided_label_id)
+            .join(Task, Task.id == AiCandidate.task_id)
+            .where(AiCandidate.task_id.in_([t[0] for t in task_rows]), AiCandidate.round_no == Task.round_no)
+        )
+        for tid, st, decided_label in rows_cand.all():
+            if st == CandidateStatus.pending:
+                cand_counts[tid]["cand_pending"] += 1
+            elif st == CandidateStatus.rejected:
+                cand_counts[tid]["cand_rejected"] += 1
+            elif decided_label is not None and decided_label not in scratch_label_ids:
+                cand_counts[tid]["cand_relabeled"] += 1
+            else:
+                cand_counts[tid]["cand_confirmed"] += 1
+
     tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for tid, status, code, sdate, dur in task_rows:
         imu = _imu_of(code)
@@ -262,6 +284,7 @@ async def daily_tracking(
                 "status": status.value if hasattr(status, "value") else str(status),
                 "scratch_segments": seg_counts.get(tid, 0),
                 **review_counts[tid],
+                **cand_counts[tid],
                 # 前端要拿它把「09:00:14 ~ ?」补成「09:00:14 ~ 10:00:00」
                 "video_duration_sec": dur,
             }

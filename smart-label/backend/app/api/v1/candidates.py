@@ -33,6 +33,8 @@ def _out(c: AiCandidate) -> dict:
         "start_time_ms": c.start_time_ms, "end_time_ms": c.end_time_ms,
         "confidence": c.confidence, "spec": c.spec, "reason": c.reason,
         "status": c.status.value, "decided_by": c.decided_by,
+        # 确认成了哪个类别（空 = 就是抓挠）：列表里要显示「已确认 → 甩身体」
+        "decided_label_id": c.decided_label_id,
         "decided_at": c.decided_at.isoformat() if c.decided_at else None,
     }
 
@@ -121,6 +123,8 @@ async def decide(
         )
 
     cand.status = CandidateStatus(body.decision)
+    # 记下确认成了哪个类别：抓挠以外的说明是"人纠正过的误报"，统计里要分开看
+    cand.decided_label_id = label_id if body.decision == "confirmed" else None
     cand.decided_by = user.id if body.decision != "pending" else None
     cand.decided_at = datetime.now(UTC).replace(tzinfo=None) if body.decision != "pending" else None
     await db.commit()

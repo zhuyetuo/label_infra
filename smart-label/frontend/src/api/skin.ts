@@ -158,6 +158,11 @@ export interface TrackingRow {
     uncertain_no_view: number;
     uncertain_ambiguous: number;
     relabeled: number;
+    /** 「疑似抓挠」候选的处理进度 */
+    cand_pending: number;
+    cand_confirmed: number;
+    cand_relabeled: number;
+    cand_rejected: number;
   }[];
   c_ai: CSide | null;
   c_human: CSide | null;

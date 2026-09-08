@@ -35,6 +35,11 @@ class AiCandidate(Base):
     status: Mapped[CandidateStatus] = mapped_column(
         Enum(CandidateStatus), nullable=False, default=CandidateStatus.pending, server_default="pending"
     )
+    # 确认成了哪个类别。空 = 就是抓挠；有值 = 人看完判成别的动作（多半是甩身体），
+    # 这种既是那个类别的正例，也是抓挠最缺的难负样本，值得单独记一笔
+    decided_label_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("label_definitions.id"), nullable=True, comment="确认成了哪个类别，空=抓挠"
+    )
     decided_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
