@@ -145,6 +145,8 @@ async def collect_link_stats(
     ai_events: dict[tuple, list] = defaultdict(list)
     human_events: dict[tuple, list] = defaultdict(list)
     wear_spans: dict[tuple, list] = defaultdict(list)
+    # 掉数据的时间段：算有效佩戴时从佩戴时段里扣掉
+    missing_spans: dict[tuple, list] = defaultdict(list)
     counts: dict[tuple, dict] = defaultdict(lambda: {"total": 0, "approved": 0, "submitted": 0, "in_progress": 0, "pending": 0, "rejected": 0, "no_ai": 0})
     ai_modes: dict[tuple, set] = defaultdict(set)
 
@@ -184,7 +186,18 @@ async def collect_link_stats(
         ts = [t for t in (parse_ts(w.get("ts")) for w in data.get("windows") or []) if t is not None]
         return (min(ts), max(ts)) if ts else None
 
+    def _missing_of(data: dict | None) -> list[tuple[datetime, datetime]]:
+        """AI 结果里记的掉数据时间段（六轴全 0 / MISSING）。这段没有真实数据，
+        算有效佩戴时要扣掉——不扣的话每天都是 23.9 小时，这个指标就没意义了。"""
+        out = []
+        for m in (data or {}).get("missing") or []:
+            a, b = parse_ts(m.get("start_ts")), parse_ts(m.get("end_ts"))
+            if a and b and b > a:
+                out.append((a, b))
+        return out
+
     spans_by_sample = {s.id: _span_of(ai_data.get(s.id)) for s in valid}
+    missing_by_sample = {s.id: _missing_of(ai_data.get(s.id)) for s in valid}
     need_start = [
         s
         for s in valid
@@ -245,6 +258,7 @@ async def collect_link_stats(
             span = (csv_start, csv_start + timedelta(seconds=int(s.video_duration_sec)))
         if span is not None:
             wear_spans[key].append(span)
+        missing_spans[key].extend(missing_by_sample.get(s.id) or [])
         if csv_start is not None:
             for t in s_tasks:
                 for s_ms, e_ms in items_by_task.get(t.id, []):
@@ -264,7 +278,9 @@ async def collect_link_stats(
     keys = sorted(k for k in counts if k[1] is not None)
     ai_rows, human_rows = [], []
     for k in keys:
-        wear = _union_seconds(wear_spans.get(k, []))
+        # 有效佩戴 = CSV 覆盖的时间 − 掉数据的时间。不扣的话每天都是 23.9 小时，
+        # 这一列就没意义了：蓝牙断了几个小时也照样显示"戴满一天"
+        wear = max(0.0, _union_seconds(wear_spans.get(k, [])) - _union_seconds(missing_spans.get(k, [])))
         # AI 版：这天只要有 AI JSON 就出一行（没抓挠也是"0 次"，不是"没数据"）
         if counts[k]["total"] - counts[k]["no_ai"] > 0 or ai_events.get(k):
             ai_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in ai_events.get(k, [])], "wear_seconds": wear})
