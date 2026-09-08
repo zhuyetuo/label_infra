@@ -11,6 +11,8 @@ interface FormValues {
   dog_code: string;
   name?: string;
   breed?: string;
+  imu?: string;
+  aliases?: string;
   remark?: string;
 }
 
@@ -47,6 +49,8 @@ export default function Dogs() {
       dog_code: dog.dog_code,
       name: dog.name ?? undefined,
       breed: dog.breed ?? undefined,
+      imu: dog.imu ?? undefined,
+      aliases: dog.aliases ?? undefined,
       remark: dog.remark ?? undefined,
     });
     setOpen(true);
@@ -54,7 +58,13 @@ export default function Dogs() {
 
   const handleSubmit = async (values: FormValues) => {
     if (editing) {
-      await updateDog(editing.id, { name: values.name, breed: values.breed, remark: values.remark });
+      await updateDog(editing.id, {
+        name: values.name,
+        breed: values.breed,
+        imu: values.imu,
+        aliases: values.aliases,
+        remark: values.remark,
+      });
       message.success("已保存");
     } else {
       await createDog(values);
@@ -80,6 +90,11 @@ export default function Dogs() {
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         狗编号（dog_code）现在主要靠样本扫描时从文件名里自动识别建档，采集端还没开始带这个信息之前基本用不上；
         新建/手动关联样本是在文件名规则落地前的过渡办法。点左侧箭头能展开看这只狗每天的样本和标注进度。
+        <br />
+        同一只狗在三个地方叫法不一样：样本编号里只有<b>机位号</b>（_imu1）、皮肤评估用的是「比熊-BB」这种
+        「品种-名字」、NAS 上的照片目录又常写成 bibi / Bali。这一页就是把它们对上的地方：
+        <b>机位</b>填 IMU1（留空则按编号当机位，编号 1 = IMU1）；<b>别名</b>把照片目录名填进去（逗号分隔），
+        皮肤评估的「照片」列才找得到图。
       </Typography.Paragraph>
 
       <Table
@@ -95,6 +110,14 @@ export default function Dogs() {
           { title: "编号", dataIndex: "dog_code", width: 120 },
           { title: "名字", dataIndex: "name", render: (v: string | null) => v || "-" },
           { title: "品种", dataIndex: "breed", render: (v: string | null) => v || "-" },
+          {
+            title: "机位",
+            dataIndex: "imu",
+            width: 110,
+            render: (v: string | null, d: Dog) =>
+              v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-"),
+          },
+          { title: "别名（照片目录名）", dataIndex: "aliases", render: (v: string | null) => v || "-" },
           { title: "备注", dataIndex: "remark", render: (v: string | null) => v || "-" },
           {
             title: "样本数",
@@ -141,6 +164,16 @@ export default function Dogs() {
           </Form.Item>
           <Form.Item name="breed" label="品种">
             <Input />
+          </Form.Item>
+          <Form.Item name="imu" label="机位" tooltip="这只狗戴的是哪个机位，样本编号 _imu1 对应 IMU1。留空按编号推断">
+            <Input placeholder="IMU1" />
+          </Form.Item>
+          <Form.Item
+            name="aliases"
+            label="别名"
+            tooltip="NAS 照片目录名、拼音、小名等，逗号分隔。皮肤评估靠它把照片跟这只狗对上"
+          >
+            <Input placeholder="bibi, BB, 比比" />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} />
