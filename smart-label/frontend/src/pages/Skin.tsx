@@ -307,8 +307,8 @@ function ChartsTab() {
       return next;
     });
   const { data, isFetching } = useQuery({
-    queryKey: ["skin-tracking", f.from, f.to],
-    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
+    queryKey: ["skin-tracking", f.from, f.to, f.cPrefer],
+    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to, c_prefer: f.cPrefer === "ai" ? "ai" : "human" }),
     refetchOnWindowFocus: false,
   });
   const all = data?.rows ?? [];
@@ -413,12 +413,30 @@ function ChartsTab() {
 // ── 每日跟踪表：一行 = (日期, 狗)，长期看每只狗的走势 ────────────────────
 
 const TRACK_FILTER_KEY = "skin-tracking-filter";
-const loadTrackFilter = (): { from: string; to: string; onlyTriggered: boolean; dogs: string[] } => {
+const loadTrackFilter = (): {
+  from: string;
+  to: string;
+  onlyTriggered: boolean;
+  dogs: string[];
+  /**
+   * 这张表看哪一版：
+   *   ai      一律用 AI 版 —— 线上就是纯 AI，没有人工审核这一环
+   *   human   人工版优先，没有才用 AI 版 —— "人最后定了什么"
+   *   compare 两版并排 + 差值 —— 看模型准不准、差在哪
+   */
+  cPrefer: "human" | "ai" | "compare";
+} => {
   try {
     const raw = localStorage.getItem(TRACK_FILTER_KEY);
     if (raw) return JSON.parse(raw);
   } catch { /* 用默认值 */ }
-  return { from: dayjs().subtract(29, "day").format("YYYY-MM-DD"), to: dayjs().format("YYYY-MM-DD"), onlyTriggered: false, dogs: [] as string[] };
+  return {
+    from: dayjs().subtract(29, "day").format("YYYY-MM-DD"),
+    to: dayjs().format("YYYY-MM-DD"),
+    onlyTriggered: false,
+    dogs: [] as string[],
+    cPrefer: "human" as const,
+  };
 };
 
 // 复看进度（看过 / 抓挠已确认 / 整份已通过）记在浏览器本地，按任务 id 存。
@@ -537,8 +555,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     }
   };
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ["skin-tracking", f.from, f.to],
-    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to }),
+    queryKey: ["skin-tracking", f.from, f.to, f.cPrefer],
+    queryFn: () => skinDailyTracking({ date_from: f.from, date_to: f.to, c_prefer: f.cPrefer === "ai" ? "ai" : "human" }),
     refetchOnWindowFocus: false,
   });
   const all = data?.rows ?? [];
@@ -577,9 +595,31 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         <Checkbox checked={f.onlyTriggered} onChange={(e) => setFilter({ onlyTriggered: e.target.checked })}>
           只看需要问答的
         </Checkbox>
+        {/* 线上是纯 AI，没有人工审核这一环；采集期只审了一部分天的话，两版混在
+            一列里趋势是断的（今天人工 30、明天 AI 70，看着像暴涨，其实是换了口径） */}
+        <Tooltip title="只看 AI 版 = 线上口径（线上没有人工审核这一环）；人工版优先 = 人最后定了什么；对比 = 两版并排看差多少，判断模型准不准">
+          <Radio.Group
+            size="small"
+            optionType="button"
+            value={f.cPrefer ?? "human"}
+            onChange={(e) => setFilter({ cPrefer: e.target.value })}
+            options={[
+              { label: "只看 AI 版", value: "ai" },
+              { label: "人工版优先", value: "human" },
+              { label: "对比 AI / 人工", value: "compare" },
+            ]}
+          />
+        </Tooltip>
         <Button loading={isFetching} onClick={() => refetch()}>刷新</Button>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果（人工版优先，没有就用 AI 版）；
+          共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
+          （
+          {f.cPrefer === "ai"
+            ? "一律用 AI 版，跟线上口径一致"
+            : f.cPrefer === "compare"
+              ? "两版并排对比，C 值那列取人工版优先"
+              : "人工版优先，没有就用 AI 版"}
+          ）；
           C 到 {(data?.trigger_tiers ?? ["C1", "C2"]).join(" / ")} 才需要做问答。
         </Typography.Text>
       </Space>
@@ -670,23 +710,35 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   <Space size={4}>
                     <b>{r.c_value}</b>
                     <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>
-                    <Tag>{r.c_source === "human" ? "人工" : "AI"}</Tag>
+                    {/* 锁死 AI 版时每行都是 AI，这个标签就是噪声 */}
+                    {f.cPrefer !== "ai" && <Tag>{r.c_source === "human" ? "人工" : "AI"}</Tag>}
                   </Space>
                 </Tooltip>
               ),
           },
-          {
-            title: "AI / 人工",
-            width: 120,
-            render: (_: unknown, r: TrackingRow) => (
-              <Tooltip {...EXPLAIN_TOOLTIP} title={<DeltaExplain r={r} />}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
-                  {r.delta_c != null && <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>（Δ{r.delta_c > 0 ? "+" : ""}{r.delta_c}）</span>}
-                </Typography.Text>
-              </Tooltip>
-            ),
-          },
+          // 对比列只在「对比」模式出现：另外两个模式各自只关心一版，摆着它
+          // 只会把人拉回"到底该看哪个数"的困惑
+          ...(f.cPrefer !== "compare"
+            ? []
+            : [
+                {
+                  title: "AI / 人工（Δ）",
+                  width: 150,
+                  render: (_: unknown, r: TrackingRow) => (
+                    <Tooltip {...EXPLAIN_TOOLTIP} title={<DeltaExplain r={r} />}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {r.c_ai?.c_value ?? "—"} / {r.c_human?.c_value ?? "—"}
+                        {r.delta_c != null && (
+                          <span style={{ color: Math.abs(r.delta_c) >= 10 ? "#ff4d4f" : undefined }}>
+                            （Δ{r.delta_c > 0 ? "+" : ""}
+                            {r.delta_c}）
+                          </span>
+                        )}
+                      </Typography.Text>
+                    </Tooltip>
+                  ),
+                },
+              ]),
           {
             title: "问答",
             width: 170,

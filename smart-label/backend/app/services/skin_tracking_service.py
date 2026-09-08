@@ -142,9 +142,17 @@ def _match_photos(
 
 
 async def daily_tracking(
-    db: AsyncSession, date_from: date, date_to: date, imu_dog_map: dict[str, str] | None = None
+    db: AsyncSession, date_from: date, date_to: date, imu_dog_map: dict[str, str] | None = None,
+    c_prefer: str = "human",
 ) -> dict:
-    """返回 {rows, warnings}，一行 = (日期, 狗)。"""
+    """返回 {rows, warnings}，一行 = (日期, 狗)。
+
+    c_prefer 决定这张表用哪一版 C 值（S 总分跟着它算）：
+      human —— 人工版优先，没有才用 AI 版。看"人最后定了什么"用这个
+      ai    —— 一律用 AI 版。线上就是纯 AI，没有人工审核这一环；采集期只审了
+               一部分天的话，两版混在一列里趋势是断的（今天人工 30、明天 AI 70，
+               看着像暴涨，其实只是口径换了）。要看长期趋势就该锁死 AI 版
+    """
     warnings: list[str] = []
     trigger_tiers = set(settings.skin_question_trigger_tiers)
 
@@ -296,9 +304,13 @@ async def daily_tracking(
         dog = imu_dog_map.get(imu) or imu
         rec = rec_by_key.get((day, dog))
         photo_n, photo_dog = _match_photos(photo_index, day, dog, alias_by_imu.get(imu))
-        # 人工版优先（人核对过的更可信），没有就用 AI 版
-        primary = m["human"] or m["ai"]
-        p_source = "human" if m["human"] else ("ai" if m["ai"] else None)
+        if c_prefer == "ai":
+            primary = m["ai"]
+            p_source = "ai" if m["ai"] else None
+        else:
+            # 人工版优先（人核对过的更可信），没有就用 AI 版
+            primary = m["human"] or m["ai"]
+            p_source = "human" if m["human"] else ("ai" if m["ai"] else None)
         c_value = (primary or {}).get("c_value")
         c_tier = (primary or {}).get("c_tier")
         row = {

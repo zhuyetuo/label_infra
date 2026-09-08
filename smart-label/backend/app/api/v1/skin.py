@@ -83,7 +83,9 @@ async def link_stats(
 
 
 @router.get("/daily-tracking")
-async def get_daily_tracking(date_from: _dt.date, date_to: _dt.date, db: AsyncSession = Depends(get_db)):
+async def get_daily_tracking(
+    date_from: _dt.date, date_to: _dt.date, c_prefer: str = "human", db: AsyncSession = Depends(get_db)
+):
     """
     每日跟踪表：一行 = (日期, 狗)。C 值取「项目联动」存下来的（人工版优先，没有用 AI 版），
     据此判断要不要做问答；S 总分算两份——问答留空的（下限）和有问答记录时的真实值。
@@ -97,7 +99,7 @@ async def get_daily_tracking(date_from: _dt.date, date_to: _dt.date, db: AsyncSe
     except HTTPException:
         imu_map = {}
     try:
-        return ok(await daily_tracking(db, date_from, date_to, imu_map))
+        return ok(await daily_tracking(db, date_from, date_to, imu_map, c_prefer=c_prefer))
     except SkinTrackingError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
