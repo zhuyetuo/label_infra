@@ -31,6 +31,12 @@ interface Props {
   /** 撤回已经做过的判断，回到「待确认」。确认过的还要把带上去的那条片段一起收回 */
   onUndo?: (c: AiCandidate) => Promise<void>;
   /**
+   * 判断之前先把本地改动落库。**顺序很要紧**：确认/改类别是后端直接往草稿里写一条，
+   * 如果先写、再拿本地这份（还不知道那条）的列表去存草稿，存的那一步会把它当成
+   * "被删掉的条目"清掉——刚建的片段立刻就没了。
+   */
+  onBeforeDecide?: () => Promise<void>;
+  /**
    * 筛选/分页这排控件渲染到哪儿。给了就 portal 到折叠面板的标题行上，
    * 跟「疑似抓挠（17 待确认 / 17）」拼一行——工作台里高度是最紧的资源，
    * 一排筛选、一排说明、一排分页三行下来，能看的片段就剩四五条
@@ -57,6 +63,7 @@ export default function CandidatePanel({
   labels = [],
   scratchLabelIds = [],
   onUndo,
+  onBeforeDecide,
   controlsPortalTarget,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
@@ -91,6 +98,7 @@ export default function CandidatePanel({
   ) => {
     setBusy(c.id);
     try {
+      await onBeforeDecide?.();
       await decideCandidate(c.id, decision, labelId, uncertainReason);
       message.success(
         decision === "rejected"

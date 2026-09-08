@@ -25,6 +25,13 @@ export interface AiCandidate {
 export const listCandidates = (taskId: number) =>
   request.get<never, AiCandidate[]>("/candidates", { params: { task_id: taskId } });
 
+/**
+ * 补回「确认过但草稿里没有对应片段」的候选。
+ * 曾经有一版前端的顺序把刚建的片段又删掉了，这个负责把丢的补回来；可以反复调。
+ */
+export const repairCandidateItems = (taskId: number) =>
+  request.post<never, { repaired: number }>("/candidates/repair-items", null, { params: { task_id: taskId } });
+
 export const decideCandidate = (
   id: number,
   decision: AiCandidate["status"],

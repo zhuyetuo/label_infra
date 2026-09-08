@@ -39,6 +39,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 from collections import Counter
 from datetime import date, datetime, timedelta
 
@@ -267,6 +268,19 @@ async def export_dataset(
 
     await asyncio.to_thread(_write)
     return meta
+
+
+def delete_dataset(name: str) -> None:
+    """删掉 NAS 上这个数据集目录。名字先过一遍白名单，别让 ../ 之类的跑出去。"""
+    if not _NAME_RE.match(name):
+        raise TrainingExportError("数据集名不合法")
+    root = os.path.realpath(os.path.join(settings.nas_root, TRAIN_DIR))
+    full = os.path.realpath(os.path.join(root, name))
+    if full != root and not full.startswith(root + os.sep):
+        raise TrainingExportError("非法路径")
+    if not os.path.isdir(full):
+        raise TrainingExportError("这个数据集不存在")
+    shutil.rmtree(full)
 
 
 def list_datasets() -> list[dict]:

@@ -49,6 +49,10 @@ export const exportDataset = (body: {
   scope?: "approved" | "reviewed";
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
 
+/** 删掉 NAS 上这份导出（data_train/<名字>/）。训练记录不动 */
+export const deleteDataset = (name: string) =>
+  request.delete<never, null>(`/model-versions/datasets/${encodeURIComponent(name)}`);
+
 export const listModelVersions = () => request.get<never, ModelVersion[]>("/model-versions");
 
 export const submitTrain = (body: {

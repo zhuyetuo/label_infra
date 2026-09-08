@@ -71,6 +71,90 @@ class DecideIn(BaseModel):
     uncertain_reason: str | None = None  # 待定时是哪一种：no_view / ambiguous / needs_split
 
 
+@router.post("/repair-items")
+async def repair_items(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """
+    补回"确认过、但草稿里没有对应片段"的候选。
+
+    为什么会缺：确认/改类别是这里直接往草稿里写一条，而工作台那边紧接着又用它
+    本地那份列表（还不知道刚写的这条）存了一次草稿——存草稿是 replace-in-place，
+    不在列表里的条目会被删掉，于是刚建的片段立刻就没了。前端的顺序已经改过来了，
+    这里负责把之前丢掉的补回来。
+
+    候选行上信息是全的（时间、确认成了哪个类别、置信度），重建是确定的；
+    已经有对应片段的不重复建，可以反复调。
+    """
+    task = await _visible_task(db, task_id, user)
+    cands = (
+        await db.execute(
+            select(AiCandidate).where(
+                AiCandidate.task_id == task_id,
+                AiCandidate.round_no == task.round_no,
+                AiCandidate.status == CandidateStatus.confirmed,
+            )
+        )
+    ).scalars().all()
+    if not cands:
+        return ok({"repaired": 0})
+
+    record = (
+        await db.execute(
+            select(AnnotationRecord).where(
+                AnnotationRecord.task_id == task_id, AnnotationRecord.round_no == task.round_no
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        record = AnnotationRecord(task_id=task_id, round_no=task.round_no, source_type=RecordSourceType.ai_revised)
+        db.add(record)
+        await db.flush()
+
+    have = set(
+        (
+            await db.execute(
+                select(AnnotationLabelItem.from_candidate_id).where(
+                    AnnotationLabelItem.annotation_record_id == record.id,
+                    AnnotationLabelItem.from_candidate_id.isnot(None),
+                )
+            )
+        ).scalars()
+    )
+    n = 0
+    for c in cands:
+        if c.id in have:
+            continue
+        label_id = c.decided_label_id
+        if label_id is None:
+            label_id = (
+                await db.execute(
+                    select(LabelDefinition.id).where(
+                        LabelDefinition.project_id == task.project_id,
+                        (LabelDefinition.display_name == c.label_name) | (LabelDefinition.code == c.label_name),
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+        if label_id is None:
+            continue
+        db.add(
+            AnnotationLabelItem(
+                annotation_record_id=record.id,
+                label_id=label_id,
+                start_time_ms=c.start_time_ms,
+                end_time_ms=c.end_time_ms,
+                source_type=LabelItemSource.human_added,
+                is_modified=False,
+                ai_confidence=c.confidence,
+                ai_confirmed=False,
+                from_candidate_id=c.id,
+                created_by=c.decided_by or user.id,
+            )
+        )
+        n += 1
+    if n:
+        await db.commit()
+    return ok({"repaired": n})
+
+
 @router.post("/{candidate_id}/decide")
 async def decide(
     candidate_id: int,

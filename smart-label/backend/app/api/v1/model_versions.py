@@ -8,6 +8,7 @@
 存一条记录、转发轮询。
 """
 
+import asyncio
 import datetime as _dt
 import json
 import logging
@@ -24,7 +25,12 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import ModelVersionOut, TrainSubmitIn
 from app.services import algo_client
-from app.services.training_export_service import TrainingExportError, export_dataset, list_datasets
+from app.services.training_export_service import (
+    TrainingExportError,
+    delete_dataset,
+    export_dataset,
+    list_datasets,
+)
 
 router = APIRouter(
     prefix="/model-versions", tags=["model-versions"],
@@ -70,6 +76,16 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return ok(meta)
+
+
+@router.delete("/datasets/{name}")
+async def remove_dataset(name: str):
+    """删掉 NAS 上这份导出（data_train/<名字>/）。训练记录不动——那是另一回事。"""
+    try:
+        await asyncio.to_thread(delete_dataset, name)
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return ok(msg="已删除")
 
 
 @router.post("/{version_id}/activate")
