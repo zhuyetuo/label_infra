@@ -31,12 +31,22 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
     标注员/审核员拿不到 /samples，列表接口自己带；前端拿 sample_code 里的
     采集时间 + 时长拼成"几号 几点到几点、多长"这种人看得懂的名字。
     """
-    ids = {t.sample_id for t in tasks}
+    ids = list({t.sample_id for t in tasks})
     if not ids:
         return {}
-    rows = await db.execute(
-        select(Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count).where(Sample.id.in_(ids))
-    )
+    # 分批：任务列表一页几十条无所谓，但"整个项目的任务"这种调用能到几千个
+    # sample_id，一次 IN 进去会超出 MySQL range optimizer 的内存上限
+    all_rows: list = []
+    for i in range(0, len(ids), 1000):
+        chunk = ids[i : i + 1000]
+        all_rows += (
+            await db.execute(
+                select(
+                    Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count
+                ).where(Sample.id.in_(chunk))
+            )
+        ).all()
+    rows = all_rows
     # 一个画面里同时有四只狗，标题上不写清楚"现在看的是哪只"就没法确认标注
     mapping = await imu_dog_map()
     return {
@@ -46,7 +56,7 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
             "imu_row_count": rows_n,
             "dog_label": dog_label(code, mapping),
         }
-        for sid, code, dur, rows_n in rows.all()
+        for sid, code, dur, rows_n in rows
     }
 
 
@@ -64,16 +74,26 @@ async def purge_task_children(db: AsyncSession, task_ids: list[int]) -> None:
     """
     if not task_ids:
         return
-    record_ids = (
-        (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars().all()
-    )
-    if record_ids:
-        await db.execute(delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(record_ids)))
-    await db.execute(delete(AiCandidate).where(AiCandidate.task_id.in_(task_ids)))
-    await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(task_ids)))
-    await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(task_ids)))
-    # 子任务的 parent 指向要删的任务，先断开，免得自引用外键挡住
-    await db.execute(update(Task).where(Task.parent_task_id.in_(task_ids)).values(parent_task_id=None))
+    # 一个项目上万个任务是常事（一天几千个样本各一个任务）。IN 一次塞几千个的话，
+    # MySQL 的 range optimizer 会因为超出内存上限（range_optimizer_max_mem_size）
+    # 放弃区间优化改走扫描，日志里刷警告而且很慢。分批走。
+    def _chunks(seq: list[int], n: int = 1000):
+        for i in range(0, len(seq), n):
+            yield seq[i : i + n]
+
+    for batch in _chunks(list(task_ids)):
+        record_ids = list(
+            (await db.execute(select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(batch)))).scalars()
+        )
+        for rec_batch in _chunks(record_ids):
+            await db.execute(
+                delete(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id.in_(rec_batch))
+            )
+        await db.execute(delete(AiCandidate).where(AiCandidate.task_id.in_(batch)))
+        await db.execute(delete(AnnotationRecord).where(AnnotationRecord.task_id.in_(batch)))
+        await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(batch)))
+        # 子任务的 parent 指向要删的任务，先断开，免得自引用外键挡住
+        await db.execute(update(Task).where(Task.parent_task_id.in_(batch)).values(parent_task_id=None))
 
 
 async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
