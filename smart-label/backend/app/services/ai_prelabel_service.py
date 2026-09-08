@@ -234,7 +234,7 @@ def ai_label_relpath(imu_csv_path: str) -> str:
     return os.path.join(settings.ai_label_dir, os.path.splitext(rel)[0] + "_ai_label.json")
 
 
-async def _record_run(sample: Sample, result: dict, relpath: str) -> None:
+async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> None:
     """把这一份结果登记进 sample_inference_runs，同 (样本, 模型, 版本) 覆盖自己那条。
 
     索引单独存一张表，是为了后面"选两个模型对比"能直接查，不用去 NAS 上瞎扫目录。
@@ -290,7 +290,7 @@ async def store_run_only(sample: Sample, result: dict) -> str:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
     await asyncio.to_thread(_write)
-    await _record_run(sample, result, ver_rel)
+    await _record_inference_run(sample, result, ver_rel)
     return ver_rel
 
 
@@ -317,7 +317,7 @@ async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime
                 json.dump(result, f, ensure_ascii=False, indent=2)
 
     await asyncio.to_thread(_write)
-    await _record_run(sample, result, ver_rel)
+    await _record_inference_run(sample, result, ver_rel)
     items, skipped = flatten_segments(result.get("segments") or {}, csv_start)
     cands = flatten_candidates(result.get("candidates") or [], csv_start)
     return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0),
