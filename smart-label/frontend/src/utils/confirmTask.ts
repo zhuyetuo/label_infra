@@ -14,8 +14,24 @@ import type { Task } from "@/types";
  * 之前只有第 2 种、按钮却写着「确认无误」，说大了：复看时看的只有抓挠那几段。
  */
 
-/** 只确认某几个类别的 AI 片段。返回这次确认了几段。 */
-export async function confirmScratchOnly(task: Task, labelIds: number[], userId?: number): Promise<number> {
+/** 这次确认的结果。光返回一个"确认了几段"的话，0 有好几种意思，提示写不清楚 */
+export interface ConfirmScratchResult {
+  /** 这次新确认的段数 */
+  confirmed: number;
+  /** 之前就已经确认过的 */
+  already: number;
+  /** 标成待定的：不能顺手认成对的，所以不算 */
+  uncertain: number;
+  /** 这个任务里 AI 标的这一类一共几段 */
+  total: number;
+}
+
+/** 只确认某几个类别的 AI 片段。 */
+export async function confirmScratchOnly(
+  task: Task,
+  labelIds: number[],
+  userId?: number
+): Promise<ConfirmScratchResult> {
   if (!labelIds.length) throw new Error("这个项目里没有「抓挠」这个标签");
   // 存草稿要求任务在自己名下且是标注中
   let t = task;
@@ -27,10 +43,16 @@ export async function confirmScratchOnly(task: Task, labelIds: number[], userId?
 
   const draft = await getDraft(t.id);
   const want = new Set(labelIds);
-  let n = 0;
+  const r: ConfirmScratchResult = { confirmed: 0, already: 0, uncertain: 0, total: 0 };
   const items = draft.items.map((i) => {
-    // 只数 AI 给的、还没确认过、也没被标成待定的那些
-    if (want.has(i.label_id) && i.source_type === "ai_generated" && !i.ai_confirmed && !i.uncertain) n += 1;
+    // 分开数：0 段可以是"本来就没有抓挠"、"早就确认过了"、"全标成待定了"，
+    // 这三种给人的提示完全不一样
+    if (want.has(i.label_id) && i.source_type === "ai_generated") {
+      r.total += 1;
+      if (i.uncertain) r.uncertain += 1;
+      else if (i.ai_confirmed) r.already += 1;
+      else r.confirmed += 1;
+    }
     return {
       label_id: i.label_id,
       start_time_ms: i.start_time_ms,
@@ -46,7 +68,7 @@ export async function confirmScratchOnly(task: Task, labelIds: number[], userId?
   // ——从工作台点「认领并修改」改完再确认也走这条路，不放的话任务就一直挂在
   // 「标注中」，跟同一天别的时段状态不一致，看着像出了问题
   await releaseTask(t.id);
-  return n;
+  return r;
 }
 
 /**
