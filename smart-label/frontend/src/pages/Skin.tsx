@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
 } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
@@ -1103,22 +1104,36 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         // 720 挤得时间段要折行；给到 1000 上限一屏宽，一行一行看着不累
         width="min(1360px, 96vw)"
       >
-        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-          这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
-          逐条跳转/循环看视频就能核对是不是真有这么多。看完关掉工作台会回到这个列表，可以接着看下一段。
-          <br />
-          看完在工作台底部下结论：<b>抓挠确认无误</b> 只认这几段抓挠标得对（不碰活动/睡觉，也不碰
-          「疑似抓挠」候选，任务还是待认领）；<b>整份通过</b> 是连活动/睡觉一起认、任务就此审核通过
-          ——跟踪表里「人工版」的次数/时长只有走这一步才会变。下面这张表只管挑段落，状态列会记着
-          哪些看过、哪些已经确认过了。
-        </Typography.Paragraph>
-        {pickWidth.hasCustom && (
-          <div style={{ textAlign: "right", marginBottom: 4 }}>
+        {/* 原来这里是七行说明。写得再对，也是每次打开都占掉半屏、而且只有
+            第一次有用的东西——留一句话，细节收进问号里 */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            挑一段点「查看标注」进工作台核对，看完在工作台底部下结论{" "}
+            <Tooltip
+              title={
+                <div style={{ lineHeight: 1.8, maxWidth: 460 }}>
+                  这天按小时段分成了好几个任务。点进去片段列表已经筛好「抓挠」，逐条跳转/循环看视频就能核对是不是真有这么多；
+                  关掉工作台回到这个列表，接着看下一段。
+                  <br />
+                  <br />
+                  <b>抓挠确认无误</b>：只认这几段抓挠标得对。不碰活动/睡觉，也不碰「疑似抓挠」候选，任务还是待认领。
+                  <br />
+                  <b>整份通过</b>：连活动/睡觉一起认，任务就此审核通过——跟踪表里「人工版」的次数/时长只有走这一步才会变。
+                  <br />
+                  <br />
+                  这张表只管挑段落；状态列记着哪些看过、哪些已经确认过了。
+                </div>
+              }
+            >
+              <QuestionCircleOutlined style={{ cursor: "help" }} />
+            </Tooltip>
+          </Typography.Text>
+          {pickWidth.hasCustom && (
             <Button size="small" type="link" onClick={pickWidth.reset}>
               恢复列宽
             </Button>
-          </div>
-        )}
+          )}
+        </div>
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
           rowKey="task_id"
