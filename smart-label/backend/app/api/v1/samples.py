@@ -10,13 +10,15 @@ import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.dog import Dog
+from app.models.clip import ClipJob
+from app.models.inference_run import SampleInferenceRun
 from app.models.media_file import MediaFile
 from app.models.sample import Sample
 from app.models.task import Task
@@ -24,6 +26,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import PrelabelResult
 from app.schemas.sample import (
+    SampleDeleteBulk,
     SampleMediaOut,
     SampleOut,
     SampleSensitiveBulk,
@@ -33,6 +36,7 @@ from app.schemas.sample import (
 )
 from app.services.ai_prelabel_service import PrelabelError, ai_label_relpath, infer_sample, replace_candidates
 from app.services.sample_import_service import get_progress, start_scan_background
+from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
 
 router = APIRouter(prefix="/samples", tags=["samples"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
@@ -66,6 +70,48 @@ async def set_sensitive_bulk(body: SampleSensitiveBulk, db: AsyncSession = Depen
     result = await db.execute(update(Sample).where(Sample.id.in_(body.sample_ids)).values(**values))
     await db.commit()
     return ok({"updated": result.rowcount or 0})
+
+
+@router.post("/batch-delete")
+async def delete_samples_bulk(body: SampleDeleteBulk, db: AsyncSession = Depends(get_db)):
+    """
+    删一批样本，连同它们上面的任务和任务下面的东西。
+
+    NAS 上的文件一个都不动——删的只是数据库里的登记。主要用来清掉空 CSV 的样本
+    （文件建出来了但一行数据都没写），这些样本打开就报错，也算不出任何指标。
+
+    media_files 里那几条路径登记也一起删掉：它是按路径唯一的，留着的话既是孤儿，
+    又会让「这个文件还在系统里」这件事看起来是真的。
+    """
+    if not body.sample_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
+    samples = (await db.execute(select(Sample).where(Sample.id.in_(body.sample_ids)))).scalars().all()
+    if not samples:
+        return ok({"deleted": 0, "tasks_deleted": 0})
+    ids = [s.id for s in samples]
+
+    task_ids = list((await db.execute(select(Task.id).where(Task.sample_id.in_(ids)))).scalars())
+    if task_ids:
+        # 标签条目→候选→标注记录→审核记录，按外键顺序清。跟删项目/删任务同一套，
+        # 不要在这里另写一份，不然以后新加的表又会漏
+        await purge_task_children(db, task_ids)
+        await db.execute(delete(Task).where(Task.id.in_(task_ids)))
+    # 这两张也挂着 samples 的外键，不清的话下面 delete 会撞 1451
+    await db.execute(delete(ClipJob).where(ClipJob.sample_id.in_(ids)))
+    await db.execute(delete(SampleInferenceRun).where(SampleInferenceRun.sample_id.in_(ids)))
+
+    paths = [
+        p
+        for s in samples
+        for p in (s.video_cam1_path, s.video_cam2_path, s.video_cam3_path, s.imu_csv_path)
+        if p
+    ]
+    if paths:
+        await db.execute(delete(MediaFile).where(MediaFile.relative_path.in_(paths)))
+
+    await db.execute(delete(Sample).where(Sample.id.in_(ids)))
+    await db.commit()
+    return ok({"deleted": len(ids), "tasks_deleted": len(task_ids)})
 
 
 @router.patch("/{sample_id}")

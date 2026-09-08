@@ -286,6 +286,17 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         cam_paths, csv_rel = info["cam_paths"], info["csv_rel"]
         probe, row_count, total_size, missing = result["probe"], result["row_count"], result["total_size"], result["missing"]
 
+        # 空 CSV 不建样本：文件建出来了但一行数据都没写（采集起来就断了之类），
+        # 建了也只是个打开就报错、算不出任何指标的空壳，还得手动去删。
+        # 不建的话下次扫描会重新看到它——如果那时它已经写进数据了，自然就补上；
+        # 一直是空的就一直跳过。row_count 为 None 是探测失败，不能当空处理。
+        if row_count == 0:
+            _progress.detail.append(f"跳过 {session_key}：CSV 没有数据行")
+            _progress.skipped_existing += 1
+            _progress.processed += 1
+            _progress.tick()
+            continue
+
         dog_code = info["dog_code"]
         sample = Sample(
             sample_code=session_key,
