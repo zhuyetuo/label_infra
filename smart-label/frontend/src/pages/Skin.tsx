@@ -9,6 +9,7 @@ import PhotoGallery from "@/components/PhotoGallery";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
+import { usePersistedSort } from "@/utils/persistedSort";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { claimTask, getTask, reopenTask } from "@/api/tasks";
@@ -613,6 +614,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const userId = useAuthStore((st) => st.userInfo?.id);
   const role = useAuthStore((st) => st.userInfo?.role);
   const { f, setFilter, dataRange, offRange, alignToProjects } = useTrackFilter();
+  // 排序记住：这张表就是拿来"找哪天最不对劲"的，换个页面回来重置成默认，
+  // 等于每次都得重排一遍
+  const trackSort = usePersistedSort("skin-tracking-sort");
+  // 「挑一段复看」那张表同理，而且更需要——按待确认数排完，关掉再打开还是那个
+  // 顺序，可以接着往下做
+  const pickSort = usePersistedSort("skin-pick-sort");
 
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
   // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
@@ -797,7 +804,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         dataSource={rows}
         pagination={{ pageSize: 30, showSizeChanger: true }}
         scroll={{ x: "max-content" }}
-        columns={[
+        onChange={trackSort.onTableChange}
+        columns={trackSort.applySort<TrackingRow>([
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           {
             title: "狗",
@@ -815,6 +823,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "有效佩戴",
+            key: "wear",
             width: 120,
             sorter: (a: TrackingRow, b: TrackingRow) =>
               ((a.stats?.valid_wear_hours as number) ?? 0) - ((b.stats?.valid_wear_hours as number) ?? 0),
@@ -836,6 +845,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "抓挠 次数/时长",
+            key: "scratch",
             width: 130,
             sorter: (a: TrackingRow, b: TrackingRow) =>
               ((a.stats?.event_count as number) ?? 0) - ((b.stats?.event_count as number) ?? 0),
@@ -866,6 +876,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "C 值",
+            key: "c",
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.c_value ?? -1) - (b.c_value ?? -1),
             render: (_: unknown, r: TrackingRow) =>
@@ -926,6 +937,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "S 总分（不填问答）",
+            key: "s_no_q",
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) => (
@@ -936,6 +948,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "S 总分（含问答）",
+            key: "s_with_q",
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_with_q?.total ?? -1) - (b.s_with_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) =>
@@ -1010,7 +1023,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               );
             },
           },
-        ]}
+        ])}
       />
       <AnnotationWorkspace
         task={wsTask}
@@ -1091,7 +1104,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           dataSource={checkFor?.tasks_detail ?? []}
           pagination={false}
           scroll={{ y: "60vh" }}
-          columns={[
+          onChange={pickSort.onTableChange}
+          columns={pickSort.applySort<TrackingRow["tasks_detail"][number]>([
             {
               title: "时间段",
               width: 220,
@@ -1104,6 +1118,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
             {
               title: "抓挠片段",
+              key: "scratch_segments",
               width: 100,
               sorter: (a, b) => a.scratch_segments - b.scratch_segments,
               defaultSortOrder: "descend" as const,
@@ -1162,6 +1177,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
             {
               title: "疑似抓挠",
+              key: "cands",
               width: 210,
               // 挑下一段来看时，先看"还剩几条没确认"最多的那几段——排完序直接从
               // 上往下做。并列的按总数排，候选多的那段值得先看
@@ -1221,7 +1237,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 </Button>
               ),
             },
-          ]}
+          ])}
         />
       </Modal>
       <Modal

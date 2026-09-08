@@ -12,6 +12,7 @@ import { listSamples } from "@/api/samples";
 import { listTasks } from "@/api/tasks";
 import { TASK_STATUS_META } from "@/utils/taskStatus";
 import { getSavedText, saveText } from "@/utils/persistedSize";
+import { usePersistedSort } from "@/utils/persistedSort";
 import type { Sample, TaskStatus } from "@/types";
 
 interface FormValues {
@@ -45,6 +46,8 @@ export default function Dogs() {
   const [editing, setEditing] = useState<Dog | null>(null);
   // 照片单独开弹窗：展开行里已经有体重记录和时间轴了，再塞图会很长
   const [photoDog, setPhotoDog] = useState<Dog | null>(null);
+  // 排序记住：按体重/年龄/照片数排过一次，切走再回来还是那个顺序
+  const dogSort = usePersistedSort("dogs-sort");
   const [form] = Form.useForm<FormValues>();
 
   const refresh = () => {
@@ -227,7 +230,8 @@ export default function Dogs() {
             </div>
           ),
         }}
-        columns={[
+        onChange={dogSort.onTableChange}
+        columns={dogSort.applySort<Dog>([
           { title: "编号", dataIndex: "dog_code", width: 120 },
           { title: "名字", dataIndex: "name", render: (v: string | null) => v || "-" },
           { title: "品种", dataIndex: "breed", render: (v: string | null) => v || "-" },
@@ -241,6 +245,7 @@ export default function Dogs() {
           { title: "别名（照片目录名）", dataIndex: "aliases", render: (v: string | null) => v || "-" },
           {
             title: "年龄",
+            key: "age",
             width: 110,
             sorter: (a: Dog, b: Dog) => (a.birth_date ?? "9999").localeCompare(b.birth_date ?? "9999"),
             // 存的是出生日期，年龄现算——存"3岁"的话明年就不对了，也没人会回来改
@@ -255,6 +260,7 @@ export default function Dogs() {
           },
           {
             title: "体重",
+            key: "weight",
             width: 130,
             sorter: (a: Dog, b: Dog) => (a.latest_weight_kg ?? -1) - (b.latest_weight_kg ?? -1),
             // 显示最新一次；体重会变，所以要带上是什么时候量的
@@ -290,6 +296,7 @@ export default function Dogs() {
           },
           {
             title: "照片/视频",
+            key: "photos",
             width: 100,
             sorter: (a: Dog, b: Dog) => a.n_photos - b.n_photos,
             // 认狗用的档案照 + 平时动作的小视频，存在可写的那块 NAS 上
@@ -327,7 +334,7 @@ export default function Dogs() {
               </Space>
             ),
           },
-        ]}
+        ])}
       />
 
       <Modal

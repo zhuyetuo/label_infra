@@ -15,6 +15,7 @@ import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { usePersistedSort } from "@/utils/persistedSort";
 
 const statusColor: Record<Sample["import_status"], string> = {
   pending: "default",
@@ -71,6 +72,8 @@ export default function Samples() {
 
   // 敏感隐私：标了之后标注员/审核员在任何地方都看不到这些样本和上面的任务，
   // 只有管理员/超级管理员能看能标；确认不敏感了可以解除。支持勾选一批一起标。
+  // 排序记住：样本按 CSV 行数/时长找异常时排一次序，切走再回来不用重排
+  const sort = usePersistedSort("samples-sort");
   const [sensitiveFilter, setSensitiveFilter] = useState<"全部" | "仅敏感" | "仅非敏感">("全部");
   // 空 CSV：文件建出来了但一行数据都没写，打开就报「CSV 没有数据行」，也算不出
   // 任何指标。行数为 null 是导入时没探到，不算空
@@ -320,7 +323,8 @@ export default function Samples() {
                 size="small"
                 dataSource={rows}
                 pagination={rows.length > 20 ? { pageSize: 20 } : false}
-                columns={columns}
+                columns={sort.applySort<Sample>(columns)}
+                onChange={sort.onTableChange}
                 // antd 默认点三下是 升序 -> 降序 -> 取消排序（回到原始顺序），第三种
                 // 看着像乱序；这里只在升/降之间切
                 sortDirections={["ascend", "descend", "ascend"]}
