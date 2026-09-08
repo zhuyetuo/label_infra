@@ -33,11 +33,16 @@
   padding: 4px 8px;
 }
 
-/* 展开全部波形时视频要让出高度。这里靠"收窄整组视频的宽度"来缩小，
-   而不是压高度——压高度会让画面比它那一格窄，中间就露白缝了。 */
-.ws-body--charts-expanded .ws-videos-row {
-  width: 42%;
-  margin: 0 auto;
+/* 展开全部波形时视频让出高度：直接把视频区限成一条固定高度，宽度不动。
+   以前是"把整组视频收窄到 42%"，结果画面缩成一小条、两边全是空白，而波形
+   还是没拿到高度——因为片段面板也是 flex:1，在跟它抢。
+   所以这里两件事一起做：视频钉死高度、片段面板按内容高度，剩下的全归波形。 */
+.ws-body--charts-expanded .ws-videos {
+  flex: 0 0 200px;
+  min-height: 0;
+}
+.ws-body--charts-expanded .ws-segs {
+  flex: 0 0 auto;
 }
 
 /* 外层只留 body 这一根滚动条，antd Modal 的 wrap 层不再滚 */
