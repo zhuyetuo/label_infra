@@ -47,6 +47,8 @@ interface Props {
   onReject?: () => void;
   /** 「通过」按钮上写什么（皮肤复看那边叫「确认无误」，语义更贴那个场景） */
   approveText?: string;
+  /** 打开就跳到这个时刻（相对 CSV 起点的毫秒）。从别处点「去修」进来时用 */
+  initialSeekMs?: number | null;
   /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
   onClaim?: () => void | Promise<void>;
   /** 已通过的任务想再改：退回重标（轮次+1，上一轮内容原样带过去） */
@@ -96,6 +98,7 @@ export default function AnnotationWorkspace({
   onReject,
   approveText,
   onClaim,
+  initialSeekMs,
   onReopen,
   onConfirmScratch,
   confirmScratchText,
@@ -222,6 +225,8 @@ export default function AnnotationWorkspace({
       );
       setHasCsv(media.csv_id != null);
       setFps(media.video_fps);
+      // 从别处点「去修」进来的：直接停在出问题的那一刻，不用自己拖进度条找
+      if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
       if (media.csv_id != null) {
         getImuMeta(sampleId)
           .then((m) => setDurationMs(m.duration_ms))
