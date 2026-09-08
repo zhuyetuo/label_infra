@@ -800,9 +800,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
           逐条跳转/循环看视频就能核对是不是真有这么多。看完关掉工作台会回到这个列表，可以接着看下一段。
           <br />
-          看完有两种结论：<b>抓挠没标错</b> 只认这几段抓挠标得对（不碰活动/睡觉，也不碰「疑似抓挠」候选，
-          任务还是待认领）；<b>整份通过</b> 是连活动/睡觉一起认、任务就此审核通过——跟踪表里「人工版」的
-          次数/时长只有走这一步才会变。
+          看完在工作台底部下结论：<b>抓挠确认无误</b> 只认这几段抓挠标得对（不碰活动/睡觉，也不碰
+          「疑似抓挠」候选，任务还是待认领）；<b>整份通过</b> 是连活动/睡觉一起认、任务就此审核通过
+          ——跟踪表里「人工版」的次数/时长只有走这一步才会变。下面这张表只管挑段落，状态列会记着
+          哪些看过、哪些已经确认过了。
         </Typography.Paragraph>
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
@@ -844,37 +845,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
             {
               title: "操作",
-              width: 260,
+              width: 110,
+              // 这里只负责挑一段进去看：没看过视频就下结论没有意义，所以确认/通过
+              // 都放在工作台底部，看完当场点
               render: (_: unknown, t) => (
-                <Space size={4}>
-                  <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
-                    查看标注
-                  </Button>
-                  {/* 两个结论说的不是一回事，分开两个按钮：别让人以为点一下
-                      就把活动/睡觉和「疑似抓挠」候选也一并认了 */}
-                  {canConfirm && !scratchOk.has(t.task_id) && t.status !== "APPROVED" && (
-                    <Popconfirm
-                      title="这几段抓挠标得对？"
-                      description="只把这个时段里 AI 标的「抓挠」标成已确认；活动/睡觉和「疑似抓挠」候选都不动，任务状态也不变"
-                      onConfirm={async () => confirmScratch(await getTask(t.task_id))}
-                    >
-                      <Button size="small" type="link" loading={confirming === t.task_id}>
-                        抓挠没标错
-                      </Button>
-                    </Popconfirm>
-                  )}
-                  {canConfirm && t.status !== "APPROVED" && !approved.has(t.task_id) && (
-                    <Popconfirm
-                      title="整份标注都通过？"
-                      description="连活动/睡觉一起认，任务提交并审核通过。跟踪表的「人工版」数字只有走这一步才会变"
-                      onConfirm={async () => approveTask(await getTask(t.task_id), checkFor?.date)}
-                    >
-                      <Button size="small" type="link" loading={confirming === t.task_id}>
-                        整份通过
-                      </Button>
-                    </Popconfirm>
-                  )}
-                </Space>
+                <Button size="small" type="link" loading={wsLoading === t.task_id} onClick={() => openWorkspace(t.task_id)}>
+                  查看标注
+                </Button>
               ),
             },
           ]}
