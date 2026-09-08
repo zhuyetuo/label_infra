@@ -54,15 +54,21 @@
 /* :not(-hidden) 不能省：折叠时 antd 是靠 .ant-collapse-content-hidden 的
    display:none 把内容藏起来的，而这条规则的选择器更具体，不排除掉的话
    display:flex 会把它盖过去——面板收起来了内容还杵在那儿。 */
+/* 高度要一路传到波形区（展开全部时它是 flex:1），中间每一层都得是 flex 且
+   min-height:0——断在任何一层，波形就会按内容自然高度撑开、顶穿面板边框，
+   跟下面两个面板叠在一起。 */
+.ws-imu,
 .ws-imu > .ant-collapse-item,
 .ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden),
 .ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden) .ant-collapse-content-box {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-.ws-imu > .ant-collapse-item {
   flex: 1 1 auto;
+}
+/* 撑爆时按面板边界裁掉，宁可里面自己滚，也不要溢出去压住别的面板 */
+.ws-imu .ant-collapse-content:not(.ant-collapse-content-hidden) {
+  overflow: hidden;
 }
 .ws-imu .ant-collapse-content-box {
   padding: 8px !important;

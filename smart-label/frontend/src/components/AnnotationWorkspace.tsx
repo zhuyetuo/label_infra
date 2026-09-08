@@ -652,7 +652,7 @@ export default function AnnotationWorkspace({
         )
       }
     >
-      <div className={`ws-body${chartExpanded ? " ws-body--charts-expanded" : ""}`}>
+      <div className={`ws-body${chartExpanded && imuOpen ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
         {loopRange && (
           <Alert
@@ -674,7 +674,7 @@ export default function AnnotationWorkspace({
             fps={fps}
             fill
             controlsPortalTarget={controlsHost}
-            shrinkToFit={chartExpanded}
+            shrinkToFit={chartExpanded && imuOpen}
           />
         ) : (
           !loading && (
