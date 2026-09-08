@@ -19,6 +19,8 @@ export interface TrainDataset {
   n_merged_overlaps?: number;
   /** 不同类别压在一起的处数（矛盾标注，要回工作台改） */
   n_label_conflicts?: number;
+  /** 因为类别冲突挖掉了多少秒 */
+  label_conflict_excluded_sec?: number;
   n_tasks: number;
   n_segments: number;
   total_hours: number;
