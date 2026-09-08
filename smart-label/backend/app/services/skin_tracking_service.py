@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.dog import Dog
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.skin import SkinRecord
@@ -74,17 +75,22 @@ async def _algo_post(path: str, payload: dict) -> dict:
     return resp.json()
 
 
-def _norm_dog(name: str) -> set[str]:
+def _norm_dog(name: str, extra: set[str] | None = None) -> set[str]:
     """
     一只狗的几种叫法。PM 那边是「金毛-巴利」这种「品种-名字」，NAS 上的目录名
-    常常只写名字（「巴利」），也可能写拼音（「Bali」）。这里把可能的写法都列出来，
-    匹配时任一相等或互相包含就算同一只。
+    常常只写名字（「巴利」），也可能写拼音（「Bali」「bibi」）。这里把可能的写法
+    都列出来，匹配时任一相等或互相包含就算同一只。
+
+    extra 是狗档案里登记的别名——配置文件里那份是兜底的默认值，改一次要重启，
+    真正该维护这层对应关系的地方是狗档案页面。
     """
     n = (name or "").strip()
     parts = {n, n.lower()}
-    for alias in settings.skin_dog_aliases.get(n, []):
-        parts.add(alias)
-        parts.add(alias.lower())
+    for alias in list(settings.skin_dog_aliases.get(n, [])) + sorted(extra or ()):
+        alias = (alias or "").strip()
+        if alias:
+            parts.add(alias)
+            parts.add(alias.lower())
     for sep in ("-", "_", " "):
         if sep in n:
             for piece in n.split(sep):
@@ -117,9 +123,11 @@ def _photo_index() -> list[tuple[str, str, int]]:
     return out
 
 
-def _match_photos(index: list[tuple[str, str, int]], day: str, dog: str) -> tuple[int, str | None]:
+def _match_photos(
+    index: list[tuple[str, str, int]], day: str, dog: str, extra: set[str] | None = None
+) -> tuple[int, str | None]:
     """返回 (张数, NAS 上实际的狗目录名)。目录名跟 PM 狗名对不上是常态，做宽松匹配。"""
-    aliases = _norm_dog(dog)
+    aliases = _norm_dog(dog, extra)
     total, matched = 0, None
     for d, folder_dog, n in index:
         if d != day:
@@ -161,6 +169,18 @@ async def daily_tracking(
         rec_by_key[(r.fill_date.isoformat(), r.dog_name)] = r
 
     photo_index = await asyncio.to_thread(_photo_index)
+    # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、机位号 IMU1）
+    # 唯一能对上的地方：机位号优先，没登记就退回按编号数字当机位（IMU1 ↔ 编号1）
+    dog_rows = (await db.execute(select(Dog))).scalars().all()
+    alias_by_imu: dict[str, set[str]] = defaultdict(set)
+    for d in dog_rows:
+        imu_key = (d.imu or "").strip().upper() or (f"IMU{d.dog_code}" if (d.dog_code or "").isdigit() else "")
+        if not imu_key:
+            continue
+        for v in [d.name, d.breed, *(d.aliases or "").replace("，", ",").split(",")]:
+            v = (v or "").strip()
+            if v:
+                alias_by_imu[imu_key].add(v)
 
     # 这一天这只狗底下有哪几个任务：跟踪表里点「查看标注」要跳过去复看，
     # 顺带带上每个任务里「抓挠」片段有几段，好挑哪一段去看
@@ -248,7 +268,7 @@ async def daily_tracking(
         m = merged[key]
         dog = imu_dog_map.get(imu) or imu
         rec = rec_by_key.get((day, dog))
-        photo_n, photo_dog = _match_photos(photo_index, day, dog)
+        photo_n, photo_dog = _match_photos(photo_index, day, dog, alias_by_imu.get(imu))
         # 人工版优先（人核对过的更可信），没有就用 AI 版
         primary = m["human"] or m["ai"]
         p_source = "human" if m["human"] else ("ai" if m["ai"] else None)

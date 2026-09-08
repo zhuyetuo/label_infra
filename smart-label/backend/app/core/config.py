@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     # NAS 照片目录里的狗名跟 PM 的「品种-名字」经常对不上，中文/拼音也混着写。
     # 「品种-名字」里的名字部分会自动匹配，这里补的是拼音这类靠字面猜不出来的
     skin_dog_aliases: dict[str, list[str]] = {
-        "比熊-BB": ["BB", "bb"],
+        # NAS 照片目录用的是 bibi，不是 BB——照片对不上就是漏了这个。
+        # 这份只是兜底默认值，真正该维护的地方是狗档案页面的「别名」
+        "比熊-BB": ["BB", "bb", "bibi", "Bibi", "比比"],
         "金毛-巴利": ["Bali", "bali", "巴利"],
         "中华田园犬-露露": ["Lulu", "lulu", "露露"],
         "马尔济斯-小满": ["Xiaoman", "xiaoman", "小满"],
