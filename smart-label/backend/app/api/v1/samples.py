@@ -100,14 +100,26 @@ async def delete_samples_bulk(body: SampleDeleteBulk, db: AsyncSession = Depends
     await db.execute(delete(ClipJob).where(ClipJob.sample_id.in_(ids)))
     await db.execute(delete(SampleInferenceRun).where(SampleInferenceRun.sample_id.in_(ids)))
 
-    paths = [
+    # media_files 是按路径唯一的，而**同一次录制的 imu1~imu4 四个样本共用同一组
+    # cam 视频**（见 sample_import_service：cam_paths 是整个 session 共享的）。
+    # 所以不能见路径就删——删掉一个空 CSV 的 imu1 样本，会把同一时段 imu2/imu3/imu4
+    # 的视频登记一起带走，那几个任务打开就变成"没有找到可播放的视频"。
+    # 只删「删完之后没有任何样本还在用」的那些路径。
+    paths = {
         p
         for s in samples
         for p in (s.video_cam1_path, s.video_cam2_path, s.video_cam3_path, s.imu_csv_path)
         if p
-    ]
+    }
     if paths:
-        await db.execute(delete(MediaFile).where(MediaFile.relative_path.in_(paths)))
+        still_used: set[str] = set()
+        for col in (Sample.video_cam1_path, Sample.video_cam2_path, Sample.video_cam3_path, Sample.imu_csv_path):
+            still_used |= set(
+                (await db.execute(select(col).where(col.in_(paths), Sample.id.notin_(ids)))).scalars()
+            )
+        orphan = paths - still_used
+        if orphan:
+            await db.execute(delete(MediaFile).where(MediaFile.relative_path.in_(orphan)))
 
     await db.execute(delete(Sample).where(Sample.id.in_(ids)))
     await db.commit()
