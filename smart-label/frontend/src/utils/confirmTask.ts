@@ -42,8 +42,10 @@ export async function confirmScratchOnly(task: Task, labelIds: number[], userId?
     };
   });
   await saveDraft(t.id, items);
-  // 认领只是为了能存草稿，存完还回去，别把任务挂在自己名下挡着别人标
-  if (claimedHere) await releaseTask(t.id);
+  // 认领只是为了能存草稿，确认完就还回去（草稿保留）。不管这次是不是这里认领的
+  // ——从工作台点「认领并修改」改完再确认也走这条路，不放的话任务就一直挂在
+  // 「标注中」，跟同一天别的时段状态不一致，看着像出了问题
+  await releaseTask(t.id);
   return n;
 }
 

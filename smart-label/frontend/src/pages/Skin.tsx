@@ -500,6 +500,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     try {
       const n = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
       setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
+      // 确认完任务已经放回待认领，工作台里那份状态得跟上（不然底部按钮
+      // 还按"标注中"渲染）
+      setWsTask((cur) => (cur && cur.id === task.id ? { ...cur, status: "PENDING_ASSIGN", locked_by: null } : cur));
       message.success(n ? `已确认 ${n} 段抓挠` : "这段里的抓挠之前就确认过了");
     } catch (e) {
       message.error(`确认失败：${e instanceof Error ? e.message : String(e)}`);
