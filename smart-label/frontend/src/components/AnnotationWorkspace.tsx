@@ -517,7 +517,11 @@ export default function AnnotationWorkspace({
   return (
     <Modal
       title={
-        <Space wrap style={{ width: "100%" }}>
+        // 左边是"这是什么"（任务/狗/样本 + 播放控件），右边是"我能干什么"
+        // （只读 / 认领并修改）。夹在中间的话，播放控件的位置会跟着只读与否
+        // 左右跳，而且那个按钮混在一串说明性标签里也不显眼
+        <div style={{ display: "flex", width: "100%", alignItems: "center", gap: 8 }}>
+        <Space wrap style={{ flex: 1, minWidth: 0 }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
           {/* 一个画面里同时有四只狗，这条 IMU 是谁身上的必须一眼看见，
               不然逐条确认时很容易确认成别的狗的动作 */}
@@ -530,23 +534,26 @@ export default function AnnotationWorkspace({
             样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : sampleId}
             {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
           </Tag>
-          {readOnly && (
-            // 「只读」和「认领并修改」拼进标题行：这两个东西说的是同一件事
-            // （现在改不了 / 想改点这里），单独占一行不值当，那一行留给视频
-            <>
-              <Tag color="orange">只读</Tag>
-              {onClaim && (
-                <Tooltip title="现在是只读。要逐条确认、改类别（比如其实是甩身体）、或标成待定，先认领">
-                  <Button size="small" type="primary" onClick={onClaim}>
-                    认领并修改
-                  </Button>
-                </Tooltip>
-              )}
-            </>
-          )}
           {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
           <span ref={setControlsHost} style={{ display: "inline-flex" }} />
         </Space>
+        {readOnly && (
+          // 「只读」和「认领并修改」说的是同一件事（现在改不了 / 想改点这里），
+          // 放在最右边单独成一组。marginRight 给右上角那个关闭 X 让位
+          <Space style={{ flex: "0 0 auto", marginRight: 36 }}>
+            <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+              只读
+            </Tag>
+            {onClaim && (
+              <Tooltip title="现在是只读。要逐条确认、改类别（比如其实是甩身体）、或标成待定，先认领">
+                <Button size="small" type="primary" onClick={onClaim}>
+                  认领并修改
+                </Button>
+              </Tooltip>
+            )}
+          </Space>
+        )}
+        </div>
       }
       open={taskId != null}
       onCancel={handleClose}
