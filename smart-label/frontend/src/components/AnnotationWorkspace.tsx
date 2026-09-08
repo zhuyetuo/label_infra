@@ -376,6 +376,9 @@ export default function AnnotationWorkspace({
     if (taskId == null || !onConfirmScratch) return;
     setSaving(true);
     try {
+      // 可编辑状态下刚改的东西还只在本地，先落草稿——外面那个确认读的是
+      // 服务端草稿，不先存的话刚改的类别会被覆盖回去
+      if (!readOnly) await persist();
       await onConfirmScratch();
       setItems((await getDraft(taskId)).items);
     } finally {
@@ -500,20 +503,24 @@ export default function AnnotationWorkspace({
                 </Button>
               )}
               {/* 只认这一类标得对——比「整份通过」窄得多，所以是单独一个按钮 */}
+              {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
+              {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
+              {/* 从皮肤评估进来时只看抓挠，这时该高亮的是「抓挠确认无误」，
+                  「整份通过」退成次要——它认的是全部类别，在这个场景下高亮会误导 */}
+              {onApprove && (
+                <Popconfirm title="确认通过这份标注？（连活动/睡觉等全部类别一起认）" onConfirm={onApprove}>
+                  <Button type={onConfirmScratch ? "default" : "primary"}>{approveText ?? "通过"}</Button>
+                </Popconfirm>
+              )}
               {onConfirmScratch && (
                 <Popconfirm
                   title={`${confirmScratchText ?? "只认这一类"}？`}
                   description="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动"
                   onConfirm={handleConfirmScratch}
                 >
-                  <Button loading={saving}>{confirmScratchText ?? "只认这一类"}</Button>
-                </Popconfirm>
-              )}
-              {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
-              {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
-              {onApprove && (
-                <Popconfirm title="确认通过这份标注？" onConfirm={onApprove}>
-                  <Button type="primary">{approveText ?? "通过"}</Button>
+                  <Button type="primary" loading={saving}>
+                    {confirmScratchText ?? "只认这一类"}
+                  </Button>
                 </Popconfirm>
               )}
             </Space>
@@ -531,9 +538,23 @@ export default function AnnotationWorkspace({
             {/* 自己标自己过（管理员的常规操作）：存草稿 + 提交 + 通过一步到位。
                 先落草稿再交给外面走审核链，不然刚改的几段不算数 */}
             {onApprove && (
-              <Popconfirm title="存草稿并直接通过？（不再进审核队列）" onConfirm={handleSubmitAndApprove}>
-                <Button type="primary" loading={saving}>
+              <Popconfirm
+                title="存草稿并直接通过？（连活动/睡觉等全部类别一起认，不再进审核队列）"
+                onConfirm={handleSubmitAndApprove}
+              >
+                <Button type={onConfirmScratch ? "default" : "primary"} loading={saving}>
                   {approveText ?? "提交并通过"}
+                </Button>
+              </Popconfirm>
+            )}
+            {onConfirmScratch && (
+              <Popconfirm
+                title={`${confirmScratchText ?? "只认这一类"}？`}
+                description="先存草稿（刚改的类别/待定都会存下），再把这一类的 AI 片段标成已确认；别的类别和任务状态不动"
+                onConfirm={handleConfirmScratch}
+              >
+                <Button type="primary" loading={saving}>
+                  {confirmScratchText ?? "只认这一类"}
                 </Button>
               </Popconfirm>
             )}

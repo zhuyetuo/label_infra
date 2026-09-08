@@ -761,7 +761,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         onSubmitted={() => setWsTask(null)}
         // 两个结论都给：只认抓挠 / 连活动睡觉一起认。名字写清楚各自认的是什么
         approveText="整份通过"
-        confirmScratchText="抓挠没标错"
+        confirmScratchText="抓挠确认无误"
         onConfirmScratch={
           canConfirm && wsTask && wsTask.status !== "APPROVED"
             ? async () => {
