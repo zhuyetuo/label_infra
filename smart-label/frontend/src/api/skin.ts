@@ -95,8 +95,28 @@ export const weeklyAutofill = (b: { imu: string; dog_name?: string | null; stats
 export const weeklyRecomputeAll = (imu?: string) => request.post<never, { count: number }>("/skin/weekly/recompute-all", undefined, { params: imu ? { imu } : {} });
 
 /** 每日跟踪：一行 = (日期, 狗)，C 值 → 是否触发问答 → S 总分（不填问答 / 填了问答两份） */
-export interface CSide { c_value: number | null; c_tier: string | null }
-export interface STotalOut { total: number | null; s_tier: string | null; c_tier: string | null }
+export interface CSide {
+  c_value: number | null;
+  c_tier: string | null;
+  /** 算 C 用的那几个输入（今天几次/几分钟、基线、聚集、连续天数、ZN/ZD…） */
+  c_inputs: Record<string, number | boolean | string | null> | null;
+  /** 四个打分项各得了多少分、有没有红旗，跟踪表 tooltip 讲「这分怎么来的」用 */
+  c_detail: CResult | null;
+}
+/** S 总分：除了总分/档位，还带各部分各贡献了多少 */
+export interface STotalOut {
+  total: number | null;
+  s_tier: string | null;
+  c_tier: string | null;
+  c_score?: number | null;
+  c_value_used?: number | null;
+  c_missing?: boolean;
+  skin_group_raw?: number | null;
+  skin_group_score?: number | null;
+  hair_group_raw?: number | null;
+  hair_group_score?: number | null;
+  red_flags?: string[];
+}
 export interface TrackingRow {
   date: string;
   imu: string;

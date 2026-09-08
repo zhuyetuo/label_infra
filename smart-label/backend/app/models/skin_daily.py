@@ -35,6 +35,9 @@ class SkinDailyStat(Base):
     # 下面几个是算完之后的结果，读的时候不用再调 AI 服务
     stats: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：日统计那一行")
     c_inputs: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：C 值的输入")
+    # C 值是怎么算出来的（四项分别得了多少分、有没有红旗），跟踪表上鼠标放上去
+    # 要能看到过程，不然只有一个 85 分没人知道从哪来的
+    c_detail: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：C 值各项得分")
     c_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     c_tier: Mapped[str | None] = mapped_column(String(4), nullable=True)
     # 任务进度 / AI 用的哪个版本，前端表格要显示

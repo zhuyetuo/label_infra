@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
+import { CExplain, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
@@ -619,7 +620,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             render: (_: unknown, r: TrackingRow) => {
               const n = r.stats?.event_count as number | undefined;
               const m = r.stats?.total_duration_min as number | undefined;
-              return n == null ? "—" : `${n} 次 / ${fmt(m, 1)} 分`;
+              if (n == null) return "—";
+              return (
+                <Tooltip title={<ScratchExplain r={r} />}>
+                  <span>{`${n} 次 / ${fmt(m, 1)} 分`}</span>
+                </Tooltip>
+              );
             },
           },
           {
@@ -642,11 +648,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             sorter: (a: TrackingRow, b: TrackingRow) => (a.c_value ?? -1) - (b.c_value ?? -1),
             render: (_: unknown, r: TrackingRow) =>
               r.c_value == null ? "—" : (
-                <Space size={4}>
-                  <b>{r.c_value}</b>
-                  <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>
-                  <Tag>{r.c_source === "human" ? "人工" : "AI"}</Tag>
-                </Space>
+                <Tooltip title={<CExplain side={r.c_source === "human" ? r.c_human : r.c_ai} source={r.c_source} />}>
+                  <Space size={4}>
+                    <b>{r.c_value}</b>
+                    <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag>
+                    <Tag>{r.c_source === "human" ? "人工" : "AI"}</Tag>
+                  </Space>
+                </Tooltip>
               ),
           },
           {
@@ -685,7 +693,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
             render: (_: unknown, r: TrackingRow) => (
-              <Tooltip title="问答留空时的 S，只有 C 值那 40% 在起作用，是这一天的下限">
+              <Tooltip title={<SExplain s={r.s_no_q} withQ={false} />}>
                 <span>{sTag(r.s_no_q)}</span>
               </Tooltip>
             ),
@@ -694,7 +702,14 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             title: "S 总分（含问答）",
             width: 150,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.s_with_q?.total ?? -1) - (b.s_with_q?.total ?? -1),
-            render: (_: unknown, r: TrackingRow) => sTag(r.s_with_q),
+            render: (_: unknown, r: TrackingRow) =>
+              r.s_with_q ? (
+                <Tooltip title={<SExplain s={r.s_with_q} withQ />}>
+                  <span>{sTag(r.s_with_q)}</span>
+                </Tooltip>
+              ) : (
+                sTag(r.s_with_q)
+              ),
           },
           {
             title: "复看标注",
