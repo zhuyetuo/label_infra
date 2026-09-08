@@ -323,6 +323,24 @@ export default function SegmentPanel({
           onChange={setFilterLabels}
           options={filterLabelOptions}
           optionFilterProp="value"
+          // 下拉里那一项是「彩色标签 + 这类有几段」，选中之后 antd 默认把整段
+          // 原样塞进选择框里——于是变成"标签套标签"，后面还跟着一个没头没尾的
+          // 数字，×  也被挤得贴上去。选中态只要那个彩色标签就够了
+          tagRender={({ value, closable, onClose }) => {
+            const l = labels.find((x) => x.id === value);
+            return (
+              <Tag
+                color={l ? l.color || colorOf(l.id) : undefined}
+                closable={closable}
+                onClose={onClose}
+                // 点 × 时别让下拉跟着展开
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{ marginInlineEnd: 4 }}
+              >
+                {l?.display_name ?? value}
+              </Tag>
+            );
+          }}
         />
         <Select size="small" style={{ width: 120 }} value={filterSource} onChange={setFilterSource} options={SOURCE_OPTIONS} />
         <Space size={4}>
