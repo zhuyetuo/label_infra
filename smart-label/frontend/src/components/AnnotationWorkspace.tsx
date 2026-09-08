@@ -482,7 +482,17 @@ export default function AnnotationWorkspace({
     e.preventDefault();
     const startY = e.clientY;
     const startHeight = chartBoxRef.current?.getBoundingClientRect().height ?? chartHeight;
-    const maxHeight = Math.max(240, window.innerHeight - 260);
+    // 能拖多高 = 现在这么高 + 上面还能挤出来的空间。以前写死 innerHeight-260，
+    // 跟实际布局没关系：视频区一高，波形拖到一半底边就滑到屏幕外面去了，
+    // 把手也跟着看不见。现在按实际量：视频还能压缩多少（到它的下限为止）
+    // 加上这一屏本来就空着的部分。
+    const bodyEl = chartBoxRef.current?.closest(".ws-body") as HTMLElement | null;
+    const videoEl = bodyEl?.querySelector(".ws-videos") as HTMLElement | null;
+    const VIDEO_MIN_PX = 200;
+    const slack =
+      (videoEl ? Math.max(0, videoEl.getBoundingClientRect().height - VIDEO_MIN_PX) : 0) +
+      (bodyEl ? Math.max(0, bodyEl.clientHeight - bodyEl.scrollHeight) : 0);
+    const maxHeight = Math.max(120, startHeight + slack);
     let latest = startHeight;
     const onMove = (ev: MouseEvent) => {
       latest = Math.min(maxHeight, Math.max(80, startHeight + (ev.clientY - startY)));
@@ -784,7 +794,10 @@ export default function AnnotationWorkspace({
           // 让会自适应量尺寸的视频区独自让出高度。
           style={{
             marginTop: 4,
-            flex: chartExpanded && imuOpen ? 1 : "0 0 auto",
+            // 波形区自己是固定高度（可拖），所以这一块永远按内容高度，
+            // 剩下的高度让视频区去吃——这样拖高波形，视频跟着让位，
+            // 而不是两边抢
+            flex: "0 0 auto",
             minHeight: 0,
             display: "flex",
             flexDirection: "column",
