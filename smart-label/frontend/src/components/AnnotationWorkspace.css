@@ -114,10 +114,3 @@
   background: #fffbf0 !important;
 }
 
-/* 展开时通道标题压扁一点，六行才塞得下 */
-.ws-body--charts-expanded .ws-charts .u-title {
-  font-size: 12px;
-  line-height: 1.1;
-  margin: 0;
-  padding-left: 4px;
-}

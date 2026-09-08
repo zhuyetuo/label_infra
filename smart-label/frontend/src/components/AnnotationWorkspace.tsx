@@ -887,7 +887,6 @@ export default function AnnotationWorkspace({
                       bus={bus}
                       rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
                       key={chartExpanded ? "expanded" : "single"}
-                      compact={chartExpanded}
                       segments={segments}
                       activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
                       onCreateSegment={readOnly ? undefined : handleCreateFromChart}
