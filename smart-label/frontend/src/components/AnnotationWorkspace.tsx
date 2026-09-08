@@ -50,6 +50,8 @@ interface Props {
   approveText?: string;
   /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
   onClaim?: () => void | Promise<void>;
+  /** 已通过的任务想再改：退回重标（轮次+1，上一轮内容原样带过去） */
+  onReopen?: () => void | Promise<void>;
   /** 只认某一类（皮肤复看那边是「抓挠」）标得对，不动别的类别和任务状态 */
   onConfirmScratch?: () => void | Promise<void>;
   /** 上面那个按钮写什么 */
@@ -86,6 +88,7 @@ export default function AnnotationWorkspace({
   onReject,
   approveText,
   onClaim,
+  onReopen,
   onConfirmScratch,
   confirmScratchText,
 }: Props) {
@@ -495,7 +498,7 @@ export default function AnnotationWorkspace({
         readOnly ? (
           // 注意：这里必须给 null 而不是 undefined。footer 传 undefined 时
           // antd 会当成"没设置"，渲染它默认的 取消/确定 两个按钮。
-          onApprove || onReject || onClaim ? (
+          onApprove || onReject || onClaim || onReopen ? (
             <Space>
               {onReject && (
                 <Button danger onClick={onReject}>
@@ -505,6 +508,17 @@ export default function AnnotationWorkspace({
               {/* 只认这一类标得对——比「整份通过」窄得多，所以是单独一个按钮 */}
               {/* 看着看着发现有几段是错的，就地认领改掉，不用退回任务页 */}
               {onClaim && <Button onClick={onClaim}>认领并修改</Button>}
+              {/* 已通过的任务是锁死的，要改只能退回重标：轮次+1，这一轮的片段
+                  原样带到新一轮，不用从头标 */}
+              {onReopen && (
+                <Popconfirm
+                  title="退回重标？"
+                  description="任务轮次 +1，现在这一轮的片段会原样带到新一轮，可以接着改；改完再走一次通过"
+                  onConfirm={onReopen}
+                >
+                  <Button>退回重标</Button>
+                </Popconfirm>
+              )}
               {/* 从皮肤评估进来时只看抓挠，这时该高亮的是「抓挠确认无误」，
                   「整份通过」退成次要——它认的是全部类别，在这个场景下高亮会误导 */}
               {onApprove && (

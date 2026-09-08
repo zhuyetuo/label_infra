@@ -11,7 +11,7 @@ import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingChar
 import { sampleDisplayName } from "@/utils/sampleName";
 import { TaskStatusTag } from "@/utils/taskStatus";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
-import { claimTask, getTask } from "@/api/tasks";
+import { claimTask, getTask, reopenTask } from "@/api/tasks";
 import { approveWholeTask, confirmScratchOnly } from "@/utils/confirmTask";
 import { listLabels } from "@/api/labels";
 import type { LabelDefinition, Task } from "@/types";
@@ -808,6 +808,16 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             ? async () => {
                 await approveTask(wsTask, checkFor?.date);
                 setWsTask(null);
+              }
+            : undefined
+        }
+        // 已通过的任务锁死了，要改只能退回重标（内容会带到新一轮）
+        onReopen={
+          canConfirm && wsTask && wsTask.status === "APPROVED"
+            ? async () => {
+                await reopenTask(wsTask.id, "复看抓挠时发现要改");
+                setWsTask(await getTask(wsTask.id));
+                message.success("已退回重标，可以点「认领并修改」接着改了");
               }
             : undefined
         }
