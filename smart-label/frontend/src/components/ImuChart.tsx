@@ -73,12 +73,43 @@ export interface ChartSegment {
   label: string;
 }
 
+/**
+ * 波形的操作说明。放在外面自己找地方摆——图里不该为这一行常年占着高度，
+ * 工作台是把它塞进面板标题那一行的。
+ */
+export function ImuChartHint() {
+  return (
+    <Tooltip
+      title={
+        <div style={{ lineHeight: 1.7 }}>
+          Shift+滚轮：缩放
+          <br />
+          放大后按住拖动：左右平移（整体视图下全部数据已在视野内，无需拖动）
+          <br />
+          单击 / 拖动黑色播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
+          <br />
+          双击：恢复整体视图
+        </div>
+      }
+    >
+      <span style={{ cursor: "help", fontSize: 12, color: "#999" }}>
+        <QuestionCircleOutlined /> 操作说明
+      </span>
+    </Tooltip>
+  );
+}
+
 interface Props {
   sampleId: number;
   bus: TimeBus;
   rowHeight?: number;
   /** 已标注的时间段，会以半透明色块画在曲线上（标注工作台用） */
   segments?: ChartSegment[];
+  /**
+   * 只在最后一条波形画时间刻度。六条各画一条时间轴，光轴就吃掉一百多像素，
+   * 而它们的横轴本来就是同一条时间线——展开全部时用这个。
+   */
+  timeAxisOnlyLast?: boolean;
   /** 选中的标签颜色。传了就进入"在波形上拖拽划区间"模式，不传则拖拽=平移 */
   activeColor?: string | null;
   onCreateSegment?: (startMs: number, endMs: number) => void;
@@ -106,6 +137,7 @@ export default function ImuChart({
   bus,
   rowHeight = 125,
   segments,
+  timeAxisOnlyLast,
   activeColor,
   onCreateSegment,
   onResizeSegment,
@@ -263,7 +295,13 @@ export default function ImuChart({
           // 日期只在图表下方统一显示一次，不在每条轴上重复
           // size 要显式给：uPlot 的 X 轴默认预留 50px（够放两行日期+时间），
           // 现在每个通道都带轴，再按默认值留就把绘图区挤没了（110的行高只剩43px）
-          axes: [{ show: true, values: axisTimeValues, size: X_AXIS_PX }, {}],
+          axes: [
+            // 不画轴的那几条把 size 也归零，不然位置空着、白占高度
+            timeAxisOnlyLast && !isLast
+              ? { show: false, size: 0 }
+              : { show: true, values: axisTimeValues, size: X_AXIS_PX },
+            {},
+          ],
           series: [
             { value: (_u, v) => (v == null ? "" : formatTimestamp(v)) },
             { label: c.label, stroke: c.color, width: 1.5 },
@@ -331,31 +369,10 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus]);
+  }, [sampleId, rowHeight, bus, timeAxisOnlyLast]);
 
   return (
     <div>
-      {/* 操作说明收进问号里。这四条只在第一次用的时候有用，却天天占着一整行——
-          而这一行本来可以是波形 */}
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 2, textAlign: "right" }}>
-        <Tooltip
-          title={
-            <div style={{ lineHeight: 1.7 }}>
-              Shift+滚轮：缩放
-              <br />
-              放大后按住拖动：左右平移（整体视图下全部数据已在视野内，无需拖动）
-              <br />
-              单击 / 拖动黑色播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
-              <br />
-              双击：恢复整体视图
-            </div>
-          }
-        >
-          <span style={{ cursor: "help" }}>
-            <QuestionCircleOutlined /> 操作说明
-          </span>
-        </Tooltip>
-      </div>
       {CHANNELS.map((c, i) => (
         // 每条波形套一层相对定位的壳，左边缘贴一个平时透明、鼠标移上去才显出来
         // 的通道名。既不占高度，也不挡曲线
