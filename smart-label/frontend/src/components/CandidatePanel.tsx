@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { DownOutlined, RetweetOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
@@ -23,8 +23,8 @@ interface Props {
   loopRange?: { startMs: number; endMs: number } | null;
   /** 确认/排除之后刷新列表；确认时还要把新片段拉进草稿，所以一并重载草稿 */
   onDecided: (c: AiCandidate, decision: AiCandidate["status"]) => void;
-  /** 项目里的标签，给「改成别的类别」用 */
-  labels?: { id: number; display_name: string }[];
+  /** 项目里的标签，给「改成别的类别」用（带颜色，跟已标注片段那边的选择器一致） */
+  labels?: { id: number; display_name: string; color?: string | null }[];
   /** 「抓挠」在这个项目里的标签 id，下拉里要把它排掉（那是「确认是抓挠」干的事） */
   scratchLabelIds?: number[];
 }
@@ -41,10 +41,17 @@ export default function CandidatePanel({
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const [busy, setBusy] = useState<number | null>(null);
+  // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
+  // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
+  const [justDecided, setJustDecided] = useState<Set<number>>(new Set());
+  const empty = candidates.length === 0;
+  useEffect(() => {
+    if (empty) setJustDecided(new Set());
+  }, [empty]);
 
   const rows = useMemo(
-    () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending")),
-    [candidates, filter]
+    () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending" || justDecided.has(c.id))),
+    [candidates, filter, justDecided]
   );
   const pendingCount = candidates.filter((c) => c.status === "pending").length;
 
@@ -59,6 +66,7 @@ export default function CandidatePanel({
             ? `已标成「${labelName}」，加入标注片段`
             : "已确认，已加入标注片段"
       );
+      setJustDecided((prev) => new Set(prev).add(c.id));
       onDecided(c, decision);
     } finally {
       setBusy(null);
@@ -86,6 +94,13 @@ export default function CandidatePanel({
             { label: `全部 ${candidates.length}`, value: "all" },
           ]}
         />
+        {justDecided.size > 0 && filter === "pending" && (
+          <Tooltip title="刚处理过的这几条暂时留着不受筛选影响，方便核对；核对完可以收起来">
+            <Button size="small" onClick={() => setJustDecided(new Set())}>
+              收起刚处理的 {justDecided.size} 条
+            </Button>
+          </Tooltip>
+        )}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           正式片段之外、模型可能漏掉的抓挠。看一眼视频：是抓挠就「确认」，其实是别的动作就「改成别的」
           （比如甩身体——比单纯排除有用，等于给了那个类别一个正例，同时是抓挠最缺的难负样本），
@@ -189,7 +204,15 @@ export default function CandidatePanel({
                     {otherLabels.length > 0 && (
                       <Dropdown
                         menu={{
-                          items: otherLabels.map((l) => ({ key: String(l.id), label: l.display_name })),
+                          // 跟「已标注片段」那边的标签选择器一样带颜色，扫一眼就能对上
+                          items: otherLabels.map((l) => ({
+                            key: String(l.id),
+                            label: (
+                              <Tag color={l.color || undefined} style={{ marginRight: 0 }}>
+                                {l.display_name}
+                              </Tag>
+                            ),
+                          })),
                           onClick: ({ key }) => {
                             const l = otherLabels.find((x) => String(x.id) === key);
                             if (l) decide(c, "confirmed", l.id, l.display_name);
