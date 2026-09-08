@@ -857,7 +857,11 @@ export default function AnnotationWorkspace({
                   loopRange={loopRange}
                   onDecided={async () => {
                     if (taskId == null) return;
-                    // 确认会往当前轮草稿里写一条人工片段，重新拉一次草稿和候选
+                    // 先把本地改动落库！确认候选是后端直接往草稿里写一条，写完这边
+                    // 必须重新拉草稿才看得到——可重新拉会把还没保存的改动（刚点的
+                    // 通过、待定、改类别）整个盖掉，等于白干一遍。所以顺序是：
+                    // 先存自己的，再拉合并后的结果
+                    if (!readOnly) await persist();
                     const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
                     setItems(draft.items);
                     setCandidates(cs);
