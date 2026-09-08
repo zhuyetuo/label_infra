@@ -897,7 +897,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         footer={null}
         // 一天最多二十几行，一行要放"时间段 + 段数 + 状态 + 三个操作"，
         // 720 挤得时间段要折行；给到 1000 上限一屏宽，一行一行看着不累
-        width="min(1180px, 96vw)"
+        width="min(1360px, 96vw)"
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           这天分成好几个小时段各一个任务。点进去会打开标注工作台，片段列表已经筛好「抓挠」，
@@ -977,6 +977,32 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 ) : viewed.has(t.task_id) ? (
                   <Tag color="blue">已看过</Tag>
                 ) : null,
+            },
+            {
+              title: "疑似抓挠",
+              width: 210,
+              // 正式片段之外模型可能漏掉的那些。这里主要看"还剩几条没看"，
+              // 以及看完的结论：补成抓挠 / 改成别的类别（人纠正过的误报）/ 排除
+              render: (_: unknown, t) => {
+                const total = t.cand_pending + t.cand_confirmed + t.cand_relabeled + t.cand_rejected;
+                if (!total) return <Typography.Text type="secondary">无</Typography.Text>;
+                return (
+                  <Space size={4} wrap>
+                    {t.cand_pending > 0 && <Tag color="gold">待确认 {t.cand_pending}</Tag>}
+                    {t.cand_confirmed > 0 && (
+                      <Tooltip title="看完确认确实是抓挠，已补成正式片段（模型漏检）">
+                        <Tag color="green">补抓挠 {t.cand_confirmed}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.cand_relabeled > 0 && (
+                      <Tooltip title="其实是别的动作（多半是甩身体），已按那个类别记下——既是那类的正例，也是抓挠的难负样本">
+                        <Tag color="blue">改类别 {t.cand_relabeled}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.cand_rejected > 0 && <Tag>排除 {t.cand_rejected}</Tag>}
+                  </Space>
+                );
+              },
             },
             {
               title: "操作",

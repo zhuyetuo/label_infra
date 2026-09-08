@@ -14,6 +14,8 @@ export interface AiCandidate {
   /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 */
   reason: "low_conf" | "spectral";
   status: "pending" | "confirmed" | "rejected";
+  /** 确认成了哪个类别；空 = 就是抓挠，有值 = 人看完判成别的动作 */
+  decided_label_id: number | null;
   decided_by: number | null;
   decided_at: string | null;
 }
