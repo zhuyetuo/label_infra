@@ -798,7 +798,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   查看标注
                 </Button>
               ) : (
-                <Typography.Text type="secondary">—</Typography.Text>
+                // 这一页的行来自 IMU 日统计，每天每只狗都有；能不能复看是另一回事——
+                // 得这天这只狗在标注平台上有任务才行。写清楚缺的是哪一步，不然
+                // 一个「—」看着像出了故障
+                <Tooltip title="这天这只狗在标注平台上还没有任务，没得可看。要么样本还没扫进来，要么扫进来了还没建任务（去「项目」里给这天建任务）">
+                  <Typography.Text type="secondary">—</Typography.Text>
+                </Tooltip>
               ),
           },
           {
