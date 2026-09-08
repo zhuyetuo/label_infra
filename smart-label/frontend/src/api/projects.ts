@@ -12,7 +12,7 @@ export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "
 export const deleteProject = (id: number) => request.delete<never, null>(`/projects/${id}`);
 
 export interface PrelabelProgress {
-  status: "idle" | "running" | "done" | "error";
+  status: "idle" | "running" | "done" | "cancelled" | "error";
   project_id: number;
   total: number;
   processed: number;
@@ -42,6 +42,10 @@ export const startProjectPrelabel = (id: number, overwriteAi = false, mode: Infe
 
 export const getProjectPrelabelStatus = (id: number) =>
   request.get<never, PrelabelProgress>(`/projects/${id}/ai-prelabel/status`);
+
+/** 停掉正在跑的批量预标注。已发出去的那一批停不下来，是「跑完这批就停」 */
+export const cancelProjectPrelabel = (id: number) =>
+  request.post<never, { stopped: boolean }>(`/projects/${id}/ai-prelabel/cancel`);
 
 /** 跑完一次记一条：总耗时、AI 等待耗时、数量，慢了好拿数字去反馈 */
 export interface PrelabelRun {
