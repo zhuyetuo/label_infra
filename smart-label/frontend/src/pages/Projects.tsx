@@ -46,7 +46,7 @@ import {
   releaseTask,
   reopenTask,
 } from "@/api/tasks";
-import { getSavedText, saveText } from "@/utils/persistedSize";
+import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
 import { listLabels } from "@/api/labels";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
@@ -62,6 +62,11 @@ import { INFER_MODE_HINT, INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode }
 // 上次用的预标注版本：用惯哪个就默认哪个，省得每次重选
 const PRELABEL_MODE_KEY = "smart-label:prelabel-mode";
 const CREATE_MODE_KEY = "smart-label:create-infer-mode";
+// 「连已经有 AI 片段的也重跑」也记住：换了模型想全量刷新时，每个项目都要重勾
+// 一遍太烦，而这个选择在一轮刷新里通常是一致的
+const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
+// 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
+const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
@@ -124,14 +129,14 @@ export default function Projects() {
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
   const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
-  const [prelabelOverwrite, setPrelabelOverwrite] = useState(false);
+  const [prelabelOverwrite, setPrelabelOverwrite] = useState(() => getSavedBool(PRELABEL_OVERWRITE_KEY, false));
   // 记住上次用的版本：用惯哪个就默认哪个，不用每次重选
   const [prelabelMode, setPrelabelMode] = useState<InferMode>(
-    () => (getSavedText(PRELABEL_MODE_KEY, "stable") as InferMode)
+    () => (getSavedText(PRELABEL_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
   );
   // 新建项目 / 批量导入时 ai_assisted 自动跑预标注用哪个版本
   const [createInferMode, setCreateInferMode] = useState<InferMode>(
-    () => (getSavedText(CREATE_MODE_KEY, "stable") as InferMode)
+    () => (getSavedText(CREATE_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
   );
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
@@ -1187,9 +1192,19 @@ export default function Projects() {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {INFER_MODE_HINT[prelabelMode]}
             </Typography.Text>
-            <Checkbox checked={prelabelOverwrite} onChange={(e) => setPrelabelOverwrite(e.target.checked)}>
-              连已经有 AI 片段（但没人改过/确认过）的任务也重新跑一遍（比如换了模型想刷新）
+            <Checkbox
+              checked={prelabelOverwrite}
+              onChange={(e) => {
+                setPrelabelOverwrite(e.target.checked);
+                saveBool(PRELABEL_OVERWRITE_KEY, e.target.checked);
+              }}
+            >
+              连已经有 AI 片段的任务也重跑，用新结果<b>覆盖</b>旧的
             </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              不勾：已经有 AI 片段的任务直接跳过（只跑还没跑过的），换模型想刷新就得勾上。
+              两种情况下<b>有人改过/确认过/标了待定的任务都不会被碰</b>——那是复看的成果。
+            </Typography.Text>
             <Typography.Text>
               本次将处理 <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite)}</b> 个任务。AI 服务按文件多进程并行跑，
               整个过程在后台进行，项目行里能看到进度和预计剩余时间。
