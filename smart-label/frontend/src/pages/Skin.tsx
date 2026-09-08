@@ -657,7 +657,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const confirmScratch = async (task: Task) => {
     setConfirming(task.id);
     try {
-      const n = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
+      const r = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
       setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
       // 确认过抓挠的任务现在也算进人工版了，顺手重算这一天再刷新跟踪表
       if (checkFor?.date) {
@@ -667,7 +667,20 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       // 确认完任务已经放回待认领，工作台里那份状态得跟上（不然底部按钮
       // 还按"标注中"渲染）
       setWsTask((cur) => (cur && cur.id === task.id ? { ...cur, status: "PENDING_ASSIGN", locked_by: null } : cur));
-      message.success(n ? `已确认 ${n} 段抓挠` : "这段里的抓挠之前就确认过了");
+      // 0 段有好几种意思，含糊一句「之前就确认过了」看着像刚才白干了——
+      // 尤其是刚在「疑似抓挠」里改完一堆类别的时候。说清楚是哪一种，
+      // 并且明确这一段已经记成「抓挠已确认」了
+      message.success(
+        r.confirmed
+          ? `已确认 ${r.confirmed} 段抓挠`
+          : r.total === 0
+            ? "这段里 AI 没标出抓挠，已记为「抓挠已确认」"
+            : r.already && !r.uncertain
+              ? `这 ${r.already} 段抓挠之前已经确认过，没有新的要确认`
+              : r.uncertain && !r.already
+                ? `这段的 ${r.uncertain} 段抓挠都标成了待定，没有可确认的`
+                : `没有新的要确认（已确认 ${r.already} 段、待定 ${r.uncertain} 段）`
+      );
     } catch (e) {
       message.error(`确认失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
