@@ -109,6 +109,8 @@ interface Props {
   onDelete: (id: number) => void;
   /** 从候选确认上来的片段：退回去重新判断（删掉这条 + 那条候选回到待确认） */
   onReturnToCandidate?: (i: LabelItem) => void | Promise<void>;
+  /** 刚重跑出来、跟人工已定片段撞上的那些：标个「疑似重复」好逐条对比 */
+  dupIds?: Set<number>;
   /** 在"未预测片段"视图里给一段空白补上标签，直接生成一条人工片段 */
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
   /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
@@ -128,6 +130,7 @@ export default function SegmentPanel({
   onUpdate,
   onDelete,
   onReturnToCandidate,
+  dupIds,
   onCreate,
   initialFilterLabels,
 }: Props) {
@@ -535,6 +538,13 @@ export default function SegmentPanel({
             render: (_, i: LabelItem) => {
               const st = aiState(i);
               // 刚改过的：说清楚它为什么还留在这儿（已经不符合当前筛选了）
+              // 重跑之后跟人工已定片段重叠的：多半是同一段被这一版又标了一遍，
+              // 但起止/置信度可能不同，值得摆在一起看，所以标出来而不是自动删
+              const dupTag = dupIds?.has(i.id) ? (
+                <Tooltip title="跟一段人工已确认/已修改的片段重叠——同一段被这一版又标了一遍，对比一下起止和置信度，留一条就好">
+                  <Tag color="volcano" style={{ marginLeft: 4 }}>疑似重复</Tag>
+                </Tooltip>
+              ) : null;
               const justTag = justEdited.has(i.id) ? (
                 <Tooltip title="刚改过，暂时不受筛选影响，方便你核对">
                   <Tag color="gold" style={{ marginLeft: 4 }}>刚改</Tag>
@@ -548,6 +558,7 @@ export default function SegmentPanel({
                       <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
                     </Tooltip>
                     {justTag}
+                    {dupTag}
                   </>
                 );
               }
@@ -563,6 +574,7 @@ export default function SegmentPanel({
                     <Tag>人工</Tag>
                   )}
                   {justTag}
+                  {dupTag}
                 </>
               );
             },

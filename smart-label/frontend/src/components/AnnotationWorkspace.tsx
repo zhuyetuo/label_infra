@@ -133,6 +133,12 @@ export default function AnnotationWorkspace({
   const [candidates, setCandidates] = useState<AiCandidate[]>([]);
   // 现在这份 AI 结果是哪个版本/哪个模型跑的
   const [aiInfo, setAiInfo] = useState<AiLabelInfo | null>(null);
+  // 重跑之后，跟人工已定片段撞上的那些新片段：标出来方便逐条对比
+  const [dupIds, setDupIds] = useState<Set<number>>(new Set());
+  // 人工碰过、重跑时必须留下的片段数（确认过/改过/待定/自己画的）
+  const humanTouched = items.filter(
+    (i) => i.source_type !== "ai_generated" || i.ai_confirmed || i.is_modified || i.uncertain
+  ).length;
   const [labelId, setLabelId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -355,9 +361,27 @@ export default function AnnotationWorkspace({
           created_by: null,
         });
       });
-      // 已有的 AI 条目先清掉再填，避免重复点两次叠两层；人工画的保留
-      setItems((prev) => [...prev.filter((i) => i.source_type !== "ai_generated" || i.origin_item_id != null), ...created]);
+      // 只清掉"没人碰过"的 AI 片段，然后填新的。
+      // 之前的写法是 `source_type !== ai_generated || origin_item_id != null`——
+      // 意思是"已经存过库的 AI 片段"也留着，于是重跑一次就在旧的上面又叠一层，
+      // 13 段变 78 段。人工碰过的（确认过/改过/标了待定/自己画的）必须留下：
+      // 那是复看的成果，重跑一次模型不能把它抹掉。
+      const untouchedAi = (i: LabelItem) =>
+        i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain;
+      const kept = items.filter((i) => !untouchedAi(i));
+      // 新结果里跟"人工已经定过"的片段撞在一起的，多半是同一段被这一版又标了
+      // 一遍。不自动删——起止可能不一样，值得对比——但要标出来让人一眼看见
+      const overlaps = (a: LabelItem, b: LabelItem) =>
+        a.start_time_ms < b.end_time_ms && b.start_time_ms < a.end_time_ms && a.label_id === b.label_id;
+      const dup = new Set<number>();
+      for (const c of created) {
+        if (kept.some((k) => overlaps(c, k))) dup.add(c.id);
+      }
+      setDupIds(dup);
+      setItems([...kept, ...created]);
       const parts = [`AI 预标注完成：填入 ${created.length} 段`];
+      if (kept.length) parts.push(`保留了 ${kept.length} 段人工确认/修改过的`);
+      if (dup.size) parts.push(`其中 ${dup.size} 段跟人工片段重叠，已标「疑似重复」`);
       if (unmatched.size) parts.push(`类别「${[...unmatched].join("、")}」没有对应标签，已跳过`);
       if (res.skipped) parts.push(`${res.skipped} 段时间无效已忽略`);
       if (taskId != null) listCandidates(taskId).then(setCandidates).catch(() => {});
@@ -665,17 +689,24 @@ export default function AnnotationWorkspace({
                 <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
               )}
               {hasCsv && sampleId != null && labels.length > 0 && (
-                <Tooltip title="调用 AI 模型对这条 IMU 数据做行为识别，结果作为预填的标注框，可以再手动修改">
-                  <Button
-                    size="small"
-                    icon={<ThunderboltOutlined />}
-                    loading={prelabeling}
-                    onClick={handleAiPrelabel}
-                    style={{ marginLeft: 8 }}
-                  >
+                /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
+                   换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */
+                <Popconfirm
+                  title={`用「${INFER_MODE_LABEL[prelabelMode] ?? prelabelMode}」重新跑一遍？`}
+                  description={
+                    <div style={{ maxWidth: 380, whiteSpace: "normal" }}>
+                      没人碰过的 AI 片段会被这一版的结果整批替换；
+                      <b>已确认 / 已改类别 / 标了待定 / 自己画的（{humanTouched} 段）会原样保留</b>
+                      ，跟新结果重叠的会标出「疑似重复」方便对比。
+                    </div>
+                  }
+                  okText="重新跑"
+                  onConfirm={handleAiPrelabel}
+                >
+                  <Button size="small" icon={<ThunderboltOutlined />} loading={prelabeling} style={{ marginLeft: 8 }}>
                     AI预标注
                   </Button>
-                </Tooltip>
+                </Popconfirm>
               )}
               {hasCsv && sampleId != null && labels.length > 0 && (
                 <Tooltip title="稳定版：滞回+合并+过滤；稳定版 v2：Viterbi 解码；调试版：模型逐窗口原始输出">
@@ -862,6 +893,7 @@ export default function AnnotationWorkspace({
                   onSeek={(ms) => bus.seek(ms / 1000)}
                   onLoop={setLoop}
                   loopRange={loopRange}
+                  dupIds={dupIds}
                   onUpdate={updateItems}
                   onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
                   onReturnToCandidate={async (i) => {
