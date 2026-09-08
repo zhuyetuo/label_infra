@@ -15,7 +15,8 @@ type SourceFilter =
   | "human"
   | "uncertain"
   | "uncertain_no_view"
-  | "uncertain_ambiguous";
+  | "uncertain_ambiguous"
+  | "uncertain_needs_split";
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
@@ -27,13 +28,24 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "uncertain", label: "待定（全部）" },
   { value: "uncertain_no_view", label: "待定·没画面" },
   { value: "uncertain_ambiguous", label: "待定·看不清" },
+  { value: "uncertain_needs_split", label: "待定·要细切" },
 ];
 
-// 待定的两种情况。都不进训练集，分开记是为了知道"以后回看还有没有救"：
-// 没画面的除非补拍否则永远定不了，看不清的换个视角/放慢也许还能定。
+// 待定的三种情况。都不进训练集，但后续该怎么办完全不同，所以必须分开记、
+// 而且每个界面上都要写明是哪一种，不然复看的人得逐条点进去才知道哪些还值得看：
+//   没画面 —— 除非补拍否则永远定不了，可以直接跳过不用再看
+//   看不清 —— 换个人、换个视角、放慢也许还能定，值得再看一遍
+//   要细切 —— 已经确定是抓挠了，只是这一段里混了甩身体/走路，起止要调、要拆细，
+//            纯粹是没时间做，不是判断不了。有空回来弄就行
 const UNCERTAIN_KINDS = [
   { value: "no_view", short: "没画面", label: "画面里没拍到狗", hint: "镜头里根本没有狗，无从判断" },
   { value: "ambiguous", short: "看不清", label: "拍到了但看不准", hint: "像抓挠又不太像，定不下来" },
+  {
+    value: "needs_split",
+    short: "要细切",
+    label: "是抓挠，但起止要调 / 要拆细",
+    hint: "确实是抓挠，只是这段里还混了甩身体、走路之类，起止要调、要拆成几段——暂时没时间，先挂着",
+  },
 ] as const;
 const kindOf = (v: string | null) => UNCERTAIN_KINDS.find((k) => k.value === v);
 
@@ -201,6 +213,7 @@ export default function SegmentPanel({
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
+        if (filterSource === "uncertain_needs_split" && i.uncertain_reason !== "needs_split") return false;
         // 「待定」是单独一类，别混进别的来源的筛选结果里
         if (!filterSource.startsWith("uncertain") && filterSource !== "all" && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
@@ -251,6 +264,11 @@ export default function SegmentPanel({
   const cov = useMemo(() => coverage(items, durationMs), [items, durationMs]);
   const pendingTotal = items.filter((i) => aiState(i) === "pending").length;
   const uncertainTotal = items.filter((i) => i.uncertain).length;
+  // 待定按原因拆开写，「待定 5」看不出哪些还值得回头看
+  const uncertainBreakdown = UNCERTAIN_KINDS.map((k) => ({
+    short: k.short,
+    n: items.filter((i) => i.uncertain && i.uncertain_reason === k.value).length,
+  })).filter((x) => x.n > 0);
   const pendingInView = filtered.filter((i) => aiState(i) === "pending");
 
   const openEditor = (i: LabelItem) => {
@@ -336,7 +354,15 @@ export default function SegmentPanel({
             <>
               显示 {filtered.length} / 共 {items.length}
               {pendingTotal > 0 && <>，AI 待确认 {pendingTotal}</>}
-              {uncertainTotal > 0 && <>，待定 {uncertainTotal}（不进训练集）</>}
+              {uncertainTotal > 0 && (
+                <>
+                  ，待定 {uncertainTotal}
+                  {uncertainBreakdown.length > 0 && (
+                    <>（{uncertainBreakdown.map((x) => `${x.short} ${x.n}`).join(" / ")}）</>
+                  )}
+                  （不进训练集）
+                </>
+              )}
               {justEdited.size > 0 && <>，刚改 {justEdited.size}</>}
             </>
           )}

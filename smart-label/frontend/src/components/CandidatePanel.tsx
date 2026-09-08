@@ -31,11 +31,13 @@ interface Props {
   onUndo?: (c: AiCandidate) => Promise<void>;
 }
 
-// 跟正式片段上的「待定」同一套：没画面的除非补拍否则永远定不了，看不清的
-// 换个视角/放慢也许还能定，分开记以后才知道哪些还有救
+// 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
+// 跳过）、看不清的换个人/换个视角也许还能定（值得再看）、要细切的是已经确定
+// 是抓挠、只是起止要调，纯排期问题。每处都写明是哪一种，不然得逐条点开才知道
 const UNCERTAIN_KINDS = [
   { value: "no_view", short: "没画面", label: "画面里没拍到狗" },
   { value: "ambiguous", short: "看不清", label: "拍到了但看不准" },
+  { value: "needs_split", short: "要细切", label: "是抓挠，但起止要调 / 要拆细" },
 ] as const;
 
 export default function CandidatePanel({

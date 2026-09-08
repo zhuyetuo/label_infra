@@ -1115,9 +1115,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               title: "人工复看",
               width: 230,
               // 光看「9 段」不知道人看过没有、看完是什么结论。这几个数就是结论：
-              // 确认了几段、改走几段（比如其实是甩身体）、待定几段（分两种原因）
+              // 确认了几段、改走几段（比如其实是甩身体）、待定几段（三种原因分开写）
               render: (_: unknown, t) => {
-                const un = t.uncertain_no_view + t.uncertain_ambiguous;
+                const un = t.uncertain_no_view + t.uncertain_ambiguous + t.uncertain_needs_split;
                 if (!t.confirmed && !t.relabeled && !un) {
                   return <Typography.Text type="secondary">未复看</Typography.Text>;
                 }
@@ -1135,8 +1135,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                       </Tooltip>
                     )}
                     {t.uncertain_ambiguous > 0 && (
-                      <Tooltip title="拍到了但像抓挠又不太像（可能被遮挡）；不进训练集，也不算人定的抓挠">
+                      <Tooltip title="拍到了但像抓挠又不太像（可能被遮挡）；不进训练集，也不算人定的抓挠。换个人/换个视角也许还能定，值得再看">
                         <Tag color="purple">看不清 {t.uncertain_ambiguous}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.uncertain_needs_split > 0 && (
+                      <Tooltip title="确实是抓挠，只是这段里还混了甩身体、走路之类，起止要调、要拆成几段——是排期问题不是判断问题，有空回来弄">
+                        <Tag color="magenta">要细切 {t.uncertain_needs_split}</Tag>
                       </Tooltip>
                     )}
                   </Space>
@@ -1183,9 +1188,21 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                         <Tag color="blue">改类别 {t.cand_relabeled}</Tag>
                       </Tooltip>
                     )}
-                    {t.cand_uncertain > 0 && (
-                      <Tooltip title="看了也拿不准（没画面 / 看不清）；不进训练集，也不算抓挠">
-                        <Tag color="purple">待定 {t.cand_uncertain}</Tag>
+                    {/* 待定要写明是哪一种：没画面的可以直接跳过不用再看，看不清的
+                        值得换个人再看，要细切的是已经定了性、只差排期 */}
+                    {t.cand_uncertain_no_view > 0 && (
+                      <Tooltip title="画面里没拍到狗，无从判断；除非补拍否则永远定不了，可以直接跳过">
+                        <Tag color="purple">待定·没画面 {t.cand_uncertain_no_view}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.cand_uncertain_ambiguous > 0 && (
+                      <Tooltip title="拍到了但像抓挠又不太像；换个人/换个视角也许还能定，值得再看一遍">
+                        <Tag color="purple">待定·看不清 {t.cand_uncertain_ambiguous}</Tag>
+                      </Tooltip>
+                    )}
+                    {t.cand_uncertain_needs_split > 0 && (
+                      <Tooltip title="确实是抓挠，只是起止要调、要拆细；是排期问题不是判断问题">
+                        <Tag color="magenta">待定·要细切 {t.cand_uncertain_needs_split}</Tag>
                       </Tooltip>
                     )}
                     {t.cand_rejected > 0 && <Tag>排除 {t.cand_rejected}</Tag>}

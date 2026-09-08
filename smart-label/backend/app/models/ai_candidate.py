@@ -43,9 +43,9 @@ class AiCandidate(Base):
     decided_label_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("label_definitions.id"), nullable=True, comment="确认成了哪个类别，空=抓挠"
     )
-    # 待定的哪一种：no_view / ambiguous，跟片段上的 uncertain_reason 同一套
+    # 待定的哪一种：no_view / ambiguous / needs_split，跟片段上的 uncertain_reason 同一套
     uncertain_reason: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, comment="待定原因：no_view / ambiguous"
+        String(16), nullable=True, comment="待定原因：no_view / ambiguous / needs_split"
     )
     decided_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

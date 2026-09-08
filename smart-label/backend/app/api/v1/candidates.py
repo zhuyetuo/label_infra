@@ -68,7 +68,7 @@ async def list_candidates(
 class DecideIn(BaseModel):
     decision: str  # confirmed / rejected / uncertain / pending
     label_id: int | None = None  # 确认时写进草稿用哪个标签，留空按 label_name 找
-    uncertain_reason: str | None = None  # 待定时是哪一种：no_view / ambiguous
+    uncertain_reason: str | None = None  # 待定时是哪一种：no_view / ambiguous / needs_split
 
 
 @router.post("/{candidate_id}/decide")

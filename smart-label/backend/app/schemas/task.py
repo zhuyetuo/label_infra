@@ -58,7 +58,8 @@ class LabelItemIn(BaseModel):
     ai_confirmed: bool | None = None
     # 待定：拿不准，保留记录但不参与训练。不传 = 保持库里原值
     uncertain: bool | None = None
-    # 待定原因：no_view（画面里没拍到狗）/ ambiguous（拍到了但看不准）
+    # 待定原因：no_view（画面里没拍到狗）/ ambiguous（拍到了但看不准）/
+    # needs_split（是抓挠但混了别的动作，起止要调、要拆细，暂时没时间）
     uncertain_reason: str | None = None
 
 
