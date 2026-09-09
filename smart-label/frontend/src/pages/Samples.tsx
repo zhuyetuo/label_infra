@@ -7,6 +7,7 @@ import {
   getImportScanStatus,
   startImportScan,
   listSamples,
+  setSamplesDog,
   setSamplesSensitive,
   updateSample,
   type ScanProgress,
@@ -97,6 +98,24 @@ export default function Samples() {
     setSelected(new Set());
     qc.invalidateQueries({ queryKey: ["samples"] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
+  };
+
+  // 跟「所属狗」列的下拉显示同一套写法，两处不一致的话人会以为选错了
+  const dogLabel = (dogId: number) => {
+    const d = dogs?.find((x) => x.id === dogId);
+    if (!d) return `#${dogId}`;
+    return d.name ? `${d.dog_code}（${d.name}）` : d.dog_code;
+  };
+
+  // 一天一个机位就有 30 份样本（每小时一段），而同一天同一个机位戴在哪只狗身上
+  // 是固定的——挨个下拉选 30 次纯属白费功夫
+  const assignDogBulk = async (dogId: number | null) => {
+    if (selected.size === 0) return;
+    const r = await setSamplesDog([...selected], dogId);
+    const who = dogId == null ? "解除关联" : `关联到 ${dogLabel(dogId)}`;
+    message.success(`已把 ${r.updated} 个样本${who}`);
+    setSelected(new Set());
+    qc.invalidateQueries({ queryKey: ["samples"] });
   };
 
   const applyBulk = async (on: boolean) => {
@@ -280,6 +299,24 @@ export default function Samples() {
         {selected.size > 0 && (
           <>
             <Tag>已勾选 {selected.size}</Tag>
+            <Select
+              size="small"
+              allowClear
+              placeholder={`批量关联狗（${selected.size} 个）`}
+              style={{ width: 190 }}
+              // 不受控：选完就发请求、清空选中，下拉自己不该留着上次选的值
+              value={null}
+              options={dogs?.map((d) => ({ value: d.id, label: d.name ? `${d.dog_code}（${d.name}）` : d.dog_code }))}
+              onChange={(v) => assignDogBulk(v ?? null)}
+              showSearch
+              optionFilterProp="label"
+            />
+            <Popconfirm
+              title={`解除这 ${selected.size} 个样本的狗关联？`}
+              onConfirm={() => assignDogBulk(null)}
+            >
+              <Button size="small">解除关联</Button>
+            </Popconfirm>
             <Button size="small" danger icon={<LockOutlined />} onClick={() => setMarkOpen(true)}>
               标记为敏感
             </Button>

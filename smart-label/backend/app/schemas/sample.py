@@ -49,6 +49,13 @@ class SampleSensitiveBulk(BaseModel):
     sensitive_note: str | None = None
 
 
+class SampleDogBulk(BaseModel):
+    """一批样本一起关联到同一只狗。dog_id 传 null = 解除关联。"""
+
+    sample_ids: list[int]
+    dog_id: int | None = None
+
+
 class SampleDeleteBulk(BaseModel):
     """一批样本连同上面的任务一起删。"""
 
