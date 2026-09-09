@@ -13,6 +13,7 @@ class DogOut(BaseModel):
     imu: str | None
     aliases: str | None
     site: str | None
+    size: str | None
     birth_date: date | None
     remark: str | None
     created_at: datetime
@@ -31,6 +32,7 @@ class DogCreate(BaseModel):
     imu: str | None = None
     aliases: str | None = None
     site: str | None = None
+    size: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
@@ -41,6 +43,7 @@ class DogUpdate(BaseModel):
     imu: str | None = None
     aliases: str | None = None
     site: str | None = None
+    size: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
