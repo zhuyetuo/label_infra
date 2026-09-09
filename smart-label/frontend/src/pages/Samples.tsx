@@ -443,9 +443,23 @@ export default function Samples() {
                             {imu}（{rows.length} 个样本）
                           </span>
                           {cur && (
-                            <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
-                              {cur.text}
-                            </Tag>
+                            <>
+                              <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
+                                {cur.text}
+                              </Tag>
+                              {/* 解除单独放一个按钮，不塞进上面那个下拉当一个选项：
+                                  它是清空不是改值，混在狗名列表里太容易点错 */}
+                              <span onClick={(e) => e.stopPropagation()}>
+                                <Popconfirm
+                                  title={`解除 ${imu} 这 ${rows.length} 个样本的狗关联？`}
+                                  onConfirm={() => assignDog(rows.map((r) => r.id), null)}
+                                >
+                                  <Button size="small" type="link" style={{ padding: 0 }}>
+                                    解除
+                                  </Button>
+                                </Popconfirm>
+                              </span>
+                            </>
                           )}
                           {/* 挡掉冒泡：不挡的话点下拉会把这个折叠面板收起来，选项列表跟着消失 */}
                           <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: "auto" }}>
