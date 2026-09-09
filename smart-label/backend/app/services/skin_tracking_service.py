@@ -40,6 +40,7 @@ from app.models.sample import Sample
 from app.models.skin import SkinRecord
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
+from app.services.dog_name_service import imu_keys_of_dog
 
 _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
@@ -178,18 +179,18 @@ async def daily_tracking(
         rec_by_key[(r.fill_date.isoformat(), r.dog_name)] = r
 
     photo_index = await asyncio.to_thread(_photo_index)
-    # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、机位号 IMU1）
-    # 唯一能对上的地方：机位号优先，没登记就退回按编号数字当机位（IMU1 ↔ 编号1）
+    # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、设备号 IMU1）
+    # 唯一能对上的地方。一只狗配两个 IMU 轮换充电，两个都要挂上同一套别名，
+    # 否则换了设备的那几天照片就对不上了
     dog_rows = (await db.execute(select(Dog))).scalars().all()
     alias_by_imu: dict[str, set[str]] = defaultdict(set)
     for d in dog_rows:
-        imu_key = (d.imu or "").strip().upper() or (f"IMU{d.dog_code}" if (d.dog_code or "").isdigit() else "")
-        if not imu_key:
+        imu_keys = imu_keys_of_dog(d.imu, d.dog_code)
+        if not imu_keys:
             continue
-        for v in [d.name, d.breed, *(d.aliases or "").replace("，", ",").split(",")]:
-            v = (v or "").strip()
-            if v:
-                alias_by_imu[imu_key].add(v)
+        names = {v.strip() for v in [d.name, d.breed, *(d.aliases or "").replace("，", ",").split(",")] if (v or "").strip()}
+        for imu_key in imu_keys:
+            alias_by_imu[imu_key] |= names
 
     # 这一天这只狗底下有哪几个任务：跟踪表里点「查看标注」要跳过去复看，
     # 顺带带上每个任务里「抓挠」片段有几段，好挑哪一段去看

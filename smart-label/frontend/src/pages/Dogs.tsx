@@ -270,11 +270,12 @@ export default function Dogs() {
           styles={{ root: { maxWidth: 460 } }}
           title={
             <span style={{ fontSize: 12 }}>
-              同一只狗在三个地方叫法不一样，这一页是把它们对上的地方：样本编号里只有<b>机位号</b>（_imu1）、
+              同一只狗在三个地方叫法不一样，这一页是把它们对上的地方：样本编号里只有<b>IMU 设备号</b>（_imu1）、
               皮肤评估用「比熊-BB」这种「品种-名字」、NAS 照片目录又常写成 bibi / Bali。
               <br />
-              所以<b>机位</b>填 IMU1（留空按编号当机位，编号 1 = IMU1）；<b>别名</b>填 NAS 上的照片目录名
-              （逗号分隔），皮肤评估的「照片」列才找得到图。
+              所以<b>设备号</b>填这只狗戴的 IMU——每只狗配两个轮换充电，两个都填上（逗号分隔），
+              换了设备的那几天才认得出还是这只狗；留空按编号当设备号，编号 1 = IMU1。
+              <b>别名</b>填 NAS 上的照片目录名（逗号分隔），皮肤评估的「照片」列才找得到图。
               <br />
               编号一般不用手建：样本扫描时会从文件名里自动识别建档。点左侧箭头展开可以记体重/颈围、
               看这只狗每天的样本和标注进度。格子点一下就能直接改。
@@ -338,7 +339,23 @@ export default function Dogs() {
         // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
         scroll={{ x: "max-content" }}
         columns={dogWidth.applyResize<Dog>(dogSort.applySort<Dog>([
-          { title: "编号", dataIndex: "dog_code", width: 120 },
+          {
+            title: "编号",
+            dataIndex: "dog_code",
+            width: 100,
+            defaultSortOrder: "ascend" as const,
+            // 数字编号按数字比，不按字典序——字典序下 10 会排到 2 前面。
+            // 非数字的编号（以后可能有）排在数字后面，内部按字典序
+            sorter: (a: Dog, b: Dog) => {
+              const na = Number(a.dog_code);
+              const nb = Number(b.dog_code);
+              const aNum = Number.isFinite(na);
+              const bNum = Number.isFinite(nb);
+              if (aNum && bNum) return na - nb;
+              if (aNum !== bNum) return aNum ? -1 : 1;
+              return a.dog_code.localeCompare(b.dog_code);
+            },
+          },
           {
             title: "名字",
             dataIndex: "name",
@@ -352,20 +369,43 @@ export default function Dogs() {
               cell(d, "breed", <InlineText value={v} placeholder="品种" onSave={(x) => saveField(d, { breed: x })} onDone={doneEditing} />, v || "-"),
           },
           {
-            title: "机位",
+            title: (
+              <Tooltip title="这只狗戴的 IMU 设备号，对应样本编号里的 _imu5。每只狗配两个设备轮换充电，两个都填上（逗号分隔），换了设备的那几天才认得出还是这只狗。留空按编号当设备号，编号 1 = IMU1">
+                <span>设备号</span>
+              </Tooltip>
+            ),
+            key: "imu",
             dataIndex: "imu",
-            width: 110,
+            width: 150,
             render: (v: string | null, d: Dog) =>
               cell(
                 d,
                 "imu",
                 <InlineText
                   value={v}
-                  placeholder={`IMU${d.dog_code}`}
+                  placeholder="IMU5, IMU9"
                   onSave={(x) => saveField(d, { imu: x })}
                   onDone={doneEditing}
                 />,
-                v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-")
+                v ? (
+                  // 两个设备各显示一个 Tag，比 "IMU5, IMU9" 一串好认
+                  <Space size={2} wrap>
+                    {v
+                      .replace(/，/g, ",")
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean)
+                      .map((x) => (
+                        <Tag key={x} style={{ marginRight: 0 }}>
+                          {/^\d+$/.test(x) ? `IMU${x}` : x.toUpperCase()}
+                        </Tag>
+                      ))}
+                  </Space>
+                ) : /^\d+$/.test(d.dog_code) ? (
+                  <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span>
+                ) : (
+                  "-"
+                )
               ),
           },
           {
@@ -597,8 +637,12 @@ export default function Dogs() {
           <Form.Item name="breed" label="品种">
             <Input />
           </Form.Item>
-          <Form.Item name="imu" label="机位" tooltip="这只狗戴的是哪个机位，样本编号 _imu1 对应 IMU1。留空按编号推断">
-            <Input placeholder="IMU1" />
+          <Form.Item
+            name="imu"
+            label="设备号"
+            tooltip="这只狗戴的 IMU 设备号，对应样本编号里的 _imu1。每只狗配两个轮换充电，两个都填上（逗号分隔）。留空按编号推断"
+          >
+            <Input placeholder="IMU5, IMU9" />
           </Form.Item>
           <Form.Item
             name="aliases"
