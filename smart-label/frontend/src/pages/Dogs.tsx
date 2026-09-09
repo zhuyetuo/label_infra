@@ -3,7 +3,6 @@ import {
   Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tabs, Tag, Tooltip,
   Typography, message,
 } from "antd";
-import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import DogMeasurements from "@/components/DogMeasurements";
 import DogPhotos from "@/components/DogPhotos";
@@ -50,10 +49,12 @@ const SITE_TAB_KEY = "smart-label:dogs-site-tab";
 function InlineText({
   value,
   onSave,
+  onDone,
   placeholder,
 }: {
   value: string | null;
   onSave: (v: string | null) => void;
+  onDone: () => void;
   placeholder?: string;
 }) {
   const [v, setV] = useState(value ?? "");
@@ -61,14 +62,16 @@ function InlineText({
   return (
     <Input
       size="small"
+      autoFocus
       value={v}
       placeholder={placeholder}
       onChange={(e) => setV(e.target.value)}
       onPressEnter={(e) => (e.target as HTMLInputElement).blur()}
       onBlur={() => {
         const t = v.trim();
-        // 没改就别发请求——光是移开焦点不该算一次修改
+        // 没改就别发请求——点开看一眼又点走不该算一次修改
         if (t !== (value ?? "")) onSave(t || null);
+        onDone();
       }}
     />
   );
@@ -88,16 +91,19 @@ function InlineNumber({
   value,
   unit,
   onSave,
+  onDone,
 }: {
   value: number | null;
   unit: string;
   onSave: (v: number) => void;
+  onDone: () => void;
 }) {
   const [v, setV] = useState(value == null ? "" : String(value));
   useEffect(() => setV(value == null ? "" : String(value)), [value]);
   return (
     <Input
       size="small"
+      autoFocus
       value={v}
       suffix={<span style={{ fontSize: 11, opacity: 0.6 }}>{unit}</span>}
       onChange={(e) => setV(e.target.value)}
@@ -108,9 +114,11 @@ function InlineNumber({
         // 删那条记录，不然一个手滑就把今天的记录写成 0kg
         if (!v.trim() || !Number.isFinite(n) || n <= 0) {
           setV(value == null ? "" : String(value));
+          onDone();
           return;
         }
         if (n !== value) onSave(n);
+        onDone();
       }}
     />
   );
@@ -125,9 +133,9 @@ export default function Dogs() {
   // 当前看哪个场所（all / 影棚 / 狗场…）。记住选择：管狗场的人不该每次都先切一下
   const [siteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
   const [open, setOpen] = useState(false);
-  // 哪几行解了锁可以直接改。默认全锁着：这张表平时是拿来看的，字段又密，
-  // 不锁的话滑一下鼠标就可能把别的狗的名字改了，而自动保存是没有"取消"的
-  const [unlocked, setUnlocked] = useState<Set<number>>(new Set());
+  // 正在改的是哪一格。一次只有一格是输入框——整行一起变输入框的话，
+  // 每一列的宽度都跟着变，一行的排版全乱
+  const [editingCell, setEditingCell] = useState<{ id: number; field: string } | null>(null);
   // 刚存过的那一行闪一下"已保存"。用 message 弹全局提示太吵——一行填四五个
   // 字段就弹四五次，而人的注意力本来就在这一行上
   const [justSaved, setJustSaved] = useState<number | null>(null);
@@ -182,14 +190,6 @@ export default function Dogs() {
     setOpen(true);
   };
 
-  const toggleLock = (id: number) =>
-    setUnlocked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
   /** 改一个字段就存一个字段。失败要把话说清楚，不然自动保存悄悄没生效最坑 */
   const saveField = async (dog: Dog, patch: Parameters<typeof updateDog>[1]) => {
     try {
@@ -203,13 +203,35 @@ export default function Dogs() {
   };
 
   /**
-   * 一个单元格：锁着显示只读的样子，解了锁换成输入控件。
+   * 一个可以直接改的单元格：点一下变成输入框，改完（失焦/选完）自动存、变回文字。
    *
-   * 输入控件要挡掉点击冒泡——这张表是 expandRowByClick 的，不挡的话点一下输入框
-   * 会把这一行展开/收起，正在填的东西跟着跳走。
+   * 只有被点的那一格变，不是整行——整行一起变的话每列宽度都跟着变，排版全乱。
+   *
+   * 两处都要挡掉点击冒泡：这张表是 expandRowByClick 的，不挡的话点一下格子会把
+   * 这一行展开/收起，正在填的东西跟着跳走。
    */
-  const cell = (d: Dog, editor: React.ReactNode, view: React.ReactNode) =>
-    unlocked.has(d.id) ? <span onClick={(e) => e.stopPropagation()}>{editor}</span> : <>{view}</>;
+  const cell = (d: Dog, field: string, editor: React.ReactNode, view: React.ReactNode) => {
+    if (editingCell?.id === d.id && editingCell.field === field) {
+      return <span onClick={(e) => e.stopPropagation()}>{editor}</span>;
+    }
+    return (
+      <span
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditingCell({ id: d.id, field });
+        }}
+        // 整格都能点，包括空白处：只让文字可点的话，"—"那种一个字符的格子
+        // 要瞄准了才点得中
+        style={{ display: "block", minHeight: 22, cursor: "text" }}
+        title="点一下改"
+      >
+        {view}
+      </span>
+    );
+  };
+
+  /** 改完退出编辑态。存不存得上都要退——卡在输入框里更让人以为没生效 */
+  const doneEditing = () => setEditingCell(null);
 
   /** 记一条今天的体重/颈围。后端按 (狗, 日期) 合并，同一天改几次只留一条 */
   const saveMeasure = async (dog: Dog, patch: { weight_kg?: number; neck_cm?: number }) => {
@@ -349,13 +371,13 @@ export default function Dogs() {
             title: "名字",
             dataIndex: "name",
             render: (v: string | null, d: Dog) =>
-              cell(d, <InlineText value={v} placeholder="名字" onSave={(x) => saveField(d, { name: x })} />, v || "-"),
+              cell(d, "name", <InlineText value={v} placeholder="名字" onSave={(x) => saveField(d, { name: x })} onDone={doneEditing} />, v || "-"),
           },
           {
             title: "品种",
             dataIndex: "breed",
             render: (v: string | null, d: Dog) =>
-              cell(d, <InlineText value={v} placeholder="品种" onSave={(x) => saveField(d, { breed: x })} />, v || "-"),
+              cell(d, "breed", <InlineText value={v} placeholder="品种" onSave={(x) => saveField(d, { breed: x })} onDone={doneEditing} />, v || "-"),
           },
           {
             title: "机位",
@@ -364,7 +386,13 @@ export default function Dogs() {
             render: (v: string | null, d: Dog) =>
               cell(
                 d,
-                <InlineText value={v} placeholder={`IMU${d.dog_code}`} onSave={(x) => saveField(d, { imu: x })} />,
+                "imu",
+                <InlineText
+                  value={v}
+                  placeholder={`IMU${d.dog_code}`}
+                  onSave={(x) => saveField(d, { imu: x })}
+                  onDone={doneEditing}
+                />,
                 v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-")
               ),
           },
@@ -372,7 +400,7 @@ export default function Dogs() {
             title: "别名（照片目录名）",
             dataIndex: "aliases",
             render: (v: string | null, d: Dog) =>
-              cell(d, <InlineText value={v} placeholder="bibi, BB" onSave={(x) => saveField(d, { aliases: x })} />, v || "-"),
+              cell(d, "aliases", <InlineText value={v} placeholder="bibi, BB" onSave={(x) => saveField(d, { aliases: x })} onDone={doneEditing} />, v || "-"),
           },
           {
             title: "年龄",
@@ -384,12 +412,20 @@ export default function Dogs() {
             render: (_: unknown, d: Dog) =>
               cell(
                 d,
+                "birth_date",
                 <DatePicker
                   size="small"
+                  autoFocus
+                  // 点开就直接展开日历：不然还要再点一下才能选，等于多一步
+                  open
                   style={{ width: "100%" }}
-                  // 存生日不存岁数，所以解锁后改的是生日，显示的还是现算的年龄
+                  // 存生日不存岁数，所以改的是生日，显示的还是现算的年龄
                   value={d.birth_date ? dayjs(d.birth_date) : null}
-                  onChange={(v) => saveField(d, { birth_date: v ? v.format("YYYY-MM-DD") : null })}
+                  onChange={(v) => {
+                    saveField(d, { birth_date: v ? v.format("YYYY-MM-DD") : null });
+                    doneEditing();
+                  }}
+                  onOpenChange={(o) => !o && doneEditing()}
                 />,
                 d.age_text ? (
                   <Tooltip title={`出生 ${d.birth_date}`}>
@@ -409,9 +445,15 @@ export default function Dogs() {
             render: (_: unknown, d: Dog) =>
               cell(
                 d,
+                "weight",
                 <Tooltip title="填进去 = 记一条今天的体重，以前量的都还在（展开这一行能看）">
                   <span>
-                    <InlineNumber value={d.latest_weight_kg} unit="kg" onSave={(n) => saveMeasure(d, { weight_kg: n })} />
+                    <InlineNumber
+                      value={d.latest_weight_kg}
+                      unit="kg"
+                      onSave={(n) => saveMeasure(d, { weight_kg: n })}
+                      onDone={doneEditing}
+                    />
                   </span>
                 </Tooltip>,
                 d.latest_weight_kg == null ? (
@@ -435,9 +477,15 @@ export default function Dogs() {
             render: (_: unknown, d: Dog) =>
               cell(
                 d,
+                "neck",
                 <Tooltip title="填进去 = 记一条今天的颈围，以前量的都还在">
                   <span>
-                    <InlineNumber value={d.latest_neck_cm} unit="cm" onSave={(n) => saveMeasure(d, { neck_cm: n })} />
+                    <InlineNumber
+                      value={d.latest_neck_cm}
+                      unit="cm"
+                      onSave={(n) => saveMeasure(d, { neck_cm: n })}
+                      onDone={doneEditing}
+                    />
                   </span>
                 </Tooltip>,
                 d.latest_neck_cm == null ? (
@@ -460,14 +508,21 @@ export default function Dogs() {
             render: (v: string | null, d: Dog) =>
               cell(
                 d,
+                "size",
                 <Select
                   size="small"
+                  autoFocus
+                  defaultOpen
                   allowClear
                   style={{ width: "100%" }}
                   value={v ?? undefined}
                   placeholder="大/中/小"
                   options={SIZES.map((x) => ({ value: x, label: `${x}型` }))}
-                  onChange={(x) => saveField(d, { size: x ?? null })}
+                  onChange={(x) => {
+                    saveField(d, { size: x ?? null });
+                    doneEditing();
+                  }}
+                  onBlur={doneEditing}
                 />,
                 v ? <Tag color={SIZE_COLOR[v]}>{v}型</Tag> : <Typography.Text type="secondary">未填</Typography.Text>
               ),
@@ -479,14 +534,21 @@ export default function Dogs() {
             render: (v: string | null, d: Dog) =>
               cell(
                 d,
+                "site",
                 <Select
                   size="small"
+                  autoFocus
+                  defaultOpen
                   allowClear
                   style={{ width: "100%" }}
                   value={v ?? undefined}
                   placeholder="场所"
                   options={SITES.map((x) => ({ value: x, label: x }))}
-                  onChange={(x) => saveField(d, { site: x ?? null })}
+                  onChange={(x) => {
+                    saveField(d, { site: x ?? null });
+                    doneEditing();
+                  }}
+                  onBlur={doneEditing}
                 />,
                 v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>
               ),
@@ -508,7 +570,7 @@ export default function Dogs() {
             title: "备注",
             dataIndex: "remark",
             render: (v: string | null, d: Dog) =>
-              cell(d, <InlineText value={v} onSave={(x) => saveField(d, { remark: x })} />, v || "-"),
+              cell(d, "remark", <InlineText value={v} onSave={(x) => saveField(d, { remark: x })} onDone={doneEditing} />, v || "-"),
           },
           {
             title: "样本数",
@@ -517,25 +579,9 @@ export default function Dogs() {
           },
           {
             title: "操作",
-            width: 160,
+            width: 110,
             render: (_, d: Dog) => (
               <Space onClick={(e) => e.stopPropagation()}>
-                <Tooltip
-                  title={
-                    unlocked.has(d.id)
-                      ? "锁回去。解锁期间每改一处就立刻存下来，没有「取消」这一步"
-                      : "解锁后这一行的字段都能直接在表格里改，改完自动保存。体重/颈围填进去是记一条今天的记录，历史不动"
-                  }
-                >
-                  <Button
-                    size="small"
-                    type="link"
-                    icon={unlocked.has(d.id) ? <UnlockOutlined /> : <LockOutlined />}
-                    onClick={() => toggleLock(d.id)}
-                  >
-                    {unlocked.has(d.id) ? "锁定" : "解锁改"}
-                  </Button>
-                </Tooltip>
                 {justSaved === d.id && (
                   <Typography.Text type="success" style={{ fontSize: 12 }}>
                     已保存
