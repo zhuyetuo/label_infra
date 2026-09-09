@@ -28,7 +28,6 @@ interface FormValues {
   skin_level?: string;
   // DatePicker 给的是 dayjs 对象，提交时才转成 YYYY-MM-DD
   birth_date?: import("dayjs").Dayjs | null;
-  remark?: string;
 }
 
 // 现在就这两个场所，做成可选可填：以后开新场地直接输，不用改代码
@@ -634,12 +633,6 @@ export default function Dogs() {
             ),
           },
           {
-            title: "备注",
-            dataIndex: "remark",
-            render: (v: string | null, d: Dog) =>
-              cell(d, "remark", <InlineText value={v} onSave={(x) => saveField(d, { remark: x })} onDone={doneEditing} />, v || "-"),
-          },
-          {
             title: "样本数",
             width: 90,
             render: (_, d: Dog) => samplesOf(d.id).length,
@@ -728,9 +721,6 @@ export default function Dogs() {
             tooltip="存生日不存岁数——年龄天天在长，存「3岁」明年就不对了。列表里的年龄按它现算"
           >
             <DatePicker style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={2} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block>
             创建
