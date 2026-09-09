@@ -17,6 +17,13 @@ export const setSamplesSensitive = (sampleIds: number[], isSensitive: boolean, n
     sensitive_note: note ?? null,
   });
 
+/** 一批样本一起关联到同一只狗；dogId 传 null = 解除关联 */
+export const setSamplesDog = (sampleIds: number[], dogId: number | null) =>
+  request.patch<never, { updated: number }>("/samples/dog", {
+    sample_ids: sampleIds,
+    dog_id: dogId,
+  });
+
 /** 删一批样本，连同它们上面的任务。NAS 上的文件不动，删的只是数据库登记 */
 export const deleteSamplesBatch = (sampleIds: number[]) =>
   request.post<never, { deleted: number; tasks_deleted: number }>("/samples/batch-delete", {

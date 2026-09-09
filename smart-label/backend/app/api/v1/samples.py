@@ -27,6 +27,7 @@ from app.schemas.envelope import ok
 from app.schemas.model_version import PrelabelResult
 from app.schemas.sample import (
     SampleDeleteBulk,
+    SampleDogBulk,
     SampleMediaOut,
     SampleOut,
     SampleSensitiveBulk,
@@ -68,6 +69,29 @@ async def set_sensitive_bulk(body: SampleSensitiveBulk, db: AsyncSession = Depen
     else:
         values["sensitive_note"] = None
     result = await db.execute(update(Sample).where(Sample.id.in_(body.sample_ids)).values(**values))
+    await db.commit()
+    return ok({"updated": result.rowcount or 0})
+
+
+@router.patch("/dog")
+async def set_dog_bulk(body: SampleDogBulk, db: AsyncSession = Depends(get_db)):
+    """
+    一批样本一起关联到同一只狗（dog_id 传 null = 解除关联）。
+
+    一天一个机位就有 30 份样本（每小时一段），而同一天同一个机位戴在哪只狗身上
+    是固定的——挨个下拉去选 30 次纯属白费功夫。
+
+    这条路由必须写在 PATCH /{sample_id} 前面：FastAPI 按声明顺序匹配，写在后面
+    的话 "dog" 会先撞上 /{sample_id}，报的是 int 解析失败的 422，看着完全不像
+    路由撞了。
+    """
+    if not body.sample_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
+    if body.dog_id is not None and await db.get(Dog, body.dog_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "狗不存在")
+    result = await db.execute(
+        update(Sample).where(Sample.id.in_(body.sample_ids)).values(dog_id=body.dog_id)
+    )
     await db.commit()
     return ok({"updated": result.rowcount or 0})
 
