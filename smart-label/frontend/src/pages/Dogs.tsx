@@ -312,7 +312,9 @@ export default function Dogs() {
         loading={isLoading}
         dataSource={shown}
         expandable={{
-          expandRowByClick: true,
+          // 只有点左边那个加号才展开。以前点整行都能展开，而现在格子是点一下就
+          // 进编辑的——两件事抢同一个点击，改个名字顺手就把行展开了
+          expandRowByClick: false,
           // 以前只有"有样本"才能展开；现在展开里还有体重记录，没样本的狗也得能展开记
           expandedRowRender: (d: Dog) => (
             <div onClick={(e) => e.stopPropagation()}>
@@ -336,8 +338,13 @@ export default function Dogs() {
         onChange={dogSort.onTableChange}
         components={dogWidth.components}
         tableLayout={dogWidth.tableLayout}
-        // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
-        scroll={{ x: "max-content" }}
+        // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去。
+        //
+        // 这里必须给具体数字，不能用 "max-content"：max-content 是让浏览器按
+        // 最宽的内容算表宽，而展开行里那两张嵌套表格也算内容——一展开，父表就被
+        // 撑到几千像素，剩余宽度全灌进末尾那根空列，看起来就是"只剩编号和名字，
+        // 右边一大片空白"。给死数字就跟展开的内容彻底脱钩了。
+        scroll={{ x: 1600 }}
         columns={dogWidth.applyResize<Dog>(dogSort.applySort<Dog>([
           {
             title: "编号",
@@ -456,7 +463,7 @@ export default function Dogs() {
           {
             title: "体重",
             key: "weight",
-            width: 130,
+            width: 110,
             sorter: (a: Dog, b: Dog) => (a.latest_weight_kg ?? -1) - (b.latest_weight_kg ?? -1),
             // 显示最新一次；体重会变，所以要带上是什么时候量的
             render: (_: unknown, d: Dog) =>
@@ -476,21 +483,21 @@ export default function Dogs() {
                 d.latest_weight_kg == null ? (
                   <Typography.Text type="secondary">—</Typography.Text>
                 ) : (
+                  // 日期不写在格子里：一列十行全跟着一个"09-08"，看的人真正关心的
+                  // 是体重本身，日期鼠标放上去再说
                   <Tooltip title={`${d.latest_measured_on} 量的，共 ${d.n_measurements} 次记录；展开这一行看变化`}>
-                    <Space size={4}>
-                      <span>{d.latest_weight_kg} kg</span>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {d.latest_measured_on?.slice(5)}
-                      </Typography.Text>
-                    </Space>
+                    <span>{d.latest_weight_kg} kg</span>
                   </Tooltip>
                 )
               ),
           },
           {
             title: "颈围",
-            // 解锁后是个输入框，90 装不下数字加单位
+            key: "neck",
+            // 点开是个输入框，90 装不下数字加单位
             width: 110,
+            // 跟体重一列同一套：没量过的排最后，不要混在小数里
+            sorter: (a: Dog, b: Dog) => (a.latest_neck_cm ?? -1) - (b.latest_neck_cm ?? -1),
             render: (_: unknown, d: Dog) =>
               cell(
                 d,
@@ -605,8 +612,12 @@ export default function Dogs() {
                   </Typography.Text>
                 )}
                 <Popconfirm
-                  title="删除狗档案"
-                  description="还有样本关联着的话删不掉"
+                  // 把是哪一只写进标题：这一列每行长得一模一样，只说"删除狗档案"
+                  // 的话点错了行也看不出来
+                  title={`删掉「${d.name || d.dog_code}」的档案？`}
+                  description="删了不能撤销。还有样本关联着的话删不掉"
+                  okText="确认删除"
+                  cancelText="不删"
                   okButtonProps={{ danger: true }}
                   onConfirm={() => handleDelete(d.id)}
                 >
