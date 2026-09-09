@@ -109,13 +109,27 @@ export default function Samples() {
 
   // 一天一个机位就有 30 份样本（每小时一段），而同一天同一个机位戴在哪只狗身上
   // 是固定的——挨个下拉选 30 次纯属白费功夫
-  const assignDogBulk = async (dogId: number | null) => {
-    if (selected.size === 0) return;
-    const r = await setSamplesDog([...selected], dogId);
+  const assignDog = async (ids: number[], dogId: number | null) => {
+    if (ids.length === 0) return;
+    const r = await setSamplesDog(ids, dogId);
     const who = dogId == null ? "解除关联" : `关联到 ${dogLabel(dogId)}`;
     message.success(`已把 ${r.updated} 个样本${who}`);
     setSelected(new Set());
     qc.invalidateQueries({ queryKey: ["samples"] });
+  };
+  const assignDogBulk = (dogId: number | null) => assignDog([...selected], dogId);
+
+  const dogOptions = dogs?.map((d) => ({
+    value: d.id,
+    label: d.name ? `${d.dog_code}（${d.name}）` : d.dog_code,
+  }));
+
+  /** 这一组现在都关联到谁了：全一样就报那只狗，有多有少就是"混合" */
+  const groupDog = (rows: Sample[]) => {
+    const ids = new Set(rows.map((r) => r.dog_id ?? 0));
+    if (ids.size !== 1) return { text: "多只/部分未关联", mixed: true };
+    const only = [...ids][0];
+    return only ? { text: dogLabel(only), mixed: false } : null;
   };
 
   const applyBulk = async (on: boolean) => {
@@ -306,7 +320,7 @@ export default function Samples() {
               style={{ width: 190 }}
               // 不受控：选完就发请求、清空选中，下拉自己不该留着上次选的值
               value={null}
-              options={dogs?.map((d) => ({ value: d.id, label: d.name ? `${d.dog_code}（${d.name}）` : d.dog_code }))}
+              options={dogOptions}
               onChange={(v) => assignDogBulk(v ?? null)}
               showSearch
               optionFilterProp="label"
@@ -414,11 +428,44 @@ export default function Samples() {
               children: (
                 <Collapse
                   size="small"
-                  items={sortImuKeys(byImu.keys()).map((imu) => ({
-                    key: imu,
-                    label: `${imu}（${byImu.get(imu)!.length} 个样本）`,
-                    children: renderTable(byImu.get(imu)!),
-                  }))}
+                  items={sortImuKeys(byImu.keys()).map((imu) => {
+                    const rows = byImu.get(imu)!;
+                    const cur = groupDog(rows);
+                    return {
+                      key: imu,
+                      // 关联狗这件事天然是"整组一样"：一天里同一个机位戴在哪只狗身上
+                      // 是固定的，一组就是 30 份（每小时一段）。所以入口放在组标题上，
+                      // 比"先勾 30 个再去工具栏"少一整步——而后者恰恰是想省事的人
+                      // 第一眼找不到的地方（工具栏没勾选时整个是隐藏的）。
+                      label: (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span>
+                            {imu}（{rows.length} 个样本）
+                          </span>
+                          {cur && (
+                            <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
+                              {cur.text}
+                            </Tag>
+                          )}
+                          {/* 挡掉冒泡：不挡的话点下拉会把这个折叠面板收起来，选项列表跟着消失 */}
+                          <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: "auto" }}>
+                            <Select
+                              size="small"
+                              placeholder={`整组关联到…（${rows.length} 个）`}
+                              style={{ width: 200 }}
+                              // 不受控：选完就发请求，下拉自己不该留着上次选的值
+                              value={null}
+                              options={dogOptions}
+                              onChange={(v) => assignDog(rows.map((r) => r.id), v ?? null)}
+                              showSearch
+                              optionFilterProp="label"
+                            />
+                          </span>
+                        </div>
+                      ),
+                      children: renderTable(rows),
+                    };
+                  })}
                 />
               ),
             };
