@@ -25,6 +25,7 @@ interface FormValues {
   aliases?: string;
   site?: string;
   size?: string;
+  skin_level?: string;
   // DatePicker 给的是 dayjs 对象，提交时才转成 YYYY-MM-DD
   birth_date?: import("dayjs").Dayjs | null;
   remark?: string;
@@ -36,6 +37,11 @@ const SITES = ["影棚", "狗场"];
 // 也不按体重自动算——同样 13kg，法斗是中型，小体金毛是大型幼犬，光看数字分不出来
 const SIZES = ["大", "中", "小"] as const;
 const SIZE_COLOR: Record<string, string> = { 大: "volcano", 中: "gold", 小: "cyan" };
+// 当前皮肤状况。「正常」是必须有的一档：不然"皮肤好"和"还没评过"就分不开了，
+// 而挑训练数据时这两件事完全不同——前者是可用的阴性样本，后者是不知道。
+// 按严重程度从轻到重排，颜色跟着走，扫一眼就知道该盯哪几只。
+const SKIN_LEVELS = ["正常", "轻度", "中度", "重度"] as const;
+const SKIN_COLOR: Record<string, string> = { 正常: "green", 轻度: "gold", 中度: "orange", 重度: "red" };
 const SITE_TAB_KEY = "smart-label:dogs-site-tab";
 
 /**
@@ -552,6 +558,43 @@ export default function Dogs() {
               ),
           },
           {
+            title: (
+              <Tooltip title="这只狗现在大概什么皮肤状况，人工判断。挑数据用：重度的那几只抓挠明显更多，训练和验证时想单独看或单独排除都得先能筛出来。跟「皮肤评估」那一页按次记录的详细数据不是一回事，那边是每次评估的原始记录">
+                <span>皮肤</span>
+              </Tooltip>
+            ),
+            key: "skin_level",
+            dataIndex: "skin_level",
+            width: 110,
+            // 按严重程度排，不按字典序；没评过的排最后，别混在等级里
+            sorter: (a: Dog, b: Dog) => {
+              const rank = (v: string | null) =>
+                v ? SKIN_LEVELS.indexOf(v as (typeof SKIN_LEVELS)[number]) : SKIN_LEVELS.length;
+              return rank(a.skin_level) - rank(b.skin_level);
+            },
+            render: (v: string | null, d: Dog) =>
+              cell(
+                d,
+                "skin_level",
+                <Select
+                  size="small"
+                  autoFocus
+                  defaultOpen
+                  allowClear
+                  style={{ width: "100%" }}
+                  value={v ?? undefined}
+                  placeholder="正常/轻度…"
+                  options={SKIN_LEVELS.map((x) => ({ value: x, label: x }))}
+                  onChange={(x) => {
+                    saveField(d, { skin_level: x ?? null });
+                    doneEditing();
+                  }}
+                  onBlur={doneEditing}
+                />,
+                v ? <Tag color={SKIN_COLOR[v]}>{v}</Tag> : <Typography.Text type="secondary">未评</Typography.Text>
+              ),
+          },
+          {
             title: "场所",
             dataIndex: "site",
             width: 100,
@@ -671,6 +714,13 @@ export default function Dogs() {
             tooltip="大 / 中 / 小。不按体重自动分——同样 13kg，法斗是中型，小体金毛是大型幼犬。抓挠的幅度和频率跟体型直接相关，分开记才能按体型看指标"
           >
             <Select allowClear placeholder="大 / 中 / 小" options={SIZES.map((x) => ({ value: x, label: `${x}型` }))} />
+          </Form.Item>
+          <Form.Item
+            name="skin_level"
+            label="皮肤"
+            tooltip="正常 / 轻度 / 中度 / 重度，人工判断当前状况。「正常」和留空不是一回事：留空是还没评过"
+          >
+            <Select allowClear placeholder="正常 / 轻度 / 中度 / 重度" options={SKIN_LEVELS.map((x) => ({ value: x, label: x }))} />
           </Form.Item>
           <Form.Item
             name="birth_date"
