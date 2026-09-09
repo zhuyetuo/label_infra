@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tabs, Tag, Tooltip,
+  Button, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
   Typography, message,
 } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import DogMeasurements from "@/components/DogMeasurements";
 import DogPhotos from "@/components/DogPhotos";
@@ -153,9 +154,6 @@ export default function Dogs() {
 
   const samplesOf = (dogId: number) => samples?.filter((s) => s.dog_id === dogId) ?? [];
 
-  // 总预览：一眼看清每个场所有几只狗、登记齐了没有、有没有数据。
-  // 「已登记」= 名字填了的：编号是扫描自动建的，名字得人补，没补的那些在
-  // 皮肤评估那边就对不上照片目录，是要盯着补完的
   // 当前标签页要显示哪些狗
   const shown = useMemo(
     () => (siteTab === "all" ? dogs ?? [] : (dogs ?? []).filter((d) => ((d.site || "").trim() || "未填场所") === siteTab)),
@@ -169,12 +167,9 @@ export default function Dogs() {
       const key = (d.site || "").trim() || "未填场所";
       bySite.set(key, [...(bySite.get(key) ?? []), d]);
     }
-    const stat = (ds: Dog[]) => ({
-      total: ds.length,
-      named: ds.filter((d) => (d.name || "").trim()).length,
-      withSamples: ds.filter((d) => samplesOf(d.id).length > 0).length,
-      samples: ds.reduce((n, d) => n + samplesOf(d.id).length, 0),
-    });
+    // 只剩标签页要用的只数了：原来那几张统计卡片（已登记名字/有数据的/样本总数）
+    // 撤了，它们跟标签页说的是同一件事
+    const stat = (ds: Dog[]) => ({ total: ds.length });
     return {
       all: stat(list),
       sites: [...bySite.entries()]
@@ -268,6 +263,26 @@ export default function Dogs() {
         <Button type="primary" onClick={openCreate}>
           新建狗档案
         </Button>
+        {/* 说明收进问号里：原来是页头两段小字 + 三张统计卡片，占掉小半屏，而这些话
+            看一次就够了，天天来的人每次都要越过它们才看到表格。狗数量下面的标签页
+            本来就有（全部 10 / 狗场 6 / 影棚 4），卡片是重复的 */}
+        <Tooltip
+          styles={{ root: { maxWidth: 460 } }}
+          title={
+            <span style={{ fontSize: 12 }}>
+              同一只狗在三个地方叫法不一样，这一页是把它们对上的地方：样本编号里只有<b>机位号</b>（_imu1）、
+              皮肤评估用「比熊-BB」这种「品种-名字」、NAS 照片目录又常写成 bibi / Bali。
+              <br />
+              所以<b>机位</b>填 IMU1（留空按编号当机位，编号 1 = IMU1）；<b>别名</b>填 NAS 上的照片目录名
+              （逗号分隔），皮肤评估的「照片」列才找得到图。
+              <br />
+              编号一般不用手建：样本扫描时会从文件名里自动识别建档。点左侧箭头展开可以记体重/颈围、
+              看这只狗每天的样本和标注进度。格子点一下就能直接改。
+            </span>
+          }
+        >
+          <QuestionCircleOutlined style={{ color: "#8c8c8c", cursor: "help" }} />
+        </Tooltip>
         {dogWidth.hasCustom && (
           <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
             <Button size="small" type="link" onClick={dogWidth.reset}>
@@ -276,49 +291,6 @@ export default function Dogs() {
           </Tooltip>
         )}
       </Space>
-
-      {/* 说明在前、卡片在后：卡片高度不一，夹在文字中间会把段落顶得七零八落 */}
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        狗编号（dog_code）现在主要靠样本扫描时从文件名里自动识别建档，采集端还没开始带这个信息之前基本用不上；
-        新建/手动关联样本是在文件名规则落地前的过渡办法。点左侧箭头能展开：记体重/颈围、看这只狗每天的样本和标注进度。
-        <br />
-        同一只狗在三个地方叫法不一样：样本编号里只有<b>机位号</b>（_imu1）、皮肤评估用的是「比熊-BB」这种
-        「品种-名字」、NAS 上的照片目录又常写成 bibi / Bali。这一页就是把它们对上的地方：
-        <b>机位</b>填 IMU1（留空则按编号当机位，编号 1 = IMU1）；<b>别名</b>把照片目录名填进去（逗号分隔），
-        皮肤评估的「照片」列才找得到图。
-      </Typography.Paragraph>
-
-      {/* 总览：一张总的 + 每个场所一张。「已登记」是填了名字的——编号是扫描
-          时自动建的，名字得人补，没补的在皮肤评估那边对不上照片目录 */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
-        <Card size="small" title="全部" styles={{ body: { padding: "8px 16px" } }}>
-          <Space size={24}>
-            <Statistic title="狗总数" value={overview.all.total} valueStyle={{ fontSize: 20 }} />
-            <Statistic
-              title="已登记名字"
-              value={overview.all.named}
-              suffix={`/ ${overview.all.total}`}
-              valueStyle={{ fontSize: 20, color: overview.all.named < overview.all.total ? "#fa8c16" : undefined }}
-            />
-            <Statistic title="有数据的" value={overview.all.withSamples} valueStyle={{ fontSize: 20 }} />
-            <Statistic title="样本总数" value={overview.all.samples} valueStyle={{ fontSize: 20 }} />
-          </Space>
-        </Card>
-        {overview.sites.map((s) => (
-          <Card key={s.site} size="small" title={s.site} styles={{ body: { padding: "8px 16px" } }}>
-            <Space size={20}>
-              <Statistic title="狗" value={s.total} valueStyle={{ fontSize: 18 }} />
-              <Statistic
-                title="已登记"
-                value={s.named}
-                suffix={`/ ${s.total}`}
-                valueStyle={{ fontSize: 18, color: s.named < s.total ? "#fa8c16" : undefined }}
-              />
-              <Statistic title="样本" value={s.samples} valueStyle={{ fontSize: 18 }} />
-            </Space>
-          </Card>
-        ))}
-      </div>
 
       {/* 按场所切换：两批狗是两拨人在管，各看各的那批更顺手；「全部」留着做总览。
           标签是按数据里实际有的场所生成的，以后开新场地不用改代码 */}
@@ -397,7 +369,12 @@ export default function Dogs() {
               ),
           },
           {
-            title: "别名（照片目录名）",
+            title: (
+              <Tooltip title="NAS 上的照片目录名，逗号分隔。皮肤评估靠它把照片跟这只狗对上">
+                <span>别名</span>
+              </Tooltip>
+            ),
+            key: "aliases",
             dataIndex: "aliases",
             render: (v: string | null, d: Dog) =>
               cell(d, "aliases", <InlineText value={v} placeholder="bibi, BB" onSave={(x) => saveField(d, { aliases: x })} onDone={doneEditing} />, v || "-"),
