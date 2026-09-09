@@ -1,8 +1,6 @@
-import { useState } from "react";
-import { Button, DatePicker, Empty, InputNumber, Input, Popconfirm, Space, Table, Typography, message } from "antd";
-import dayjs from "dayjs";
+import { Button, Empty, Popconfirm, Space, Table, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { addMeasurement, deleteMeasurement, listMeasurements, type DogMeasurement } from "@/api/dogs";
+import { deleteMeasurement, listMeasurements, type DogMeasurement } from "@/api/dogs";
 
 /**
  * 一只狗的体重/颈围记录。
@@ -12,53 +10,23 @@ import { addMeasurement, deleteMeasurement, listMeasurements, type DogMeasuremen
  * 所以按次记录，档案列表显示最新一条，这里能看全部变化。
  *
  * 颈围（项圈松紧、会不会磨到皮肤）同理，没量就留空，不强制。
+ *
+ * 这里只看和删。「记一笔」的表单撤了——档案列表里那两格现在点一下就能直接填，
+ * 填进去就是记一条今天的，同一件事没必要有两个入口。代价是补录以前某一天的
+ * 数据没地方填了；真要补，先在列表里填上今天的，再回来把日期改掉的路子也没有，
+ * 等真碰上再说，比留着一整块重复的表单划算。
  */
 export default function DogMeasurements({ dogId }: { dogId: number }) {
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["dog-measurements", dogId],
     queryFn: () => listMeasurements(dogId),
   });
-  const [on, setOn] = useState(dayjs());
-  const [weight, setWeight] = useState<number | null>(null);
-  const [neck, setNeck] = useState<number | null>(null);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    if (weight == null && neck == null) return message.warning("体重和颈围至少填一个");
-    setBusy(true);
-    try {
-      await addMeasurement(dogId, {
-        measured_on: on.format("YYYY-MM-DD"),
-        weight_kg: weight,
-        neck_cm: neck,
-        note: note.trim() || undefined,
-      });
-      setWeight(null);
-      setNeck(null);
-      setNote("");
-      refetch();
-      message.success("已记录");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const rows = data ?? [];
   return (
     <div>
-      <Space wrap style={{ marginBottom: 8 }}>
-        {/* 量的那天，不是录入那天——补录以前的数据时这两个不是一回事 */}
-        <DatePicker value={on} onChange={(v) => v && setOn(v)} allowClear={false} />
-        <InputNumber addonBefore="体重" addonAfter="kg" min={0} max={120} step={0.1} value={weight} onChange={setWeight} />
-        <InputNumber addonBefore="颈围" addonAfter="cm" min={0} max={120} step={0.5} value={neck} onChange={setNeck} />
-        <Input placeholder="备注（可不填）" style={{ width: 160 }} value={note} onChange={(e) => setNote(e.target.value)} />
-        <Button type="primary" loading={busy} onClick={submit}>
-          记一笔
-        </Button>
-      </Space>
       {rows.length === 0 && !isLoading ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有记录" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有记录（在上面表格的体重/颈围格子里直接填）" />
       ) : (
         <Table<DogMeasurement>
           size="small"
