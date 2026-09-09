@@ -193,10 +193,26 @@ async def add_measurement(
     dog = await db.get(Dog, dog_id)
     if dog is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
-    if body.weight_kg is None and body.neck_cm is None:
+    fields = body.model_dump(exclude_unset=True)
+    if "weight_kg" not in fields and "neck_cm" not in fields:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "体重和颈围至少填一个")
-    row = DogMeasurement(dog_id=dog_id, created_by=user.id, **body.model_dump())
-    db.add(row)
+
+    # 同一天同一只狗只留一条：列表页可以直接在「体重」格子里改，改一次就调一次
+    # 这个接口，不合并的话今天调三次体重就多出三条一模一样日期的记录，展开行里
+    # 的曲线全是同一天的点。有则更新（只覆盖这次带上来的字段，另一个数留着）。
+    row = (
+        await db.execute(
+            select(DogMeasurement).where(
+                DogMeasurement.dog_id == dog_id, DogMeasurement.measured_on == body.measured_on
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = DogMeasurement(dog_id=dog_id, created_by=user.id, **fields)
+        db.add(row)
+    else:
+        for field, value in fields.items():
+            setattr(row, field, value)
     await db.commit()
     await db.refresh(row)
     return ok(MeasurementOut.model_validate(row).model_dump())
