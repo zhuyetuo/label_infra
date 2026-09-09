@@ -14,6 +14,7 @@ class DogOut(BaseModel):
     aliases: str | None
     site: str | None
     size: str | None
+    skin_level: str | None
     birth_date: date | None
     remark: str | None
     created_at: datetime
@@ -33,6 +34,7 @@ class DogCreate(BaseModel):
     aliases: str | None = None
     site: str | None = None
     size: str | None = None
+    skin_level: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
@@ -44,6 +46,7 @@ class DogUpdate(BaseModel):
     aliases: str | None = None
     site: str | None = None
     size: str | None = None
+    skin_level: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
