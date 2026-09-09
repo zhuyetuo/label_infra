@@ -8,7 +8,7 @@ import dayjs from "dayjs";
 import DogMeasurements from "@/components/DogMeasurements";
 import DogPhotos from "@/components/DogPhotos";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs";
+import { addMeasurement, createDog, deleteDog, listDogs, updateDog, type Dog } from "@/api/dogs";
 import { listSamples } from "@/api/samples";
 import { listTasks } from "@/api/tasks";
 import { TASK_STATUS_META } from "@/utils/taskStatus";
@@ -77,6 +77,45 @@ function InlineText({
 // 狗档案：现在主要靠样本扫描时按文件名里的 dog 编号自动建档（采集端还没开始
 // 带这个信息之前基本是空的），这里补一套手动管理 + 每只狗的样本总览（按
 // 日期分组，能看出这只狗每天的数据处于哪个标注阶段）。
+/**
+ * 体重/颈围这两格。跟别的字段不一样：它们不在 dogs 表上，是 dog_measurements
+ * 里按日期记的一串，列里显示的是最新一次。所以这里改的含义不是"把那个数改掉"，
+ * 而是"今天量了这么多"——记一条今天的记录，历史那些一条不动。
+ *
+ * 同一天改几次不会堆出几条：后端按 (狗, 日期) 合并。
+ */
+function InlineNumber({
+  value,
+  unit,
+  onSave,
+}: {
+  value: number | null;
+  unit: string;
+  onSave: (v: number) => void;
+}) {
+  const [v, setV] = useState(value == null ? "" : String(value));
+  useEffect(() => setV(value == null ? "" : String(value)), [value]);
+  return (
+    <Input
+      size="small"
+      value={v}
+      suffix={<span style={{ fontSize: 11, opacity: 0.6 }}>{unit}</span>}
+      onChange={(e) => setV(e.target.value)}
+      onPressEnter={(e) => (e.target as HTMLInputElement).blur()}
+      onBlur={() => {
+        const n = Number(v.trim());
+        // 空着或者打错字就当没改：这里没有"清空体重"的语义——真要删得去展开行里
+        // 删那条记录，不然一个手滑就把今天的记录写成 0kg
+        if (!v.trim() || !Number.isFinite(n) || n <= 0) {
+          setV(value == null ? "" : String(value));
+          return;
+        }
+        if (n !== value) onSave(n);
+      }}
+    />
+  );
+}
+
 export default function Dogs() {
   const qc = useQueryClient();
   const { data: dogs, isLoading } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
@@ -171,6 +210,19 @@ export default function Dogs() {
    */
   const cell = (d: Dog, editor: React.ReactNode, view: React.ReactNode) =>
     unlocked.has(d.id) ? <span onClick={(e) => e.stopPropagation()}>{editor}</span> : <>{view}</>;
+
+  /** 记一条今天的体重/颈围。后端按 (狗, 日期) 合并，同一天改几次只留一条 */
+  const saveMeasure = async (dog: Dog, patch: { weight_kg?: number; neck_cm?: number }) => {
+    try {
+      await addMeasurement(dog.id, { measured_on: dayjs().format("YYYY-MM-DD"), ...patch });
+      setJustSaved(dog.id);
+      window.setTimeout(() => setJustSaved((cur) => (cur === dog.id ? null : cur)), 1500);
+      refresh();
+      qc.invalidateQueries({ queryKey: ["dog-measurements", dog.id] });
+    } catch {
+      message.error("没保存上，检查一下网络再改一次");
+    }
+  };
 
   const handleSubmit = async (values: FormValues) => {
     await createDog({
@@ -355,27 +407,44 @@ export default function Dogs() {
             sorter: (a: Dog, b: Dog) => (a.latest_weight_kg ?? -1) - (b.latest_weight_kg ?? -1),
             // 显示最新一次；体重会变，所以要带上是什么时候量的
             render: (_: unknown, d: Dog) =>
-              d.latest_weight_kg == null ? (
-                <Typography.Text type="secondary">—</Typography.Text>
-              ) : (
-                <Tooltip title={`${d.latest_measured_on} 量的，共 ${d.n_measurements} 次记录；展开这一行看变化`}>
-                  <Space size={4}>
-                    <span>{d.latest_weight_kg} kg</span>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {d.latest_measured_on?.slice(5)}
-                    </Typography.Text>
-                  </Space>
-                </Tooltip>
+              cell(
+                d,
+                <Tooltip title="填进去 = 记一条今天的体重，以前量的都还在（展开这一行能看）">
+                  <span>
+                    <InlineNumber value={d.latest_weight_kg} unit="kg" onSave={(n) => saveMeasure(d, { weight_kg: n })} />
+                  </span>
+                </Tooltip>,
+                d.latest_weight_kg == null ? (
+                  <Typography.Text type="secondary">—</Typography.Text>
+                ) : (
+                  <Tooltip title={`${d.latest_measured_on} 量的，共 ${d.n_measurements} 次记录；展开这一行看变化`}>
+                    <Space size={4}>
+                      <span>{d.latest_weight_kg} kg</span>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {d.latest_measured_on?.slice(5)}
+                      </Typography.Text>
+                    </Space>
+                  </Tooltip>
+                )
               ),
           },
           {
             title: "颈围",
-            width: 90,
+            // 解锁后是个输入框，90 装不下数字加单位
+            width: 110,
             render: (_: unknown, d: Dog) =>
-              d.latest_neck_cm == null ? (
-                <Typography.Text type="secondary">—</Typography.Text>
-              ) : (
-                `${d.latest_neck_cm} cm`
+              cell(
+                d,
+                <Tooltip title="填进去 = 记一条今天的颈围，以前量的都还在">
+                  <span>
+                    <InlineNumber value={d.latest_neck_cm} unit="cm" onSave={(n) => saveMeasure(d, { neck_cm: n })} />
+                  </span>
+                </Tooltip>,
+                d.latest_neck_cm == null ? (
+                  <Typography.Text type="secondary">—</Typography.Text>
+                ) : (
+                  `${d.latest_neck_cm} cm`
+                )
               ),
           },
           {
@@ -455,7 +524,7 @@ export default function Dogs() {
                   title={
                     unlocked.has(d.id)
                       ? "锁回去。解锁期间每改一处就立刻存下来，没有「取消」这一步"
-                      : "解锁后这一行的名字、品种、机位、别名、生日、体型、场所、备注都能直接在表格里改，改完自动保存"
+                      : "解锁后这一行的字段都能直接在表格里改，改完自动保存。体重/颈围填进去是记一条今天的记录，历史不动"
                   }
                 >
                   <Button
