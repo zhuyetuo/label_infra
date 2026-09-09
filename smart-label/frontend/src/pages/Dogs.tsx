@@ -23,6 +23,7 @@ interface FormValues {
   imu?: string;
   aliases?: string;
   site?: string;
+  size?: string;
   // DatePicker 给的是 dayjs 对象，提交时才转成 YYYY-MM-DD
   birth_date?: import("dayjs").Dayjs | null;
   remark?: string;
@@ -30,6 +31,10 @@ interface FormValues {
 
 // 现在就这两个场所，做成可选可填：以后开新场地直接输，不用改代码
 const SITES = ["影棚", "狗场"];
+// 体型只有这三档，不做成可自由填的：分档就是为了能按它归类，选项一多就归不成类了。
+// 也不按体重自动算——同样 13kg，法斗是中型，小体金毛是大型幼犬，光看数字分不出来
+const SIZES = ["大", "中", "小"] as const;
+const SIZE_COLOR: Record<string, string> = { 大: "volcano", 中: "gold", 小: "cyan" };
 const SITE_TAB_KEY = "smart-label:dogs-site-tab";
 
 // 狗档案：现在主要靠样本扫描时按文件名里的 dog 编号自动建档（采集端还没开始
@@ -106,6 +111,7 @@ export default function Dogs() {
       imu: dog.imu ?? undefined,
       aliases: dog.aliases ?? undefined,
       site: dog.site ?? undefined,
+      size: dog.size ?? undefined,
       birth_date: dog.birth_date ? dayjs(dog.birth_date) : undefined,
       remark: dog.remark ?? undefined,
     });
@@ -120,6 +126,7 @@ export default function Dogs() {
         imu: values.imu,
         aliases: values.aliases,
         site: values.site,
+        size: values.size,
         birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : null,
         remark: values.remark,
       });
@@ -302,6 +309,18 @@ export default function Dogs() {
               ),
           },
           {
+            title: "体型",
+            dataIndex: "size",
+            width: 80,
+            // 按大→中→小排，不按字典序（字典序出来是"中大小"，没有意义）
+            sorter: (a: Dog, b: Dog) => {
+              const rank = (v: string | null) => (v ? SIZES.indexOf(v as (typeof SIZES)[number]) : SIZES.length);
+              return rank(a.size) - rank(b.size);
+            },
+            render: (v: string | null) =>
+              v ? <Tag color={SIZE_COLOR[v]}>{v}型</Tag> : <Typography.Text type="secondary">未填</Typography.Text>,
+          },
+          {
             title: "场所",
             dataIndex: "site",
             width: 100,
@@ -379,6 +398,13 @@ export default function Dogs() {
           </Form.Item>
           <Form.Item name="site" label="场所" tooltip="这只狗在哪个场地。以前写在备注里，单独一列才能按场所筛选和统计">
             <Select allowClear placeholder="影棚 / 狗场" options={SITES.map((x) => ({ value: x, label: x }))} />
+          </Form.Item>
+          <Form.Item
+            name="size"
+            label="体型"
+            tooltip="大 / 中 / 小。不按体重自动分——同样 13kg，法斗是中型，小体金毛是大型幼犬。抓挠的幅度和频率跟体型直接相关，分开记才能按体型看指标"
+          >
+            <Select allowClear placeholder="大 / 中 / 小" options={SIZES.map((x) => ({ value: x, label: `${x}型` }))} />
           </Form.Item>
           <Form.Item
             name="birth_date"

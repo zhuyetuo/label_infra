@@ -11,6 +11,8 @@ export interface Dog {
   aliases: string | null;
   /** 场所：影棚 / 狗场 */
   site: string | null;
+  /** 体型：大 / 中 / 小。不按体重自动分——同样 13kg，法斗是中型，小体金毛是大型幼犬 */
+  size: string | null;
   /** 出生日期。年龄不存数字存生日——存「3岁」第二年就错了 */
   birth_date: string | null;
   remark: string | null;
@@ -34,12 +36,13 @@ export const createDog = (body: {
   imu?: string;
   aliases?: string;
   site?: string;
+  size?: string;
   birth_date?: string;
   remark?: string;
 }) =>
   request.post<never, Dog>("/dogs", body);
 
-export const updateDog = (id: number, body: Partial<Pick<Dog, "name" | "breed" | "imu" | "aliases" | "site" | "birth_date" | "remark">>) =>
+export const updateDog = (id: number, body: Partial<Pick<Dog, "name" | "breed" | "imu" | "aliases" | "site" | "size" | "birth_date" | "remark">>) =>
   request.patch<never, Dog>(`/dogs/${id}`, body);
 
 export const deleteDog = (id: number) => request.delete<never, null>(`/dogs/${id}`);
