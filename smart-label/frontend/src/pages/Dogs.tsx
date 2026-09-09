@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Statistic, Table, Tabs, Tag, Tooltip,
   Typography, message,
 } from "antd";
+import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import DogMeasurements from "@/components/DogMeasurements";
 import DogPhotos from "@/components/DogPhotos";
@@ -37,6 +38,42 @@ const SIZES = ["大", "中", "小"] as const;
 const SIZE_COLOR: Record<string, string> = { 大: "volcano", 中: "gold", 小: "cyan" };
 const SITE_TAB_KEY = "smart-label:dogs-site-tab";
 
+/**
+ * 单元格里直接改的文本框。
+ *
+ * 受控 + useEffect 同步，不用 defaultValue：保存完会重新拉一遍 dogs，这一行
+ * 会带着新数据重新渲染，defaultValue 那时候是不会更新的，看起来就像"改了又变回去"。
+ *
+ * 失焦才保存，不是每敲一个字保存一次：一个名字要发七八个请求，而且中间那些
+ * 半截的值真的会被写进库里。回车等同于失焦。
+ */
+function InlineText({
+  value,
+  onSave,
+  placeholder,
+}: {
+  value: string | null;
+  onSave: (v: string | null) => void;
+  placeholder?: string;
+}) {
+  const [v, setV] = useState(value ?? "");
+  useEffect(() => setV(value ?? ""), [value]);
+  return (
+    <Input
+      size="small"
+      value={v}
+      placeholder={placeholder}
+      onChange={(e) => setV(e.target.value)}
+      onPressEnter={(e) => (e.target as HTMLInputElement).blur()}
+      onBlur={() => {
+        const t = v.trim();
+        // 没改就别发请求——光是移开焦点不该算一次修改
+        if (t !== (value ?? "")) onSave(t || null);
+      }}
+    />
+  );
+}
+
 // 狗档案：现在主要靠样本扫描时按文件名里的 dog 编号自动建档（采集端还没开始
 // 带这个信息之前基本是空的），这里补一套手动管理 + 每只狗的样本总览（按
 // 日期分组，能看出这只狗每天的数据处于哪个标注阶段）。
@@ -49,7 +86,12 @@ export default function Dogs() {
   // 当前看哪个场所（all / 影棚 / 狗场…）。记住选择：管狗场的人不该每次都先切一下
   const [siteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Dog | null>(null);
+  // 哪几行解了锁可以直接改。默认全锁着：这张表平时是拿来看的，字段又密，
+  // 不锁的话滑一下鼠标就可能把别的狗的名字改了，而自动保存是没有"取消"的
+  const [unlocked, setUnlocked] = useState<Set<number>>(new Set());
+  // 刚存过的那一行闪一下"已保存"。用 message 弹全局提示太吵——一行填四五个
+  // 字段就弹四五次，而人的注意力本来就在这一行上
+  const [justSaved, setJustSaved] = useState<number | null>(null);
   // 照片单独开弹窗：展开行里已经有体重记录和时间轴了，再塞图会很长
   const [photoDog, setPhotoDog] = useState<Dog | null>(null);
   // 排序记住：按体重/年龄/照片数排过一次，切走再回来还是那个顺序
@@ -97,47 +139,45 @@ export default function Dogs() {
   const tasksOfSample = (sampleId: number) => tasks?.filter((t) => t.sample_id === sampleId) ?? [];
 
   const openCreate = () => {
-    setEditing(null);
     form.resetFields();
     setOpen(true);
   };
 
-  const openEdit = (dog: Dog) => {
-    setEditing(dog);
-    form.setFieldsValue({
-      dog_code: dog.dog_code,
-      name: dog.name ?? undefined,
-      breed: dog.breed ?? undefined,
-      imu: dog.imu ?? undefined,
-      aliases: dog.aliases ?? undefined,
-      site: dog.site ?? undefined,
-      size: dog.size ?? undefined,
-      birth_date: dog.birth_date ? dayjs(dog.birth_date) : undefined,
-      remark: dog.remark ?? undefined,
+  const toggleLock = (id: number) =>
+    setUnlocked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
-    setOpen(true);
+
+  /** 改一个字段就存一个字段。失败要把话说清楚，不然自动保存悄悄没生效最坑 */
+  const saveField = async (dog: Dog, patch: Parameters<typeof updateDog>[1]) => {
+    try {
+      await updateDog(dog.id, patch);
+      setJustSaved(dog.id);
+      window.setTimeout(() => setJustSaved((cur) => (cur === dog.id ? null : cur)), 1500);
+      refresh();
+    } catch {
+      message.error("没保存上，检查一下网络再改一次");
+    }
   };
 
+  /**
+   * 一个单元格：锁着显示只读的样子，解了锁换成输入控件。
+   *
+   * 输入控件要挡掉点击冒泡——这张表是 expandRowByClick 的，不挡的话点一下输入框
+   * 会把这一行展开/收起，正在填的东西跟着跳走。
+   */
+  const cell = (d: Dog, editor: React.ReactNode, view: React.ReactNode) =>
+    unlocked.has(d.id) ? <span onClick={(e) => e.stopPropagation()}>{editor}</span> : <>{view}</>;
+
   const handleSubmit = async (values: FormValues) => {
-    if (editing) {
-      await updateDog(editing.id, {
-        name: values.name,
-        breed: values.breed,
-        imu: values.imu,
-        aliases: values.aliases,
-        site: values.site,
-        size: values.size,
-        birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : null,
-        remark: values.remark,
-      });
-      message.success("已保存");
-    } else {
-      await createDog({
-        ...values,
-        birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : undefined,
-      });
-      message.success("已创建");
-    }
+    await createDog({
+      ...values,
+      birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : undefined,
+    });
+    message.success("已创建");
     setOpen(false);
     refresh();
   };
@@ -253,29 +293,59 @@ export default function Dogs() {
         scroll={{ x: "max-content" }}
         columns={dogWidth.applyResize<Dog>(dogSort.applySort<Dog>([
           { title: "编号", dataIndex: "dog_code", width: 120 },
-          { title: "名字", dataIndex: "name", render: (v: string | null) => v || "-" },
-          { title: "品种", dataIndex: "breed", render: (v: string | null) => v || "-" },
+          {
+            title: "名字",
+            dataIndex: "name",
+            render: (v: string | null, d: Dog) =>
+              cell(d, <InlineText value={v} placeholder="名字" onSave={(x) => saveField(d, { name: x })} />, v || "-"),
+          },
+          {
+            title: "品种",
+            dataIndex: "breed",
+            render: (v: string | null, d: Dog) =>
+              cell(d, <InlineText value={v} placeholder="品种" onSave={(x) => saveField(d, { breed: x })} />, v || "-"),
+          },
           {
             title: "机位",
             dataIndex: "imu",
             width: 110,
             render: (v: string | null, d: Dog) =>
-              v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-"),
+              cell(
+                d,
+                <InlineText value={v} placeholder={`IMU${d.dog_code}`} onSave={(x) => saveField(d, { imu: x })} />,
+                v || (/^\d+$/.test(d.dog_code) ? <span style={{ opacity: 0.5 }}>IMU{d.dog_code}（按编号）</span> : "-")
+              ),
           },
-          { title: "别名（照片目录名）", dataIndex: "aliases", render: (v: string | null) => v || "-" },
+          {
+            title: "别名（照片目录名）",
+            dataIndex: "aliases",
+            render: (v: string | null, d: Dog) =>
+              cell(d, <InlineText value={v} placeholder="bibi, BB" onSave={(x) => saveField(d, { aliases: x })} />, v || "-"),
+          },
           {
             title: "年龄",
             key: "age",
-            width: 110,
+            // 解锁后这里是个 DatePicker，比"6个月"三个字宽得多，宽度按它来
+            width: 145,
             sorter: (a: Dog, b: Dog) => (a.birth_date ?? "9999").localeCompare(b.birth_date ?? "9999"),
             // 存的是出生日期，年龄现算——存"3岁"的话明年就不对了，也没人会回来改
             render: (_: unknown, d: Dog) =>
-              d.age_text ? (
-                <Tooltip title={`出生 ${d.birth_date}`}>
-                  <span>{d.age_text}</span>
-                </Tooltip>
-              ) : (
-                <Typography.Text type="secondary">未填生日</Typography.Text>
+              cell(
+                d,
+                <DatePicker
+                  size="small"
+                  style={{ width: "100%" }}
+                  // 存生日不存岁数，所以解锁后改的是生日，显示的还是现算的年龄
+                  value={d.birth_date ? dayjs(d.birth_date) : null}
+                  onChange={(v) => saveField(d, { birth_date: v ? v.format("YYYY-MM-DD") : null })}
+                />,
+                d.age_text ? (
+                  <Tooltip title={`出生 ${d.birth_date}`}>
+                    <span>{d.age_text}</span>
+                  </Tooltip>
+                ) : (
+                  <Typography.Text type="secondary">未填生日</Typography.Text>
+                )
               ),
           },
           {
@@ -311,20 +381,46 @@ export default function Dogs() {
           {
             title: "体型",
             dataIndex: "size",
-            width: 80,
+            // 同上：解锁后是个下拉，80 装不下
+            width: 110,
             // 按大→中→小排，不按字典序（字典序出来是"中大小"，没有意义）
             sorter: (a: Dog, b: Dog) => {
               const rank = (v: string | null) => (v ? SIZES.indexOf(v as (typeof SIZES)[number]) : SIZES.length);
               return rank(a.size) - rank(b.size);
             },
-            render: (v: string | null) =>
-              v ? <Tag color={SIZE_COLOR[v]}>{v}型</Tag> : <Typography.Text type="secondary">未填</Typography.Text>,
+            render: (v: string | null, d: Dog) =>
+              cell(
+                d,
+                <Select
+                  size="small"
+                  allowClear
+                  style={{ width: "100%" }}
+                  value={v ?? undefined}
+                  placeholder="大/中/小"
+                  options={SIZES.map((x) => ({ value: x, label: `${x}型` }))}
+                  onChange={(x) => saveField(d, { size: x ?? null })}
+                />,
+                v ? <Tag color={SIZE_COLOR[v]}>{v}型</Tag> : <Typography.Text type="secondary">未填</Typography.Text>
+              ),
           },
           {
             title: "场所",
             dataIndex: "site",
             width: 100,
-            render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>),
+            render: (v: string | null, d: Dog) =>
+              cell(
+                d,
+                <Select
+                  size="small"
+                  allowClear
+                  style={{ width: "100%" }}
+                  value={v ?? undefined}
+                  placeholder="场所"
+                  options={SITES.map((x) => ({ value: x, label: x }))}
+                  onChange={(x) => saveField(d, { site: x ?? null })}
+                />,
+                v ? <Tag>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>
+              ),
           },
           {
             title: "照片/视频",
@@ -339,7 +435,12 @@ export default function Dogs() {
               </Button>
             ),
           },
-          { title: "备注", dataIndex: "remark", render: (v: string | null) => v || "-" },
+          {
+            title: "备注",
+            dataIndex: "remark",
+            render: (v: string | null, d: Dog) =>
+              cell(d, <InlineText value={v} onSave={(x) => saveField(d, { remark: x })} />, v || "-"),
+          },
           {
             title: "样本数",
             width: 90,
@@ -350,9 +451,27 @@ export default function Dogs() {
             width: 160,
             render: (_, d: Dog) => (
               <Space onClick={(e) => e.stopPropagation()}>
-                <Button size="small" type="link" onClick={() => openEdit(d)}>
-                  编辑
-                </Button>
+                <Tooltip
+                  title={
+                    unlocked.has(d.id)
+                      ? "锁回去。解锁期间每改一处就立刻存下来，没有「取消」这一步"
+                      : "解锁后这一行的名字、品种、机位、别名、生日、体型、场所、备注都能直接在表格里改，改完自动保存"
+                  }
+                >
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={unlocked.has(d.id) ? <UnlockOutlined /> : <LockOutlined />}
+                    onClick={() => toggleLock(d.id)}
+                  >
+                    {unlocked.has(d.id) ? "锁定" : "解锁改"}
+                  </Button>
+                </Tooltip>
+                {justSaved === d.id && (
+                  <Typography.Text type="success" style={{ fontSize: 12 }}>
+                    已保存
+                  </Typography.Text>
+                )}
                 <Popconfirm
                   title="删除狗档案"
                   description="还有样本关联着的话删不掉"
@@ -370,7 +489,7 @@ export default function Dogs() {
       />
 
       <Modal
-        title={editing ? `编辑 - ${editing.dog_code}` : "新建狗档案"}
+        title="新建狗档案"
         open={open}
         onCancel={() => setOpen(false)}
         footer={null}
@@ -378,7 +497,7 @@ export default function Dogs() {
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="dog_code" label="编号" rules={[{ required: true }]}>
-            <Input disabled={!!editing} placeholder="跟文件名里 _dog 后面那段对应" />
+            <Input placeholder="跟文件名里 _dog 后面那段对应" />
           </Form.Item>
           <Form.Item name="name" label="名字">
             <Input />
@@ -417,7 +536,7 @@ export default function Dogs() {
             <Input.TextArea rows={2} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block>
-            {editing ? "保存" : "创建"}
+            创建
           </Button>
         </Form>
       </Modal>
