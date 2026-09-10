@@ -1106,24 +1106,23 @@ export default function Projects() {
           {
             title: "项目名",
             key: "name",
-            width: 160,
+            width: 230,   // 说明那一列撤了，宽度还给项目名——导入的项目名很长
             ellipsis: true,
             // 项目名就是日期，按名字排 = 按日期排
             sorter: (a: Project, b: Project) => a.name.localeCompare(b.name),
             sortDirections: ["descend", "ascend", "descend"],
+            // 说明挪到项目名的悬浮提示里，不单占一列。
+            // 那一列 180px 装不下一句话，永远是「从 L…」这种截断，占着位置又
+            // 什么都没说清楚；而说明本来就不是每行都要看的东西，需要时鼠标
+            // 放上去就有。腾出来的宽度给右边的任务进度，那个才是天天在看的。
             render: (_, p: Project) => (
               <Space>
-                <strong>{p.name}</strong>
+                <Tooltip title={p.description || undefined}>
+                  <strong style={p.description ? { cursor: "help" } : undefined}>{p.name}</strong>
+                </Tooltip>
                 {!p.is_active && <Tag>已停用</Tag>}
               </Space>
             ),
-          },
-          {
-            title: "说明",
-            dataIndex: "description",
-            width: 180,
-            ellipsis: true,
-            render: (d: string | null) => d || "-",
           },
           {
             title: "任务",
