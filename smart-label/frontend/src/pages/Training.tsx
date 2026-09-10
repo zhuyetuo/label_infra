@@ -518,7 +518,10 @@ export default function Training() {
         open={dsDetail != null}
         onCancel={() => setDsDetail(null)}
         footer={null}
-        width={980}
+        // 跟着屏幕走，别写死。原来固定 980px，片段明细那张表六列排不下，
+        // 每次点「去修」都得先往右拖一段。大屏上明明有空间，白白浪费。
+        width="94vw"
+        style={{ maxWidth: 1400, top: 24 }}
       >
         {dsDetail && (
           <>
@@ -749,11 +752,19 @@ export default function Training() {
               loading={loadingSegs}
               dataSource={(dsSegs?.rows ?? []).filter((r) => !segLabel || r.label === segLabel)}
               pagination={{ pageSize: 20, size: "small" }}
-              scroll={{ x: "max-content", y: 300 }}
+              // max-content 会按内容无限撑宽，「去修」被推到屏幕外；给个下限，
+              // 剩下的宽度归「样本」那一列。
+              // 980 = 其它列合计 730 + 样本编号至少要的 250。
+              // multicam_20260822_143447483_imu2 这种大概 230px，下限给少了
+              // （试过 900，只剩 170px）一上来就是省略号，等于白留一列。
+              scroll={{ x: 980, y: 300 }}
               columns={[
                 { title: "任务", dataIndex: "task_id", width: 80 },
                 { title: "样本", dataIndex: "sample_code", ellipsis: true },
-                { title: "类别", dataIndex: "label", width: 90, render: (v: string) => <Tag>{v}</Tag> },
+                {
+                  title: "类别", dataIndex: "label", width: 90,
+                  render: (v: string) => <Tag color={labelColor(v)}>{v}</Tag>,
+                },
                 { title: "开始", dataIndex: "start", width: 190 },
                 { title: "结束", dataIndex: "end", width: 190 },
                 {
@@ -765,6 +776,9 @@ export default function Training() {
                 {
                   title: "",
                   width: 80,
+                  // 钉在右边：横向滚动时也够得着。列一多就得先往右拖才能点，
+                  // 而这一列恰恰是这张表存在的意义——看到不对的就地点开改。
+                  fixed: "right",
                   // 按时长排一下，长得离谱的那几条多半是起止没调好，就地点开改
                   render: (_, r) => (
                     <Button
