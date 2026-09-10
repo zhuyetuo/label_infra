@@ -10,23 +10,33 @@ export interface SampleTime {
   date: string; // 2026-08-20
   start: string; // 00:00:00
   end: string | null; // 01:00:00，没有时长时为 null
+  /** 结束时间是不是已经跨到第二天了（23:30 开始录一小时那种） */
+  endsNextDay: boolean;
   imu: string; // imu1 / 其它
 }
 
 const CODE_RE = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(\d{3})?/;
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const hms = (sec: number) => `${pad(Math.floor(sec / 3600))}:${pad(Math.floor((sec % 3600) / 60))}:${pad(Math.floor(sec % 60))}`;
+// 跨零点的录制（23:30 开始录一小时）算出来是 86400 秒往上，直接格式化会得到
+// "24:30:00" 这种不存在的时间。狗场是按整点切片通宵录的，每天都要撞上一次。
+// 对 24 小时取模回到真实时间，跨没跨天由调用方另外标。
+const hms = (sec: number) => {
+  const s = ((sec % 86400) + 86400) % 86400;
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(Math.floor(s % 60))}`;
+};
 
 export function parseSampleTime(code: string | null | undefined, durationSec?: number | null): SampleTime | null {
   const m = CODE_RE.exec(code ?? "");
   if (!m) return null;
   const [, y, mo, d, h, mi, s] = m;
   const startSec = Number(h) * 3600 + Number(mi) * 60 + Number(s);
+  const endSec = durationSec != null && durationSec > 0 ? startSec + durationSec : null;
   return {
     date: `${y}-${mo}-${d}`,
     start: `${h}:${mi}:${s}`,
-    end: durationSec != null && durationSec > 0 ? hms(startSec + durationSec) : null,
+    end: endSec != null ? hms(endSec) : null,
+    endsNextDay: endSec != null && endSec >= 86400,
     imu: imuOf(code),
   };
 }
@@ -43,16 +53,24 @@ export function formatDuration(sec: number | null | undefined): string {
 }
 
 /**
- * 列表里显示用的样本名，所有角色一样："09:42:46 ~ 09:59:59"。项目名本身就是
- * 日期，这里不重复；原始编号放在鼠标悬停里给开发者看。
+ * 列表里显示用的样本名："09:42:46 ~ 09:59:59"。
+ *
+ * 默认不带日期：任务列表是按项目展开的，项目名本身就是日期，重复一遍是噪声。
+ *
+ * withDate 用在看不到项目名的地方——工作台标题就是，那里只有任务号、狗、样本
+ * 时间，"哪一天"根本无从得知。而且从 Label Studio 导进来的项目名是日期区间
+ * （2026_7_17-2026_7_29_old），就算看得见项目名也说不出是哪天，所以"项目名就是
+ * 日期"这个前提现在只对新建的项目成立。
  */
 export function sampleDisplayName(
   code: string | null | undefined,
   durationSec: number | null | undefined,
-  _role?: string | null | undefined
+  _role?: string | null | undefined,
+  withDate = false
 ): string {
   if (!code) return "";
   const t = parseSampleTime(code, durationSec);
   if (!t) return code;
-  return `${t.start} ~ ${t.end ?? "?"}`;
+  const range = `${t.start} ~ ${t.end ?? "?"}${t.endsNextDay ? "（次日）" : ""}`;
+  return withDate ? `${t.date} ${range}` : range;
 }

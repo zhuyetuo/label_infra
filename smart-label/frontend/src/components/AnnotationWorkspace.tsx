@@ -576,7 +576,8 @@ export default function AnnotationWorkspace({
             </Tag>
           )}
           <Tag>
-            样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role) : sampleId}
+            {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
+            样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}
             {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
           </Tag>
           {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
