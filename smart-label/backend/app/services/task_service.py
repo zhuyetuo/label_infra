@@ -14,7 +14,7 @@ from app.models.annotation import (
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
-from app.services.dog_name_service import dog_label, imu_dog_map
+from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map
 from app.models.user import User
 from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
@@ -42,21 +42,23 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
         all_rows += (
             await db.execute(
                 select(
-                    Sample.id, Sample.sample_code, Sample.video_duration_sec, Sample.imu_row_count
+                    Sample.id, Sample.sample_code, Sample.video_duration_sec,
+                    Sample.imu_row_count, Sample.dog_id,
                 ).where(Sample.id.in_(chunk))
             )
         ).all()
     rows = all_rows
     # 一个画面里同时有四只狗，标题上不写清楚"现在看的是哪只"就没法确认标注
     mapping = await imu_dog_map()
+    names = await dog_names_by_id(db, {r[4] for r in rows if r[4] is not None})
     return {
         sid: {
             "sample_code": code,
             "video_duration_sec": dur,
             "imu_row_count": rows_n,
-            "dog_label": dog_label(code, mapping),
+            "dog_label": dog_label_of(code, names.get(dog_id), mapping),
         }
-        for sid, code, dur, rows_n in rows
+        for sid, code, dur, rows_n, dog_id in rows
     }
 
 
