@@ -114,3 +114,15 @@
   background: #fffbf0 !important;
 }
 
+
+/* 从别处点「去修」进来定位到的那一条片段。
+   排在最前还不够——几十行里第一行也未必显眼，尤其人还在同时看视频和波形。
+   左边一条竖杠 + 淡底，扫一眼就知道"就是这条"。
+   用 outline 而不是 border：border 会把行高撑开一像素，虚拟滚动下每行高度必须
+   一致，撑开会让滚动位置算错。 */
+.seg-row--focus > td {
+  background: rgba(22, 119, 255, 0.14) !important;
+}
+.seg-row--focus > td:first-child {
+  box-shadow: inset 3px 0 0 #1677ff;
+}

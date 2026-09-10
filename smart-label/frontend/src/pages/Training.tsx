@@ -781,14 +781,25 @@ export default function Training() {
                   fixed: "right",
                   // 按时长排一下，长得离谱的那几条多半是起止没调好，就地点开改
                   render: (_, r) => (
-                    <Button
-                      size="small"
-                      type="link"
-                      loading={wsOpening === r.task_id}
-                      onClick={() => openTask(r.task_id, r.start_ms)}
+                    // start_ms 是后加的字段，早先导出的数据集里没有。没有它就只能
+                    // 把工作台开在开头，人还得自己按时间戳找——那跟"就地改"差远了。
+                    // 与其静默地跳不过去，不如说清楚为什么、以及怎么办。
+                    <Tooltip
+                      title={
+                        r.start_ms == null
+                          ? "这份数据集导出得早，片段里没记时间偏移，点进去只能停在开头。重新导出一次就能直接跳到这一段。"
+                          : undefined
+                      }
                     >
-                      去修
-                    </Button>
+                      <Button
+                        size="small"
+                        type="link"
+                        loading={wsOpening === r.task_id}
+                        onClick={() => openTask(r.task_id, r.start_ms)}
+                      >
+                        去修{r.start_ms == null ? "（无法定位）" : ""}
+                      </Button>
+                    </Tooltip>
                   ),
                 },
               ]}

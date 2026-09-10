@@ -5,6 +5,8 @@
 export class TimeBus {
   private timeListeners: ((sec: number) => void)[] = [];
   private seekHandler: ((sec: number) => void) | null = null;
+  // handler 还没注册时收到的 seek，等注册上来再补发（见 setSeekHandler）
+  private pendingSeek: number | null = null;
   private pendingSec: number | null = null;
   private rafId: number | null = null;
   // 区间循环：设了之后视频播到 end 就跳回 start 接着播（片段列表"循环"按钮用，
@@ -36,10 +38,25 @@ export class TimeBus {
 
   setSeekHandler(fn: ((sec: number) => void) | null): void {
     this.seekHandler = fn;
+    // 补上注册之前就发生的那次 seek。
+    // 从别处点「去修」进来时，工作台是在拿到媒体列表的同一个 tick 里就调 seek 的，
+    // 而那一刻 SyncedVideoGroup 还没挂载、还没注册 handler——原来 seek 是
+    // `this.seekHandler?.(sec)`，没有 handler 就静默什么都不做。表现是视频停在
+    // 0:00、帧号 0，人以为功能没做，其实是调早了一拍。
+    // 这里存下来等 handler 来了再补一次，比要求每个调用方自己去等挂载靠谱。
+    if (fn && this.pendingSeek != null) {
+      const s = this.pendingSeek;
+      this.pendingSeek = null;
+      fn(s);
+    }
   }
 
   seek(sec: number): void {
-    this.seekHandler?.(sec);
+    if (!this.seekHandler) {
+      this.pendingSeek = sec;
+      return;
+    }
+    this.seekHandler(sec);
   }
 
   getLoop(): { start: number; end: number } | null {
