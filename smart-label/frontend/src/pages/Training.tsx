@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -161,9 +161,36 @@ export default function Training() {
   };
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
+  // 调试时同一套参数要导好几遍，每次重敲一遍名字和条件很烦。上次用的存下来，
+  // 下次打开直接是它。存的是整套（名字/项目/取法/含待审核），不只是名字——
+  // 光记名字没用，条件还是得重挑一遍。
+  //
+  // 日期范围不记：它默认是"最近 30 天"，跟着今天走；记住一个写死的区间，过几天
+  // 再打开就是一段莫名其妙的历史范围，比重挑更容易出错。
+  const EXPORT_FORM_KEY = "train-export-form";
   useEffect(() => {
-    if (exportOpen && !name) setName(`ds_${dayjs().format("YYYYMMDD_HHmm")}`);
+    if (!exportOpen) return;
+    if (name) return;
+    try {
+      const raw = localStorage.getItem(EXPORT_FORM_KEY);
+      if (raw) {
+        const v = JSON.parse(raw);
+        if (typeof v.name === "string" && v.name) setName(v.name);
+        if (Array.isArray(v.projectIds)) setProjectIds(v.projectIds);
+        if (v.scope === "approved" || v.scope === "reviewed") setScope(v.scope);
+        if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
+        return;
+      }
+    } catch {
+      // 存的东西坏了不该让弹窗打不开，退回默认名字就是了
+    }
+    setName(`ds_${dayjs().format("YYYYMMDD_HHmm")}`);
   }, [exportOpen, name]);
+
+  // 这个名字已经有了：再导一次会原地覆盖那个目录。调试时这往往正是想要的，
+  // 但「训练记录」里引用过它的话，那条记录指向的就不是当初训练用的数据了。
+  // 所以不拦着，只说清楚。
+  const nameExists = (datasets ?? []).some((d) => d.name === name.trim());
 
   const doExport = async () => {
     setExporting(true);
@@ -180,8 +207,15 @@ export default function Training() {
         `已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时` +
           (meta.n_untouched_skipped ? `（跳过 ${meta.n_untouched_skipped} 条没人看过的 AI 片段）` : "")
       );
+      try {
+        localStorage.setItem(
+          EXPORT_FORM_KEY,
+          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted })
+        );
+      } catch {
+        // 存不下（隐私模式/满了）不影响导出本身
+      }
       setExportOpen(false);
-      setName("");
       qc.invalidateQueries({ queryKey: ["train-datasets"] });
     } finally {
       setExporting(false);
@@ -458,13 +492,27 @@ export default function Training() {
           </Typography.Paragraph>
           <Space>
             <Typography.Text>数据集名</Typography.Text>
-            <Input
-              style={{ width: 240 }}
+            <AutoComplete
+              style={{ width: 260 }}
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={setName}
               placeholder="字母/数字/下划线"
+              // 已有的名字列出来，调试时重导同一份直接选，不用照着抄
+              options={(datasets ?? []).map((d) => ({ value: d.name }))}
+              filterOption={(input: string, opt?: { value: string }) =>
+                (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())
+              }
             />
+            <Button size="small" type="link" onClick={() => setName(`ds_${dayjs().format("YYYYMMDD_HHmm")}`)}>
+              换个新名字
+            </Button>
           </Space>
+          {nameExists && (
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              已经有同名数据集了，导出会<strong>原地覆盖</strong>它。调试时重导同一份就是要这样；
+              但「训练记录」里引用过它的话，那条记录指向的就不再是当初训练用的数据了。
+            </Typography.Text>
+          )}
           <Space>
             <Typography.Text>日期范围</Typography.Text>
             <DatePicker.RangePicker
