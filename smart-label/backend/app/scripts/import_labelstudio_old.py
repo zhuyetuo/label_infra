@@ -264,61 +264,69 @@ async def color_map(db) -> dict[str, str]:
     色，两边对着看的时候全靠脑子换算，而拿老标注当基准去比 AI 标得对不对，恰恰
     就是要两边对着看。颜色不一致会让这件事变难，而这本来是免费的一致性。
 
-    模板优先——模板是人特意维护的那一份，项目上的颜色可能被谁临时改过。
-    同一个码在不同项目里颜色不同时取用得最多的那个，不去猜谁更权威。
+    先收项目里的票（同一个码多处颜色不同就取用得最多的），再让模板覆盖上去——
+    模板是人特意维护的那一份，项目上的颜色可能被谁临时改过。
+    这里**不能**写成"模板里有东西就整个用模板"：模板未必收了这批老标签的码，
+    那样一来 活动/抓挠 这些明明在别的项目里有颜色的，会被一并丢掉，最后一个也
+    补不上。第一版就是这么写的，结果六个项目的标签全是灰的。
     """
     from collections import Counter as _C
     votes: dict[str, _C] = {}
-    for model in (LabelTemplateItem, LabelDefinition):
-        rows = (await db.execute(select(model.code, model.color))).all()
-        for code, color in rows:
-            if color:
-                votes.setdefault(code, _C())[color] += 1
-        if votes and model is LabelTemplateItem:
-            # 模板里已经有的就定了，不让项目里的票把它冲掉
-            return {c: v.most_common(1)[0][0] for c, v in votes.items()}
-    return {c: v.most_common(1)[0][0] for c, v in votes.items()}
+    for code, color in (await db.execute(select(LabelDefinition.code, LabelDefinition.color))).all():
+        if color:
+            votes.setdefault(code, _C())[color] += 1
+    out = {c: v.most_common(1)[0][0] for c, v in votes.items()}
+    for code, color in (await db.execute(select(LabelTemplateItem.code, LabelTemplateItem.color))).all():
+        if color:
+            out[code] = color
+    return out
 
 
 async def get_or_create_labels(db, project_id: int, codes: list[str], user_id: int,
                                dry: bool, colors: dict[str, str]) -> dict[str, int]:
+    """建这个项目要用的标签，并保证每个都有颜色。
+
+    没颜色的标签在界面上全是一样的灰底，一排 tag 挤在一起根本分不出哪个是抓挠
+    哪个是睡觉——而这些项目正是拿来快速扫一眼、跟 AI 标注对比的。
+
+    新建的和「已经在库里但没颜色的」走同一条发色逻辑。第一版把补色单独写了一遍，
+    而且只会"借"、没有兜底色板：模板和别的项目都没有这个码时就什么也不做，
+    于是已经建好的那批标签永远补不上颜色。
+    """
     rows = (
         await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
     ).scalars().all()
     out = {r.code: r.id for r in rows}
-    # 已经在库里、但当初建的时候没给颜色的，这次补上。
-    # 第一版导入就没设 color，六个 _old 项目的标签在界面上全是灰的。
-    # 为这个再 --reset 重导一遍标注太亏了——颜色是标签定义上的一个字段，
-    # 跟标注数据没关系，就地补掉。人手改过颜色的不动（color 非空就跳过）。
-    for r in rows:
-        if not r.color:
-            c = colors.get(r.code)
-            if c and not dry:
-                r.color = c
-    # 这个项目里已经占掉的颜色。兜底发色时要避开——不然会出现「行走」拿到跟
+    by_code = {r.code: r for r in rows}
+
+    # 这个项目里已经占掉的颜色。发兜底色时要避开——不然会出现「行走」拿到跟
     # 借来的「抓挠」一样的红，同一个项目里两个标签同色，配了等于没配。
     used = {r.color for r in rows if r.color}
     for code in codes:
-        if code in out:
-            continue
         c = colors.get(code)
-        if c:
+        if c and not (code in by_code and by_code[code].color):
             used.add(c)
 
-    n_new = 0
+    def pick(code: str) -> str:
+        c = colors.get(code)
+        if c:
+            return c
+        # 取第一个没被占用的。别在收缩的列表上取模——free 每发一个就少一个，
+        # 下一轮同一个下标指向的已经是另一个颜色了，会绕回已经用过的那些。
+        free = [x for x in _FALLBACK_COLORS if x not in used]
+        c = free[0] if free else _FALLBACK_COLORS[len(used) % len(_FALLBACK_COLORS)]
+        used.add(c)
+        return c
+
     for i, code in enumerate(codes):
-        if code in out:
+        exist = by_code.get(code)
+        if exist is not None:
+            # 已经在库里、但当初建的时候没给颜色的，这次补上。
+            # 人手改过颜色的不动（color 非空就跳过）。
+            if not exist.color and not dry:
+                exist.color = pick(code)
             continue
-        # 没颜色的标签在界面上全是一样的灰底，一排 tag 挤在一起根本分不出哪个是
-        # 抓挠哪个是睡觉——而这些项目是拿来快速扫一眼、跟 AI 标注对比的
-        color = colors.get(code)
-        if not color:
-            # 取第一个没被占用的。别在收缩的列表上取模——free 每发一个就少一个，
-            # 下一轮同一个下标指向的已经是另一个颜色了，会绕回已经用过的那些。
-            free = [c for c in _FALLBACK_COLORS if c not in used]
-            color = free[0] if free else _FALLBACK_COLORS[n_new % len(_FALLBACK_COLORS)]
-            used.add(color)
-        n_new += 1
+        color = pick(code)
         if dry:
             out[code] = -1
             continue
@@ -330,38 +338,6 @@ async def get_or_create_labels(db, project_id: int, codes: list[str], user_id: i
         await db.flush()
         out[code] = d.id
     return out
-
-
-async def reset_projects(db, names: list[str]) -> None:
-    """把之前导进来的 _old 项目连同任务/标注整个删掉，为重导让路。
-
-    什么时候用：第一版导入把 1078 个老任务当成"已存在"跳过了，1156 条标注没进去，
-    库里那份是残的。这些项目是导入脚本自己建的、还没人在上面改过东西，删掉重来
-    比写一个"补差异"的迁移脚本简单得多，也不容易出错。
-
-    只删名字精确匹配的这几个 _old 项目。人手建的项目、别的项目一律不碰。
-    """
-    from sqlalchemy import delete
-    for name in names:
-        p = (await db.execute(select(Project).where(Project.name == name))).scalar_one_or_none()
-        if p is None:
-            continue
-        task_ids = list((await db.execute(select(Task.id).where(Task.project_id == p.id))).scalars())
-        rec_ids = []
-        if task_ids:
-            rec_ids = list((await db.execute(
-                select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars())
-        # 从叶子往根删，外键才不会拦
-        if rec_ids:
-            await db.execute(delete(AnnotationLabelItem).where(
-                AnnotationLabelItem.annotation_record_id.in_(rec_ids)))
-            await db.execute(delete(AnnotationRecord).where(AnnotationRecord.id.in_(rec_ids)))
-        if task_ids:
-            await db.execute(delete(Task).where(Task.id.in_(task_ids)))
-        await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == p.id))
-        await db.delete(p)
-        print(f"  已删除项目 {name}（任务 {len(task_ids)} 个，标注记录 {len(rec_ids)} 条）")
-    await db.commit()
 
 
 async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool = False) -> int:
