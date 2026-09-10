@@ -307,6 +307,26 @@ async def collect_link_stats(
                         (csv_start + timedelta(milliseconds=s_ms), csv_start + timedelta(milliseconds=e_ms))
                     )
 
+    def _merge_events(spans):
+        """把真正压在一起的事件并成一条。返回排好序的 [(起, 止), ...]。
+
+        为什么必须并：这些事件是原样送给 algo_service 去算「今天抓了几次、共多久」
+        的，中间没有任何去重。而重复的抓挠片段是会产生的——从「疑似抓挠」里确认
+        一条候选时，代码是无条件新增一条片段，不看同类别是不是已经有一条压在同一
+        段时间上。于是同一次抓挠被算成两次，时长也被重复计入，C 值跟着虚高。
+        皮肤评估是拿来判断要不要干预的，数字虚高比没有数字更糟。
+
+        只并**真正重叠**的（后一条的起点严格早于前一条的终点），紧挨着的不并——
+        22:00:05 结束、22:00:05 开始的两条，很可能就是分开的两次，并了反而少算。
+        """
+        out: list[list] = []
+        for st, en in sorted(spans):
+            if out and st < out[-1][1]:
+                out[-1][1] = max(out[-1][1], en)
+            else:
+                out.append([st, en])
+        return [(a, b) for a, b in out]
+
     def _union_seconds(spans) -> float:
         merged: list[list[datetime]] = []
         for st, en in sorted(spans):
@@ -324,7 +344,9 @@ async def collect_link_stats(
         wear = max(0.0, _union_seconds(wear_spans.get(k, [])) - _union_seconds(missing_spans.get(k, [])))
         # AI 版：这天只要有 AI JSON 就出一行（没抓挠也是"0 次"，不是"没数据"）
         if counts[k]["total"] - counts[k]["no_ai"] > 0 or ai_events.get(k):
-            ai_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in ai_events.get(k, [])], "wear_seconds": wear})
+            ai_rows.append({"date": k[0], "imu": k[1],
+                            "events": [[_fmt(a), _fmt(b)] for a, b in _merge_events(ai_events.get(k, []))],
+                            "wear_seconds": wear})
         # 人工版：默认要有任务提交/通过；include_drafts 时只要这天有任务就出一行
         has_human = (
             counts[k]["total"] > 0
@@ -332,7 +354,9 @@ async def collect_link_stats(
             else counts[k]["approved"] + counts[k]["submitted"] + counts[k]["reviewed"] > 0
         )
         if has_human:
-            human_rows.append({"date": k[0], "imu": k[1], "events": [[_fmt(a), _fmt(b)] for a, b in human_events.get(k, [])], "wear_seconds": wear})
+            human_rows.append({"date": k[0], "imu": k[1],
+                               "events": [[_fmt(a), _fmt(b)] for a, b in _merge_events(human_events.get(k, []))],
+                               "wear_seconds": wear})
 
     # 这一趟算出来的事件先落库（同 日期+IMU+来源 覆盖），再连同库里其它天一起
     # 送去算——基线是"这只狗别的日子的中位数"，只拿本次选的范围算会偏，范围里

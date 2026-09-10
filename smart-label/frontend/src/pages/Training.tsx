@@ -115,6 +115,17 @@ export default function Training() {
     queryFn: () => getDatasetSegments(dsDetail!.name),
     enabled: dsDetail != null,
   });
+
+  // 重叠表里只有绝对时间字符串，没有 start_ms，没法直接把工作台开到那一刻。
+  // 片段明细里有（老数据集的由接口现算补上），按 任务+起始时间 对一下就能拿到。
+  const msOfSeg = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of dsSegs?.rows ?? []) {
+      if (r.start_ms != null) m.set(`${r.task_id}|${r.start}`, r.start_ms);
+    }
+    return (taskId: number, start: string) => m.get(`${taskId}|${start}`);
+  }, [dsSegs]);
+
   const [segLabel, setSegLabel] = useState<string | null>(null);
   // 核对数据集时发现要改起止，直接把工作台开在这一页——不然得记下任务号，
   // 切到项目/任务页翻出来，再拖进度条找那一刻
@@ -683,10 +694,10 @@ export default function Training() {
                           title: "两段",
                           render: (_, r) => (
                             <span>
-                              <Tag>{r.label_a}</Tag>
+                              <Tag color={labelColor(r.label_a)}>{r.label_a}</Tag>
                               {r.start_a.slice(11)} ~ {r.end_a.slice(11)}
                               {" ／ "}
-                              <Tag>{r.label_b}</Tag>
+                              <Tag color={labelColor(r.label_b)}>{r.label_b}</Tag>
                               {r.start_b.slice(11)} ~ {r.end_b.slice(11)}
                             </span>
                           ),
@@ -697,6 +708,26 @@ export default function Training() {
                           width: 110,
                           render: (_, r) =>
                             r.same_label ? <Tag>同类别</Tag> : <Tag color="red">不同类别</Tag>,
+                        },
+                        {
+                          title: "",
+                          width: 80,
+                          fixed: "right",
+                          // 重叠这一行原来只能看不能动，想核对得自己去任务列表里翻。
+                          // 而"这两段是不是同一次动作"恰恰是只有看画面才判断得了的。
+                          render: (_, r) => {
+                            const ms = msOfSeg(r.task_id, r.start_a);
+                            return (
+                              <Button
+                                size="small"
+                                type="link"
+                                loading={wsOpening === r.task_id}
+                                onClick={() => openTask(r.task_id, ms)}
+                              >
+                                去修
+                              </Button>
+                            );
+                          },
                         },
                       ]}
                     />

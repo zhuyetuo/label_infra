@@ -195,6 +195,43 @@ async def decide(
             record = AnnotationRecord(task_id=task.id, round_no=task.round_no, source_type=RecordSourceType.ai_revised)
             db.add(record)
             await db.flush()
+        # 同类别已经有一条压在这段时间上，就把它撑开，别再加一条。
+        #
+        # 「疑似抓挠」候选常常跟 AI 已经出的抓挠片段指向同一次动作——确认一下就
+        # 多出一条一模一样的，两条都留着的后果不是"多一行"：这些片段是原样送去
+        # 算「今天抓了几次、共多久」的，同一次抓挠被算成两次，C 值跟着虚高。
+        # 皮肤评估是拿来判断要不要干预的，数字虚高比没有数字更糟。
+        #
+        # 只在**真正重叠**时并（严格 < ，不含紧挨着的）：22:00:05 结束、
+        # 22:00:05 开始的两条很可能就是分开的两次，并了反而少算。
+        dup = (
+            await db.execute(
+                select(AnnotationLabelItem).where(
+                    AnnotationLabelItem.annotation_record_id == record.id,
+                    AnnotationLabelItem.label_id == label_id,
+                    AnnotationLabelItem.start_time_ms < cand.end_time_ms,
+                    AnnotationLabelItem.end_time_ms > cand.start_time_ms,
+                )
+            )
+        ).scalars().first()
+        if dup is not None:
+            dup.start_time_ms = min(dup.start_time_ms, cand.start_time_ms)
+            dup.end_time_ms = max(dup.end_time_ms, cand.end_time_ms)
+            # 记上出处：点错了还能退回候选重新判断，跟新建那条一个待遇
+            if dup.from_candidate_id is None:
+                dup.from_candidate_id = cand.id
+            # 人特意从候选里确认出来的，算人碰过——否则它还挂着"没人看过的AI片段"，
+            # 按片段取的导出会把它跳过，等于白确认一场
+            dup.ai_confirmed = True
+            cand.status = CandidateStatus(body.decision)
+            cand.decided_label_id = label_id
+            cand.uncertain_reason = None
+            cand.decided_by = user.id
+            cand.decided_at = datetime.now(UTC).replace(tzinfo=None)
+            await db.commit()
+            await db.refresh(cand)
+            return ok(_out(cand))
+
         db.add(
             AnnotationLabelItem(
                 annotation_record_id=record.id,
