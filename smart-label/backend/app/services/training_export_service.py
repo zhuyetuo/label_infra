@@ -205,8 +205,12 @@ async def export_dataset(
     conflicts: list[dict] = []
 
     ls_tasks: list[dict] = []
-    # 实际进了这份数据集的采集日，用来回显"范围"
-    spans: list[date] = []
+    # 实际进了这份数据集的采集日，用来回显"范围"。
+    # 名字别叫 spans——这个函数里下面的合并循环有个
+    # `for label_id, spans in by_label.items()`，会把同名变量重新绑成一堆
+    # (起, 止) 毫秒元组。第一版就叫 spans，结果日期和元组混在一个列表里，
+    # min() 直接 TypeError: '<' not supported between 'date' and 'tuple'。
+    session_days: list[date] = []
     label_counter: Counter[str] = Counter()
     label_sec: Counter[str] = Counter()
     warnings: list[str] = []
@@ -314,7 +318,7 @@ async def export_dataset(
         else:
             n_hz_unknown += 1
         if sample.session_date is not None:
-            spans.append(sample.session_date)
+            session_days.append(sample.session_date)
         ls_tasks.append({
             "id": task.id,
             "data": {
@@ -349,8 +353,8 @@ async def export_dataset(
         # 回显的是**实际包含进来的**最早/最晚采集日，不是筛选条件。
         # 不给日期范围时筛选条件本来就是空的；就算给了，圈到的样本也未必铺满整个
         # 区间——列表上那一列写着"范围"，人看的是"这份数据集里装的是哪几天"。
-        "date_from": (min(spans).isoformat() if spans else None),
-        "date_to": (max(spans).isoformat() if spans else None),
+        "date_from": (min(session_days).isoformat() if session_days else None),
+        "date_to": (max(session_days).isoformat() if session_days else None),
         # 筛选条件另存一份，重导时照着填
         "filter": {
             "date_from": date_from.isoformat() if date_from else None,
