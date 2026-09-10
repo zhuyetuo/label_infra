@@ -70,6 +70,18 @@ async def _scalars_in_chunks(db: AsyncSession, column, values) -> set:
 
 # 第4段 dog 编号是可选的，现在的采集端还没带这个，得兼容没有这一段的旧文件名
 _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)(?:_dog([A-Za-z0-9]+))?", re.IGNORECASE)
+# 单摄像头录制没有 cam 编号：multi_20260814_105828977_imu1_raw.mp4/.csv
+# 早期 imu_camera_sync_multi.py 录的是这个形状，归到 cam1。
+#
+# ⚠ 必须把 multicam_ 排除掉。多路录制会在配对文件之外，另外给每个设备写一份
+# 原始流水：multicam_20260909_190255051_imu9_raw.csv。它同样没有 cam 编号，
+# 但它不是"单摄像头样本"，而是多路会话里的一个附属文件。
+# 认了它的后果很隐蔽：它跟配对的 ..._cam1_imu9_raw.csv 会落到同一个 csvs[9]
+# 上，谁先扫到用谁——而两者的时间轴不一样（配对那份按视频起止裁过，这份是
+# 整段），选错了样本的 t0 就偏了，导入进来的标注会整体错位，而且看不出来。
+_ONECAM_RE = re.compile(
+    r"^(?!multicam)(.+?)_imu(\d+)(?:_dog([A-Za-z0-9]+))?(?:_raw)?$", re.IGNORECASE
+)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 _PROBE_CONCURRENCY = 8
 
@@ -143,9 +155,13 @@ async def run_scan(nas_root: str, admin_id: int) -> None:
 def _parse_filename(filename: str) -> tuple[str, int, int, str | None] | None:
     stem = os.path.splitext(filename)[0]
     match = _CAM_RE.match(stem)
-    if not match:
-        return None
-    return match.group(1), int(match.group(2)), int(match.group(3)), match.group(4)
+    if match:
+        return match.group(1), int(match.group(2)), int(match.group(3)), match.group(4)
+    # 带 cam 编号的先试；没有 cam 编号的按单摄像头算，归到 cam1
+    match = _ONECAM_RE.match(stem)
+    if match:
+        return match.group(1), 1, int(match.group(2)), match.group(3)
+    return None
 
 
 def _parse_session_date(session_key: str) -> date | None:
@@ -339,8 +355,10 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     all_candidate_paths: set[str] = set()
     for session_key, g in groups.items():
         videos, csvs = g["videos"], g["csvs"]
-        if not all(c in videos for c in (1, 2)):
-            _progress.detail.append(f"跳过 {session_key}：缺少cam1/cam2视频")
+        # 只要求 cam1。狗场是一间一狗一摄像头，一只狗的样本天生只有一路视频；
+        # 要求两路的话那批数据一条都进不来，而那正是接下来主要的数据来源。
+        if 1 not in videos:
+            _progress.detail.append(f"跳过 {session_key}：一路视频都没有")
             _progress.processed += 1
             _progress.tick()
             continue
@@ -426,7 +444,7 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             dog_id=dog_id_by_code.get(dog_code) if dog_code else None,
             session_date=_parse_session_date(session_key),
             video_cam1_path=cam_paths[1],
-            video_cam2_path=cam_paths[2],
+            video_cam2_path=cam_paths.get(2),
             video_cam3_path=cam_paths.get(3),
             imu_csv_path=csv_rel,
             video_duration_sec=probe["duration_sec"] if probe else None,

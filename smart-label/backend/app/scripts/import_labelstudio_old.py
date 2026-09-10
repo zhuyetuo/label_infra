@@ -124,6 +124,15 @@ _MEDIA_RE = re.compile(
     r"(?:_(?P<clip>clip\d+)_(?P<cs>\d{6})-(?P<ce>\d{6}))?"
 )
 
+# 单摄像头录制没有 cam 编号：multi_20260814_105828977_imu1_raw.mp4
+# 一路视频 + 一个 IMU。路数是场地决定的，不是数据不完整——狗场的小单间就是
+# 一间一狗一摄像头（草地和公共活动区才跟影棚一样多路多狗）。
+# 平台这边 samples.video_cam2_path 已经改成可空，扫描也只硬性要求 cam1。
+_ONECAM_RE = re.compile(
+    r"(?P<session>multi_\d{8}_\d{6,9})_imu(?P<imu>\d+)(?:_raw)?"
+    r"(?:_(?P<clip>clip\d+)_(?P<cs>\d{6})-(?P<ce>\d{6}))?"
+)
+
 # LS 的 task.data 里媒体字段名换过好几茬：两路时代是 video1/video2 + csv，
 # 四路时代是 video1..video4 + csv1/csv2，还有更早的单路 video。
 # 只要能拿到一个能解析出会话号的就够了，挨个试。
@@ -415,7 +424,7 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
             in_run: dict = {}
             for t in tasks_raw:
                 base = media_of(t)
-                m = _MEDIA_RE.search(base)
+                m = _MEDIA_RE.search(base) or _ONECAM_RE.search(base)
                 if not m:
                     # 更早的 rec_wit_* 单设备录制，平台里没有对应样本，导不了
                     unparsed[base.split("_")[0] or "(空)"] += 1
