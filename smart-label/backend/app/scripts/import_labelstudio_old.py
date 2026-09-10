@@ -586,12 +586,14 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
         print(f"\n⚠ 文件名认不出来、导不进来的 {sum(unparsed.values())} 个任务：")
         for pre, n in unparsed.most_common():
             why = {
-                "multi": "单摄像头时代（imu_camera_sync_multi.py），只有一路 video + 一个 csv",
                 "rec": "更早的纯 IMU 录制（rec_wit_*），根本没有视频",
             }.get(pre, "不认识的命名")
             print(f"    {pre}_*  {n:3d} 个 —— {why}")
-        print("  平台的 sample 至少要 cam1+cam2 两路视频，这些凑不出来，只能留在 LS 的导出文件里。"
-              "占比很小（约 1.5% 的标注片段），但别当成 0：真要用得单独想办法。")
+        # 这里以前写的是"平台的 sample 至少要 cam1+cam2 两路视频"。现在不成立了：
+        # cam2 已经改成可空，单摄像头（multi_*）那批能正常导入。剩下认不出来的
+        # 只有 rec_wit_* ——那是纯 IMU 录制，一路视频都没有，而 cam1 是硬性要求。
+        print("  平台的 sample 至少要一路视频（cam1），这些一路都没有，凑不出来，"
+              "只能留在 LS 的导出文件里。别当成 0：真要用得单独想办法。")
     if dry:
         print("\n(dry-run，什么都没写。去掉 --dry-run 才真的导入)")
     if tmp:
