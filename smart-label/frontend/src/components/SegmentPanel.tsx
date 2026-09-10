@@ -133,6 +133,11 @@ interface Props {
    * 「已标注片段（38）」拼一行——工作台里高度是最紧的资源，这排单独占一行不值当
    */
   controlsPortalTarget?: HTMLElement | null;
+  /**
+   * 从别处点「去修」进来时定位到的时刻（相对样本起点的毫秒）。
+   * 命中它的那条片段排到最前并高亮——不然人得在几十上百条里自己找刚点的是哪条。
+   */
+  focusMs?: number | null;
 }
 
 export default function SegmentPanel({
@@ -152,6 +157,7 @@ export default function SegmentPanel({
   onCreate,
   initialFilterLabels,
   controlsPortalTarget,
+  focusMs,
 }: Props) {
   const isLooping = (startMs: number, endMs: number) =>
     loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
@@ -203,7 +209,20 @@ export default function SegmentPanel({
     if (empty) setJustEdited(new Set());
   }, [empty]);
 
-  const sorted = useMemo(() => [...items].sort((a, b) => a.start_time_ms - b.start_time_ms), [items]);
+  // 从别处点「去修」进来时，focusMs 是那一条片段的起点。把命中它的那条排到最前，
+  // 不然人得在几十上百条里自己找刚才点的是哪一条——而这一步恰恰是"就地改"这件事
+  // 唯一的意义。命中的定义放宽到"包含这一刻"，导出时被挖过洞的片段起点会有几十
+  // 毫秒偏差，严格相等匹配不上。
+  const sorted = useMemo(() => {
+    const base = [...items].sort((a, b) => a.start_time_ms - b.start_time_ms);
+    if (focusMs == null) return base;
+    const hit = (i: LabelItem) => i.start_time_ms <= focusMs && focusMs < i.end_time_ms;
+    const near = (i: LabelItem) => Math.abs(i.start_time_ms - focusMs);
+    const hits = base.filter(hit).sort((a, b) => near(a) - near(b));
+    if (hits.length === 0) return base;
+    const ids = new Set(hits.map((h) => h.id));
+    return [...hits, ...base.filter((i) => !ids.has(i.id))];
+  }, [items, focusMs]);
 
   const filtered = useMemo(
     () =>
@@ -530,7 +549,17 @@ export default function SegmentPanel({
         virtual
         scroll={{ x: 900, y: 220 }}
         locale={{ emptyText: items.length ? "没有符合筛选条件的片段" : "还没有标注片段" }}
-        rowClassName={(i) => (aiState(i) === "pending" ? "seg-row--pending" : "")}
+        rowClassName={(i) =>
+          [
+            aiState(i) === "pending" ? "seg-row--pending" : "",
+            // 点「去修」进来的那一条：排在最前还不够，几十行里第一行也未必显眼
+            focusMs != null && i.start_time_ms <= focusMs && focusMs < i.end_time_ms
+              ? "seg-row--focus"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")
+        }
         columns={[
           {
             title: "标签",
