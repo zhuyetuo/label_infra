@@ -86,11 +86,23 @@ async def imu_dog_map() -> dict[str, str]:
     try:
         async with SessionLocal() as db:
             rows = (await db.execute(select(Dog.dog_code, Dog.name, Dog.imu))).all()
+        # 两只狗登记了同一个设备号时，原来是"谁后查到谁赢"——顺序一变名字就变，
+        # 而且一声不吭。现场表现是工作台标题上写着 bibi（IMU2），可 IMU2 明明是
+        # 巴利的。IMU 号本来就该是全局唯一的（跨场地也是），撞了就是档案填错了，
+        # 得让人看见，不能挑一个装作没事。
+        claimed: dict[str, str] = {}
         for dog_code, name, imu in rows:
             name = (name or "").strip()
             if not name:
                 continue
             for key in imu_keys_of_dog(imu, dog_code):
+                if key in claimed and claimed[key] != name:
+                    _logger.warning(
+                        "设备号 %s 被多只狗登记：%s 和 %s。IMU 号要全局唯一（两个场地也不能撞），"
+                        "现在按后者显示，去狗档案里把重复的那个改掉。",
+                        key, claimed[key], name,
+                    )
+                claimed[key] = name
                 mapping[key] = name
     except Exception as e:  # noqa: BLE001 查库失败也不能把任务列表带崩
         _logger.warning("读本地狗档案失败，只用远端对照表：%s", e)
@@ -98,6 +110,37 @@ async def imu_dog_map() -> dict[str, str]:
     _cache = mapping
     _cache_at = now
     return _cache
+
+
+async def dog_names_by_id(db, dog_ids: set[int]) -> dict[int, str]:
+    """dog_id → 狗名。一次查完，不要每行一次。
+
+    传进来的是同一个请求里已经开着的 session，不新开——这个函数在任务列表里
+    一次几百行时被调用，每次新建 session 光连接开销就够呛。
+    """
+    if not dog_ids:
+        return {}
+    rows = (await db.execute(select(Dog.id, Dog.name).where(Dog.id.in_(dog_ids)))).all()
+    return {i: (n or "").strip() for i, n in rows if (n or "").strip()}
+
+
+def dog_label_of(sample_code: str | None, dog_name: str | None, mapping: dict[str, str]) -> str | None:
+    """一个样本该显示成哪只狗。
+
+    优先用样本自己关联的狗（samples.dog_id），拿不到才退回按设备号猜。
+
+    为什么这个顺序：按设备号猜是全局一张 IMU→狗名 表，而两个场地的狗都在同一张
+    表里，编号一撞就会互相盖掉——现场就撞出过"IMU2 显示成 bibi，其实是巴利"。
+    而 dog_id 是这个样本自己身上的字段，人在样本页上一条条关联过的，不存在跨场地
+    串号的可能。有确切答案的时候不该去猜。
+
+    退回猜，是因为老样本还有一批没关联 dog_id（采集端那时还没在文件名里带狗编号），
+    对那些来说，按设备号猜聊胜于无。
+    """
+    if dog_name:
+        imu = imu_of(sample_code)
+        return f"{dog_name}（{imu}）" if imu else dog_name
+    return dog_label(sample_code, mapping)
 
 
 def dog_label(sample_code: str | None, mapping: dict[str, str]) -> str | None:
