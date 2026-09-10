@@ -105,7 +105,8 @@ def _fmt(t: datetime) -> str:
 
 
 async def export_dataset(
-    db: AsyncSession, name: str, date_from: date, date_to: date, project_id: int | None = None,
+    db: AsyncSession, name: str, date_from: date | None = None, date_to: date | None = None,
+    project_ids: list[int] | None = None,
     include_submitted: bool = False, scope: str = "approved",
 ) -> dict:
     if not _NAME_RE.match(name):
@@ -113,22 +114,23 @@ async def export_dataset(
     if scope not in ("approved", "reviewed"):
         raise TrainingExportError("scope 只能是 approved 或 reviewed")
     only_reviewed = scope == "reviewed"
-    q = (
-        select(Task, Sample)
-        .join(Sample, Sample.id == Task.sample_id)
-        .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
-        .order_by(Task.id)
-    )
+    q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
+    # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
+    # 一份），只是导出来会很大，n_tasks 会如实报出来。
+    if date_from is not None:
+        q = q.where(Sample.session_date >= date_from)
+    if date_to is not None:
+        q = q.where(Sample.session_date <= date_to)
     if not only_reviewed:
         # 整份取：任务本身得审过
         statuses = [TaskStatus.APPROVED] + ([TaskStatus.SUBMITTED] if include_submitted else [])
         q = q.where(Task.status.in_(statuses))
-    if project_id is not None:
-        q = q.where(Task.project_id == project_id)
+    if project_ids:
+        q = q.where(Task.project_id.in_(project_ids))
     rows = (await db.execute(q)).all()
     if not rows:
         raise TrainingExportError(
-            "这段日期里没有任务" if only_reviewed else "这段日期里没有审核通过的任务"
+            "这个范围里没有任务" if only_reviewed else "这个范围里没有审核通过的任务"
         )
 
     label_names = dict(
@@ -203,6 +205,8 @@ async def export_dataset(
     conflicts: list[dict] = []
 
     ls_tasks: list[dict] = []
+    # 实际进了这份数据集的采集日，用来回显"范围"
+    spans: list[date] = []
     label_counter: Counter[str] = Counter()
     label_sec: Counter[str] = Counter()
     warnings: list[str] = []
@@ -309,6 +313,8 @@ async def export_dataset(
             hz_counter[int(sample.imu_sample_rate_hz)] += 1
         else:
             n_hz_unknown += 1
+        if sample.session_date is not None:
+            spans.append(sample.session_date)
         ls_tasks.append({
             "id": task.id,
             "data": {
@@ -339,8 +345,19 @@ async def export_dataset(
     rel_dir = os.path.join(TRAIN_DIR, name)
     full_dir = os.path.join(settings.nas_root, rel_dir)
     meta = {
-        "name": name, "date_from": date_from.isoformat(), "date_to": date_to.isoformat(),
-        "project_id": project_id, "include_submitted": include_submitted,
+        "name": name,
+        # 回显的是**实际包含进来的**最早/最晚采集日，不是筛选条件。
+        # 不给日期范围时筛选条件本来就是空的；就算给了，圈到的样本也未必铺满整个
+        # 区间——列表上那一列写着"范围"，人看的是"这份数据集里装的是哪几天"。
+        "date_from": (min(spans).isoformat() if spans else None),
+        "date_to": (max(spans).isoformat() if spans else None),
+        # 筛选条件另存一份，重导时照着填
+        "filter": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "project_ids": project_ids or [],
+        },
+        "include_submitted": include_submitted,
         "scope": scope,
         # 按片段取时跳过了多少条"没人看过的 AI 片段"，导出后能对上账
         "n_untouched_skipped": n_skipped_untouched,

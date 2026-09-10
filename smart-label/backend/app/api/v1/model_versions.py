@@ -53,8 +53,14 @@ _logger = logging.getLogger("smart-label.model_versions")
 
 class DatasetExportIn(BaseModel):
     name: str
-    date_from: _dt.date
-    date_to: _dt.date
+    # 日期和项目都可以不给。项目名跟日期本来就不是一回事——从 Label Studio 导进来
+    # 的项目名是日期区间（2026_7_17-2026_7_29_old），还有按狗命名的
+    # （2026_8_28_imu4_xiaoman_unwear_old），只按日期圈根本圈不准。
+    # 两个条件同时给就是"且"，都不给就是全部。
+    date_from: _dt.date | None = None
+    date_to: _dt.date | None = None
+    project_ids: list[int] | None = None
+    # 兼容老调用方：单个 project_id 还认，内部并进 project_ids
     project_id: int | None = None
     # 只用「已通过」最稳；赶时间可以把「待审核」也算上，但那部分还没人复核
     include_submitted: bool = False
@@ -76,7 +82,9 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
     """
     try:
         meta = await export_dataset(
-            db, body.name, body.date_from, body.date_to, body.project_id, body.include_submitted,
+            db, body.name, body.date_from, body.date_to,
+            (body.project_ids or ([body.project_id] if body.project_id is not None else None)),
+            body.include_submitted,
             scope=body.scope,
         )
     except TrainingExportError as e:
