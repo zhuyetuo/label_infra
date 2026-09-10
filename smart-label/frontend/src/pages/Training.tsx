@@ -236,11 +236,20 @@ export default function Training() {
                   loading={loadingDs}
                   dataSource={datasets ?? []}
                   pagination={false}
-                  scroll={{ x: "max-content" }}
+                  // x 给一个下限而不是 max-content。max-content 会让表格按内容无限
+                  // 撑宽，类别标签一多就把「导出时间/操作」挤到屏幕外，只能横向滚——
+                  // 而那两列是每行都要用的。给定宽度之后，剩下的空间归「各类别段数」，
+                  // 它自己换行。
+                  //
+                  // 1430 = 其它列固定宽度合计 1050 + 留给标签列的 380。
+                  // 这个下限不能只比 1050 多一点：那样窄屏下标签列只剩几十像素，
+                  // 十几个标签会挤成一条竖着的细柱，比横向滚动还难看。
+                  scroll={{ x: 1430 }}
                   columns={[
-                    { title: "数据集", dataIndex: "name", render: (n: string) => <strong>{n}</strong> },
+                    { title: "数据集", dataIndex: "name", width: 190, render: (n: string) => <strong>{n}</strong> },
                     {
                       title: "范围",
+                      width: 230,
                       render: (_, d: TrainDataset) => (
                         <span>
                           {d.date_from} ~ {d.date_to}
@@ -258,6 +267,9 @@ export default function Training() {
                     { title: "时长(小时)", dataIndex: "total_hours", width: 100 },
                     {
                       title: "各类别段数",
+                      // 不给 width：让它吃掉其它列分完之后剩下的宽度。
+                      // Space 的 wrap 只有在容器有边界时才生效，上面那些列定了宽度，
+                      // 这一列才有边界可言。
                       render: (_, d: TrainDataset) => (
                         <Space size={4} wrap>
                           {Object.entries(d.labels).map(([k, v]) => (
