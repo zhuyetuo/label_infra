@@ -22,7 +22,7 @@ import {
   getSkinDataRange,
   purgeSkinDailyStats,
   deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
-  skinDailyTracking, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
+  skinDailyTracking, skinLinkStaleness, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
   type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
 } from "@/api/skin";
 import { listProjects } from "@/api/projects";
@@ -1439,20 +1439,33 @@ function LinkTab(p: {
     refetchOnWindowFocus: false,
   });
   const [recomputing, setRecomputing] = useState(false);
+  // 哪些天的标注在上次算完之后改过。不自动重算：改一天会牵动别的天（基线是这只狗
+  // 所有算过的天的中位数），而且一次全量是几百次 algo 调用——标注是高频操作，
+  // 自动触发等于每存一次草稿就打一轮后端。提醒到位，按钮还是人按。
+  const { data: stale, refetch: refetchStale } = useQuery({
+    queryKey: ["skin-link-staleness"],
+    queryFn: skinLinkStaleness,
+    refetchOnWindowFocus: false,
+  });
   const rows = data?.rows ?? [];
   const warnings = data?.warnings ?? [];
   const loading = isFetching || recomputing;
 
   // 重新拉取 = 扫一遍 NAS / 任务重算，覆盖库里的结果；标注有更新时才需要点
-  const pull = async () => {
+  const pull = async (over?: { from: string; to: string }) => {
+    const from = over?.from ?? f.from;
+    const to = over?.to ?? f.to;
     setRecomputing(true);
     try {
       const r = await skinLinkStats({
-        date_from: f.from, date_to: f.to, project_id: f.projectId, include_drafts: f.includeDrafts, refresh: true,
+        date_from: from, date_to: to, project_id: f.projectId, include_drafts: f.includeDrafts, refresh: true,
       });
-      qcLink.setQueryData(["skin-link", f.from, f.to], r);
+      // 换了范围就把筛选也跟着挪过去，不然算完的行跟界面上显示的范围对不上
+      if (over) setFilter({ from, to });
+      qcLink.setQueryData(["skin-link", from, to], r);
       if (!r.rows.length) message.info(r.warnings[0] ?? "这段日期里没有样本/任务");
       else message.success(`已重新计算并保存 ${r.rows.length} 行`);
+      refetchStale();
     } finally {
       setRecomputing(false);
     }
@@ -1489,7 +1502,7 @@ function LinkTab(p: {
         <Checkbox checked={f.includeDrafts} onChange={(e) => setFilter({ includeDrafts: e.target.checked })}>
           人工版包含未审核的草稿
         </Checkbox>
-        <Button type="primary" loading={loading} onClick={pull}>重新拉取</Button>
+        <Button type="primary" loading={loading} onClick={() => pull()}>重新拉取</Button>
         {data && !loading && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}
@@ -1499,6 +1512,30 @@ function LinkTab(p: {
           </Typography.Text>
         )}
       </Space>
+      {stale && stale.stale_days.length > 0 && stale.range && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`有 ${stale.stale_days.length} 天的标注在上次计算之后改过：${stale.stale_days.slice(0, 8).join("、")}${stale.stale_days.length > 8 ? ` 等 ${stale.stale_days.length} 天` : ""}`}
+          description={
+            <>
+              这里的数字是点「重新拉取」时算下来存着的，标注改了不会自动跟着变。
+              {/* 只重算变过的那几天会让新旧基线混在一起：基线是这只狗所有算过的天的
+                  中位数，一半用新数据一半用旧的，算出来的 C 值哪一版都不是。
+                  所以按钮走全量，范围自动铺到算过的第一天到最后一天。 */}
+              重算走全量（{stale.range.from} ~ {stale.range.to}，共 {stale.computed_days} 天）——
+              基线是「所有算过的天」的中位数，只补几天会让新旧基线混在一起，C 值哪一版都不是。
+            </>
+          }
+          action={
+            <Button size="small" type="primary" loading={loading}
+                    onClick={() => stale.range && pull(stale.range)}>
+              全部重新算
+            </Button>
+          }
+        />
+      )}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         按 (日期, IMU) 聚合标注平台上的「抓挠」片段：<b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响），
         <b>人工版</b> = 已提交/已通过任务里当前的片段（勾上「包含未审核的草稿」就把标注中/待认领里已经标了的也算进来）。结果存在服务器上，打开页面直接读；基线用<b>所有算过的天</b>算，不只是这次选的范围。

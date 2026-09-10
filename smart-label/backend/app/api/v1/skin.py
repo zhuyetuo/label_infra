@@ -18,7 +18,10 @@ from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.sample import Sample
+from app.services.dog_name_service import imu_of
+from app.models.annotation import AnnotationRecord
 from app.models.skin_daily import SkinDailyStat
+from app.models.task import Task
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.task import Task
 from app.models.user import User, UserRole
@@ -83,6 +86,75 @@ async def link_stats(
         # 出了预料之外的错也要让人在界面上看到原因，而不是"暂无数据"一片空白
         _logger.exception("项目联动统计失败 %s~%s project=%s", date_from, date_to, project_id)
         return ok({"rows": [], "warnings": [f"统计失败：{type(e).__name__}: {e}"]})
+
+
+@router.get("/link/staleness")
+async def link_staleness(db: AsyncSession = Depends(get_db)):
+    """哪些天的标注在上次算完之后又改过了。
+
+    为什么要有这个：跟踪表和 C 值不是实时算的，是「项目联动」点一次「重新拉取」
+    才算的。人在工作台改完标注，这边的数字纹丝不动，而它又恰恰是「要不要干预」
+    的依据——不提醒的话，要么每次进来都疑心数字旧了，要么就一直看着旧数字。
+
+    为什么不自动算：改一天会牵动别的天——基线是这只狗所有算过的天的中位数。
+    自动在后台悄悄改健康评分，人不知道数字为什么变了，也没法回溯是哪次改动引起
+    的。而且一次全量重算是几百次 algo 调用，标注是高频操作，自动触发等于每存一次
+    草稿就打一轮后端。所以：提醒到位，按钮还是人按。
+
+    判据很便宜：annotation_records 和 skin_daily_stats 都有 onupdate 的
+    updated_at，按（日期, IMU）分组比一下最大值就行，一条聚合查询，不碰
+    algo_service。
+    """
+    # 每个 (日期, IMU) 上次算完是什么时候。取最早的那个 source——ai 和 human
+    # 是同一次拉取里一起写的，但万一只写成功一个，按早的算才不会漏报。
+    computed = {
+        (d, imu): ts
+        for d, imu, ts in (
+            await db.execute(
+                select(SkinDailyStat.stat_date, SkinDailyStat.imu, func.min(SkinDailyStat.updated_at))
+                .group_by(SkinDailyStat.stat_date, SkinDailyStat.imu)
+            )
+        ).all()
+    }
+    if not computed:
+        return ok({"stale": [], "stale_days": [], "computed_days": 0, "range": None})
+
+    # 每个 (日期, IMU) 的标注最后一次改动是什么时候。
+    # 日期取样本的 session_date，IMU 取样本编号里的号——跟联动那边聚合的口径一致。
+    rows = (
+        await db.execute(
+            select(Sample.session_date, Sample.sample_code, func.max(AnnotationRecord.updated_at))
+            .join(Task, Task.sample_id == Sample.id)
+            .join(AnnotationRecord, AnnotationRecord.task_id == Task.id)
+            .where(Sample.session_date.isnot(None))
+            .group_by(Sample.session_date, Sample.sample_code)
+        )
+    ).all()
+    touched: dict[tuple, _dt.datetime] = {}
+    for sess_date, code, ts in rows:
+        imu = imu_of(code)
+        if imu is None or ts is None:
+            continue
+        key = (sess_date, imu)
+        if key not in touched or ts > touched[key]:
+            touched[key] = ts
+
+    stale = [
+        {"date": d.isoformat(), "imu": imu, "changed_at": touched[(d, imu)].strftime("%Y-%m-%d %H:%M:%S")}
+        for (d, imu), ts in computed.items()
+        if (d, imu) in touched and touched[(d, imu)] > ts
+    ]
+    stale.sort(key=lambda x: (x["date"], x["imu"]))
+    days = sorted({s["date"] for s in stale})
+    all_days = sorted({d.isoformat() for d, _ in computed})
+    return ok({
+        "stale": stale,
+        "stale_days": days,
+        "computed_days": len(all_days),
+        # 全部重算时要覆盖的范围：算过的最早一天到最晚一天。基线是"所有算过的天"
+        # 的中位数，只重算变过的那几天会让新旧基线混在一起，所以按钮走全量。
+        "range": {"from": all_days[0], "to": all_days[-1]} if all_days else None,
+    })
 
 
 @router.get("/daily-tracking")

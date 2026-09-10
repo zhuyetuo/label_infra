@@ -85,6 +85,15 @@ export interface LinkResult {
 }
 export interface WeeklyRow { id: number; imu: string; dog_name: string | null; report_date: string; data: Record<string, string | number>; updated_at: string | null }
 
+export type LinkStaleness = {
+  stale: { date: string; imu: string; changed_at: string }[];
+  stale_days: string[];
+  computed_days: number;
+  range: { from: string; to: string } | null;
+};
+/** 哪些天的标注在上次算完之后又改过了。一条聚合查询，不碰 algo_service。 */
+export const skinLinkStaleness = () => request.get<never, LinkStaleness>("/skin/link/staleness");
+
 export const getSkinOptions = () => request.get<never, SkinOptions>("/skin/options");
 export const skinQScore = (a: Answers) => request.post<never, QScore>("/skin/questionnaire-score", a);
 export const skinCScore = (c: CInputs) => request.post<never, CResult>("/skin/c-score", c);
