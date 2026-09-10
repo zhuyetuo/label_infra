@@ -204,6 +204,7 @@ async def export_dataset(
 
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
+    label_sec: Counter[str] = Counter()
     warnings: list[str] = []
     # 这份数据集里各种采样率各占多少个任务。混了频率是要当场看见的事，
     # 不是等模型训出来效果不对再回头查。
@@ -292,6 +293,9 @@ async def export_dataset(
                     },
                 })
                 label_counter[name_] += 1
+                # 段数不等于份量：一段睡觉 30 分钟和一段抓挠 2 秒都算"1 段"。
+                # 判断类别均不均衡要看时长，看段数会得出完全相反的结论。
+                label_sec[name_] += (b_ms - a_ms) / 1000
                 total_sec += (b_ms - a_ms) / 1000
         n_segments += len(result)
         # 带上这份 CSV 自己的采样率，别让下游按一个全局假设去重采样。
@@ -355,7 +359,10 @@ async def export_dataset(
         # 不用也不该去猜一个全局值。
         "sample_rate_hz": {str(k): v for k, v in sorted(hz_counter.items())},
         "n_sample_rate_unknown": n_hz_unknown,
-        "labels": dict(label_counter), "warnings": warnings[:50],
+        "labels": dict(label_counter),
+        # 每个类别的总时长（秒）。段数看不出份量，均衡与否得按时长算。
+        "label_seconds": {k: round(v, 1) for k, v in label_sec.items()},
+        "warnings": warnings[:50],
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "export_json": os.path.join(rel_dir, "merged_tmp.json"),
     }
@@ -417,6 +424,73 @@ def read_segments(name: str, limit: int = 5000) -> dict:
                     "end_ms": v.get("end_ms"),
                 })
     return {"total": total, "truncated": total > len(rows), "rows": rows}
+
+
+def label_stats(names: list[str]) -> dict:
+    """按类别统计这些数据集的段数和时长，用来看类别均不均衡。
+
+    直接读各自的 merged_tmp.json 现算，不读 meta.json 里的汇总：
+    label_seconds 是后加的字段，之前导出的数据集里没有；而"哪些类别不够、要不要
+    补采"这种判断，最不该因为"这份数据集导得早"就少一块。现算就都有。
+
+    多选是重点。单份数据集看均衡没什么意义——真正要回答的是"我手上所有训练数据
+    加起来，抓挠占多少"，而数据是一批批攒的，答案只能跨数据集看。
+    """
+    per: dict[str, Counter] = {}
+    per_sec: dict[str, Counter] = {}
+    missing: list[str] = []
+    for name in names:
+        if not _NAME_RE.match(name):
+            continue
+        path = os.path.join(settings.nas_root, TRAIN_DIR, name, "merged_tmp.json")
+        if not os.path.isfile(path):
+            missing.append(name)
+            continue
+        with open(path, encoding="utf-8") as f:
+            tasks = json.load(f)
+        c, s = Counter(), Counter()
+        for t_ in tasks:
+            for ann in t_.get("annotations") or []:
+                for seg in ann.get("result") or []:
+                    v = seg.get("value") or {}
+                    labels = v.get("timeserieslabels") or []
+                    if not labels:
+                        continue
+                    try:
+                        a_ = datetime.strptime(v.get("start") or "", "%Y-%m-%d %H:%M:%S.%f")
+                        b_ = datetime.strptime(v.get("end") or "", "%Y-%m-%d %H:%M:%S.%f")
+                        sec = (b_ - a_).total_seconds()
+                    except ValueError:
+                        sec = 0.0
+                    c[labels[0]] += 1
+                    s[labels[0]] += sec
+        per[name] = c
+        per_sec[name] = s
+
+    total_c, total_s = Counter(), Counter()
+    for name in per:
+        total_c.update(per[name])
+        total_s.update(per_sec[name])
+    grand = sum(total_s.values()) or 1.0
+    rows = [
+        {
+            "label": k,
+            "n_segments": total_c[k],
+            "seconds": round(total_s[k], 1),
+            "hours": round(total_s[k] / 3600, 3),
+            "pct": round(total_s[k] / grand * 100, 2),
+            # 每份数据集各贡献了多少秒，一眼看出"这个类别只有某一批有"
+            "by_dataset": {n: round(per_sec[n][k], 1) for n in per if per_sec[n][k] > 0},
+        }
+        for k in sorted(total_s, key=lambda x: -total_s[x])
+    ]
+    return {
+        "datasets": list(per),
+        "missing": missing,
+        "total_hours": round(grand / 3600, 2),
+        "total_segments": sum(total_c.values()),
+        "rows": rows,
+    }
 
 
 def check_dataset(name: str, max_examples: int = 200) -> dict:

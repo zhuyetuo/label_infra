@@ -15,6 +15,8 @@ import type { LabelDefinition, Task } from "@/types";
 import {
   type DatasetCheck,
   checkDataset,
+  datasetStats,
+  type LabelStats,
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
@@ -59,6 +61,18 @@ export default function Training() {
   //
   // 不传 project_id = 拿全部项目的标签。同一个名字在不同项目里颜色可能不同，
   // 取用得最多的那个——跟导入脚本借颜色的规则一致。
+  // 类别统计：可以看单份、选中的几份、或者全部。
+  // 为什么要能跨数据集看：单份数据集的均衡度没什么意义——真正要回答的是
+  // 「我手上所有训练数据加起来，抓挠占多少」，而数据是一批批攒的，
+  // 答案只能跨数据集看。不够就补采，太多就砍。
+  const [statsFor, setStatsFor] = useState<string[] | null>(null); // null=关着, []=全部
+  const [pickedDs, setPickedDs] = useState<string[]>([]);
+  const { data: stats, isFetching: loadingStats } = useQuery({
+    queryKey: ["ds-stats", statsFor],
+    queryFn: () => datasetStats(statsFor ?? []),
+    enabled: statsFor !== null,
+  });
+
   const { data: allLabels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
   const labelColor = useMemo(() => {
     const votes = new Map<string, Map<string, number>>();
@@ -225,9 +239,12 @@ export default function Training() {
                   <Button type="primary" onClick={() => setExportOpen(true)}>
                     导出新数据集
                   </Button>
+                  <Button onClick={() => setStatsFor(pickedDs)} disabled={!datasets?.length}>
+                    类别统计{pickedDs.length ? `（选中 ${pickedDs.length} 份）` : "（全部）"}
+                  </Button>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     导出到 NAS 的 data_train/&lt;名字&gt;/。可以只用审核通过的任务，也可以按片段取——
-                    只要人碰过的（审了一半的任务也能用）。
+                    只要人碰过的（审了一半的任务也能用）。勾选几份可以合起来看类别够不够。
                   </Typography.Text>
                 </Space>
                 <Table
@@ -236,6 +253,10 @@ export default function Training() {
                   loading={loadingDs}
                   dataSource={datasets ?? []}
                   pagination={false}
+                  rowSelection={{
+                    selectedRowKeys: pickedDs,
+                    onChange: (keys) => setPickedDs(keys as string[]),
+                  }}
                   // x 给一个下限而不是 max-content。max-content 会让表格按内容无限
                   // 撑宽，类别标签一多就把「导出时间/操作」挤到屏幕外，只能横向滚——
                   // 而那两列是每行都要用的。给定宽度之后，剩下的空间归「各类别段数」，
@@ -534,6 +555,10 @@ export default function Training() {
               <Descriptions.Item label="掉数据挖掉">{dsDetail.missing_excluded_min ?? 0} 分钟</Descriptions.Item>
               <Descriptions.Item label="各类别段数" span={2}>
                 <Space size={4} wrap>
+                  <Button size="small" type="link" style={{ paddingLeft: 0 }}
+                          onClick={() => setStatsFor([dsDetail.name])}>
+                    按时长看
+                  </Button>
                   {Object.entries(dsDetail.labels).map(([k, v]) => (
                     <Tag key={k} color={labelColor(k)}>
                       {k} {v}
@@ -843,6 +868,91 @@ export default function Training() {
               </Descriptions.Item>
             )}
           </Descriptions>
+        )}
+      </Modal>
+
+      {/* 类别统计。段数看不出份量——一段睡觉半小时和一段抓挠 2 秒都算"1 段"，
+          按段数排和按时长排能得出完全相反的结论。判断均不均衡只能看时长。 */}
+      <Modal
+        open={statsFor !== null}
+        onCancel={() => setStatsFor(null)}
+        title={
+          statsFor?.length
+            ? `类别统计 · ${statsFor.length} 份数据集`
+            : "类别统计 · 全部数据集"
+        }
+        footer={null}
+        width={900}
+      >
+        {stats && (
+          <>
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Typography.Text>
+                合计 <strong>{stats.total_hours}</strong> 小时 / {stats.total_segments} 段，
+                来自 {stats.datasets.length} 份数据集
+              </Typography.Text>
+              {stats.missing.length > 0 && (
+                <Typography.Text type="danger">
+                  {stats.missing.length} 份读不到导出文件：{stats.missing.join("、")}
+                </Typography.Text>
+              )}
+            </Space>
+            <Table
+              rowKey="label"
+              size="small"
+              loading={loadingStats}
+              pagination={false}
+              dataSource={stats.rows}
+              scroll={{ y: 420 }}
+              columns={[
+                {
+                  title: "类别", dataIndex: "label", width: 110,
+                  render: (v: string) => <Tag color={labelColor(v)}>{v}</Tag>,
+                },
+                { title: "段数", dataIndex: "n_segments", width: 80,
+                  sorter: (a, b) => a.n_segments - b.n_segments },
+                {
+                  title: "时长", width: 110,
+                  sorter: (a, b) => a.seconds - b.seconds,
+                  render: (_, r) =>
+                    r.hours >= 1 ? `${r.hours} 小时` : `${Math.round(r.seconds)} 秒`,
+                },
+                {
+                  title: "占比", width: 200,
+                  sorter: (a, b) => a.pct - b.pct,
+                  // 数字之外再画一条，比例悬殊时（睡觉 70% vs 抓挠 0.3%）
+                  // 一眼就看出来，不用在小数点后面数零
+                  render: (_, r) => (
+                    <Space size={6}>
+                      <div style={{ width: 100, height: 8, background: "rgba(128,128,128,.25)", borderRadius: 4 }}>
+                        <div style={{
+                          width: `${Math.max(r.pct, 0.5)}%`, height: "100%", borderRadius: 4,
+                          background: labelColor(r.label) ?? "#1677ff",
+                        }} />
+                      </div>
+                      <span>{r.pct}%</span>
+                    </Space>
+                  ),
+                },
+                {
+                  title: "各数据集贡献",
+                  render: (_, r) => (
+                    <Space size={4} wrap>
+                      {Object.entries(r.by_dataset).map(([n, sec]) => (
+                        <Tooltip key={n} title={`${n}：${Math.round(sec)} 秒`}>
+                          <Tag>{n.replace(/^ds_/, "")} {(sec / 60).toFixed(1)}分</Tag>
+                        </Tooltip>
+                      ))}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 10 }}>
+              「各数据集贡献」能看出某个类别是不是只有某一批数据里有——只有一份贡献的类别，
+              模型很可能只是记住了那一批的场地/设备，换个场地就不认了。
+            </Typography.Paragraph>
+          </>
         )}
       </Modal>
     </div>

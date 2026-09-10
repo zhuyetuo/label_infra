@@ -103,6 +103,28 @@ export interface DatasetCheck {
   shared_samples: { sample_code: string; task_ids: number[] }[];
 }
 
+export type LabelStatRow = {
+  label: string;
+  n_segments: number;
+  seconds: number;
+  hours: number;
+  pct: number;
+  by_dataset: Record<string, number>;
+};
+export type LabelStats = {
+  datasets: string[];
+  missing: string[];
+  total_hours: number;
+  total_segments: number;
+  rows: LabelStatRow[];
+};
+
+/** 按类别统计一批数据集的段数/时长/占比。names 为空 = 全部数据集。 */
+export const datasetStats = (names?: string[]) =>
+  request.get<never, LabelStats>("/model-versions/dataset-stats", {
+    params: names?.length ? { names: names.join(",") } : {},
+  });
+
 export const checkDataset = (name: string) =>
   request.get<never, DatasetCheck>(`/model-versions/datasets/${encodeURIComponent(name)}/check`, {
     timeout: 120_000,
