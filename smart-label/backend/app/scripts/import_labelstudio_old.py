@@ -111,6 +111,7 @@ from app.models.annotation import (
     RecordSourceType,
 )
 from app.models.label import LabelDefinition
+from app.models.label_template import LabelTemplateItem
 from app.models.project import Project
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
@@ -236,19 +237,85 @@ async def get_or_create_project(db, name: str, user_id: int, dry: bool) -> Proje
     return p
 
 
-async def get_or_create_labels(db, project_id: int, codes: list[str], user_id: int, dry: bool) -> dict[str, int]:
+# 平台上从来没出现过的标签码，按顺序发这些颜色。用 antd 的色名，跟别处一致。
+# 只是兜底——正常情况下颜色都是从平台已有的同名标签那里借来的。
+# antd 的 11 个预设色不够用：这批老数据一个项目最多 15 种标签，减去从平台借来的
+# 那几个，剩下的照样会撞。后面补几个十六进制的把色板凑够，antd 的 Tag 两种都认。
+_FALLBACK_COLORS = [
+    "magenta", "red", "volcano", "orange", "gold", "lime",
+    "green", "cyan", "blue", "geekblue", "purple",
+    "#8c8c8c", "#a0522d", "#0d7d7d", "#7b5ea7", "#b5651d", "#4a7c59", "#9e3d5c",
+]
+
+
+async def color_map(db) -> dict[str, str]:
+    """平台上「这个标签码惯用什么颜色」。
+
+    为什么要借而不是自己配一套：同一个「抓挠」在新项目是红的、在 _old 项目是别的
+    色，两边对着看的时候全靠脑子换算，而拿老标注当基准去比 AI 标得对不对，恰恰
+    就是要两边对着看。颜色不一致会让这件事变难，而这本来是免费的一致性。
+
+    模板优先——模板是人特意维护的那一份，项目上的颜色可能被谁临时改过。
+    同一个码在不同项目里颜色不同时取用得最多的那个，不去猜谁更权威。
+    """
+    from collections import Counter as _C
+    votes: dict[str, _C] = {}
+    for model in (LabelTemplateItem, LabelDefinition):
+        rows = (await db.execute(select(model.code, model.color))).all()
+        for code, color in rows:
+            if color:
+                votes.setdefault(code, _C())[color] += 1
+        if votes and model is LabelTemplateItem:
+            # 模板里已经有的就定了，不让项目里的票把它冲掉
+            return {c: v.most_common(1)[0][0] for c, v in votes.items()}
+    return {c: v.most_common(1)[0][0] for c, v in votes.items()}
+
+
+async def get_or_create_labels(db, project_id: int, codes: list[str], user_id: int,
+                               dry: bool, colors: dict[str, str]) -> dict[str, int]:
     rows = (
         await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
     ).scalars().all()
     out = {r.code: r.id for r in rows}
+    # 已经在库里、但当初建的时候没给颜色的，这次补上。
+    # 第一版导入就没设 color，六个 _old 项目的标签在界面上全是灰的。
+    # 为这个再 --reset 重导一遍标注太亏了——颜色是标签定义上的一个字段，
+    # 跟标注数据没关系，就地补掉。人手改过颜色的不动（color 非空就跳过）。
+    for r in rows:
+        if not r.color:
+            c = colors.get(r.code)
+            if c and not dry:
+                r.color = c
+    # 这个项目里已经占掉的颜色。兜底发色时要避开——不然会出现「行走」拿到跟
+    # 借来的「抓挠」一样的红，同一个项目里两个标签同色，配了等于没配。
+    used = {r.color for r in rows if r.color}
+    for code in codes:
+        if code in out:
+            continue
+        c = colors.get(code)
+        if c:
+            used.add(c)
+
+    n_new = 0
     for i, code in enumerate(codes):
         if code in out:
             continue
+        # 没颜色的标签在界面上全是一样的灰底，一排 tag 挤在一起根本分不出哪个是
+        # 抓挠哪个是睡觉——而这些项目是拿来快速扫一眼、跟 AI 标注对比的
+        color = colors.get(code)
+        if not color:
+            # 取第一个没被占用的。别在收缩的列表上取模——free 每发一个就少一个，
+            # 下一轮同一个下标指向的已经是另一个颜色了，会绕回已经用过的那些。
+            free = [c for c in _FALLBACK_COLORS if c not in used]
+            color = free[0] if free else _FALLBACK_COLORS[n_new % len(_FALLBACK_COLORS)]
+            used.add(color)
+        n_new += 1
         if dry:
             out[code] = -1
             continue
         d = LabelDefinition(
-            project_id=project_id, code=code, display_name=code, sort_order=i, created_by=user_id
+            project_id=project_id, code=code, display_name=code, color=color,
+            sort_order=i, created_by=user_id,
         )
         db.add(d)
         await db.flush()
@@ -300,6 +367,9 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
     unparsed: Counter = Counter()
 
     async with SessionLocal() as db:
+        # 平台上同名标签惯用的颜色，取一次给所有数据集用
+        colors = await color_map(db)
+
         if reset:
             names = [f"{d}_old" for d in sorted(groups) if not only or only == d]
             if dry:
@@ -336,7 +406,7 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
                 label_ids = {c: -1 for c in label_codes}
                 pid = -1
             else:
-                label_ids = await get_or_create_labels(db, project.id, label_codes, user_id, dry)
+                label_ids = await get_or_create_labels(db, project.id, label_codes, user_id, dry, colors)
                 pid = project.id
 
             t0_cache: dict[str, float | None] = {}
