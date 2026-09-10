@@ -91,8 +91,11 @@ export default function Training() {
 
   const [exportOpen, setExportOpen] = useState(false);
   const [name, setName] = useState("");
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(30, "day"), dayjs()]);
-  const [projectId, setProjectId] = useState<number | null>(null);
+  // 日期范围可以清空。项目名跟日期不是一回事——导进来的项目名是日期区间
+  // （2026_7_17-2026_7_29_old），还有按狗命名的（..._imu4_xiaoman_unwear_old），
+  // 只按日期圈根本圈不准，得能直接挑项目。
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>([dayjs().subtract(30, "day"), dayjs()]);
+  const [projectIds, setProjectIds] = useState<number[]>([]);
   const [includeSubmitted, setIncludeSubmitted] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -167,9 +170,9 @@ export default function Training() {
     try {
       const meta = await exportDataset({
         name: name.trim(),
-        date_from: range[0].format("YYYY-MM-DD"),
-        date_to: range[1].format("YYYY-MM-DD"),
-        project_id: projectId,
+        date_from: range ? range[0].format("YYYY-MM-DD") : null,
+        date_to: range ? range[1].format("YYYY-MM-DD") : null,
+        project_ids: projectIds,
         include_submitted: includeSubmitted,
         scope,
       });
@@ -466,21 +469,31 @@ export default function Training() {
             <Typography.Text>日期范围</Typography.Text>
             <DatePicker.RangePicker
               value={range}
-              onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
-              allowClear={false}
+              onChange={(v) => setRange(v && v[0] && v[1] ? [v[0], v[1]] : null)}
+              allowClear
             />
           </Space>
           <Space>
             <Typography.Text>项目</Typography.Text>
             <Select
+              mode="multiple"
               allowClear
-              placeholder="全部项目"
-              style={{ width: 220 }}
-              value={projectId ?? undefined}
-              onChange={(v) => setProjectId(v ?? null)}
+              placeholder="全部项目（可多选）"
+              style={{ width: 420 }}
+              maxTagCount="responsive"
+              // 项目多了得能搜，光靠下拉翻找不现实
+              showSearch
+              optionFilterProp="label"
+              value={projectIds}
+              onChange={setProjectIds}
               options={(projects ?? []).map((p) => ({ value: p.id, label: p.name }))}
             />
           </Space>
+          {!range && projectIds.length === 0 && (
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              日期和项目都没限制 = 导出全部标注。确实想要就继续，只是会比较大。
+            </Typography.Text>
+          )}
           {/* 人工复看很费时间，实际总是"这个任务只审了抓挠""那个审了一半"。
               等整份审完再用，数据集永远攒不起来——所以给一个按片段取的口子 */}
           <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)} style={{ width: "100%" }}>

@@ -58,9 +58,11 @@ export const listDatasets = () => request.get<never, TrainDataset[]>("/model-ver
 
 export const exportDataset = (body: {
   name: string;
-  date_from: string;
-  date_to: string;
-  project_id?: number | null;
+  // 日期和项目都可以不给：项目名跟日期不是一回事（导进来的是日期区间、
+  // 还有按狗命名的），只按日期圈不准。两个都给就是"且"，都不给就是全部。
+  date_from?: string | null;
+  date_to?: string | null;
+  project_ids?: number[];
   include_submitted?: boolean;
   scope?: "approved" | "reviewed";
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
