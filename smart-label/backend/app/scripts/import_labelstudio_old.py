@@ -48,16 +48,27 @@ LS 存的是绝对时间（`2026-07-18 02:14:05.692`），平台存的是相对�
 跳过，不重建也不追加标注。改过标注的任务更是绝对不碰——重跑一次导入不该把
 人后来的修订盖掉。
 
-## 用法（在后端容器里）
+## 用法
 
-    # 先看会发生什么，什么都不写
-    python -m app.scripts.import_labelstudio_old --src /path/to/数据集 --dry-run
+导出文件就在仓库里（backend/fixtures/labelstudio_old/，一共 368KB），跟这个脚本配套，
+git pull 下来就能跑，不用再手工往容器里传文件。容器里的路径是 /app/fixtures/...
+（Dockerfile 是 COPY . . + WORKDIR /app）。
 
-    # 真的导入
-    python -m app.scripts.import_labelstudio_old --src /path/to/数据集 --user 1
+注意 compose 里的服务名是 api，不是 backend：
 
---src 指向解压出来的目录，结构是 `<数据集名>/<project-N-at-....json>`；
-直接指向那一堆 .zip 所在的目录也行，会自己解压到临时目录。
+    cd ~/label_infra/smart-label/deploy
+
+    # 先空跑看统计，什么都不写
+    docker compose exec api python -m app.scripts.import_labelstudio_old \
+      --src /app/fixtures/labelstudio_old --dry-run
+
+    # 确认没问题再真导
+    docker compose exec api python -m app.scripts.import_labelstudio_old \
+      --src /app/fixtures/labelstudio_old --user 1
+
+--src 认两种：解压好的目录（结构是 `<数据集名>/<project-N-at-....json>`），
+或者一堆 .zip 所在的目录（会自己解压到临时目录，跑完删掉）。
+--only <数据集名> 只导一个，先拿最小的 2026_8_28_imu1_bb 试水比较稳。
 """
 
 from __future__ import annotations
