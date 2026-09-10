@@ -205,6 +205,10 @@ async def export_dataset(
     ls_tasks: list[dict] = []
     label_counter: Counter[str] = Counter()
     warnings: list[str] = []
+    # 这份数据集里各种采样率各占多少个任务。混了频率是要当场看见的事，
+    # 不是等模型训出来效果不对再回头查。
+    hz_counter: Counter[int] = Counter()
+    n_hz_unknown = 0
     n_segments = 0
     total_sec = 0.0
     for task, sample in rows:
@@ -290,13 +294,43 @@ async def export_dataset(
                 label_counter[name_] += 1
                 total_sec += (b_ms - a_ms) / 1000
         n_segments += len(result)
+        # 带上这份 CSV 自己的采样率，别让下游按一个全局假设去重采样。
+        # 这批数据是混的：8-11 之前采集端就已经降到 16Hz 存了，8-11 起才是 50Hz
+        # 原始流。全按 50Hz 处理的话，本来就是 16Hz 的那批会被再降一次到 ~5Hz——
+        # 而抓挠的判据是陀螺仪 4–8Hz 的能量占比，5Hz 采样的奈奎斯特频率才 2.5Hz，
+        # 那个频带整个没了。训出来的模型不会报错，只是认不出抓挠。
+        # 扫描导入时已经逐个文件量过并存在 samples.imu_sample_rate_hz 上，这里
+        # 只是把它带出去。量不出来的留 None，下游自己决定退回什么默认值。
+        if sample.imu_sample_rate_hz:
+            hz_counter[int(sample.imu_sample_rate_hz)] += 1
+        else:
+            n_hz_unknown += 1
         ls_tasks.append({
             "id": task.id,
-            "data": {"csv": sample.imu_csv_path, "sample_code": sample.sample_code},
+            "data": {
+                "csv": sample.imu_csv_path,
+                "sample_code": sample.sample_code,
+                "sample_rate_hz": sample.imu_sample_rate_hz,
+            },
             "annotations": [{"id": task.id, "result": result}],
         })
     if not ls_tasks:
         raise TrainingExportError("没有可导出的任务；" + "；".join(warnings[:3]))
+
+    # 混了采样率就喊一声，放在 warnings 最前面。不拦着导出——混着导是合理需求，
+    # 只要下游按每个任务的 sample_rate_hz 处理就行；但绝不能让它悄无声息。
+    if len(hz_counter) > 1:
+        parts = "、".join(f"{k}Hz {v} 个任务" for k, v in sorted(hz_counter.items()))
+        warnings.insert(0, (
+            f"⚠ 这份数据集混了 {len(hz_counter)} 种采样率（{parts}）。"
+            "每个任务的 data.sample_rate_hz 里有各自的频率，训练时按它来重采样；"
+            "统一按某一个频率处理会把另一批算错，而且不会报错。"
+        ))
+    if n_hz_unknown:
+        warnings.insert(0, (
+            f"⚠ 有 {n_hz_unknown} 个任务量不出采样率（sample_rate_hz 为 null）。"
+            "多半是 CSV 时间戳列有问题；下游会退回默认频率，那批数据可能算错。"
+        ))
 
     rel_dir = os.path.join(TRAIN_DIR, name)
     full_dir = os.path.join(settings.nas_root, rel_dir)
@@ -317,6 +351,10 @@ async def export_dataset(
         # 有多少段被判「待定」而挖掉了，以及采集时掉数据挖掉了多久，导出后能对上账
         "n_uncertain_excluded": n_holes,
         "missing_excluded_min": round(n_missing_ms / 60000, 1),
+        # 采样率分布：{16: 641, 50: 284} 这种。下游按每份文件自己的频率处理即可，
+        # 不用也不该去猜一个全局值。
+        "sample_rate_hz": {str(k): v for k, v in sorted(hz_counter.items())},
+        "n_sample_rate_unknown": n_hz_unknown,
         "labels": dict(label_counter), "warnings": warnings[:50],
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "export_json": os.path.join(rel_dir, "merged_tmp.json"),
