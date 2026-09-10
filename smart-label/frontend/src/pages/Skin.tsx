@@ -497,9 +497,23 @@ function PurgeStatsButton({ from, to, onDone }: { from: string; to: string; onDo
 
   return (
     <>
-      <Button size="small" danger onClick={() => setOpen(true)}>
-        清理历史结果
-      </Button>
+      {/* 解释写在弹窗里是不够的：这是个红色的危险按钮，人得先点开才知道它干什么，
+          而"点开看看"对红按钮来说本身就是个心理门槛。放上去就有。 */}
+      <Tooltip
+        title={
+          <>
+            删掉「项目联动」算完存下来的日统计行（跟踪表和趋势图看的就是这张表）。
+            <br />
+            典型用处：删过项目之后，表里还留着那些天的行——数据源没了，数字却还在。
+            <br />
+            点开会先算一遍要删几行、涉及哪几天，确认了才删。
+          </>
+        }
+      >
+        <Button size="small" danger onClick={() => setOpen(true)}>
+          清理历史结果
+        </Button>
+      </Tooltip>
       <Modal
         open={open}
         title="清理存下来的日统计"
@@ -1536,10 +1550,32 @@ function LinkTab(p: {
           }
         />
       )}
+      {/* 这段说明原来常驻占三行。它是"第一次用要读一遍、之后再也不看"的东西，
+          而下面那张表才是天天在看的。收进问号里，需要时点开。 */}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        按 (日期, IMU) 聚合标注平台上的「抓挠」片段：<b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响），
-        <b>人工版</b> = 已提交/已通过任务里当前的片段（勾上「包含未审核的草稿」就把标注中/待认领里已经标了的也算进来）。结果存在服务器上，打开页面直接读；基线用<b>所有算过的天</b>算，不只是这次选的范围。
-        「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
+        按 (日期, IMU) 聚合「抓挠」片段，AI 版和人工版并排对比。
+        <Tooltip
+          overlayStyle={{ maxWidth: 520 }}
+          title={
+            <>
+              <b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响）。
+              <br />
+              <b>人工版</b> = 已提交/已通过任务里当前的片段；勾上「包含未审核的草稿」
+              就把标注中/待认领里已经标了的也算进来。
+              <br />
+              <br />
+              结果存在服务器上，打开页面直接读——所以标注改了这里不会自动变，
+              上面有提示时点「全部重新算」。
+              <br />
+              基线用<b>所有算过的天</b>算，不只是这次选的范围。
+              <br />
+              <br />
+              「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
+            </>
+          }
+        >
+          <QuestionCircleOutlined style={{ marginLeft: 6, cursor: "help" }} />
+        </Tooltip>
       </Typography.Paragraph>
       {warnings.length > 0 && (
         // 拉不到数或者数字看着不对时，原因基本都在这里（AI 服务没起、样本缺时间戳……）
