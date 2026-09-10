@@ -827,6 +827,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         )}
         {role === "super_admin" && <PurgeStatsButton from={f.from} to={f.to} onDone={() => refetch()} />}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {/* 「这两张表有什么区别」是个真实困惑：它们看着都是"一天一行的抓挠数字"。
+              区别在于一个是产地一个是货架——项目联动算并存下来，这里读那份结果。
+              两边各写一句，谁先点进来都能明白。 */}
+          <b>这一页负责「看」</b>：一行 = 一天一只狗，长期走势看这里；数字是
+          「项目联动」算完存下来的，<b>这一页不会自己重算</b>，标注改了要去那边点重算。
+          <br />
           共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
           （
           {f.cPrefer === "ai"
@@ -1526,6 +1532,27 @@ function LinkTab(p: {
           </Typography.Text>
         )}
       </Space>
+      {/* 「源没了」跟「改过了」是两回事，处理办法相反：前者重算救不回来（没有数据源
+          可算），只能去「每日跟踪表 → 清理历史结果」删掉；后者才是重算。混在一条
+          提示里，人照着点「全部重新算」会发现数字纹丝不动，然后以为功能坏了。 */}
+      {stale && stale.orphan_days.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`有 ${stale.orphan_days.length} 天的项目已经被删了，但跟踪表上还留着这些天的数字：${stale.orphan_days.slice(0, 8).join("、")}${stale.orphan_days.length > 8 ? ` 等 ${stale.orphan_days.length} 天` : ""}`}
+          description={
+            <>
+              这些天已经没有任何任务了，<b>重算也救不回来</b>——没有数据源可算，
+              重算只会把它们原样留着。
+              去「每日跟踪表」右上角的<b>「清理历史结果」</b>，勾「只清已经没有任务的天」删掉。
+              <br />
+              删完记得回这里点一次「全部重新算」：基线是这只狗「所有算过的天」的中位数，
+              少了几天，剩下那些天的 C 值会跟着变。
+            </>
+          }
+        />
+      )}
       {stale && stale.stale_days.length > 0 && stale.range && (
         <Alert
           type="warning"
