@@ -13,7 +13,7 @@ class SampleOut(BaseModel):
     dog_id: int | None
     session_date: date | None
     video_cam1_path: str
-    video_cam2_path: str
+    video_cam2_path: str | None
     video_cam3_path: str | None
     imu_csv_path: str
     ai_label_path: str | None

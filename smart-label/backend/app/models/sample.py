@@ -16,8 +16,11 @@ class ImportStatus(str, enum.Enum):
 class Sample(Base):
     """
     原始样本：2或3路同步视频 + 1个IMU CSV，均为相对 NAS_ROOT 的相对路径。
-    历史数据里有一批只有cam1/cam2两路（没有cam3），video_cam3_path 允许为空
-    以兼容这批数据；cam1/cam2 是硬性要求，任何样本都至少有这两路。
+    路数是可变的，只有 cam1 是硬性要求：
+      - 早期有一批只有 cam1/cam2 两路（没有 cam3）
+      - 狗场是一间一狗一摄像头，一只狗的样本天生就只有一路视频；
+        更早的单摄像头录制（multi_*）也是一路
+    所以 cam2/cam3 都允许为空。缺路数不是数据有问题，是场地就那样。
     """
 
     __tablename__ = "samples"
@@ -31,7 +34,7 @@ class Sample(Base):
     session_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
 
     video_cam1_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    video_cam2_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    video_cam2_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     video_cam3_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     imu_csv_path: Mapped[str] = mapped_column(String(500), nullable=False)
     ai_label_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

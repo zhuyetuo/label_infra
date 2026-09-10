@@ -28,7 +28,7 @@ export interface Sample {
   dog_id: number | null;
   session_date: string | null;
   video_cam1_path: string;
-  video_cam2_path: string;
+  video_cam2_path: string | null;
   video_cam3_path: string | null;
   imu_csv_path: string;
   video_duration_sec: number | null;
