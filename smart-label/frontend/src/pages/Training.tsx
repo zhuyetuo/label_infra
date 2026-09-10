@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
@@ -48,6 +48,32 @@ export default function Training() {
       (q.state.data ?? []).some((v: ModelVersion) => v.status === "queued" || v.status === "running") ? 10_000 : false,
   });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+
+  // 数据集里的「各类别段数」只有名字和数量（meta.labels 就是 {名字: 段数}），
+  // 拿不到颜色，于是一排全是灰底 tag，扫一眼分不出哪个是抓挠哪个是睡觉。
+  // 这里按名字去平台的标签定义里查颜色。
+  //
+  // 为什么在前端查、而不是导出时把颜色写进 meta：meta 是导出那一刻定死的，
+  // 已经导好的数据集补不上；而且颜色是会改的，改完老数据集还留着旧颜色，
+  // 跟别处对不上。现查就永远跟当前一致。
+  //
+  // 不传 project_id = 拿全部项目的标签。同一个名字在不同项目里颜色可能不同，
+  // 取用得最多的那个——跟导入脚本借颜色的规则一致。
+  const { data: allLabels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
+  const labelColor = useMemo(() => {
+    const votes = new Map<string, Map<string, number>>();
+    for (const l of allLabels ?? []) {
+      if (!l.color) continue;
+      const m = votes.get(l.display_name) ?? new Map<string, number>();
+      m.set(l.color, (m.get(l.color) ?? 0) + 1);
+      votes.set(l.display_name, m);
+    }
+    const out = new Map<string, string>();
+    votes.forEach((m, name) => {
+      out.set(name, [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+    });
+    return (name: string) => out.get(name);
+  }, [allLabels]);
 
   const [exportOpen, setExportOpen] = useState(false);
   const [name, setName] = useState("");
@@ -235,7 +261,7 @@ export default function Training() {
                       render: (_, d: TrainDataset) => (
                         <Space size={4} wrap>
                           {Object.entries(d.labels).map(([k, v]) => (
-                            <Tag key={k}>{k} {v}</Tag>
+                            <Tag key={k} color={labelColor(k)}>{k} {v}</Tag>
                           ))}
                         </Space>
                       ),
@@ -497,7 +523,7 @@ export default function Training() {
               <Descriptions.Item label="各类别段数" span={2}>
                 <Space size={4} wrap>
                   {Object.entries(dsDetail.labels).map(([k, v]) => (
-                    <Tag key={k}>
+                    <Tag key={k} color={labelColor(k)}>
                       {k} {v}
                     </Tag>
                   ))}
@@ -665,6 +691,17 @@ export default function Training() {
               </Tag.CheckableTag>
               {Object.keys(dsDetail.labels).map((k) => (
                 <Tag.CheckableTag key={k} checked={segLabel === k} onChange={() => setSegLabel(k)}>
+                  {/* CheckableTag 没有 color 属性——它的底色是用来表达"选中没选中"的，
+                      硬塞颜色会把这个区别弄没。所以在名字前点一个小色块，
+                      既能对上类别颜色，又不动选中态。 */}
+                  {labelColor(k) && (
+                    <span
+                      style={{
+                        display: "inline-block", width: 8, height: 8, borderRadius: 2,
+                        background: labelColor(k), marginRight: 5, verticalAlign: "middle",
+                      }}
+                    />
+                  )}
                   {k} {dsDetail.labels[k]}
                 </Tag.CheckableTag>
               ))}
