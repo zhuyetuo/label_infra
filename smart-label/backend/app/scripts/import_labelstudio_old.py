@@ -242,7 +242,39 @@ async def get_or_create_labels(db, project_id: int, codes: list[str], user_id: i
     return out
 
 
-async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
+async def reset_projects(db, names: list[str]) -> None:
+    """把之前导进来的 _old 项目连同任务/标注整个删掉，为重导让路。
+
+    什么时候用：第一版导入把 1078 个老任务当成"已存在"跳过了，1156 条标注没进去，
+    库里那份是残的。这些项目是导入脚本自己建的、还没人在上面改过东西，删掉重来
+    比写一个"补差异"的迁移脚本简单得多，也不容易出错。
+
+    只删名字精确匹配的这几个 _old 项目。人手建的项目、别的项目一律不碰。
+    """
+    from sqlalchemy import delete
+    for name in names:
+        p = (await db.execute(select(Project).where(Project.name == name))).scalar_one_or_none()
+        if p is None:
+            continue
+        task_ids = list((await db.execute(select(Task.id).where(Task.project_id == p.id))).scalars())
+        rec_ids = []
+        if task_ids:
+            rec_ids = list((await db.execute(
+                select(AnnotationRecord.id).where(AnnotationRecord.task_id.in_(task_ids)))).scalars())
+        # 从叶子往根删，外键才不会拦
+        if rec_ids:
+            await db.execute(delete(AnnotationLabelItem).where(
+                AnnotationLabelItem.annotation_record_id.in_(rec_ids)))
+            await db.execute(delete(AnnotationRecord).where(AnnotationRecord.id.in_(rec_ids)))
+        if task_ids:
+            await db.execute(delete(Task).where(Task.id.in_(task_ids)))
+        await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == p.id))
+        await db.delete(p)
+        print(f"  已删除项目 {name}（任务 {len(task_ids)} 个，标注记录 {len(rec_ids)} 条）")
+    await db.commit()
+
+
+async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool = False) -> int:
     root, tmp = extract_sources(src)
     groups = load_groups(root)
     if not groups:
@@ -254,6 +286,15 @@ async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
     unparsed: Counter = Counter()
 
     async with SessionLocal() as db:
+        if reset:
+            names = [f"{d}_old" for d in sorted(groups) if not only or only == d]
+            if dry:
+                print(f"(dry-run) 会先删掉这些项目再重导: {', '.join(names)}")
+            else:
+                print("先清掉之前导入的项目（只删这几个 _old，别的不碰）：")
+                await reset_projects(db, names)
+                print()
+
         for dataset, files in sorted(groups.items()):
             if only and only != dataset:
                 continue
@@ -285,6 +326,9 @@ async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
                 pid = project.id
 
             t0_cache: dict[str, float | None] = {}
+            # 本次运行里已经建过的任务：键 → (annotation_record_id, 已有的标注集合)
+            # dry-run 时没有 record_id，只放集合
+            in_run: dict = {}
             for t in tasks_raw:
                 base = media_of(t)
                 m = _MEDIA_RE.search(base)
@@ -322,15 +366,31 @@ async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
                         stats["跳过_切片时间段无效"] += 1
                         continue
 
-                # 幂等：同一个 (项目, 样本, 子时间段) 已经有任务就不再建。
-                # 已有任务一律不动——重跑导入不该把人后来的修订盖掉。
-                q = select(Task).where(
-                    Task.project_id == pid, Task.sample_id == sample.id,
-                    Task.segment_start_ms.is_(None) if seg_start is None else Task.segment_start_ms == seg_start,
-                )
-                if pid > 0 and (await db.execute(q)).scalars().first() is not None:
-                    stats["已存在_跳过"] += 1
-                    continue
+                # 一个 (项目, 样本, 子时间段) 对应平台上的一个任务。多个老任务
+                # 落到同一个键上是常事——LS 那边一个 task 是一个 cam×imu 文件，
+                # cam1_imu3 和 cam3_imu3 指向同一个样本；同一个时间窗还会有
+                # clip01 和 clip05 两份切片，各自标了不同的东西。
+                #
+                # 这里必须**合并**，不能后来者跳过。第一版就是跳过，结果 2088 个
+                # 老任务里 1078 个被判成"已存在"，其中 1076 个的标注跟先到的那个
+                # 不一样——1156 条独有的标注片段一声不吭地没了。而 dry-run 还看不
+                # 出来：那时项目还不存在，pid 是 -1，这段检查整个被绕过去了，
+                # 报出来的是漂亮的 2040。
+                #
+                # 区分两种"已经有了"：
+                #   本次运行里刚建的  → 合并进去（in_run 里有）
+                #   上次导入留下的    → 原样不动，重跑不该盖掉人后来的修订
+                key = (pid, sample.id, seg_start)
+                merge_into = in_run.get(key)
+                if merge_into is None and pid > 0:
+                    q = select(Task).where(
+                        Task.project_id == pid, Task.sample_id == sample.id,
+                        Task.segment_start_ms.is_(None) if seg_start is None
+                        else Task.segment_start_ms == seg_start,
+                    )
+                    if (await db.execute(q)).scalars().first() is not None:
+                        stats["已存在_跳过（上次导入的，不动）"] += 1
+                        continue
 
                 items: list[tuple[str, int, int]] = []
                 for a in t.get("annotations") or []:
@@ -362,9 +422,28 @@ async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
                     stats["跳过_没有有效标注"] += 1
                     continue
 
+                # dry-run 也要模拟合并，否则报出来的数字比真跑的乐观
+                if merge_into is not None:
+                    stats["合并进已有任务"] += 1
+                    seen = merge_into if dry else merge_into[1]
+                    fresh = [x for x in items if x not in seen]
+                    stats["合并_新增标注片段"] += len(fresh)
+                    stats["合并_丢弃重复片段"] += len(items) - len(fresh)
+                    seen.update(fresh)
+                    if not dry and fresh:
+                        for c, a_ms, b_ms in fresh:
+                            db.add(AnnotationLabelItem(
+                                annotation_record_id=merge_into[0], label_id=label_ids[c],
+                                start_time_ms=a_ms, end_time_ms=b_ms,
+                                source_type=LabelItemSource.human_added,
+                                created_by=user_id,
+                            ))
+                    continue
+
                 stats["导入_任务"] += 1
                 stats["导入_标注片段"] += len(items)
                 if dry:
+                    in_run[key] = set(items)
                     continue
 
                 task = Task(
@@ -390,6 +469,7 @@ async def run(src: str, user_id: int, dry: bool, only: str | None) -> int:
                         source_type=LabelItemSource.human_added,
                         created_by=user_id,
                     ))
+                in_run[key] = (rec.id, set(items))
             if not dry:
                 await db.commit()
 
@@ -427,8 +507,14 @@ def main() -> int:
     ap.add_argument("--user", type=int, default=1, help="以哪个用户的身份创建项目/任务/标注，默认 1")
     ap.add_argument("--only", help="只导这一个数据集（目录名）")
     ap.add_argument("--dry-run", action="store_true", help="只统计不写库")
+    ap.add_argument("--reset", action="store_true",
+                    help="先把同名的 _old 项目连同任务/标注整个删掉再重导。"
+                         "用于修第一版导入留下的残缺数据——那次把 1078 个老任务"
+                         "当成'已存在'跳过了，1156 条标注没进库。"
+                         "只删这几个 _old 项目，人手建的项目不碰。"
+                         "已经在这些项目上改过标注的话别用，会连人的修改一起删掉。")
     a = ap.parse_args()
-    return asyncio.run(run(a.src, a.user, a.dry_run, a.only))
+    return asyncio.run(run(a.src, a.user, a.dry_run, a.only, a.reset))
 
 
 if __name__ == "__main__":
