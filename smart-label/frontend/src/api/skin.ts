@@ -88,6 +88,8 @@ export interface WeeklyRow { id: number; imu: string; dog_name: string | null; r
 export type LinkStaleness = {
   stale: { date: string; imu: string; changed_at: string }[];
   stale_days: string[];
+  /** 项目/任务已经被删了，跟踪表上却还留着数字的天。重算救不了，得去「清理历史结果」 */
+  orphan_days: string[];
   computed_days: number;
   range: { from: string; to: string } | null;
 };

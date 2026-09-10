@@ -117,7 +117,7 @@ async def link_staleness(db: AsyncSession = Depends(get_db)):
         ).all()
     }
     if not computed:
-        return ok({"stale": [], "stale_days": [], "computed_days": 0, "range": None})
+        return ok({"stale": [], "stale_days": [], "orphan_days": [], "computed_days": 0, "range": None})
 
     # 每个 (日期, IMU) 的标注最后一次改动是什么时候。
     # 日期取样本的 session_date，IMU 取样本编号里的号——跟联动那边聚合的口径一致。
@@ -146,10 +146,28 @@ async def link_staleness(db: AsyncSession = Depends(get_db)):
     ]
     stale.sort(key=lambda x: (x["date"], x["imu"]))
     days = sorted({s["date"] for s in stale})
+
+    # 「数据源没了」是另一种变化，上面那套判据看不见：删掉一个项目，它的任务和
+    # 标注记录跟着没了，于是 touched 里根本不会有这一天——比较"改动时间"永远比
+    # 不出来，而跟踪表上那些天的数字还留着，看着像真的。
+    #
+    # 判据跟「清理历史结果」的"只清已经没有任务的天"完全一致：那一天现在还有没有
+    # 任务。口径不一致的话，这边报出来的天在那边删不掉，更让人糊涂。
+    live_days = set(
+        (
+            await db.execute(
+                select(Sample.session_date).join(Task, Task.sample_id == Sample.id).distinct()
+            )
+        ).scalars()
+    )
+    orphan_days = sorted({d.isoformat() for d, _ in computed if d not in live_days})
     all_days = sorted({d.isoformat() for d, _ in computed})
     return ok({
         "stale": stale,
         "stale_days": days,
+        # 这些天的项目/任务已经被删了，跟踪表上却还留着数字。重算救不了它们
+        # （没有数据源可算），得去「清理历史结果」删掉。
+        "orphan_days": orphan_days,
         "computed_days": len(all_days),
         # 全部重算时要覆盖的范围：算过的最早一天到最晚一天。基线是"所有算过的天"
         # 的中位数，只重算变过的那几天会让新旧基线混在一起，所以按钮走全量。
