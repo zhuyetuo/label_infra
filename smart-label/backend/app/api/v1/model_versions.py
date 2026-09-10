@@ -31,6 +31,7 @@ from app.services.training_export_service import (
     check_dataset,
     export_dataset,
     list_datasets,
+    label_stats,
     read_segments,
 )
 
@@ -78,6 +79,23 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return ok(meta)
+
+
+@router.get("/dataset-stats")
+async def dataset_label_stats(names: str = ""):
+    """按类别统计一批数据集的段数/时长/占比，用来判断类别均不均衡。
+
+    names 是逗号分隔的数据集名；不传就统计全部。
+    路由必须放在 /datasets/{name} 系列之前——不然 "dataset-stats" 会被当成
+    某个数据集的名字匹配进去。
+    """
+    picked = [x for x in (n.strip() for n in names.split(",")) if x]
+    if not picked:
+        picked = [d["name"] for d in await asyncio.to_thread(list_datasets)]
+    try:
+        return ok(await asyncio.to_thread(label_stats, picked))
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/datasets/{name}/segments")
