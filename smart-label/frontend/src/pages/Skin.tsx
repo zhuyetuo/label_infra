@@ -417,6 +417,64 @@ function ChartsTab() {
   );
 }
 
+/**
+ * 「项目联动」和「每日跟踪表」有什么区别——两边的问号都开这一个。
+ *
+ * 为什么用弹窗不用悬浮提示：这是个对比，左右两栏对着看才说得清；而悬浮提示
+ * 鼠标一动就没了，读到一半得重新悬停。短句子用悬浮提示很好，成段的对比不行。
+ *
+ * 为什么两边共用一个：说明本身就是"这两个的关系"，写两份迟早会改一份忘一份，
+ * 到时候两边说的话对不上，比没有说明更糟。
+ */
+function TabsHelp() {
+  const [open, setOpen] = useState(false);
+  const cell: React.CSSProperties = { verticalAlign: "top", padding: "8px 12px" };
+  return (
+    <>
+      <QuestionCircleOutlined style={{ cursor: "pointer" }} onClick={() => setOpen(true)} />
+      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width={620}
+             title="项目联动 和 每日跟踪表，有什么区别">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid rgba(128,128,128,.3)" }}>
+              <th style={{ ...cell, width: "50%", textAlign: "left" }}>项目联动</th>
+              <th style={{ ...cell, width: "50%", textAlign: "left" }}>每日跟踪表</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={cell}><b>算</b></td>
+              <td style={cell}><b>看</b></td>
+            </tr>
+            <tr>
+              <td style={cell}>把标注里的「抓挠」片段按天聚合，算完存到服务器</td>
+              <td style={cell}>读那份存下来的结果，一行 = 一天一只狗</td>
+            </tr>
+            <tr>
+              <td style={cell}>AI 版 / 人工版并排对比，挑一个用</td>
+              <td style={cell}>长期走势、填问答、算 S 总分</td>
+            </tr>
+            <tr>
+              <td style={cell}>标注改了 → 在这里点「全部重新算」</td>
+              <td style={cell}>这一页<b>不会自己重算</b></td>
+            </tr>
+          </tbody>
+        </table>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 16, marginBottom: 0 }}>
+          一句话：<b>项目联动是产地，每日跟踪表是货架。</b>
+          数字只在项目联动那边生产，跟踪表只负责摆出来看。
+          <br />
+          <br />
+          <b>AI 版</b> = 预标注的原始结果，人改过也不受影响；<b>人工版</b> = 任务里当前的片段。
+          「人工完整」= 当天任务都通过了，「部分」= 有的还没审、数字偏低。
+          <br />
+          基线用<b>所有算过的天</b>算，不只是当前选的日期范围——所以删掉几天会让剩下那些天的 C 值跟着变。
+        </Typography.Paragraph>
+      </Modal>
+    </>
+  );
+}
+
 // ── 每日跟踪表：一行 = (日期, 狗)，长期看每只狗的走势 ────────────────────
 
 const TRACK_FILTER_KEY = "skin-tracking-filter";
@@ -826,13 +884,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           </Tooltip>
         )}
         {role === "super_admin" && <PurgeStatsButton from={f.from} to={f.to} onDone={() => refetch()} />}
+        {/* 说明收进问号：它是"第一次用读一遍、之后再也不看"的东西，
+            常驻在这儿只会挤掉真正要看的表。 */}
+        <TabsHelp />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {/* 「这两张表有什么区别」是个真实困惑：它们看着都是"一天一行的抓挠数字"。
-              区别在于一个是产地一个是货架——项目联动算并存下来，这里读那份结果。
-              两边各写一句，谁先点进来都能明白。 */}
-          <b>这一页负责「看」</b>：一行 = 一天一只狗，长期走势看这里；数字是
-          「项目联动」算完存下来的，<b>这一页不会自己重算</b>，标注改了要去那边点重算。
-          <br />
           共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
           （
           {f.cPrefer === "ai"
@@ -1580,29 +1635,7 @@ function LinkTab(p: {
       {/* 这段说明原来常驻占三行。它是"第一次用要读一遍、之后再也不看"的东西，
           而下面那张表才是天天在看的。收进问号里，需要时点开。 */}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        按 (日期, IMU) 聚合「抓挠」片段，AI 版和人工版并排对比。
-        <Tooltip
-          overlayStyle={{ maxWidth: 520 }}
-          title={
-            <>
-              <b>AI 版</b> = 稳定版预标注的原始结果（人改过也不受影响）。
-              <br />
-              <b>人工版</b> = 已提交/已通过任务里当前的片段；勾上「包含未审核的草稿」
-              就把标注中/待认领里已经标了的也算进来。
-              <br />
-              <br />
-              结果存在服务器上，打开页面直接读——所以标注改了这里不会自动变，
-              上面有提示时点「全部重新算」。
-              <br />
-              基线用<b>所有算过的天</b>算，不只是这次选的范围。
-              <br />
-              <br />
-              「人工完整」= 当天所有任务都已通过；「部分」= 有的还没审，人工版数字偏低。
-            </>
-          }
-        >
-          <QuestionCircleOutlined style={{ marginLeft: 6, cursor: "help" }} />
-        </Tooltip>
+        AI 版 vs 人工版，按 (日期, IMU) 对比。 <TabsHelp />
       </Typography.Paragraph>
       {warnings.length > 0 && (
         // 拉不到数或者数字看着不对时，原因基本都在这里（AI 服务没起、样本缺时间戳……）
