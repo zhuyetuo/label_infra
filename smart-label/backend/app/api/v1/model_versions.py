@@ -10,6 +10,7 @@
 
 import asyncio
 import datetime as _dt
+from datetime import datetime
 import json
 import logging
 
@@ -21,9 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.model_version import ModelTrainStatus, ModelVersion
+from app.models.sample import Sample
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import ModelVersionOut, TrainSubmitIn
+from app.services.ai_prelabel_service import _csv_start_of
 from app.services import algo_client
 from app.services.training_export_service import (
     TrainingExportError,
@@ -99,12 +102,43 @@ async def dataset_label_stats(names: str = ""):
 
 
 @router.get("/datasets/{name}/segments")
-async def dataset_segments(name: str, limit: int = 5000):
-    """这份导出里到底装了哪些片段——直接读最终喂给训练的那个 json。"""
+async def dataset_segments(name: str, limit: int = 5000, db: AsyncSession = Depends(get_db)):
+    """这份导出里到底装了哪些片段——直接读最终喂给训练的那个 json。
+
+    start_ms 是后加的字段，早先导出的数据集里没有，而「去修」要靠它把工作台开到
+    那一刻。没有就现算：导出里存着绝对时间，减掉样本 CSV 的起点就是相对毫秒。
+    按样本缓存，一份数据集通常只有十几个样本，多读十几个文件头而已。
+
+    为什么不让人重导一次了事：重导会换掉训练集的内容（这中间标注可能已经改过），
+    而这里只是想点开看一眼。为了看一眼就把数据集换掉，代价和目的完全不成比例。
+    """
     try:
-        return ok(await asyncio.to_thread(read_segments, name, limit))
+        data = await asyncio.to_thread(read_segments, name, limit)
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    need = {r["sample_code"] for r in data["rows"] if r.get("start_ms") is None and r.get("sample_code")}
+    if need:
+        rows = (await db.execute(select(Sample).where(Sample.sample_code.in_(need)))).scalars().all()
+        starts: dict[str, datetime] = {}
+        for s in rows:
+            try:
+                starts[s.sample_code] = await _csv_start_of(s)
+            except Exception:  # noqa: BLE001 读不到就这条不补，不影响别的行
+                continue
+        for r in data["rows"]:
+            if r.get("start_ms") is not None:
+                continue
+            base = starts.get(r.get("sample_code") or "")
+            if base is None:
+                continue
+            for key, src in (("start_ms", "start"), ("end_ms", "end")):
+                try:
+                    dt = datetime.strptime(r[src], "%Y-%m-%d %H:%M:%S.%f")
+                except (ValueError, KeyError, TypeError):
+                    continue
+                r[key] = int(round((dt - base).total_seconds() * 1000))
+    return ok(data)
 
 
 @router.get("/datasets/{name}/check")

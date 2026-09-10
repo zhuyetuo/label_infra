@@ -754,19 +754,25 @@ export default function Training() {
               pagination={{ pageSize: 20, size: "small" }}
               // max-content 会按内容无限撑宽，「去修」被推到屏幕外；给个下限，
               // 剩下的宽度归「样本」那一列。
-              // 980 = 其它列合计 730 + 样本编号至少要的 250。
-              // multicam_20260822_143447483_imu2 这种大概 230px，下限给少了
-              // （试过 900，只剩 170px）一上来就是省略号，等于白留一列。
-              scroll={{ x: 980, y: 300 }}
+              // 每一列都定了宽度，加起来 960（80+260+90+175+175+100+80）；
+              // x 给这个数，表格正好铺满，也不会有哪一列被多出来的空间撑开。
+              // 之前「样本」是唯一没宽度的列，弹窗一放宽它就吃掉全部富余，
+              // 样本和类别之间空出一大片。
+              scroll={{ x: 960, y: 300 }}
+              tableLayout="fixed"
               columns={[
                 { title: "任务", dataIndex: "task_id", width: 80 },
-                { title: "样本", dataIndex: "sample_code", ellipsis: true },
+                // 给「样本」定宽。原来它是唯一没有宽度的列，于是把弹窗放宽之后
+                // 多出来的空间全被它吃了——样本编号明明 230px 就够，却撑出一大片
+                // 空白，把「类别」推到老远。260 = 编号本身 230 + 内边距。
+                { title: "样本", dataIndex: "sample_code", width: 260, ellipsis: true },
                 {
                   title: "类别", dataIndex: "label", width: 90,
                   render: (v: string) => <Tag color={labelColor(v)}>{v}</Tag>,
                 },
-                { title: "开始", dataIndex: "start", width: 190 },
-                { title: "结束", dataIndex: "end", width: 190 },
+                // 2026-08-22 14:38:43.248 实际约 170px，190 是拍脑袋定的
+                { title: "开始", dataIndex: "start", width: 175 },
+                { title: "结束", dataIndex: "end", width: 175 },
                 {
                   title: "时长(秒)",
                   dataIndex: "seconds",
