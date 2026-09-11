@@ -85,6 +85,24 @@ _ONECAM_RE = re.compile(
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 _PROBE_CONCURRENCY = 8
 
+# 「一间一狗一摄像头」的场地。这些场地的日期目录带站点后缀（2026_9_11_gouchang），
+# 采集端按 PAIRS 给每只狗单独配了摄像头，文件名里的 _camN_imuM 是真的配对关系。
+# 只有这些目录走按 IMU 配对的逻辑；其余目录（影棚、以及所有旧数据）一律保持
+# 原来的「三路共用」行为，已导入的样本不会因为这次改动而变。
+_PAIRED_SITE_SUFFIXES = ("_gouchang",)
+
+
+def _is_paired_site_dir(data_raw_dir: str, root: str) -> bool:
+    """root 是否落在某个带配对站点后缀的日期目录里。"""
+    rel = os.path.relpath(root, data_raw_dir)
+    if rel in (".", os.curdir):
+        return False
+    return any(
+        part.lower().endswith(_PAIRED_SITE_SUFFIXES)
+        for part in rel.replace("\\", "/").split("/")
+        if part
+    )
+
 
 @dataclass
 class ScanProgress:
@@ -203,8 +221,19 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
             session_key, cam_idx, imu_idx, dog_code = parsed
             full_path = os.path.join(root, fname)
             rel_path = os.path.relpath(full_path, nas_root)
-            g = groups.setdefault(session_key, {"videos": {}, "csvs": {}})
+            g = groups.setdefault(
+                session_key,
+                {"videos": {}, "csvs": {}, "videos_by_imu": {}, "paired_site": False},
+            )
+            if _is_paired_site_dir(data_raw_dir, root):
+                g["paired_site"] = True
             if ext == "mp4":
+                # 文件名里的 imu 号说明这一路视频是配给哪只狗的：
+                #   multicam_..._cam1_imu9_raw.mp4  = 小白那间的画面
+                #   multicam_..._cam7_imu9_raw.mp4  = 天花板那路，也配给小白
+                # 狗场是一间一狗一摄像头，这个配对关系就是采集端 PAIRS 定的，
+                # 丢掉它的后果见下面 cam_paths 那段。
+                g["videos_by_imu"].setdefault(imu_idx, {}).setdefault(cam_idx, rel_path)
                 # 同一路摄像头正常只有一份视频；万一撞了（不同 imu 编号的文件名
                 # 巧合落到同一个 cam 编号），保留先扫到的那份，不用后写的覆盖。
                 # 视频文件名上就算带了 dog 编号也不用——同一批视频是给好几只
@@ -367,11 +396,45 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             _progress.processed += 1
             _progress.tick()
             continue
-        cam_paths = {c: videos[c] for c in (1, 2, 3) if c in videos}
+        # 每只狗该看哪几路画面。
+        #
+        # 原来是所有样本共用 videos 里的 cam1/cam2/cam3——那是按影棚来的：一个大
+        # 空间几路固定摄像头，哪路都可能拍到哪只狗，共用是对的。
+        # 可狗场是一间一狗一摄像头，共用的结果是每只狗都配上 cam1/cam2/cam3，
+        # 也就是小白、柯基、小金毛三个房间的画面：旺财的样本里一帧旺财都没有，
+        # 而天花板那路（cam7）因为不在 (1,2,3) 里，一次都不会出现。
+        # 这种错不会报警——视频能播、任务能开，只是画面里的狗不是这只。
+        #
+        # 文件名里本来就带着配对关系（_camN_imuM），按它分就对了。
+        # 但只对带站点后缀的狗场目录生效（见 _PAIRED_SITE_SUFFIXES）——影棚和所有
+        # 旧数据仍然走共用那条路，之前认出来的样本一个都不会变。
+        videos_by_imu = g.get("videos_by_imu") or {}
+        paired_site = bool(g.get("paired_site")) and bool(videos_by_imu)
+
+        shared_cams = {c: videos[c] for c in (1, 2, 3) if c in videos}
+
+        def _cams_for(imu_idx: int) -> dict[int, str]:
+            if not paired_site:
+                return shared_cams
+            own = videos_by_imu.get(imu_idx)
+            if not own:
+                return shared_cams
+            # samples 表只有 cam1/cam2/cam3 三个位置，按摄像头编号从小到大占位：
+            # 狗场是「自己那间 + 天花板」两路，正好 cam1/cam2 两个位置。
+            return {
+                slot: path
+                for slot, (_cam, path) in enumerate(sorted(own.items()), start=1)
+                if slot <= 3
+            }
+
         imu_items = sorted(csvs.items())
         for imu_idx, csv_info in imu_items:
             csv_rel = csv_info["path"]
             sample_code = f"{session_key}_imu{imu_idx}"
+            cam_paths = _cams_for(imu_idx)
+            if not cam_paths:
+                _progress.detail.append(f"跳过 {sample_code}：这个 IMU 没有配对的视频")
+                continue
             candidates[sample_code] = {
                 "cam_paths": cam_paths,
                 "csv_rel": csv_rel,
