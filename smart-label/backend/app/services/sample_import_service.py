@@ -304,6 +304,97 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
             "sample_hz": sample_hz}
 
 
+def _plan_cam_path_fix(
+    stored: tuple[str | None, str | None, str | None],
+    cam_paths: dict[int, str],
+    on_disk: set[str],
+) -> dict[int, str]:
+    """
+    一个样本上哪几路该改、改成什么。纯函数，不碰数据库/文件系统，好测。
+
+    只动两种位置：存的那份在 NAS 上已经没了、或者这个位置本来就空着。
+    存的那份文件还在就一律不碰——影棚那种多只狗共用一组视频的，同一个 cam
+    位置具体落到哪个文件名取决于扫描顺序，碰了只会来回改。
+    """
+    plan: dict[int, str] = {}
+    for slot in (1, 2, 3):
+        cur = stored[slot - 1]
+        if cur and cur in on_disk:
+            continue
+        want = cam_paths.get(slot)
+        if want and want != cur:
+            plan[slot] = want
+    return plan
+
+
+async def _repair_sample_cam_paths(
+    db: AsyncSession,
+    nas_root: str,
+    candidates: dict[str, dict],
+    existing_codes: set[str],
+    existing_media_paths: set[str],
+) -> int:
+    """
+    已存在的样本：把指向"文件已经不在了"的那一路视频改回现在扫到的那一路，
+    空着的位置顺手补上。
+
+    为什么需要：扫描只建新样本，已存在的一律跳过，样本上的视频路径就是第一次
+    扫到时写下的那几个，之后再也不动。狗场先扫了一次（那时天花板那路还是
+    {base}_cam7_imuM_raw.mp4 六份配对），再跑清理把六份删掉只留
+    {base}_cam7_raw.mp4——样本上的路径还指着删掉的那份，界面上"视角2"就是一个
+    打不开的空播放器，而 NAS 上公用那份明明在。
+
+    只动两种位置，动不了别的：
+      - 存的那份在 NAS 上已经不存在了 → 换成现在扫到的
+      - 这个位置本来就空着 → 补上
+    存的那份文件还在就一律不碰。影棚那种多只狗共用一组视频的，同一个 cam 位置
+    具体落到哪个文件名取决于扫描顺序，碰了只会来回改，没有意义。
+    """
+    stale = [k for k in candidates if k in existing_codes]
+    if not stale:
+        return 0
+
+    rows = (
+        await db.execute(
+            select(Sample).where(Sample.sample_code.in_(stale))
+        )
+    ).scalars().all()
+
+    def _exists(paths: list[str]) -> set[str]:
+        return {p for p in paths if os.path.isfile(os.path.join(nas_root, p))}
+
+    stored_paths = [p for s in rows for p in (s.video_cam1_path, s.video_cam2_path, s.video_cam3_path) if p]
+    on_disk = await asyncio.to_thread(_exists, stored_paths)
+
+    fixed = 0
+    for sample in rows:
+        columns = {1: "video_cam1_path", 2: "video_cam2_path", 3: "video_cam3_path"}
+        stored = (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path)
+        plan = _plan_cam_path_fix(stored, candidates[sample.sample_code]["cam_paths"], on_disk)
+        changed: list[str] = []
+        for slot, want in sorted(plan.items()):
+            cur = stored[slot - 1]
+            setattr(sample, columns[slot], want)
+            changed.append(f"cam{slot}: {os.path.basename(cur) if cur else '(空)'} → {os.path.basename(want)}")
+            if want not in existing_media_paths:
+                db.add(
+                    MediaFile(
+                        file_type=MediaFileType.raw_video,
+                        relative_path=want,
+                        content_type="video/mp4",
+                    )
+                )
+                existing_media_paths.add(want)
+        if changed:
+            fixed += 1
+            _progress.detail.append(f"修正 {sample.sample_code} 的视频路径：" + "；".join(changed))
+
+    if fixed:
+        await db.commit()
+        _progress.detail.append(f"共修正 {fixed} 个已存在样本的视频路径")
+    return fixed
+
+
 async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
     """
     给已存在的样本补回缺失的 media_files 登记。
@@ -509,6 +600,8 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     _progress.skipped_existing += len(candidates) - len(new_session_keys)
     _progress.processed += len(candidates) - len(new_session_keys)
     _progress.tick()
+
+    await _repair_sample_cam_paths(db, nas_root, candidates, existing_codes, existing_media_paths)
 
     # 这批新样本里出现的 dog 编号解析成 dog_id：没见过的编号自动建档（只有
     # 编号，名字/品种之类的信息留到管理页面再补）。没带 dog 编号的样本
