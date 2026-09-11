@@ -106,14 +106,27 @@ def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
     # 三帧一组的量出 33Hz，正好是真值的 1/2、2/3。
     #
     # 所以 0 差值必须算进去。但也不能直接拿首尾平均：中间掉一段数据的缝会把
-    # 结果拉低。折中：先用非零差值的中位数定一个"正常间隔"，超过它 10 倍的当
-    # 数据缝剔掉，剩下的按 行数 / 总时长 算。
+    # 结果拉低。要剔掉数据缝，就得先有个"正常间隔"当标尺。
+    #
+    # ⚠ 这个标尺不能用"非零差值的中位数"。狗场 6 个设备挂一个蓝牙适配器，一次
+    # 串口读经常带回一整批帧，写进 CSV 就是「几行挤在同一瞬间，然后隔一个整包的
+    # 时间」——非零差值里占多数的是包内那种零点几毫秒，中位数就是零点几毫秒，
+    # 乘十也还是几毫秒，于是真正的包间隔（20ms）全被当成"数据缝"剔掉，只剩包内
+    # 那点时间当分母。50Hz 的文件量出三四千 Hz，就是这么来的。
+    #
+    # 改用全部差值的平均值当标尺：一批帧挤在一起不会把平均值拉动多少（总时长
+    # 摆在那儿），而真正掉一段数据的缝一定远大于平均值。剔掉缝之后平均值会更
+    # 准，所以再迭代两轮收敛。
     deltas = [d for d in (ts[i + 1] - ts[i] for i in range(len(ts) - 1)) if d >= 0]
-    nonzero = sorted(d for d in deltas if d > 0)
-    if not nonzero:
+    if not deltas or sum(deltas) <= 0:
         return None
-    gap_limit = nonzero[len(nonzero) // 2] * 10
-    kept = [d for d in deltas if d <= gap_limit]
+    kept = deltas
+    for _ in range(3):
+        gap_limit = (sum(kept) / len(kept)) * 10
+        shrunk = [d for d in kept if d <= gap_limit]
+        if not shrunk or sum(shrunk) <= 0 or len(shrunk) == len(kept):
+            break
+        kept = shrunk
     span = sum(kept)
     if span <= 0:
         return None
