@@ -36,7 +36,8 @@ from app.schemas.sample import (
     ScanStartResult,
 )
 from app.services.ai_prelabel_service import PrelabelError, ai_label_relpath, infer_sample, replace_candidates
-from app.services.sample_import_service import get_progress, start_scan_background
+from app.services.sample_delete_service import delete_samples
+from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progress, start_scan_background
 from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
 
@@ -110,44 +111,66 @@ async def delete_samples_bulk(body: SampleDeleteBulk, db: AsyncSession = Depends
     if not body.sample_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
     samples = (await db.execute(select(Sample).where(Sample.id.in_(body.sample_ids)))).scalars().all()
-    if not samples:
-        return ok({"deleted": 0, "tasks_deleted": 0})
-    ids = [s.id for s in samples]
-
-    task_ids = list((await db.execute(select(Task.id).where(Task.sample_id.in_(ids)))).scalars())
-    if task_ids:
-        # 标签条目→候选→标注记录→审核记录，按外键顺序清。跟删项目/删任务同一套，
-        # 不要在这里另写一份，不然以后新加的表又会漏
-        await purge_task_children(db, task_ids)
-        await db.execute(delete(Task).where(Task.id.in_(task_ids)))
-    # 这两张也挂着 samples 的外键，不清的话下面 delete 会撞 1451
-    await db.execute(delete(ClipJob).where(ClipJob.sample_id.in_(ids)))
-    await db.execute(delete(SampleInferenceRun).where(SampleInferenceRun.sample_id.in_(ids)))
-
-    # media_files 是按路径唯一的，而**同一次录制的 imu1~imu4 四个样本共用同一组
-    # cam 视频**（见 sample_import_service：cam_paths 是整个 session 共享的）。
-    # 所以不能见路径就删——删掉一个空 CSV 的 imu1 样本，会把同一时段 imu2/imu3/imu4
-    # 的视频登记一起带走，那几个任务打开就变成"没有找到可播放的视频"。
-    # 只删「删完之后没有任何样本还在用」的那些路径。
-    paths = {
-        p
-        for s in samples
-        for p in (s.video_cam1_path, s.video_cam2_path, s.video_cam3_path, s.imu_csv_path)
-        if p
-    }
-    if paths:
-        still_used: set[str] = set()
-        for col in (Sample.video_cam1_path, Sample.video_cam2_path, Sample.video_cam3_path, Sample.imu_csv_path):
-            still_used |= set(
-                (await db.execute(select(col).where(col.in_(paths), Sample.id.notin_(ids)))).scalars()
-            )
-        orphan = paths - still_used
-        if orphan:
-            await db.execute(delete(MediaFile).where(MediaFile.relative_path.in_(orphan)))
-
-    await db.execute(delete(Sample).where(Sample.id.in_(ids)))
+    result = await delete_samples(db, samples)
     await db.commit()
-    return ok({"deleted": len(ids), "tasks_deleted": len(task_ids)})
+    return ok(result)
+
+
+@router.get("/missing-files")
+async def list_missing_file_samples(db: AsyncSession = Depends(get_db)):
+    """
+    列出「NAS 上文件已经没了」的样本：当天重录过、或者手工删过原始数据，样本行
+    还留在库里，点预览就是 No such file or directory。
+
+    判断由扫描那边做（import_error 打了固定前缀），这里只负责读出来给界面用，
+    顺带数一下每个样本上还挂着几个任务——有任务的删掉会连标注一起没，得让人
+    看见再决定。
+    """
+    rows = (
+        await db.execute(
+            select(Sample)
+            .where(Sample.import_error.like(f"{MISSING_FILES_PREFIX}%"))
+            .order_by(Sample.session_date.desc(), Sample.sample_code)
+        )
+    ).scalars().all()
+    ids = [s.id for s in rows]
+    task_count: dict[int, int] = {}
+    if ids:
+        for sid in (await db.execute(select(Task.sample_id).where(Task.sample_id.in_(ids)))).scalars():
+            task_count[sid] = task_count.get(sid, 0) + 1
+    return ok(
+        {
+            "total": len(rows),
+            "with_tasks": sum(1 for s in rows if task_count.get(s.id)),
+            "items": [
+                {
+                    "id": s.id,
+                    "sample_code": s.sample_code,
+                    "session_date": s.session_date.isoformat() if s.session_date else None,
+                    "task_count": task_count.get(s.id, 0),
+                    "import_error": s.import_error,
+                }
+                for s in rows
+            ],
+        }
+    )
+
+
+@router.post("/missing-files/cleanup")
+async def cleanup_missing_file_samples(db: AsyncSession = Depends(get_db)):
+    """
+    把上面那批删掉。NAS 上的文件一个都不动——本来也已经不在了。
+
+    只删扫描标记过的那些，而标记的前提是「这个样本所在的日期目录还在，只是它
+    自己的文件没了」。整个目录都读不到（NAS 没挂上、网线掉了）的一律不标记，
+    所以不会因为一次挂载抖动就把一天的数据从库里抹掉。
+    """
+    samples = (
+        await db.execute(select(Sample).where(Sample.import_error.like(f"{MISSING_FILES_PREFIX}%")))
+    ).scalars().all()
+    result = await delete_samples(db, samples)
+    await db.commit()
+    return ok(result)
 
 
 @router.patch("/{sample_id}")

@@ -89,6 +89,10 @@ _PROBE_CONCURRENCY = 8
 # 手上的设备最高 200Hz，量出比这还高只可能是量错了
 _IMPOSSIBLE_HZ = 500.0
 
+# 「NAS 上文件已经没了」的样本，import_error 打这个前缀。界面按它筛出来一键清理，
+# 所以是约定好的常量，不是随手拼的字符串——改这里就等于改接口。
+MISSING_FILES_PREFIX = "NAS 上文件已不存在："
+
 # 「一间一狗一摄像头」的场地。这些场地的日期目录带站点后缀（2026_9_11_gouchang），
 # 采集端按 PAIRS 给每只狗单独配了摄像头，文件名里的 _camN_imuM 是真的配对关系。
 # 只有这些目录走按 IMU 配对的逻辑；其余目录（影棚、以及所有旧数据）一律保持
@@ -397,6 +401,82 @@ async def _repair_sample_cam_paths(
     return fixed
 
 
+def _classify_missing(items, nas_root: str):
+    """
+    哪些样本的文件没了、哪些又回来了。只读文件系统，不碰数据库，好测。
+
+    items 是 (sample_id, video_cam1_path, imu_csv_path, import_error)。
+    返回 (要标记的 [(id, 提示语)], 要解除标记的 [id])。
+    """
+    gone, back = [], []
+    dir_ok: dict[str, bool] = {}
+    for sid, cam1, csv_rel, err in items:
+        rel_dir = os.path.dirname(csv_rel)
+        full_dir = os.path.join(nas_root, rel_dir)
+        if rel_dir not in dir_ok:
+            dir_ok[rel_dir] = os.path.isdir(full_dir)
+        flagged = bool(err and err.startswith(MISSING_FILES_PREFIX))
+        if not dir_ok[rel_dir]:
+            # 目录整个读不到：不判断，也不解除已有的标记
+            continue
+        missing = [
+            p for p in (cam1, csv_rel) if p and not os.path.isfile(os.path.join(nas_root, p))
+        ]
+        if missing and not flagged:
+            gone.append((sid, f"{MISSING_FILES_PREFIX}{', '.join(os.path.basename(p) for p in missing)}"))
+        elif not missing and flagged:
+            back.append(sid)
+    return gone, back
+
+
+async def _flag_missing_file_samples(db: AsyncSession, nas_root: str) -> int:
+    """
+    标出「NAS 上文件已经没了」的样本，供界面一键清理（/samples/missing-files）。
+
+    为什么会有这种样本：当天重录过、或者人工把某一次录制删了，NAS 上文件没了，
+    可样本行还在库里。点预览就是 No such file or directory，而且看不出是哪一步
+    出的问题——扫描从来不回头看已有的样本，这种行会一直留着。
+
+    ⚠ 只在「这个样本所在的日期目录还在」的前提下才标记。整个目录都读不到的一律
+    跳过：NAS 没挂上、网线掉了、容器漏挂 volume，这些情况下所有文件都"不存在"，
+    照标不误的话一次挂载抖动就能把库里所有样本标成待删，而人多半会直接点确认。
+    目录还在、里面偏偏少了这几个文件，才是真的被删了。
+
+    文件又回来了（比如重新拷了一份）就把标记清掉，不用人工处理。
+    """
+    rows = (
+        await db.execute(
+            select(Sample.id, Sample.video_cam1_path, Sample.imu_csv_path, Sample.import_error).where(
+                Sample.imu_csv_path.isnot(None)
+            )
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    gone, back = await asyncio.to_thread(_classify_missing, rows, nas_root)
+
+    for sid, msg in gone:
+        await db.execute(
+            update(Sample)
+            .where(Sample.id == sid)
+            .values(import_status=ImportStatus.error, import_error=msg)
+        )
+    if back:
+        await db.execute(
+            update(Sample)
+            .where(Sample.id.in_(back))
+            .values(import_status=ImportStatus.verified, import_error=None)
+        )
+    if gone or back:
+        await db.commit()
+    if gone:
+        _progress.detail.append(f"{len(gone)} 个样本的文件在 NAS 上已经没了，可在样本管理里一键清理")
+    if back:
+        _progress.detail.append(f"{len(back)} 个样本的文件又回来了，已解除标记")
+    return len(gone)
+
+
 async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
     """
     给已存在的样本补回缺失的 media_files 登记。
@@ -495,6 +575,9 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     # 先补登记再扫新数据：登记缺了的话，已有样本的视频点开就是"没有找到可播放的
     # 视频"，而扫描只处理新 sample_code，永远不会回头修已有的
     await _repair_media_rows(db, nas_root)
+    # 标出 NAS 上已经没了的样本（当天重录过、或者人工删过原始数据）。只标记，
+    # 不自动删——上面可能挂着标注，得让人看见再决定
+    await _flag_missing_file_samples(db, nas_root)
     # 采样率是后加的字段，存量样本都是空的；空的话推理会按全局默认值处理，
     # 对 8-11 之前那批 16Hz 数据就是错的
     await _backfill_sample_hz(db, nas_root)
