@@ -38,7 +38,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,6 +86,8 @@ _ONECAM_RE = re.compile(
 _SHAREDCAM_RE = re.compile(r"^(.+?)_cam(\d+)_raw$", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 _PROBE_CONCURRENCY = 8
+# 手上的设备最高 200Hz，量出比这还高只可能是量错了
+_IMPOSSIBLE_HZ = 500.0
 
 # 「一间一狗一摄像头」的场地。这些场地的日期目录带站点后缀（2026_9_11_gouchang），
 # 采集端按 PAIRS 给每只狗单独配了摄像头，文件名里的 _camN_imuM 是真的配对关系。
@@ -449,16 +451,23 @@ async def _repair_media_rows(db: AsyncSession, nas_root: str) -> int:
 
 async def _backfill_sample_hz(db: AsyncSession, nas_root: str, limit: int = 4000) -> int:
     """
-    给还没有采样率的老样本补上。
+    给还没有采样率的老样本补上，顺带把明显量错的重量一遍。
 
     扫描只处理没见过的 sample_code，不会回头改已有的；而采样率是后加的字段，
     存量样本全是空的——空的话推理那边就用全局默认值（50Hz），对 8-11 之前那批
     16Hz 的数据就是错的。所以在这儿补一遍，量不出来的留空，下次再试。
+
+    大于 _IMPOSSIBLE_HZ 的一律重量：手上的设备最高 200Hz，几千 Hz 只可能是量错
+    的（狗场那批整包写入的 CSV 触发过一次，量出三四千 Hz）。量法修好了，但存下来
+    的错值不会自己变对，这里顺手刷掉。
     """
     rows = (
         await db.execute(
             select(Sample.id, Sample.imu_csv_path)
-            .where(Sample.sample_hz.is_(None), Sample.imu_csv_path.isnot(None))
+            .where(
+                or_(Sample.sample_hz.is_(None), Sample.sample_hz > _IMPOSSIBLE_HZ),
+                Sample.imu_csv_path.isnot(None),
+            )
             .limit(limit)
         )
     ).all()
