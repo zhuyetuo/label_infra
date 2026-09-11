@@ -82,6 +82,8 @@ _CAM_RE = re.compile(r"^(.+?)_cam(\d+)_imu(\d+)(?:_dog([A-Za-z0-9]+))?", re.IGNO
 _ONECAM_RE = re.compile(
     r"^(?!multicam)(.+?)_imu(\d+)(?:_dog([A-Za-z0-9]+))?(?:_raw)?$", re.IGNORECASE
 )
+# 公用视角的视频：{base}_camN_raw.mp4，没有 imu 号。只在配对场地（狗场）算数。
+_SHAREDCAM_RE = re.compile(r"^(.+?)_cam(\d+)_raw$", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 _PROBE_CONCURRENCY = 8
 
@@ -211,10 +213,37 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
     """
     groups: dict[str, dict] = {}
     for root, _dirs, files in os.walk(data_raw_dir):
+        paired_dir = _is_paired_site_dir(data_raw_dir, root)
         for fname in files:
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
             if ext not in ("mp4", "csv"):
                 continue
+
+            # 公用视角：{base}_camN_raw.mp4，没带 imu 号。
+            # 狗场天花板那路是 6 只狗共用的，采集端配对时给每只狗各写了一个文件名，
+            # 6 个名字指向同一段视频；清理脚本把那 6 份删掉，只留这一份没带 imu 号的。
+            # 它不属于任何一只狗，而是属于所有狗——下面给每个样本都挂上。
+            shared = _SHAREDCAM_RE.match(os.path.splitext(fname)[0]) if ext == "mp4" else None
+            if shared is not None:
+                session_key = shared.group(1)
+                full_path = os.path.join(root, fname)
+                g = groups.setdefault(
+                    session_key,
+                    {
+                        "videos": {},
+                        "csvs": {},
+                        "videos_by_imu": {},
+                        "shared_videos": {},
+                        "paired_site": False,
+                    },
+                )
+                if paired_dir:
+                    g["paired_site"] = True
+                    g["shared_videos"].setdefault(
+                        int(shared.group(2)), os.path.relpath(full_path, nas_root)
+                    )
+                continue
+
             parsed = _parse_filename(fname)
             if parsed is None:
                 continue
@@ -223,9 +252,15 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
             rel_path = os.path.relpath(full_path, nas_root)
             g = groups.setdefault(
                 session_key,
-                {"videos": {}, "csvs": {}, "videos_by_imu": {}, "paired_site": False},
+                {
+                    "videos": {},
+                    "csvs": {},
+                    "videos_by_imu": {},
+                    "shared_videos": {},
+                    "paired_site": False,
+                },
             )
-            if _is_paired_site_dir(data_raw_dir, root):
+            if paired_dir:
                 g["paired_site"] = True
             if ext == "mp4":
                 # 文件名里的 imu 号说明这一路视频是配给哪只狗的：
@@ -411,6 +446,18 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         videos_by_imu = g.get("videos_by_imu") or {}
         paired_site = bool(g.get("paired_site")) and bool(videos_by_imu)
 
+        # 哪几路是真·公用：有 {base}_camN_raw.mp4、而且这一路没有任何配对文件。
+        # 清理脚本跑过之后只有天花板那路符合（它的 6 份配对被删了，其余各路留的
+        # 恰恰是配对文件）。没跑过清理的目录里每一路都还有自己的 _camN_raw.mp4，
+        # 那些是各房间的原视频、不是公用的——按配对关系走就行，别当公用挂给所有狗，
+        # 不然又回到「每只狗看别人房间」那个错。
+        paired_cams = {cam for cams in videos_by_imu.values() for cam in cams}
+        shared_videos = {
+            cam: path
+            for cam, path in (g.get("shared_videos") or {}).items()
+            if cam not in paired_cams
+        }
+
         shared_cams = {c: videos[c] for c in (1, 2, 3) if c in videos}
 
         def _cams_for(imu_idx: int) -> dict[int, str]:
@@ -419,11 +466,17 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
             own = videos_by_imu.get(imu_idx)
             if not own:
                 return shared_cams
+            # 自己那间的画面 + 公用那路（天花板）。公用那路只有一份文件、不带
+            # imu 号，6 只狗都挂它——清理脚本删掉 6 份配对副本之后就是这个形状。
+            # 公用的 cam 编号跟自己那路撞了就不重复加（清理前的目录会是这样）。
+            cams = dict(own)
+            for cam_idx, path in shared_videos.items():
+                cams.setdefault(cam_idx, path)
             # samples 表只有 cam1/cam2/cam3 三个位置，按摄像头编号从小到大占位：
             # 狗场是「自己那间 + 天花板」两路，正好 cam1/cam2 两个位置。
             return {
                 slot: path
-                for slot, (_cam, path) in enumerate(sorted(own.items()), start=1)
+                for slot, (_cam, path) in enumerate(sorted(cams.items()), start=1)
                 if slot <= 3
             }
 
