@@ -99,3 +99,24 @@ export const startImportScan = () =>
   request.post<never, { already_running: boolean }>("/samples/import-scan");
 
 export const getImportScanStatus = () => request.get<never, ScanProgress>("/samples/import-scan/status");
+
+export interface MissingFileSample {
+  id: number;
+  sample_code: string;
+  session_date: string | null;
+  task_count: number;
+  import_error: string | null;
+}
+
+export interface MissingFileSamples {
+  total: number;
+  with_tasks: number;
+  items: MissingFileSample[];
+}
+
+/** NAS 上文件已经没了的样本（当天重录过、或者人工删过原始数据），扫描时标出来的 */
+export const listMissingFileSamples = () =>
+  request.get<never, MissingFileSamples>("/samples/missing-files");
+
+export const cleanupMissingFileSamples = () =>
+  request.post<never, { deleted: number; tasks_deleted: number }>("/samples/missing-files/cleanup");

@@ -3,8 +3,10 @@ import { Alert, Button, Checkbox, Collapse, Input, Modal, Popconfirm, Progress, 
 import { LockOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  cleanupMissingFileSamples,
   deleteSamplesBatch,
   getImportScanStatus,
+  listMissingFileSamples,
   startImportScan,
   listSamples,
   setSamplesDog,
@@ -90,6 +92,20 @@ export default function Samples() {
     await updateSample(sample.id, { is_sensitive: on });
     message.success(on ? "已标记为敏感，仅管理员可见" : "已解除敏感标记");
     qc.invalidateQueries({ queryKey: ["samples"] });
+  };
+
+  // NAS 上文件已经没了的样本（当天重录过、或者人工删过原始数据）。
+  // 由扫描标出来，这里只负责展示和一键清理
+  const { data: missing } = useQuery({
+    queryKey: ["samples", "missing-files"],
+    queryFn: listMissingFileSamples,
+  });
+
+  const cleanupMissing = async () => {
+    const r = await cleanupMissingFileSamples();
+    message.success(`已清理 ${r.deleted} 个样本${r.tasks_deleted ? `、${r.tasks_deleted} 个任务` : ""}`);
+    qc.invalidateQueries({ queryKey: ["samples"] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
   };
 
   const removeSamples = async (ids: number[]) => {
@@ -306,6 +322,44 @@ export default function Samples() {
             >
               <Button size="small" danger>
                 删除空 CSV 样本
+              </Button>
+            </Popconfirm>
+          </>
+        )}
+        {(missing?.total ?? 0) > 0 && (
+          <>
+            <Tooltip
+              title={
+                <div>
+                  <div>这些样本在库里，但 NAS 上对应的文件已经没了——当天重录过、或者原始数据被删了。</div>
+                  <div style={{ marginTop: 6 }}>点预览就是 No such file or directory。清理只删数据库登记，NAS 上本来也没东西可删。</div>
+                  {(missing?.with_tasks ?? 0) > 0 && (
+                    <div style={{ marginTop: 6, color: "#ffa39e" }}>
+                      其中 {missing?.with_tasks} 个上面还挂着任务，删掉会连标注一起没。
+                    </div>
+                  )}
+                </div>
+              }
+            >
+              <Tag color="red" style={{ cursor: "help" }}>
+                NAS 上已删除 {missing?.total}
+              </Tag>
+            </Tooltip>
+            <Popconfirm
+              title={`清理这 ${missing?.total} 个样本？`}
+              description={
+                <div style={{ maxWidth: 420 }}>
+                  NAS 上文件已经没了，只删数据库登记。
+                  {(missing?.with_tasks ?? 0) > 0
+                    ? `其中 ${missing?.with_tasks} 个上面还挂着任务，会连同标注、草稿、审核记录一起删，不可恢复。`
+                    : "这些样本上没有任何任务。"}
+                </div>
+              }
+              okButtonProps={{ danger: true }}
+              onConfirm={cleanupMissing}
+            >
+              <Button size="small" danger>
+                清理已删除的样本
               </Button>
             </Popconfirm>
           </>
