@@ -20,6 +20,7 @@ from app.api.v1 import (
     tasks,
     tooth,
     users,
+    vision,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -47,3 +48,4 @@ api_router.include_router(tooth.stream_router)
 api_router.include_router(skin.router)
 api_router.include_router(material.router)
 api_router.include_router(material.stream_router)
+api_router.include_router(vision.router)

@@ -20,6 +20,7 @@ from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
 from app.models.tooth_photo import ToothPhotoResult
 from app.models.user import User
+from app.models.vision_annotation import VisionAnnotation, VisionAsset
 
 __all__ = [
     "AiCandidate",
@@ -45,4 +46,6 @@ __all__ = [
     "ToothPhotoResult",
     "SkinRecord",
     "SkinWeeklyRow",
+    "VisionAsset",
+    "VisionAnnotation",
 ]
