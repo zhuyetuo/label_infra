@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     # 和这个后端共享同一份 nas_root，接口里只传相对路径，不传文件内容
     algo_service_url: str = "http://192.168.2.140:8383"
     algo_service_timeout_sec: int = 30
+    # --- vision_service（SAM 辅助标注，可选）---
+    # imu_train/vision_service，跟 algo_service 是两个服务两个端口（它 8383，这个 8385）。
+    # 默认空 = 关着：视觉标注页上 SAM 按钮置灰，其它功能一概不受影响。
+    # 要开就配 http://<跑 SAM 那台>:8385
+    vision_service_url: str = ""
     # /infer 是同步推理，AI 服务那边还加了锁排队，一次几十秒很正常，单独放宽。
     # 前端 axios 给这个请求 180s、nginx proxy_read_timeout 300s，这里要比前端略短，
     # 这样超时是后端报出清楚的 502 而不是前端先断掉。

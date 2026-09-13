@@ -4,12 +4,14 @@ import {
   Space, Spin, Table, Tag, Tooltip, Typography, message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getMaterialPhotoToken, materialPhotoUrl } from "@/api/material";
+import { materialPhotoUrl } from "@/api/material";
 import {
-  deleteVisionDataset, exportVisionDataset, getVisionAnnotations, getVisionLabels, getVisionStats,
-  listVisionDatasets, listVisionPhotos, saveVisionAnnotations,
-  type VisionAlbum, type VisionAssetState, type VisionAttrDef, type VisionBox, type VisionDatasetMeta,
-  type VisionItem, type VisionPhoto,
+  createVisionAssignments, deleteVisionAssignment, deleteVisionDataset, exportVisionDataset,
+  getSamStatus, getVisionAnnotations, getVisionLabels, getVisionPhotoToken, getVisionStats, listVisionAnnotators,
+  listVisionAssignments, listVisionDatasets, listVisionPhotos, reviewVisionAssignment,
+  samSegment, saveVisionAnnotations, submitVisionAssignment,
+  type VisionAlbum, type VisionAssetState, type VisionAssignment, type VisionAssignmentState,
+  type VisionAttrDef, type VisionBox, type VisionDatasetMeta, type VisionItem, type VisionPhoto,
 } from "@/api/vision";
 
 // 视觉标注工作台（雏形）：在素材库的口腔/皮肤照片上画框、打类别、填属性。
@@ -25,6 +27,13 @@ const STATE_META: Record<VisionAssetState, { color: string; text: string }> = {
   todo: { color: "default", text: "未标" },
   done: { color: "success", text: "标完" },
   skipped: { color: "warning", text: "跳过" },
+};
+
+const ASSIGN_META: Record<VisionAssignmentState, { color: string; text: string }> = {
+  open: { color: "blue", text: "标注中" },
+  submitted: { color: "gold", text: "待审" },
+  approved: { color: "green", text: "已通过" },
+  rejected: { color: "red", text: "被打回" },
 };
 
 /** 犬 modified Triadan 牙位：上颌每象限 10 颗（x01-x10），下颌 11 颗（x01-x11）。
@@ -67,6 +76,12 @@ export default function Vision() {
   // 当前要画的类别。画完框立刻就带上它，省掉"画框 → 再点类别"的第二步。
   const [brush, setBrush] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  // SAM 点选模式：开着的时候单击 = 让 SAM 出一个框，而不是拖框
+  const [samMode, setSamMode] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -80,6 +95,10 @@ export default function Vision() {
   const { data: catalog } = useQuery({ queryKey: ["vision-labels", album], queryFn: () => getVisionLabels(album) });
   const { data: tree, isLoading, error } = useQuery({ queryKey: ["vision-photos", album], queryFn: () => listVisionPhotos(album) });
   const { data: stats } = useQuery({ queryKey: ["vision-stats", album], queryFn: () => getVisionStats(album) });
+  // SAM 可能没配、没起、没权重。查一次就够，用不了就把按钮置灰——
+  // 这是设计里说的 L4 降级：SAM 挂了只影响 SAM，手画照常。
+  const { data: sam } = useQuery({ queryKey: ["vision-sam-status"], queryFn: getSamStatus, retry: false });
+  const samOk = !!sam?.available;
 
   const photos = useMemo(
     () => (tree?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, folder: f.folder, dog: d.name })))),
@@ -113,7 +132,7 @@ export default function Vision() {
       setNatural(null);
       try {
         const [tok, ann] = await Promise.all([
-          getMaterialPhotoToken(album, relPath),
+          getVisionPhotoToken(album, relPath),
           getVisionAnnotations(album, relPath),
         ]);
         setImgUrl(materialPhotoUrl(album, relPath, tok.token));
@@ -155,6 +174,27 @@ export default function Vision() {
       message.success(state === "skipped" ? "已标记为跳过" : `已保存 ${items.length} 个框`);
       qc.invalidateQueries({ queryKey: ["vision-photos", album] });
       qc.invalidateQueries({ queryKey: ["vision-stats", album] });
+    },
+  });
+
+  const samPick = useMutation({
+    mutationFn: (pt: { x: number; y: number }) =>
+      samSegment({ album, path: current!, points: [{ ...pt, label: 1 }] }),
+    onSuccess: (r) => {
+      if (!brush) return;
+      setItems((prev) => [...prev, { label_code: brush, bbox: r.bbox, attrs: {} }]);
+      setSelected(items.length);
+      setDirty(true);
+    },
+    onError: () => message.warning("SAM 这下没分出东西来，换个位置再点，或者直接拖个框"),
+  });
+
+  const submit = useMutation({
+    mutationFn: (id: number) => submitVisionAssignment(id),
+    onSuccess: () => {
+      message.success("已提交，等审核");
+      qc.invalidateQueries({ queryKey: ["vision-photos", album] });
+      qc.invalidateQueries({ queryKey: ["vision-assignments", album] });
     },
   });
 
@@ -250,6 +290,11 @@ export default function Vision() {
     if (!current || !imgUrl) return;
     const { px, py, w, h } = posOf(e);
     const hit = hitTest(px, py, w, h);
+    if (samMode && samOk && !hit) {
+      // 点在空白处 = 让 SAM 出框。点在已有框上还是当选中，不然改不了已经画好的
+      samPick.mutate({ x: px / w, y: py / h });
+      return;
+    }
     if (hit) {
       setSelected(hit.idx);
       dragRef.current = { mode: hit.corner ? "resize" : "move", idx: hit.idx, px, py, orig: items[hit.idx].bbox };
@@ -398,13 +443,33 @@ export default function Vision() {
         style={{ width: 260, display: "flex", flexDirection: "column" }}
         styles={{ body: { overflow: "auto", flex: 1, padding: 8 } }}
         title={
-          <Segmented
-            size="small"
-            block
-            value={album}
-            onChange={(v) => setAlbum(v as VisionAlbum)}
-            options={[{ label: "口腔", value: "oral" }, { label: "皮肤", value: "skin" }]}
-          />
+          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+            <Segmented
+              size="small"
+              block
+              value={album}
+              onChange={(v) => setAlbum(v as VisionAlbum)}
+              options={[{ label: "口腔", value: "oral" }, { label: "皮肤", value: "skin" }]}
+            />
+            {tree?.is_manager && (
+              selectMode ? (
+                <Space size={4}>
+                  <Button size="small" type="primary" disabled={!picked.length} onClick={() => setAssigning(true)}>
+                    指派这 {picked.length} 组
+                  </Button>
+                  <Button size="small" onClick={() => { setSelectMode(false); setPicked([]); }}>取消</Button>
+                </Space>
+              ) : (
+                <Space size={4}>
+                  <Button size="small" onClick={() => setSelectMode(true)}>指派…</Button>
+                  {tree?.can_review && <Button size="small" onClick={() => setReviewing(true)}>审核</Button>}
+                </Space>
+              )
+            )}
+            {!tree?.is_manager && tree?.can_review && (
+              <Button size="small" block onClick={() => setReviewing(true)}>审核</Button>
+            )}
+          </Space>
         }
       >
         {isLoading ? (
@@ -417,7 +482,41 @@ export default function Vision() {
               <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>{f.folder}</div>
               {f.dogs.map((d) => (
                 <div key={d.name} style={{ marginBottom: 6 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500 }}>{d.name}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
+                    <span>{d.name}</span>
+                    {d.assignment && <Tag color={ASSIGN_META[d.assignment.state].color} style={{ marginInlineEnd: 0 }}>
+                      {ASSIGN_META[d.assignment.state].text}
+                    </Tag>}
+                    {tree?.is_manager && d.assignment?.assignee_name && (
+                      <span style={{ color: "#aaa", fontWeight: 400 }}>{d.assignment.assignee_name}</span>
+                    )}
+                    {selectMode && (
+                      <input
+                        type="checkbox"
+                        style={{ marginLeft: "auto" }}
+                        checked={picked.includes(d.group_key)}
+                        onChange={(e) =>
+                          setPicked((prev) => (e.target.checked ? [...prev, d.group_key] : prev.filter((g) => g !== d.group_key)))
+                        }
+                      />
+                    )}
+                  </div>
+                  {d.assignment?.state === "rejected" && d.assignment.review_note && (
+                    <div style={{ fontSize: 12, color: "#d4380d", background: "#fff2e8", padding: "2px 6px", borderRadius: 3 }}>
+                      打回：{d.assignment.review_note}
+                    </div>
+                  )}
+                  {d.assignment && !tree?.can_review && ["open", "rejected"].includes(d.assignment.state) && (
+                    <Button
+                      size="small"
+                      type="link"
+                      style={{ padding: 0, height: 20, fontSize: 12 }}
+                      loading={submit.isPending}
+                      onClick={() => submit.mutate(d.assignment!.id)}
+                    >
+                      这组标完了，提交
+                    </Button>
+                  )}
                   {d.photos.map((p: VisionPhoto) => (
                     <div
                       key={p.rel_path}
@@ -468,6 +567,17 @@ export default function Vision() {
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
+              <Tooltip title={samOk ? "开着的时候，在牙上点一下就出一个框；点已有的框还是选中它" : (sam?.error || "SAM 辅助没开")}>
+                <Button
+                  size="small"
+                  type={samMode ? "primary" : "default"}
+                  disabled={!samOk}
+                  loading={samPick.isPending}
+                  onClick={() => setSamMode((v) => !v)}
+                >
+                  SAM 点选
+                </Button>
+              </Tooltip>
             </Space>
           )
         }
@@ -492,7 +602,7 @@ export default function Vision() {
             />
             <canvas
               ref={canvasRef}
-              style={{ position: "absolute", left: 0, top: 0, cursor: "crosshair" }}
+              style={{ position: "absolute", left: 0, top: 0, cursor: samMode && samOk ? "cell" : "crosshair" }}
               onMouseDown={onMouseDown}
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
@@ -578,7 +688,168 @@ export default function Vision() {
       </Card>
 
       <ExportModal open={exporting} album={album} onClose={() => setExporting(false)} />
+      <AssignModal
+        open={assigning}
+        album={album}
+        groups={picked}
+        onClose={(done) => {
+          setAssigning(false);
+          if (done) {
+            setSelectMode(false);
+            setPicked([]);
+          }
+        }}
+      />
+      <ReviewModal open={reviewing} album={album} onClose={() => setReviewing(false)} />
     </div>
+  );
+}
+
+/** 把选中的几组指派给一个人。一组同时只属于一个人——允许多人同标一组，
+ *  而标注又是整张覆盖保存的，两个人会互相覆盖且谁都收不到提示。 */
+function AssignModal({ open, album, groups, onClose }: {
+  open: boolean; album: VisionAlbum; groups: string[]; onClose: (done: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const [who, setWho] = useState<number | null>(null);
+  const { data: people } = useQuery({ queryKey: ["vision-annotators"], queryFn: listVisionAnnotators, enabled: open });
+
+  const run = useMutation({
+    mutationFn: () => createVisionAssignments({ album, group_keys: groups, assignee_id: who! }),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["vision-photos", album] });
+      qc.invalidateQueries({ queryKey: ["vision-assignments", album] });
+      if (r.locked.length) {
+        message.warning(`${r.created + r.moved} 组已指派；${r.locked.length} 组已审核通过、锁定了，要改派先让审核员打回`);
+      } else {
+        message.success(`已指派 ${r.created + r.moved} 组`);
+      }
+      onClose(true);
+    },
+  });
+
+  return (
+    <Modal
+      open={open}
+      title={`指派 ${groups.length} 组照片`}
+      onCancel={() => onClose(false)}
+      onOk={() => who && run.mutate()}
+      okButtonProps={{ disabled: !who, loading: run.isPending }}
+      okText="指派"
+      cancelText="取消"
+    >
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>
+        {groups.join("、") || "还没选组"}
+      </div>
+      <Select
+        style={{ width: "100%" }}
+        placeholder="指派给谁"
+        value={who}
+        onChange={setWho}
+        options={(people ?? []).map((p) => ({ value: p.id, label: `${p.name}（${p.role}）` }))}
+      />
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginTop: 10 }}
+        message="标注员只看得到指派给自己的组"
+        description="别的组在接口层就被剔掉了，不是靠前端不显示。已经指派过的组会改派，改派会把状态退回「标注中」。"
+      />
+    </Modal>
+  );
+}
+
+/** 审核：通过（锁定）或打回（要写清楚哪里改）。 */
+function ReviewModal({ open, album, onClose }: { open: boolean; album: VisionAlbum; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [note, setNote] = useState<Record<number, string>>({});
+  const { data: rows } = useQuery({
+    queryKey: ["vision-assignments", album],
+    queryFn: () => listVisionAssignments(album),
+    enabled: open,
+  });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["vision-assignments", album] });
+    qc.invalidateQueries({ queryKey: ["vision-photos", album] });
+  };
+
+  const act = useMutation({
+    mutationFn: (v: { id: number; approve: boolean }) =>
+      reviewVisionAssignment(v.id, { approve: v.approve, note: note[v.id] }),
+    onSuccess: (_d, v) => {
+      message.success(v.approve ? "已通过，这组锁定了" : "已打回");
+      refresh();
+    },
+  });
+  const drop = useMutation({
+    mutationFn: (id: number) => deleteVisionAssignment(id),
+    onSuccess: () => {
+      message.success("已撤销指派（标好的框留着）");
+      refresh();
+    },
+  });
+
+  return (
+    <Modal open={open} onCancel={onClose} footer={null} width={820} title="指派与审核">
+      <Table
+        size="small"
+        rowKey="id"
+        pagination={false}
+        dataSource={rows ?? []}
+        locale={{ emptyText: "还没有指派" }}
+        columns={[
+          { title: "组", dataIndex: "group_key" },
+          { title: "标注员", dataIndex: "assignee_name" },
+          {
+            title: "状态",
+            dataIndex: "state",
+            render: (s: VisionAssignmentState, r: VisionAssignment) => (
+              <Space direction="vertical" size={0}>
+                <Tag color={ASSIGN_META[s].color}>{ASSIGN_META[s].text}</Tag>
+                {r.review_note && <span style={{ fontSize: 12, color: "#888" }}>{r.review_note}</span>}
+              </Space>
+            ),
+          },
+          {
+            title: "打回意见",
+            width: 220,
+            render: (_: unknown, r: VisionAssignment) => (
+              <Input
+                size="small"
+                placeholder="打回必须写哪里要改"
+                value={note[r.id] ?? ""}
+                onChange={(e) => setNote((p) => ({ ...p, [r.id]: e.target.value }))}
+              />
+            ),
+          },
+          {
+            title: "",
+            width: 190,
+            render: (_: unknown, r: VisionAssignment) => (
+              <Space size={4}>
+                <Popconfirm title={`通过并锁定 ${r.group_key}？`} onConfirm={() => act.mutate({ id: r.id, approve: true })}>
+                  <Button size="small" type="primary" disabled={r.state === "approved"}>通过</Button>
+                </Popconfirm>
+                <Button
+                  size="small"
+                  danger
+                  disabled={!((note[r.id] ?? "").trim())}
+                  onClick={() => act.mutate({ id: r.id, approve: false })}
+                >
+                  打回
+                </Button>
+                <Popconfirm title="撤销指派？标好的框会留着" onConfirm={() => drop.mutate(r.id)}>
+                  <Button size="small" type="text">撤销</Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+      <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+        通过 = 锁定，之后连管理员也不能直接改，要改先在这里打回。
+      </div>
+    </Modal>
   );
 }
 

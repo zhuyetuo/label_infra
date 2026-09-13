@@ -45,6 +45,45 @@ class VisionAsset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class VisionAssignment(Base):
+    """
+    把一「组」照片（`日期目录/狗名`，也就是一次拍摄）指派给某个标注员，走
+    指派 → 提交 → 通过/打回 的最小流程。
+
+    为什么不接现有的 tasks/annotation_records：那套的每一步都挂在 samples 上
+    （认领的原子 UPDATE、task_scope 的可见性、审核队列、轮次克隆），照片要挤进去
+    就得先让 samples 接受"没有视频也没有 IMU 的样本"，那是会动到一堆现有热路径的
+    改动。雏形阶段用这张自己的表，形态定了再谈要不要并过去。
+
+    组是指派的粒度，也是导出切分的粒度，还是"标注员能看见哪些照片"的判据——
+    同一个 group_of()，三处共用。
+    """
+
+    __tablename__ = "vision_assignments"
+    __table_args__ = (
+        # 一个组同时只属于一个人。允许多人同时标一组，就要处理"谁的版本算数"，
+        # 而标注结果是整张覆盖保存的，两个人来回覆盖谁都不会收到提示
+        UniqueConstraint("album", "group_key", name="uq_vision_assignments_album_group"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    album: Mapped[str] = mapped_column(String(20), nullable=False)
+    group_key: Mapped[str] = mapped_column(String(200), nullable=False, comment="日期目录/狗名，散图就是日期目录")
+
+    assignee_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open",
+        comment="open 标注中 / submitted 已提交待审 / approved 通过（锁定） / rejected 被打回（可继续改）",
+    )
+    review_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="打回意见")
+
+    reviewed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class VisionAnnotation(Base):
     """
     照片上的一个框。
