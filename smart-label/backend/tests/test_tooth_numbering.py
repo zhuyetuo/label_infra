@@ -98,18 +98,56 @@ def test_没看到犬齿就整排不给号():
     assert "犬齿" in got["reason"]
 
 
-def test_没看到臼齿也不给号():
-    """x09 在非麻醉掀唇照里经常根本拍不到——这是最常见的情况，
-    所以这条不是边角料，是主路径。"""
+def test_没看到臼齿就只给犬齿和门齿():
+    """用户手机随手拍，两个锚点同时入镜的比例不高——这是主路径不是边角料。
+
+    整排不给号是对的（避免自洽的整体错位），但"一颗都不给"浪费了两类本来就
+    确定的牙：犬齿（一个象限只有一颗，看见就是 x04）、以及犬齿和中线之间的门齿
+    （正好 3 颗，往中线数就是 03/02/01）。前臼齿不给——05 还是 06 全看中间
+    缺没缺牙，没有第二个锚点分不出来。"""
     teeth = _row([
         ("incisor", 0.10), ("incisor", 0.16), ("incisor", 0.22),
         ("canine", 0.28),
         ("premolar", 0.34), ("premolar", 0.40),
     ])
     got = tn.suggest("left", teeth)
+    assert got["verdict"] == "partial"
+    by_index = {s["index"]: s["tooth_code"] for s in got["suggestions"]}
+    assert by_index == {0: 201, 1: 202, 2: 203, 3: 204}
+    assert 4 not in by_index and 5 not in by_index, "前臼齿不该给号"
+    assert "臼齿" in got["reason"]
+
+
+def test_没看到犬齿则一颗都不给():
+    """退路的前提是犬齿在——没有它，门齿也定不了是第几颗。"""
+    teeth = _row([
+        ("incisor", 0.10), ("incisor", 0.16),
+        ("premolar", 0.34), ("premolar", 0.40),
+    ])
+    got = tn.suggest("left", teeth)
     assert got["suggestions"] == []
     assert got["verdict"] == "no_anchor"
-    assert "臼齿" in got["reason"]
+
+
+def test_只拍到一颗犬齿也能给号():
+    """随手拍最常见的情形之一：只有半张嘴、几颗牙。"""
+    teeth = _row([("canine", 0.30), ("premolar", 0.38)])
+    got = tn.suggest("left", teeth)
+    by_index = {s["index"]: s["tooth_code"] for s in got["suggestions"]}
+    assert by_index == {0: 204}, "犬齿不靠序列就能确定"
+
+
+def test_退路不会跨过非门齿继续数():
+    """犬齿往中线方向如果夹着别的类别，说明排序或分类有问题，到此为止——
+    硬数下去就会把前臼齿标成门齿位。"""
+    teeth = _row([
+        ("incisor", 0.04), ("premolar", 0.10), ("incisor", 0.16),
+        ("canine", 0.28),
+        ("premolar", 0.40),
+    ])
+    got = tn.suggest("left", teeth)
+    by_index = {s["index"]: s["tooth_code"] for s in got["suggestions"]}
+    assert by_index == {3: 204, 2: 203}, by_index
 
 
 def test_两个锚点对不上就整排不给号():
@@ -121,9 +159,21 @@ def test_两个锚点对不上就整排不给号():
         ("molar", 0.46),                           # 推出来第一臼齿会是 07，不是 09
     ])
     got = tn.suggest("left", teeth)
-    assert got["suggestions"] == []
+    assert got["suggestions"] == [], "锚点自相矛盾时连犬齿都不能给——见下一条"
     assert got["verdict"] == "no_anchor"
     assert "对不上" in got["reason"]
+
+
+def test_锚点矛盾时连犬齿都不给():
+    """两个锚点互相矛盾，最可能的原因是视角填反了（或者照片本身是镜像的）。
+    而象限号那一位完全来自视角——视角错了，连犬齿都会给成 104 而不是 204。
+    有理由怀疑视角时，一颗都不给，并在原因里点名让人先确认视角。"""
+    teeth = _row([
+        ("canine", 0.28), ("premolar", 0.34), ("premolar", 0.40), ("molar", 0.46),
+    ])
+    got = tn.suggest("left", teeth)
+    assert got["suggestions"] == []
+    assert "视角" in got["reason"]
 
 
 def test_正面照不推号():
@@ -215,3 +265,52 @@ def test_推不出号时要说清楚为什么():
         got = tn.suggest("left", teeth)
         assert got["reason"], "没说原因"
         assert kw in got["reason"] or kw in got["verdict"], got["reason"]
+
+
+# ── 只拍到一排牙（用户随手拍最常见的情形） ──────────────────────────────
+
+def test_只有一排牙时说明上下颌是猜的():
+    """几何上根本分不出这排是上颌还是下颌，默认会全判成上颌。
+    不说出来的话，一张下排牙的照片会静默地拿到 2xx 而不是 3xx。"""
+    teeth = _row([
+        ("incisor", 0.10), ("incisor", 0.16), ("incisor", 0.22), ("canine", 0.28),
+        ("premolar", 0.34), ("premolar", 0.40), ("premolar", 0.46), ("premolar", 0.52),
+        ("molar", 0.58),
+    ], y=0.3)
+    got = tn.suggest("left", teeth)
+    assert got["per_jaw"]["upper"]["jaw_guessed"] is True
+    assert "猜" in got["per_jaw"]["upper"]["reason"]
+    assert "上下颌" in got["per_jaw"]["upper"]["reason"]
+
+
+def test_人填了下颌就按下颌给号():
+    teeth = _row([
+        ("incisor", 0.10), ("incisor", 0.16), ("incisor", 0.22), ("canine", 0.28),
+        ("premolar", 0.34), ("premolar", 0.40), ("premolar", 0.46), ("premolar", 0.52),
+        ("molar", 0.58),
+    ], y=0.3)
+    got = tn.suggest("left", teeth, jaw="lower")
+    codes = sorted(s["tooth_code"] for s in got["suggestions"])
+    assert codes == [301, 302, 303, 304, 305, 306, 307, 308, 309], "没按下颌算"
+    assert got["per_jaw"]["lower"]["jaw_guessed"] is False
+    assert "猜" not in got["per_jaw"]["lower"]["reason"]
+
+
+def test_上下都拍到时不提示猜():
+    upper = _row([("incisor", 0.10), ("incisor", 0.16), ("incisor", 0.22), ("canine", 0.28),
+                  ("premolar", 0.34), ("premolar", 0.40), ("premolar", 0.46), ("premolar", 0.52),
+                  ("molar", 0.58)], y=0.25)
+    lower = _row([("incisor", 0.10), ("incisor", 0.16), ("incisor", 0.22), ("canine", 0.28),
+                  ("premolar", 0.34), ("premolar", 0.40), ("premolar", 0.46), ("premolar", 0.52),
+                  ("molar", 0.58)], y=0.75)
+    got = tn.suggest("left", upper + lower)
+    assert got["per_jaw"]["upper"]["jaw_guessed"] is False
+    assert got["per_jaw"]["lower"]["jaw_guessed"] is False
+
+
+def test_看不出视角就不推号():
+    """用户随手拍有不少分不清左右颊的。填错比不填糟得多——象限号全错。"""
+    for v in ("unknown", "front", ""):
+        got = tn.suggest(v, _LEFT_UPPER)
+        assert got["suggestions"] == [], v
+        assert got["verdict"] == "bad_view", v

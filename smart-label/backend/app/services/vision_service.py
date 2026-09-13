@@ -26,13 +26,21 @@ _TOOTH_LABELS = [
 
 # 皮肤：按病灶形态，不按疾病名。疾病名要刮片/培养才能确诊，照片上标不准、
 # 标注者之间一致性极差，而且一张图常有多种病因共存。
+#
+# 第一版只做 3 类（用户拍板）。砍掉的那三类不是不重要，是样本会太少——
+# 一类少于一两百张，模型学不动，标了也白标。等这三类标到量、而且实际数据里
+# 那三类确实常见，再放开。放开就是把下面注释里那几行加回来的事。
+#
+# 暂时不启用的：
+#   {"code": "lichenification", "name": "苔藓化/色素沉着", "color": "#78350f", "hotkey": "4"},
+#   {"code": "crust", "name": "痂皮", "color": "#a855f7", "hotkey": "5"},
+#   {"code": "scale", "name": "皮屑", "color": "#0ea5e9", "hotkey": "6"},
+# 注意：加回来之前，库里如果已经有这些类别的标注（比如先启用过又关掉），
+# 导出时会被当成"不认识的类别"丢弃并整张排除——meta.json 的 warnings 里会说。
 _SKIN_LABELS = [
     {"code": "erythema", "name": "红斑", "color": "#ef4444", "hotkey": "1"},
     {"code": "alopecia", "name": "脱毛", "color": "#f59e0b", "hotkey": "2"},
-    {"code": "lichenification", "name": "苔藓化/色素沉着", "color": "#78350f", "hotkey": "3"},
-    {"code": "excoriation", "name": "抓伤/糜烂", "color": "#ec4899", "hotkey": "4"},
-    {"code": "crust", "name": "痂皮", "color": "#a855f7", "hotkey": "5"},
-    {"code": "scale", "name": "皮屑", "color": "#0ea5e9", "hotkey": "6"},
+    {"code": "excoriation", "name": "抓伤/糜烂", "color": "#ec4899", "hotkey": "3"},
 ]
 
 _GRADE_0_3 = [
@@ -66,11 +74,27 @@ _SKIN_ATTRS = [
 # 图级属性：一张照片整体的信息，不属于某个框。
 _TOOTH_ASSET_ATTRS = [
     {"key": "view_code", "name": "视角", "type": "select",
-     "options": [{"value": "left", "label": "左颊"}, {"value": "right", "label": "右颊"}, {"value": "front", "label": "正面"}],
-     "help": "决定这张图能推哪个象限的牙位。填错会让整张图的牙位全错。"},
+     "options": [
+         {"value": "left", "label": "左颊"}, {"value": "right", "label": "右颊"},
+         {"value": "front", "label": "正面"}, {"value": "unknown", "label": "看不出"},
+     ],
+     "help": "决定这张图能推哪个象限的牙位。用户随手拍的照片有不少分不清左右，"
+             "这时候选「看不出」——填错比不填糟得多，会让整张图的牙位全错。"
+             "正面和看不出都不推号（正面同时看到左右两侧，一个象限号盖不住）。"},
+    {"key": "jaw", "name": "上下颌", "type": "select",
+     "options": [{"value": "upper", "label": "上颌"}, {"value": "lower", "label": "下颌"}, {"value": "both", "label": "都有"}],
+     "help": "只拍到一排牙时一定要填。几何上分不出这排是上还是下，不填会默认当成上颌——"
+             "要是下排，整张图的象限号就全错了（204 而不是 304）。上下都拍到就选「都有」。"},
+    {"key": "need_vet", "name": "拿不准", "type": "select",
+     "options": [{"value": "yes", "label": "等兽医看"}],
+     "help": "自己判断不了的（这颗到底几级、这是不是结石）先打这个标，接着往下标。"
+             "攒一批之后在列表里筛出来，让兽医一次看完——比标一张问一次高效得多。"},
 ]
 
 _SKIN_ASSET_ATTRS = [
+    {"key": "need_vet", "name": "拿不准", "type": "select",
+     "options": [{"value": "yes", "label": "等兽医看"}],
+     "help": "自己判断不了的先打标接着往下标，攒一批让兽医一次看完。"},
     {"key": "body_site", "name": "部位", "type": "select",
      "options": [{"value": v, "label": n} for v, n in [
          ("ear", "耳廓"), ("periocular", "眼周"), ("muzzle", "口鼻"), ("neck", "颈部"),
@@ -227,7 +251,9 @@ _ATTR_DOMAINS = {
     "severity": frozenset(range(4)),
     "area_band": frozenset(range(4)),
     "visibility": frozenset(["clear", "partial", "occluded", "not_captured"]),
-    "view_code": frozenset(["left", "right", "front"]),
+    "view_code": frozenset(["left", "right", "front", "unknown"]),
+    "need_vet": frozenset(["yes"]),
+    "jaw": frozenset(["upper", "lower", "both"]),
     "body_site": frozenset(
         x["value"] for x in _SKIN_ASSET_ATTRS[0]["options"]
     ),
