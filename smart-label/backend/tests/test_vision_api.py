@@ -254,3 +254,68 @@ def test_类别体系没有重复热键():
         labels = svc.catalog(a)["labels"]
         assert len({x["hotkey"] for x in labels}) == len(labels), a
         assert len({x["code"] for x in labels}) == len(labels), a
+
+
+def test_拿不准的图能在列表上筛出来(album, db, user, run):
+    """一个人全流程干的时候，"标不准就问兽医"不能是标一张问一次——
+    打个标接着往下标，攒一批让兽医一次看完。列表上得能筛出来才成立。"""
+    _save(run, db, user, items=[], state="done", asset_attrs={"need_vet": "yes"})
+    run(api.save_annotations(api.SaveIn(album="oral", path=_P2, items=[], state="done"), db=db, user=user))
+
+    got = run(api.list_photos(album="oral", db=db, user=user))["data"]
+    flags = {p["filename"]: p["need_vet"] for f in got["folders"] for d in f["dogs"] for p in d["photos"]}
+    assert flags == {"a.jpg": True, "b.jpg": False}, flags
+
+
+def test_皮肤第一版只有三类(db, user, run):
+    """用户拍板：先做 3 类。砍掉的那三类样本会太少，标了也白标。"""
+    got = run(api.get_labels(album="skin", user=user))["data"]
+    assert [l["code"] for l in got["labels"]] == ["erythema", "alopecia", "excoriation"]
+    assert [l["hotkey"] for l in got["labels"]] == ["1", "2", "3"]
+
+
+def test_砍掉的皮肤类别存不进去(album, db, user, run, tmp_path, monkeypatch):
+    """类别表里没有就一律拒——不然关掉的类别还能从接口塞进来，
+    导出时又被当成"不认识的类别"丢弃并整张排除，白标一场。"""
+    from app.core.config import settings
+
+    rel = "2026-09-01-ok/lulu/s.jpg"
+    p = tmp_path / "material" / "皮肤" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(_JPEG)
+    monkeypatch.setattr(settings, "skin_photo_dir", "皮肤")
+
+    with pytest.raises(HTTPException) as e:
+        run(api.save_annotations(
+            api.SaveIn(album="skin", path=rel, items=[{"label_code": "crust", "bbox": [0.1, 0.1, 0.1, 0.1]}]),
+            db=db, user=user,
+        ))
+    assert e.value.status_code == 400
+
+
+@pytest.mark.parametrize("bad", [
+    {"tooth_code": 111},   # 犬上颌只有 2 颗臼齿，111/211 不存在
+    {"tooth_code": 211},
+    {"tooth_code": 999},
+    {"ci": 4},             # 分级只有 0-3
+    {"ci": -1},
+    {"view_code": "背面"},
+    {"随便写的键": 1},
+])
+def test_属性值域在后端也守着(album, db, user, run, bad):
+    """值域只写在前端是不够的：接口照收的话，手工调接口或者以后换个前端
+    就能写进来，而一个不存在的牙位进了导出，训练时就是个永远学不会的类别。"""
+    key = next(iter(bad))
+    with pytest.raises(HTTPException) as e:
+        if key in ("view_code",):
+            _save(run, db, user, items=[], asset_attrs=bad)
+        else:
+            _save(run, db, user, items=[{"label_code": "canine", "bbox": [0.1, 0.1, 0.1, 0.1], "attrs": bad}])
+    assert e.value.status_code == 400, bad
+
+
+def test_111_被拒时说清楚为什么(album, db, user, run):
+    with pytest.raises(HTTPException) as e:
+        _save(run, db, user, items=[{"label_code": "canine", "bbox": [0.1, 0.1, 0.1, 0.1], "attrs": {"tooth_code": 111}}])
+    assert "不存在" in str(e.value.detail)
+    assert "110" in str(e.value.detail), "要告诉他正确的上限是多少"

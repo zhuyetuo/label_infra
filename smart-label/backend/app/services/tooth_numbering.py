@@ -128,18 +128,60 @@ def number_one_arch(teeth: list[Tooth], quadrant: int) -> dict:
     molars = [i for i, t in enumerate(ordered) if t.label_code == "molar"]
     if not canine or not molars:
         missing = "犬齿" if not canine else "第一臼齿"
-        return {
-            "assignments": {},
-            "verdict": "no_anchor",
-            "reason": f"这个象限没看到{missing}。两个锚点缺一个就只能开放式往后数，"
-                      f"整排会一起错位而且看不出来——所以宁可不给号。",
-        }
+        return _anchor_only(
+            ordered, quadrant,
+            f"这个象限没看到{missing}，凑不齐两个锚点（开放式往后数会整排一起错位，"
+            f"而且看不出来）。",
+        )
     # 同一象限里理论上只有一颗犬齿。多于一颗说明分错类或者跨象限了，不猜
     if len(canine) > 1:
-        return {"assignments": {}, "verdict": "no_anchor", "reason": "这个象限认出了多颗犬齿，锚点不唯一"}
+        return {"assignments": {}, "verdict": "no_anchor",
+                "reason": "这个象限认出了多颗犬齿，锚点不唯一——多半是分错类或者这张图跨了象限。"}
 
     ci = canine[0]
     mi = min(molars)  # 最靠前的臼齿就是第一臼齿 x09
+    return _full_sequence(ordered, quadrant, ci, mi, ranges, last_seat)
+
+
+def _anchor_only(teeth: list[Tooth], quadrant: int, reason: str) -> dict:
+    """凑不齐两个锚点时的退路：**只给能单独确定的那几颗**。
+
+    用户手机随手拍的照片里，犬齿和第一臼齿同时入镜的比例不高。整排不给号是对的
+    （避免自洽的整体错位），但"一颗都不给"就浪费了两类本来就确定的牙：
+
+      - **犬齿**：一个象限只有一颗，形态独一无二，看见就是 x04。不依赖任何序列。
+      - **犬齿和中线之间的门齿**：正好 3 颗，从犬齿往中线数就是 03 / 02 / 01。
+        也不依赖第二个锚点——门齿的总数是固定的，中间缺一颗也只会让靠中线那侧
+        少给一个号，不会让已给的号错位。
+
+    前臼齿和臼齿不给：05 还是 06 全看中间缺没缺牙，没有第二个锚点分不出来。
+    """
+    canine = [i for i, t in enumerate(teeth) if t.label_code == "canine"]
+    if len(canine) != 1:
+        return {"assignments": {}, "verdict": "no_anchor", "reason": reason}
+
+    ci = canine[0]
+    out = {teeth[ci].index: quadrant * 100 + _ANCHOR_CANINE}
+    # 从犬齿往中线方向（ordered 里下标变小的方向）数门齿
+    seat = _ANCHOR_CANINE
+    for k in range(ci - 1, -1, -1):
+        if teeth[k].label_code != "incisor":
+            break  # 中间夹了别的类别，说明排序或分类有问题，到此为止
+        seat -= 1
+        if seat < 1:
+            break
+        out[teeth[k].index] = quadrant * 100 + seat
+
+    return {
+        "assignments": out,
+        "verdict": "partial",
+        "reason": f"{reason}只给了犬齿和它前面的门齿——这几颗不靠序列就能确定；"
+                  f"前臼齿和臼齿没有第二个锚点分不出是第几颗，留空等你填。",
+    }
+
+
+def _full_sequence(ordered, quadrant, ci, mi, ranges, last_seat) -> dict:
+    """两个锚点都在时，沿牙弓推完整序列"""
 
     # 用两个锚点之间的实际牙数，算出"一个座位"的平均间距，再据此判缺牙
     gaps = [abs(ordered[k + 1].cx - ordered[k].cx) for k in range(len(ordered) - 1)]
@@ -166,11 +208,14 @@ def number_one_arch(teeth: list[Tooth], quadrant: int) -> dict:
     # 第二个锚点校验：推出来的第一臼齿座位号必须落在 x09。
     # 对不上说明中间的缺牙判断错了，整排不可信
     if seats.get(mi) != _ANCHOR_FIRST_MOLAR:
+        # 这里**不能**退到"只给锚点牙"：两个锚点互相矛盾，最可能的原因就是视角填反了
+        # （或者照片本身是镜像的）。而象限号那一位完全来自视角——视角错了，
+        # 连犬齿都会给成 104 而不是 204。有理由怀疑视角时，一颗都不给。
         return {
-            "assignments": {},
-            "verdict": "no_anchor",
-            "reason": f"按犬齿推到第一臼齿是 {seats.get(mi)} 号，跟锚点 {_ANCHOR_FIRST_MOLAR} 对不上，"
-                      f"说明中间的缺牙判断错了。整排不给号，请人工确认。",
+            "assignments": {}, "verdict": "no_anchor",
+            "reason": f"按犬齿推到第一臼齿是 {seats.get(mi)} 号、跟锚点 {_ANCHOR_FIRST_MOLAR} 对不上。"
+                      f"多半是视角填反了，或者中间的缺牙判断错了。视角一错象限号就全错，"
+                      f"所以这张图一颗都不给号——请先确认视角。",
         }
 
     out: dict[int, int] = {}
@@ -185,12 +230,14 @@ def number_one_arch(teeth: list[Tooth], quadrant: int) -> dict:
 
     # 同一象限不能有重号。真出现了说明排序或缺牙判断有问题，整排不给
     if len(set(out.values())) != len(out):
-        return {"assignments": {}, "verdict": "no_anchor", "reason": "推出来有重号，整排不可信"}
+        # 同上：重号说明排序或缺牙判断有问题，牵连到象限，不退到锚点牙
+        return {"assignments": {}, "verdict": "no_anchor",
+                "reason": "推出来有重号，说明排序或缺牙判断有问题，整排不可信。"}
 
     return {"assignments": out, "verdict": "ok", "reason": ""}
 
 
-def suggest(view_code: str, boxes: list[dict]) -> dict:
+def suggest(view_code: str, boxes: list[dict], jaw: str | None = None) -> dict:
     """入口：给一张照片上的框推牙位。
 
     boxes：[{label_code, bbox}]，顺序即返回里的 index。
@@ -214,7 +261,20 @@ def suggest(view_code: str, boxes: list[dict]) -> dict:
     if len(teeth) < 2:
         return {"suggestions": [], "verdict": "too_few", "per_jaw": {}, "reason": "框太少，推不出牙弓序列"}
 
-    upper, lower = _split_jaw(teeth)
+    # 上下颌：人填了就信人的，没填才按纵向位置猜。
+    #
+    # 猜是有条件的：照片里上下两排牙都在时，中位 cy 一刀切是可靠的。但用户随手拍
+    # 经常只拍到一排——这时候几何上**根本分不出**这排是上颌还是下颌，而默认会
+    # 全判成上颌，象限号整个错掉（204 而不是 304）。所以只有一排时要说出来。
+    guessed = False
+    if jaw == "upper":
+        upper, lower = teeth, []
+    elif jaw == "lower":
+        upper, lower = [], teeth
+    else:
+        upper, lower = _split_jaw(teeth)
+        guessed = not upper or not lower
+
     out: dict[int, int] = {}
     per_jaw = {}
     for jaw_name, group, is_upper in (("upper", upper, True), ("lower", lower, False)):
@@ -222,7 +282,14 @@ def suggest(view_code: str, boxes: list[dict]) -> dict:
             continue
         q = quadrant_of(view_code, is_upper)
         r = number_one_arch(group, q)
-        per_jaw[jaw_name] = {"quadrant": q, "verdict": r["verdict"], "reason": r["reason"], "n": len(group)}
+        reason = r["reason"]
+        if guessed and r["assignments"]:
+            reason = ("这张图只看到一排牙，上下颌是按位置猜的（默认当成上颌）——"
+                      "要是下排，象限号就全错了，请在右栏把「上下颌」填上再推一次。" + reason)
+        per_jaw[jaw_name] = {
+            "quadrant": q, "verdict": r["verdict"], "reason": reason,
+            "n": len(group), "jaw_guessed": guessed,
+        }
         out.update(r["assignments"])
 
     verdicts = {v["verdict"] for v in per_jaw.values()}

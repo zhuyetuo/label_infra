@@ -82,6 +82,8 @@ export default function Vision() {
   const [reviewing, setReviewing] = useState(false);
   // SAM 点选模式：开着的时候单击 = 让 SAM 出一个框，而不是拖框
   const [samMode, setSamMode] = useState(false);
+  // 只看打了「拿不准」的：攒一批给兽医一次看完，比标一张问一次高效
+  const [onlyVet, setOnlyVet] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -91,6 +93,12 @@ export default function Vision() {
     | null
   >(null);
   const [, forceDraw] = useState(0);
+  // 缩放：1 = 适应窗口。放大之后靠外层 overflow:auto 平移，不自己算位移。
+  const [zoom, setZoom] = useState(1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const fitSizeRef = useRef({ w: 0, h: 0 });
+  const panRef = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
+  const spaceRef = useRef(false);
 
   const { data: catalog } = useQuery({ queryKey: ["vision-labels", album], queryFn: () => getVisionLabels(album) });
   const { data: tree, isLoading, error } = useQuery({ queryKey: ["vision-photos", album], queryFn: () => listVisionPhotos(album) });
@@ -130,6 +138,7 @@ export default function Vision() {
       setSelected(null);
       setImgUrl(null);
       setNatural(null);
+      setZoom(1);
       // 先把上一张的框清掉，再去加载。不清的话，这张加载失败时上一张的框还留在
       // state 里，而保存按钮仍然可点——一按就把 A 图的框写进了 B 图，
       // 而且两边都不会报错。
@@ -209,6 +218,7 @@ export default function Vision() {
         album,
         path: current!,
         view_code: String(assetAttrs.view_code ?? ""),
+        jaw: assetAttrs.jaw ? String(assetAttrs.jaw) : null,
         boxes: items.map((it) => ({ label_code: it.label_code, bbox: it.bbox })),
       }),
     onSuccess: (r) => {
@@ -220,11 +230,18 @@ export default function Vision() {
         }),
       );
       setDirty(true);
-      message.success(
-        r.verdict === "ok"
-          ? `推出 ${r.suggestions.length} 颗牙的牙位，请逐颗核对`
-          : `推出 ${r.suggestions.length} 颗；${r.reason}`,
-      );
+      // 原因要原样给出来，而且给足时间读——"只给了犬齿和门齿"「上下颌是猜的」
+      // 这些话决定了他接下来该干什么，一闪而过等于没说
+      if (r.verdict === "ok") {
+        message.success(`推出 ${r.suggestions.length} 颗牙的牙位，请逐颗核对`);
+      } else {
+        Modal.info({
+          title: `推出 ${r.suggestions.length} 颗，其余留空`,
+          content: r.reason,
+          okText: "知道了",
+          width: 520,
+        });
+      }
     },
   });
 
@@ -308,6 +325,31 @@ export default function Vision() {
     return () => window.removeEventListener("resize", onResize);
   }, [draw]);
 
+  // 滚轮缩放，以光标为中心：放大的时候人盯着的是那颗牙，不是图片中心
+  const onWheel = (e: React.WheelEvent) => {
+    if (!imgUrl) return;
+    e.preventDefault();
+    const vp = viewportRef.current;
+    const img = imgRef.current;
+    if (!vp || !img) return;
+    const before = img.clientWidth;
+    const next = Math.min(Math.max(zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1), 8);
+    if (Math.abs(next - zoom) < 1e-6) return;
+    const rect = vp.getBoundingClientRect();
+    const cx = e.clientX - rect.left + vp.scrollLeft;
+    const cy = e.clientY - rect.top + vp.scrollTop;
+    setZoom(next);
+    // 等新宽度生效之后再按比例修滚动位置
+    requestAnimationFrame(() => {
+      const after = img.clientWidth;
+      if (!before || !after) return;
+      const k = after / before;
+      vp.scrollLeft = cx * k - (e.clientX - rect.left);
+      vp.scrollTop = cy * k - (e.clientY - rect.top);
+      draw();
+    });
+  };
+
   const posOf = (e: React.MouseEvent) => {
     const r = canvasRef.current!.getBoundingClientRect();
     return { px: e.clientX - r.left, py: e.clientY - r.top, w: r.width, h: r.height };
@@ -329,6 +371,13 @@ export default function Vision() {
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (!current || !imgUrl) return;
+    // 中键或按住空格 = 平移（放大之后必须能挪，不然只能靠滚动条）
+    if (e.button === 1 || spaceRef.current) {
+      e.preventDefault();
+      const vp = viewportRef.current;
+      if (vp) panRef.current = { x: e.clientX, y: e.clientY, sl: vp.scrollLeft, st: vp.scrollTop };
+      return;
+    }
     const { px, py, w, h } = posOf(e);
     const hit = hitTest(px, py, w, h);
     if (samMode && samOk && !hit) {
@@ -347,6 +396,15 @@ export default function Vision() {
   };
 
   const onMouseMove = (e: React.MouseEvent) => {
+    const pan = panRef.current;
+    if (pan) {
+      const vp = viewportRef.current;
+      if (vp) {
+        vp.scrollLeft = pan.sl - (e.clientX - pan.x);
+        vp.scrollTop = pan.st - (e.clientY - pan.y);
+      }
+      return;
+    }
     const d = dragRef.current;
     if (!d) return;
     const { px, py, w, h } = posOf(e);
@@ -377,6 +435,11 @@ export default function Vision() {
   };
 
   const onMouseUp = () => {
+    if (panRef.current) {
+      panRef.current = null;
+      forceDraw((n) => n + 1);
+      return;
+    }
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) return;
@@ -418,8 +481,23 @@ export default function Vision() {
         setDirty(true);
       }
     };
+    const onSpaceDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) {
+        e.preventDefault();
+        spaceRef.current = true;
+      }
+    };
+    const onSpaceUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") spaceRef.current = false;
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onSpaceDown);
+    window.addEventListener("keyup", onSpaceUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onSpaceDown);
+      window.removeEventListener("keyup", onSpaceUp);
+    };
   }, [catalog, selected, current, imgUrl, save]);
 
   // ── 属性面板 ────────────────────────────────────────────────────────
@@ -612,6 +690,11 @@ export default function Vision() {
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
+              <Tooltip title="滚轮缩放（以光标为中心）；放大后按住空格或中键拖动平移。一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。">
+                <Button size="small" disabled={zoom === 1} onClick={() => setZoom(1)}>
+                  {zoom === 1 ? "适应窗口" : `${zoom.toFixed(1)}× 复位`}
+                </Button>
+              </Tooltip>
               {catalog?.domain === "tooth" && (
                 <Tooltip
                   title={
@@ -650,27 +733,44 @@ export default function Vision() {
         ) : !imgUrl ? (
           <Spin style={{ marginTop: 60 }} />
         ) : (
-          <div style={{ position: "relative", lineHeight: 0 }}>
-            <img
-              ref={imgRef}
-              src={imgUrl}
-              alt=""
-              style={{ maxWidth: "100%", maxHeight: "calc(100vh - 210px)", display: "block", userSelect: "none" }}
-              draggable={false}
-              onLoad={(e) => {
-                const el = e.currentTarget;
-                setNatural({ w: el.naturalWidth, h: el.naturalHeight });
-                draw();
-              }}
-            />
-            <canvas
-              ref={canvasRef}
-              style={{ position: "absolute", left: 0, top: 0, cursor: samMode && samOk ? "cell" : "crosshair" }}
-              onMouseDown={onMouseDown}
-              onMouseMove={onMouseMove}
-              onMouseUp={onMouseUp}
-              onMouseLeave={onMouseUp}
-            />
+          // 真实照片里一颗牙只占画幅宽度的 3-8%，适应窗口之后在屏幕上只有几十像素——
+          // 在那个尺寸上画准框、再判 CI 几级是做不到的。所以缩放不是锦上添花。
+          //
+          // 实现上不用 CSS transform，直接改 <img> 的像素宽度：draw() 本来就是按
+          // img.clientWidth 算的，posOf 用 getBoundingClientRect，两边自动跟着变，
+          // 归一化坐标一行都不用改。外层 overflow:auto 顺带把平移也解决了。
+          <div ref={viewportRef} style={{ overflow: "auto", maxWidth: "100%", maxHeight: "calc(100vh - 210px)" }} onWheel={onWheel}>
+            <div style={{ position: "relative", lineHeight: 0, width: "fit-content" }}>
+              <img
+                ref={imgRef}
+                src={imgUrl}
+                alt=""
+                style={
+                  zoom === 1
+                    ? { maxWidth: "100%", maxHeight: "calc(100vh - 210px)", display: "block", userSelect: "none" }
+                    : { width: `${fitSizeRef.current.w * zoom}px`, maxWidth: "none", display: "block", userSelect: "none" }
+                }
+                draggable={false}
+                onLoad={(e) => {
+                  const el = e.currentTarget;
+                  setNatural({ w: el.naturalWidth, h: el.naturalHeight });
+                  // 记下"适应窗口"时的显示尺寸，放大倍数以它为基准
+                  if (zoom === 1) fitSizeRef.current = { w: el.clientWidth, h: el.clientHeight };
+                  draw();
+                }}
+              />
+              <canvas
+                ref={canvasRef}
+                style={{
+                  position: "absolute", left: 0, top: 0,
+                  cursor: panRef.current ? "grabbing" : samMode && samOk ? "cell" : "crosshair",
+                }}
+                onMouseDown={onMouseDown}
+                onMouseMove={onMouseMove}
+                onMouseUp={onMouseUp}
+                onMouseLeave={onMouseUp}
+              />
+            </div>
           </div>
         )}
       </Card>

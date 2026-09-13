@@ -202,10 +202,11 @@ async def list_photos(album: str = Query("oral"), db: AsyncSession = Depends(get
             )
         ).all()
     )
-    states = {
-        r.rel_path: r.state
-        for r in (await db.execute(select(VisionAsset).where(VisionAsset.album == album))).scalars().all()
-    }
+    assets = (await db.execute(select(VisionAsset).where(VisionAsset.album == album))).scalars().all()
+    states = {r.rel_path: r.state for r in assets}
+    # 「拿不准，等兽医看」要能在列表上筛出来——攒一批让兽医一次看完，
+    # 比标一张问一次高效得多
+    need_vet = {r.rel_path for r in assets if svc.load_attrs(r.attrs).get("need_vet") == "yes"}
     for folder in folders:
         for dog in folder["dogs"]:
             group = svc.group_of(dog["photos"][0]["rel_path"]) if dog["photos"] else ""
@@ -215,6 +216,7 @@ async def list_photos(album: str = Query("oral"), db: AsyncSession = Depends(get
             for p in dog["photos"]:
                 p["n_boxes"] = int(counts.get(p["rel_path"], 0))
                 p["state"] = states.get(p["rel_path"], "todo")
+                p["need_vet"] = p["rel_path"] in need_vet
     return ok({"album": album, "folders": folders, "can_review": _can_review(user), "is_manager": _is_manager(user)})
 
 
@@ -331,7 +333,8 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
 class NumberIn(BaseModel):
     album: str = "oral"
     path: str
-    view_code: str = Field(..., description="left 左颊 / right 右颊（正面照推不了）")
+    view_code: str = Field(..., description="left 左颊 / right 右颊（正面和看不出都推不了）")
+    jaw: str | None = Field(None, description="upper / lower / both。只拍到一排牙时必填，不填会默认当上颌")
     boxes: list[dict] = Field(..., min_length=1, max_length=64, description="[{label_code, bbox}]，顺序即返回里的 index")
 
 
@@ -349,7 +352,7 @@ async def suggest_tooth_codes(body: NumberIn, db: AsyncSession = Depends(get_db)
     if svc.domain_of(body.album) != "tooth":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "只有口腔相册能推牙位")
     await _check_writable(db, body.album, body.path, user)
-    return ok(tooth_numbering.suggest(body.view_code, body.boxes))
+    return ok(tooth_numbering.suggest(body.view_code, body.boxes, None if body.jaw == "both" else body.jaw))
 
 
 class SamPoint(BaseModel):

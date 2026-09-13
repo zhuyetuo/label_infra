@@ -126,13 +126,14 @@ export const suggestToothCodes = (body: {
   album: VisionAlbum;
   path: string;
   view_code: string;
+  jaw?: string | null;
   boxes: { label_code: string; bbox: VisionBox }[];
 }) =>
   request.post<never, {
     suggestions: { index: number; tooth_code: number }[];
     verdict: "ok" | "partial" | "no_anchor" | "too_few" | "bad_view";
     reason: string;
-    per_jaw: Record<string, { quadrant: number; verdict: string; reason: string; n: number }>;
+    per_jaw: Record<string, { quadrant: number; verdict: string; reason: string; n: number; jaw_guessed: boolean }>;
   }>("/vision/tooth/suggest-codes", body);
 
 /** SAM 辅助开着没有。没配 VISION_SERVICE_URL / 连不上 / 没装权重，都会是 available=false */
