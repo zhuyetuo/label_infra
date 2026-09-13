@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Badge, Button, Card, Empty, Modal, Radio, Segmented, Select, Space, Spin, Tag, Tooltip, Typography, message,
+  Alert, Badge, Button, Card, Descriptions, Empty, Input, Modal, Popconfirm, Radio, Segmented, Select, Slider,
+  Space, Spin, Table, Tag, Tooltip, Typography, message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMaterialPhotoToken, materialPhotoUrl } from "@/api/material";
 import {
-  getVisionAnnotations, getVisionLabels, getVisionStats, listVisionPhotos, saveVisionAnnotations,
-  type VisionAlbum, type VisionAssetState, type VisionAttrDef, type VisionBox, type VisionItem, type VisionPhoto,
+  deleteVisionDataset, exportVisionDataset, getVisionAnnotations, getVisionLabels, getVisionStats,
+  listVisionDatasets, listVisionPhotos, saveVisionAnnotations,
+  type VisionAlbum, type VisionAssetState, type VisionAttrDef, type VisionBox, type VisionDatasetMeta,
+  type VisionItem, type VisionPhoto,
 } from "@/api/vision";
 
 // 视觉标注工作台（雏形）：在素材库的口腔/皮肤照片上画框、打类别、填属性。
@@ -63,6 +66,7 @@ export default function Vision() {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   // 当前要画的类别。画完框立刻就带上它，省掉"画框 → 再点类别"的第二步。
   const [brush, setBrush] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -566,11 +570,125 @@ export default function Vision() {
         )}
 
         <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
-        <div style={{ fontSize: 12, color: "#888" }}>
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
           进度：{stats?.total_boxes ?? 0} 个框
           {stats?.by_state?.length ? `　${stats.by_state.map((s) => `${STATE_META[s.state as VisionAssetState]?.text ?? s.state} ${s.n}`).join("　")}` : ""}
         </div>
+        <Button size="small" block onClick={() => setExporting(true)}>导出训练集…</Button>
       </Card>
+
+      <ExportModal open={exporting} album={album} onClose={() => setExporting(false)} />
     </div>
+  );
+}
+
+/** 导出成 YOLO 检测数据集。落 data_train_vision/，跟模型训练页那边的 data_train 分开。 */
+function ExportModal({ open, album, onClose }: { open: boolean; album: VisionAlbum; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [valRatio, setValRatio] = useState(0.2);
+  const [last, setLast] = useState<VisionDatasetMeta | null>(null);
+
+  const { data: datasets } = useQuery({ queryKey: ["vision-datasets"], queryFn: listVisionDatasets, enabled: open });
+  const refresh = () => qc.invalidateQueries({ queryKey: ["vision-datasets"] });
+
+  const run = useMutation({
+    mutationFn: () => exportVisionDataset({ album, name: name.trim(), val_ratio: valRatio }),
+    onSuccess: (meta) => {
+      setLast(meta);
+      setName("");
+      refresh();
+      message.success(`导出好了：${meta.n_images} 张图，${meta.total_boxes} 个框`);
+    },
+  });
+
+  const del = useMutation({
+    mutationFn: (n: string) => deleteVisionDataset(n),
+    onSuccess: () => {
+      refresh();
+      message.success("已删除");
+    },
+  });
+
+  return (
+    <Modal open={open} onCancel={onClose} footer={null} width={720} title="导出 YOLO 检测数据集">
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="只有「标完」的图会进数据集"
+        description={
+          <span style={{ fontSize: 13 }}>
+            标完但一个框都没有的图 = <b>显式负样本</b>（写一个空 txt，模型会把它当纯背景图学）；
+            「未标」和「跳过」的一律不进。所以标之前先想清楚：这张是真没有目标，还是你还没标。
+          </span>
+        }
+      />
+      <Space.Compact style={{ width: "100%", marginBottom: 10 }}>
+        <Input
+          placeholder="数据集名，字母数字下划线短横线，比如 oral_v1"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onPressEnter={() => name.trim() && run.mutate()}
+        />
+        <Button type="primary" loading={run.isPending} disabled={!name.trim()} onClick={() => run.mutate()}>
+          导出
+        </Button>
+      </Space.Compact>
+      <div style={{ fontSize: 12, color: "#888" }}>
+        验证集比例 {Math.round(valRatio * 100)}%
+        <Tooltip title="按「日期/狗」整组切分，同一次拍摄的连拍不会散到两边——散了的话 val 里全是 train 的近邻图，指标会虚高。切分按组名哈希，同一批标注导多少次结果都一样。">
+          <span style={{ marginLeft: 4, cursor: "help", borderBottom: "1px dotted #aaa" }}>?</span>
+        </Tooltip>
+      </div>
+      <Slider min={0} max={0.5} step={0.05} value={valRatio} onChange={setValRatio} />
+
+      {last && (
+        <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }} title={`刚导出：${last.name}`}>
+          <Descriptions.Item label="图片">{last.counts.train} 训练 / {last.counts.val} 验证</Descriptions.Item>
+          <Descriptions.Item label="框">{last.total_boxes}</Descriptions.Item>
+          <Descriptions.Item label="负样本">{last.negatives.train + last.negatives.val}</Descriptions.Item>
+          <Descriptions.Item label="排除">
+            {Object.entries(last.excluded).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join("　") || "无"}
+          </Descriptions.Item>
+          <Descriptions.Item label="各类别" span={2}>
+            {Object.entries(last.boxes_per_class).map(([k, v]) => <Tag key={k}>{k} {v}</Tag>)}
+          </Descriptions.Item>
+          {!!last.warnings.length && (
+            <Descriptions.Item label="注意" span={2}>
+              {last.warnings.map((w) => <div key={w} style={{ color: "#d46b08" }}>{w}</div>)}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+      )}
+
+      <Table
+        size="small"
+        rowKey="name"
+        pagination={false}
+        dataSource={datasets ?? []}
+        locale={{ emptyText: "还没导出过" }}
+        columns={[
+          { title: "名字", dataIndex: "name" },
+          { title: "相册", dataIndex: "album", render: (a: string) => (a === "oral" ? "口腔" : "皮肤") },
+          { title: "图", render: (_: unknown, r: VisionDatasetMeta) => `${r.counts.train}/${r.counts.val}` },
+          { title: "框", dataIndex: "total_boxes" },
+          { title: "导出时间", dataIndex: "exported_at", render: (v: string) => v?.replace("T", " ") },
+          {
+            title: "",
+            render: (_: unknown, r: VisionDatasetMeta) => (
+              <Popconfirm title={`删掉 ${r.name}？`} onConfirm={() => del.mutate(r.name)}>
+                <Button size="small" danger type="text">删除</Button>
+              </Popconfirm>
+            ),
+          },
+        ]}
+      />
+      <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+        产出在 NAS 的 <code>data_train_vision/&lt;名字&gt;/</code>：<code>data.yaml</code> +{" "}
+        <code>images|labels/train|val/</code>，ultralytics 可以直接吃。
+        <code>manifest.json</code> 能把导出的文件名查回原始照片路径。
+      </div>
+    </Modal>
   );
 }

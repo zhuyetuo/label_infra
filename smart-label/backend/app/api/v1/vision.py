@@ -21,7 +21,7 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.vision_annotation import VisionAnnotation, VisionAsset
 from app.schemas.envelope import ok
-from app.services import tooth_service, vision_service as svc
+from app.services import tooth_service, vision_export_service as exp, vision_service as svc
 
 router = APIRouter(
     prefix="/vision",
@@ -170,6 +170,54 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
 
     await db.commit()
     return ok({"saved": len(prepared), "state": body.state})
+
+
+class ExportIn(BaseModel):
+    album: str = "oral"
+    name: str = Field(..., description="数据集目录名，字母数字下划线短横线")
+    val_ratio: float = Field(0.2, ge=0.0, le=1.0)
+
+
+@router.post("/export")
+async def export_dataset(body: ExportIn, db: AsyncSession = Depends(get_db), user: User = Depends(require_role(UserRole.admin, UserRole.super_admin))):
+    """导出成 YOLO 检测数据集，落 nas_root/data_train_vision/<name>/。
+
+    刻意不跟 IMU 那套 data_train 混在一个目录——那边的 list_datasets 会把每个带
+    meta.json 的目录都读出来丢给模型训练页，delete_dataset 又只按名字删。
+    """
+    try:
+        exp.dataset_root(body.name)  # 先把名字校验了，不然扫完全表才发现名字不合法
+        assets = (
+            await db.execute(select(VisionAsset).where(VisionAsset.album == body.album))
+        ).scalars().all()
+        rows = (
+            await db.execute(select(VisionAnnotation).where(VisionAnnotation.album == body.album))
+        ).scalars().all()
+        boxes: dict[str, list[dict]] = {}
+        for r in rows:
+            boxes.setdefault(r.rel_path, []).append({"label_code": r.label_code, "bbox": svc.load_bbox(r.bbox)})
+        plan = exp.plan_dataset(body.album, [{"rel_path": a.rel_path, "state": a.state} for a in assets], boxes, body.val_ratio)
+        if not plan["items"]:
+            raise exp.ExportError("没有一张图是「标完」状态，导出来是空的。先把图标完再导。")
+        meta = exp.write_dataset(body.name, plan, exported_by=user.username)
+    except (exp.ExportError, svc.VisionError) as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    return ok(meta)
+
+
+@router.get("/datasets")
+async def list_datasets():
+    """只列视觉数据集（data_train_vision），跟模型训练页那边的列表互不干扰"""
+    return ok(exp.list_datasets())
+
+
+@router.delete("/datasets/{name}")
+async def delete_dataset(name: str):
+    try:
+        exp.delete_dataset(name)
+    except exp.ExportError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    return ok({"deleted": name})
 
 
 @router.get("/stats")

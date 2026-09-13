@@ -96,6 +96,35 @@ export const saveVisionAnnotations = (body: {
   height?: number;
 }) => request.put<never, { saved: number; state: VisionAssetState }>("/vision/annotations", body);
 
+export interface VisionDatasetMeta {
+  kind: string;
+  name: string;
+  album: VisionAlbum;
+  domain: string;
+  task: string;
+  class_names: string[];
+  counts: { train: number; val: number };
+  negatives: { train: number; val: number };
+  boxes_per_class: Record<string, number>;
+  total_boxes: number;
+  excluded: Record<string, number>;
+  val_ratio: number;
+  n_images: number;
+  copied_bytes: number;
+  warnings: string[];
+  exported_at: string;
+  exported_by: string | null;
+}
+
+/** 导出 YOLO 检测数据集，落 nas_root/data_train_vision/<name>/ */
+export const exportVisionDataset = (body: { album: VisionAlbum; name: string; val_ratio: number }) =>
+  request.post<never, VisionDatasetMeta>("/vision/export", body, { timeout: 600_000 });
+
+export const listVisionDatasets = () => request.get<never, VisionDatasetMeta[]>("/vision/datasets");
+
+export const deleteVisionDataset = (name: string) =>
+  request.delete<never, { deleted: string }>(`/vision/datasets/${encodeURIComponent(name)}`);
+
 export const getVisionStats = (album: VisionAlbum) =>
   request.get<never, {
     by_label: { label_code: string; n: number }[];
