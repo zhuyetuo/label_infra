@@ -19,6 +19,7 @@
 """
 
 import os
+import re
 
 from app.utils.ffprobe import count_csv_rows, measure_csv_hz
 
@@ -111,18 +112,46 @@ NEEDS_ATTENTION = ("no_csv", "empty", "bad", "hz_mismatch", "partial", "unknown"
 LEGACY_YINGPENG_SUFFIX = "_yingpeng"
 NEW_YINGPENG_SUFFIX = "_yingpeng2"
 
+# 采集端换成设备真实编号的那一天。这天**之后**录的都是对的。
+#
+# 为什么光看后缀不够：后缀（_yingpeng2）是 2026-09-13 才加的，而编号是 09-12
+# 改的——中间 9-12 到 9-13 这一天多的数据，编号已经是对的，目录却还叫
+# _yingpeng。只按后缀判会把这批好数据误标成"归属不可信"，那比不标还糟：
+# 真正有问题的那批会淹没在误报里，久了就没人看了。
+#
+# 所以两个条件都要：老后缀 **且** 日期早于这一天。
+_NUMBERING_FIXED_ON = (2026, 9, 12)
+
+_DAY_RE = re.compile(r"^(\d{4})_(\d{1,2})_(\d{1,2})(?:_|$)")
+
+
+def _dir_date(part: str) -> tuple[int, int, int] | None:
+    """从 `2026_9_13_yingpeng` 这种目录名里取日期。取不出就返回 None。"""
+    m = _DAY_RE.match(part)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
 
 def is_legacy_yingpeng(rel_path: str | None) -> bool:
-    """这条样本是不是影棚 9-12 之前那批（imu 号是位置号，狗归属有一半是错的）。
+    """这条样本是不是影棚**编号改之前**那批（imu 号是位置号，狗归属有一半是错的）。
 
-    按目录后缀判，不按日期：日期规则写在代码里会漂，而且要维护一张"哪天改的"
-    的表；后缀是采集端写进路径的事实，跟着文件走。
+    判据：目录后缀是老的 `_yingpeng`（不是 `_yingpeng2`）**并且**日期早于
+    2026-09-12。两个条件缺一不可——只看后缀会误伤 9-12/9-13 那批（编号已经对了、
+    目录还是老名字），只看日期又要求每个场地都维护一张"哪天改的"表。
+
+    日期取不出来（目录名不是 `YYYY_M_D_...` 的形状）时判**不是**老数据：
+    宁可漏标也不误标，误标会让真正有问题的那批淹没在误报里。
     """
     if not rel_path:
         return False
-    parts = rel_path.replace("\\", "/").split("/")
-    return any(
-        p.lower().endswith(LEGACY_YINGPENG_SUFFIX) and not p.lower().endswith(NEW_YINGPENG_SUFFIX)
-        for p in parts
-        if p
-    )
+    for part in rel_path.replace("\\", "/").split("/"):
+        if not part:
+            continue
+        low = part.lower()
+        if not low.endswith(LEGACY_YINGPENG_SUFFIX) or low.endswith(NEW_YINGPENG_SUFFIX):
+            continue
+        d = _dir_date(part)
+        if d is not None and d < _NUMBERING_FIXED_ON:
+            return True
+    return False
