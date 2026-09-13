@@ -59,7 +59,13 @@ async def segment(material_rel_path: str, points: list[dict], box: list[float] |
         raise SamUnavailable(_detail(resp) or "SAM 模型不可用")
     if resp.status_code != 200:
         raise SamUnavailable(f"SAM 服务返回 {resp.status_code}：{_detail(resp)}")
-    return resp.json()
+    try:
+        data = resp.json()
+    except Exception as e:  # noqa: BLE001 - 200 但不是 JSON：多半是中间挡了个网关/登录页
+        raise SamUnavailable(f"SAM 服务返回的不是 JSON（是不是中间挡了代理）：{type(e).__name__}") from e
+    if not isinstance(data, dict):
+        raise SamUnavailable("SAM 服务返回的不是一个对象")
+    return data
 
 
 def _detail(resp: httpx.Response) -> str:
