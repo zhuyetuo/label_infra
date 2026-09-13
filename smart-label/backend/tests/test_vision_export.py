@@ -264,3 +264,29 @@ def test_meta_的计数是真正落盘的那些(nas, monkeypatch):
     assert meta["planned_counts"]["train"] == len(plan["items"]), "计划数要留着，好对出差在哪"
     assert meta["total_boxes"] == 0 or meta["total_boxes"] < plan["total_boxes"]
     assert any("读不到" in w for w in meta["warnings"])
+
+
+def test_导出中途炸了不留半截目录(nas, plan, monkeypatch):
+    """留着的话这个名字就被占死：重导报「已经存在了」，而目录里是个残缺的
+    数据集——比没有更坏，因为它看起来像个能用的数据集。"""
+    import shutil as _sh
+
+    calls = []
+    orig = _sh.copyfile
+
+    def boom(src, dst):
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError("模拟 NAS 中途断开")
+        return orig(src, dst)
+
+    monkeypatch.setattr(exp.shutil, "copyfile", boom)
+    with pytest.raises(OSError):
+        exp.write_dataset("half", plan)
+
+    assert not os.path.exists(exp.dataset_root("half")), "半截目录没清掉"
+    assert exp.list_datasets() == []
+    # 名字还能再用
+    monkeypatch.setattr(exp.shutil, "copyfile", orig)
+    meta = exp.write_dataset("half", plan)
+    assert meta["n_images"] > 0

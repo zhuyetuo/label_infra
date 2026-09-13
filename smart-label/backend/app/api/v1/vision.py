@@ -29,6 +29,7 @@ from app.models.user import User, UserRole
 from app.models.vision_annotation import VisionAnnotation, VisionAssignment, VisionAsset
 from app.schemas.envelope import ok
 from app.services import (
+    tooth_numbering,
     tooth_service,
     vision_export_service as exp,
     vision_sam_client as sam_client,
@@ -325,6 +326,30 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
 
     await db.commit()
     return ok({"saved": len(prepared), "state": body.state})
+
+
+class NumberIn(BaseModel):
+    album: str = "oral"
+    path: str
+    view_code: str = Field(..., description="left 左颊 / right 右颊（正面照推不了）")
+    boxes: list[dict] = Field(..., min_length=1, max_length=64, description="[{label_code, bbox}]，顺序即返回里的 index")
+
+
+@router.post("/tooth/suggest-codes")
+async def suggest_tooth_codes(body: NumberIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """给这张照片上已经画好的框推 Triadan 牙位。
+
+    纯几何后处理，不调模型。**返回的是建议不是结论**：界面上默认逐颗确认。
+    案例级"整图一个号都没错"才是能开批量接受的判据，逐颗准确率不是——牙位错误
+    是象限块状相关的，逐颗平均很高也可能对应过半个体有整段错位。
+
+    推不出来时会说清楚为什么（没拍到锚点 / 牙太少 / 视角不对），
+    标注员据此决定是换个角度重拍还是接着手填。
+    """
+    if svc.domain_of(body.album) != "tooth":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只有口腔相册能推牙位")
+    await _check_writable(db, body.album, body.path, user)
+    return ok(tooth_numbering.suggest(body.view_code, body.boxes))
 
 
 class SamPoint(BaseModel):

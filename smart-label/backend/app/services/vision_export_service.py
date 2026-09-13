@@ -212,6 +212,16 @@ def write_dataset(name: str, plan: dict, exported_by: str | None = None) -> dict
     manifest = []
     copied_bytes = 0
     failed: list[str] = []
+    try:
+        return _write_files(root, dirs, plan, manifest, failed, copied_bytes, name, exported_by)
+    except Exception:
+        # 中途炸了（NAS 断了、盘满了）要把半截目录清掉：留着的话这个名字就被占死，
+        # 重导会报"已经存在了"，而目录里是个残缺的数据集——比没有更坏
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+
+
+def _write_files(root, dirs, plan, manifest, failed, copied_bytes, name, exported_by):
     for it in plan["items"]:
         try:
             src = vision_service.check_photo(plan["album"], it["rel_path"])
