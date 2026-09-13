@@ -9,7 +9,7 @@ import {
   createVisionAssignments, deleteVisionAssignment, deleteVisionDataset, exportVisionDataset,
   getSamStatus, getVisionAnnotations, getVisionLabels, getVisionPhotoToken, getVisionStats, listVisionAnnotators,
   listVisionAssignments, listVisionDatasets, listVisionPhotos, reviewVisionAssignment,
-  samSegment, saveVisionAnnotations, submitVisionAssignment,
+  samSegment, saveVisionAnnotations, submitVisionAssignment, suggestToothCodes,
   type VisionAlbum, type VisionAssetState, type VisionAssignment, type VisionAssignmentState,
   type VisionAttrDef, type VisionBox, type VisionDatasetMeta, type VisionItem, type VisionPhoto,
 } from "@/api/vision";
@@ -199,6 +199,33 @@ export default function Vision() {
       setDirty(true);
     },
     onError: () => message.warning("SAM 这下没分出东西来，换个位置再点，或者直接拖个框"),
+  });
+
+  // 推牙位：纯几何后处理。推不出来时它会说清楚为什么（没拍到锚点/牙太少/视角不对），
+  // 原样转述给标注员——他据此决定是换个角度重拍还是接着手填。
+  const suggestCodes = useMutation({
+    mutationFn: () =>
+      suggestToothCodes({
+        album,
+        path: current!,
+        view_code: String(assetAttrs.view_code ?? ""),
+        boxes: items.map((it) => ({ label_code: it.label_code, bbox: it.bbox })),
+      }),
+    onSuccess: (r) => {
+      if (!r.suggestions.length) return void message.warning(r.reason || "推不出牙位");
+      setItems((prev) =>
+        prev.map((it, i) => {
+          const hit = r.suggestions.find((s) => s.index === i);
+          return hit ? { ...it, attrs: { ...it.attrs, tooth_code: hit.tooth_code } } : it;
+        }),
+      );
+      setDirty(true);
+      message.success(
+        r.verdict === "ok"
+          ? `推出 ${r.suggestions.length} 颗牙的牙位，请逐颗核对`
+          : `推出 ${r.suggestions.length} 颗；${r.reason}`,
+      );
+    },
   });
 
   const submit = useMutation({
@@ -585,6 +612,24 @@ export default function Vision() {
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
+              {catalog?.domain === "tooth" && (
+                <Tooltip
+                  title={
+                    !assetAttrs.view_code
+                      ? "先在右栏选这张图的视角（左颊/右颊），牙位是按象限推的"
+                      : "按 Triadan 规则推每颗牙的牙位：以犬齿 x04 和第一臼齿 x09 为锚点沿牙弓递推，缺牙留空号。两个锚点少一个就整排不给号——宁可不给，也不要给一个自洽但整排错位的结果。推完请逐颗核对。"
+                  }
+                >
+                  <Button
+                    size="small"
+                    disabled={!imgUrl || !items.length || !assetAttrs.view_code}
+                    loading={suggestCodes.isPending}
+                    onClick={() => suggestCodes.mutate()}
+                  >
+                    推牙位
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title={samOk ? "开着的时候，在牙上点一下就出一个框；点已有的框还是选中它" : (sam?.error || "SAM 辅助没开")}>
                 <Button
                   size="small"

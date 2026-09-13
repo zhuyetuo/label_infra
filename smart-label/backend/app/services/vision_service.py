@@ -207,13 +207,57 @@ def normalize_bbox(bbox) -> list[float]:
     return [round(x, 6), round(y, 6), round(w, 6), round(h, 6)]
 
 
+# 犬 modified Triadan 的合法牙位。上颌每象限 10 颗（x01-x10），下颌 11 颗（x01-x11）。
+#
+# 两个容易记反的点：
+#   - 105/205 在犬中**是存在的**（上颌第一前臼齿，单根）。"105/205 缺失"是猫的特征。
+#   - 犬真正不存在的是 111/211——上颌只有 2 颗臼齿，止于 110/210。
+# 值域只写在前端是不够的：接口照收的话，手工调接口或者以后换个前端就能写进来，
+# 而一个不存在的牙位进了导出，训练时就是个永远学不会的类别。
+TOOTH_CODES = frozenset(
+    [q * 100 + i for q in (1, 2) for i in range(1, 11)]      # 101-110 / 201-210
+    + [q * 100 + i for q in (3, 4) for i in range(1, 12)]    # 301-311 / 401-411
+)
+
+# 有值域的属性：{属性名: 合法值集合}。按相册分开，因为两套类别的属性不一样。
+_ATTR_DOMAINS = {
+    "tooth_code": TOOTH_CODES,
+    "ci": frozenset(range(4)),
+    "gi": frozenset(range(4)),
+    "severity": frozenset(range(4)),
+    "area_band": frozenset(range(4)),
+    "visibility": frozenset(["clear", "partial", "occluded", "not_captured"]),
+    "view_code": frozenset(["left", "right", "front"]),
+    "body_site": frozenset(
+        x["value"] for x in _SKIN_ASSET_ATTRS[0]["options"]
+    ),
+}
+
+
 def clean_attrs(attrs) -> str:
-    """属性存 JSON 字符串。值为 None 的键直接丢掉，省得前端到处判空。"""
+    """属性存 JSON 字符串。值为 None 的键直接丢掉，省得前端到处判空。
+
+    有值域的属性会被校验：牙位 111/211 在犬中不存在，分级只能是 0-3。
+    不认识的键一律拒掉——写错一个键名不会有任何报错，只会让那个值永远读不出来，
+    而标注员以为自己填过了。
+    """
     if attrs is None:
         return "{}"
     if not isinstance(attrs, dict):
         raise VisionError("attrs 应该是一个对象")
-    return json.dumps({k: v for k, v in attrs.items() if v is not None}, ensure_ascii=False)
+    cleaned = {}
+    for k, v in attrs.items():
+        if v is None:
+            continue
+        domain = _ATTR_DOMAINS.get(k)
+        if domain is None:
+            raise VisionError(f"不认识的属性 {k}")
+        if v not in domain:
+            if k == "tooth_code" and isinstance(v, int) and v in (111, 211):
+                raise VisionError("111/211 在犬中不存在（上颌只有 2 颗臼齿，止于 110/210）")
+            raise VisionError(f"属性 {k} 的值 {v!r} 不在合法范围里")
+        cleaned[k] = v
+    return json.dumps(cleaned, ensure_ascii=False)
 
 
 def load_attrs(raw: str | None) -> dict:

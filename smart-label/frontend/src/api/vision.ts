@@ -120,6 +120,21 @@ export const reviewVisionAssignment = (id: number, body: { approve: boolean; not
 export const deleteVisionAssignment = (id: number) =>
   request.delete<never, { deleted: number }>(`/vision/assignments/${id}`);
 
+/** 给这张照片上已画好的框推 Triadan 牙位。纯几何后处理，不调模型。
+ *  返回的是**建议**：界面上默认逐颗确认，不批量套用。 */
+export const suggestToothCodes = (body: {
+  album: VisionAlbum;
+  path: string;
+  view_code: string;
+  boxes: { label_code: string; bbox: VisionBox }[];
+}) =>
+  request.post<never, {
+    suggestions: { index: number; tooth_code: number }[];
+    verdict: "ok" | "partial" | "no_anchor" | "too_few" | "bad_view";
+    reason: string;
+    per_jaw: Record<string, { quadrant: number; verdict: string; reason: string; n: number }>;
+  }>("/vision/tooth/suggest-codes", body);
+
 /** SAM 辅助开着没有。没配 VISION_SERVICE_URL / 连不上 / 没装权重，都会是 available=false */
 export const getSamStatus = () =>
   request.get<never, { available: boolean; error?: string | null; device?: string }>("/vision/sam/status");
