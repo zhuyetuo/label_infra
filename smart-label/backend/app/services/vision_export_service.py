@@ -46,14 +46,10 @@ def to_yolo_line(class_id: int, bbox: list[float]) -> str:
     return f"{class_id} {x + w / 2:.6f} {y + h / 2:.6f} {w:.6f} {h:.6f}"
 
 
-def _group_of(rel_path: str) -> str:
-    """切分的最小单位：一个「日期/狗」目录 = 一次拍摄。
-
-    同一次拍摄的照片往往是连拍、互为近邻，散到 train 和 val 两边会让 val 指标
-    虚高（val 里全是 train 的近邻帧）。所以整组一起走。
-    """
-    parts = rel_path.split("/")
-    return "/".join(parts[:2]) if len(parts) >= 3 else (parts[0] if parts else "")
+# 切分的最小单位就是「组」（日期/狗 = 一次拍摄）。同一次拍摄的照片往往是连拍、
+# 互为近邻，散到 train 和 val 两边会让 val 指标虚高。定义在 vision_service 里，
+# 指派、审核、导出共用同一个——三处各写一份迟早走岔。
+_group_of = vision_service.group_of
 
 
 def _split_of(group: str, val_ratio: float) -> str:

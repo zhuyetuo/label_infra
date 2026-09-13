@@ -42,9 +42,25 @@ export interface VisionPhoto {
   state: VisionAssetState;
 }
 
+export type VisionAssignmentState = "open" | "submitted" | "approved" | "rejected";
+
+export interface VisionAssignment {
+  id: number;
+  album: VisionAlbum;
+  group_key: string;
+  assignee_id: number;
+  assignee_name?: string;
+  state: VisionAssignmentState;
+  review_note: string | null;
+  reviewed_at: string | null;
+  updated_at: string | null;
+}
+
 export interface VisionDogFolder {
   name: string;
   photos: VisionPhoto[];
+  group_key: string;
+  assignment: VisionAssignment | null;
 }
 
 export interface VisionDateFolder {
@@ -80,7 +96,46 @@ export const getVisionLabels = (album: VisionAlbum) =>
   request.get<never, VisionCatalog>("/vision/labels", { params: { album } });
 
 export const listVisionPhotos = (album: VisionAlbum) =>
-  request.get<never, { album: VisionAlbum; folders: VisionDateFolder[] }>("/vision/photos", { params: { album } });
+  request.get<never, { album: VisionAlbum; folders: VisionDateFolder[]; can_review: boolean; is_manager: boolean }>(
+    "/vision/photos", { params: { album } },
+  );
+
+/** 图片流的 token。走 vision 自己的接口而不是 /material 的——那个是管理员专属，
+ *  标注员拿不到；这里按「这张图在不在你被指派的组里」发。 */
+export const getVisionPhotoToken = (album: VisionAlbum, path: string) =>
+  request.post<never, { token: string }>("/vision/photos/token", { album, path });
+
+export const listVisionAssignments = (album: VisionAlbum) =>
+  request.get<never, VisionAssignment[]>("/vision/assignments", { params: { album } });
+
+export const createVisionAssignments = (body: { album: VisionAlbum; group_keys: string[]; assignee_id: number }) =>
+  request.post<never, { created: number; moved: number; locked: string[] }>("/vision/assignments", body);
+
+export const submitVisionAssignment = (id: number) =>
+  request.post<never, VisionAssignment>(`/vision/assignments/${id}/submit`);
+
+export const reviewVisionAssignment = (id: number, body: { approve: boolean; note?: string | null }) =>
+  request.post<never, VisionAssignment>(`/vision/assignments/${id}/review`, body);
+
+export const deleteVisionAssignment = (id: number) =>
+  request.delete<never, { deleted: number }>(`/vision/assignments/${id}`);
+
+/** SAM 辅助开着没有。没配 VISION_SERVICE_URL / 连不上 / 没装权重，都会是 available=false */
+export const getSamStatus = () =>
+  request.get<never, { available: boolean; error?: string | null; device?: string }>("/vision/sam/status");
+
+/** 在图上点一下出一个框。坐标归一化 0-1；label 1=正点 0=负点 */
+export const samSegment = (body: {
+  album: VisionAlbum;
+  path: string;
+  points: { x: number; y: number; label: number }[];
+}) =>
+  request.post<never, { bbox: VisionBox; polygon: number[][] | null; score: number }>(
+    "/vision/sam/segment", body, { timeout: 60_000 },
+  );
+
+export const listVisionAnnotators = () =>
+  request.get<never, { id: number; name: string; role: string }[]>("/vision/annotators");
 
 export const getVisionAnnotations = (album: VisionAlbum, path: string) =>
   request.get<never, { items: VisionItem[]; asset: VisionAsset }>("/vision/annotations", { params: { album, path } });

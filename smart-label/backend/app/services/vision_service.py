@@ -108,6 +108,19 @@ def valid_label_codes(album: str) -> set[str]:
     return {x["code"] for x in DOMAINS[domain_of(album)]["labels"]}
 
 
+def group_of(rel_path: str) -> str:
+    """一张照片属于哪一「组」：`日期目录/狗名`，散图则是 `日期目录`。
+
+    这是三件事共用的同一个概念，所以只能有一个定义：
+      - 指派和审核的粒度（一次指派一组，不是一张一张派）
+      - 导出时 train/val 的切分单位（同一次拍摄不能散到两边）
+      - 标注员能看见哪些照片的判据
+    三处各写一份迟早会走岔，而走岔的后果是标注员看得见不该看的图。
+    """
+    parts = [p for p in rel_path.split("/") if p]
+    return "/".join(parts[:2]) if len(parts) >= 3 else (parts[0] if parts else "")
+
+
 def check_photo(album: str, rel_path: str) -> str:
     """照片必须真的在相册目录里（复用 tooth_service 的路径沙箱，不另写一套）"""
     try:
