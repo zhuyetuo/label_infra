@@ -172,7 +172,7 @@ export interface VisionDatasetMeta {
 }
 
 /** 导出 YOLO 检测数据集，落 nas_root/data_train_vision/<name>/ */
-export const exportVisionDataset = (body: { album: VisionAlbum; name: string; val_ratio: number }) =>
+export const exportVisionDataset = (body: { album: VisionAlbum; name: string; val_ratio: number; only_approved?: boolean }) =>
   request.post<never, VisionDatasetMeta>("/vision/export", body, { timeout: 600_000 });
 
 export const listVisionDatasets = () => request.get<never, VisionDatasetMeta[]>("/vision/datasets");

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Badge, Button, Card, Descriptions, Empty, Input, Modal, Popconfirm, Radio, Segmented, Select, Slider,
+  Alert, Badge, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Popconfirm, Radio, Segmented, Select, Slider,
   Space, Spin, Table, Tag, Tooltip, Typography, message,
 } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -130,6 +130,12 @@ export default function Vision() {
       setSelected(null);
       setImgUrl(null);
       setNatural(null);
+      // 先把上一张的框清掉，再去加载。不清的话，这张加载失败时上一张的框还留在
+      // state 里，而保存按钮仍然可点——一按就把 A 图的框写进了 B 图，
+      // 而且两边都不会报错。
+      setItems([]);
+      setAssetAttrs({});
+      setDirty(false);
       try {
         const [tok, ann] = await Promise.all([
           getVisionPhotoToken(album, relPath),
@@ -140,7 +146,8 @@ export default function Vision() {
         setAssetAttrs(ann.asset?.attrs ?? {});
         setDirty(false);
       } catch {
-        message.error("这张图打不开");
+        // imgUrl 保持 null，下面的保存/跳过/SAM 都会因此不可用
+        message.error("这张图打不开，换一张试试");
       }
     },
     [album],
@@ -178,10 +185,15 @@ export default function Vision() {
   });
 
   const samPick = useMutation({
-    mutationFn: (pt: { x: number; y: number }) =>
-      samSegment({ album, path: current!, points: [{ ...pt, label: 1 }] }),
+    mutationFn: async (pt: { x: number; y: number }) => {
+      const forPath = current!;
+      const r = await samSegment({ album, path: forPath, points: [{ ...pt, label: 1 }] });
+      return { ...r, forPath };
+    },
     onSuccess: (r) => {
-      if (!brush) return;
+      // SAM 一次要几百毫秒，这期间人很可能已经翻到下一张了。不认发起时那张的话，
+      // 这个框会落到新打开的图上——位置还是按旧图算的
+      if (!brush || r.forPath !== current) return;
       setItems((prev) => [...prev, { label_code: brush, bbox: r.bbox, attrs: {} }]);
       setSelected(items.length);
       setDirty(true);
@@ -200,8 +212,10 @@ export default function Vision() {
 
   const nextPhoto = () => {
     const i = photos.findIndex((p) => p.rel_path === current);
-    if (i >= 0 && i + 1 < photos.length) openPhoto(photos[i + 1].rel_path);
-    else message.info("已经是最后一张了");
+    if (i < 0 || i + 1 >= photos.length) return void message.info("已经是最后一张了");
+    // 走跟点左边列表同一条路：保存失败（比如网断）之后按「下一张」，
+    // 直接 openPhoto 会把没存上的框静默丢掉
+    tryOpen(photos[i + 1].rel_path);
   };
 
   // ── 画布 ────────────────────────────────────────────────────────────
@@ -358,7 +372,8 @@ export default function Vision() {
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        if (current && !save.isPending) save.mutate("done");
+        // 图没加载出来就不让存：那时 items 是空的，存下去等于把这张图清空
+        if (current && imgUrl && !save.isPending) save.mutate("done");
         return;
       }
       const hit = catalog?.labels.find((l) => l.hotkey === e.key);
@@ -378,7 +393,7 @@ export default function Vision() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [catalog, selected, current, save]);
+  }, [catalog, selected, current, imgUrl, save]);
 
   // ── 属性面板 ────────────────────────────────────────────────────────
   const renderAttr = (def: VisionAttrDef, value: number | string | undefined, onChange: (v: number | string | undefined) => void) => {
@@ -475,7 +490,10 @@ export default function Vision() {
         {isLoading ? (
           <Spin />
         ) : !photos.length ? (
-          <Empty description="这个相册里没有照片" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={tree?.can_review ? "这个相册里没有照片" : "还没有指派给你的照片，找管理员派一组"}
+          />
         ) : (
           (tree?.folders ?? []).map((f) => (
             <div key={f.folder} style={{ marginBottom: 10 }}>
@@ -562,8 +580,8 @@ export default function Vision() {
         extra={
           current && (
             <Space size={4}>
-              <Button size="small" onClick={() => save.mutate("skipped")} loading={save.isPending}>跳过</Button>
-              <Button size="small" type="primary" onClick={() => save.mutate("done")} loading={save.isPending}>
+              <Button size="small" disabled={!imgUrl} onClick={() => save.mutate("skipped")} loading={save.isPending}>跳过</Button>
+              <Button size="small" type="primary" disabled={!imgUrl} onClick={() => save.mutate("done")} loading={save.isPending}>
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
@@ -858,13 +876,14 @@ function ExportModal({ open, album, onClose }: { open: boolean; album: VisionAlb
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [valRatio, setValRatio] = useState(0.2);
+  const [onlyApproved, setOnlyApproved] = useState(false);
   const [last, setLast] = useState<VisionDatasetMeta | null>(null);
 
   const { data: datasets } = useQuery({ queryKey: ["vision-datasets"], queryFn: listVisionDatasets, enabled: open });
   const refresh = () => qc.invalidateQueries({ queryKey: ["vision-datasets"] });
 
   const run = useMutation({
-    mutationFn: () => exportVisionDataset({ album, name: name.trim(), val_ratio: valRatio }),
+    mutationFn: () => exportVisionDataset({ album, name: name.trim(), val_ratio: valRatio, only_approved: onlyApproved }),
     onSuccess: (meta) => {
       setLast(meta);
       setName("");
@@ -913,6 +932,12 @@ function ExportModal({ open, album, onClose }: { open: boolean; album: VisionAlb
         </Tooltip>
       </div>
       <Slider min={0} max={0.5} step={0.05} value={valRatio} onChange={setValRatio} />
+      <Checkbox checked={onlyApproved} onChange={(e) => setOnlyApproved(e.target.checked)}>
+        只要审核通过的组
+        <Tooltip title="不勾：被审核员打回的组一律排除，其余（通过 / 还没审 / 没指派）都进——小团队里管理员常常自己标自己不审，全要求通过的话就导不出东西。勾上：只有审核通过的组才进。">
+          <span style={{ marginLeft: 4, cursor: "help", borderBottom: "1px dotted #aaa" }}>?</span>
+        </Tooltip>
+      </Checkbox>
 
       {last && (
         <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }} title={`刚导出：${last.name}`}>

@@ -82,6 +82,7 @@ def plan_dataset(
     assets: list[dict],
     boxes_by_path: dict[str, list[dict]],
     val_ratio: float = 0.2,
+    only_approved: bool = False,
 ) -> dict:
     """纯函数：决定哪些图进数据集、进哪个 split、每张的标注行写什么。
 
@@ -102,7 +103,12 @@ def plan_dataset(
     class_of = {lb["code"]: i for i, lb in enumerate(labels)}
 
     items: list[dict] = []
-    skipped = {"todo": 0, "skipped": 0, "unknown_state": 0, "all_boxes_dropped": 0}
+    skipped = {
+        "todo": 0, "skipped": 0, "unknown_state": 0, "all_boxes_dropped": 0,
+        # 审核层面被排除的：被打回的一律不要（审核员明确说了这批有问题），
+        # only_approved 时连没审过的也不要
+        "review_rejected": 0, "review_not_approved": 0, "bad_bbox": 0,
+    }
     dropped_boxes: list[str] = []
     index = 0
     for a in sorted(assets, key=lambda r: r["rel_path"]):
@@ -110,6 +116,17 @@ def plan_dataset(
         if state != "done":
             skipped[state if state in skipped else "unknown_state"] += 1
             continue
+
+        # 审核结论必须影响导出，否则「打回」这个动作对训练集毫无作用——
+        # 审核员说了这批有问题，它照样进训练集，那审核就是走个过场。
+        review = a.get("review_state")
+        if review == "rejected":
+            skipped["review_rejected"] += 1
+            continue
+        if only_approved and review != "approved":
+            skipped["review_not_approved"] += 1
+            continue
+
         raw = boxes_by_path.get(a["rel_path"], [])
         lines = []
         n_dropped = 0
@@ -121,7 +138,16 @@ def plan_dataset(
                 dropped_boxes.append(f"{a['rel_path']}: {b['label_code']}")
                 n_dropped += 1
                 continue
-            lines.append(to_yolo_line(cid, b["bbox"]))
+            bbox = b.get("bbox") or []
+            # 库里的 bbox 脏掉时（手工改库、以后换了存储格式），读接口是兜住了的
+            # ——返回 [0,0,0,0] 让页面还能打开。但导出不能跟着兜：一条零面积的
+            # YOLO 行不会报错，只会悄悄进训练集教模型认一个不存在的目标。
+            if len(bbox) != 4 or bbox[2] <= 0 or bbox[3] <= 0 or any(not (0.0 <= v <= 1.0) for v in bbox):
+                dropped_boxes.append(f"{a['rel_path']}: 非法 bbox {bbox}")
+                skipped["bad_bbox"] += 1
+                n_dropped += 1
+                continue
+            lines.append(to_yolo_line(cid, bbox))
         if raw and not lines and n_dropped:
             # 这张图本来是有标注的，只是全被丢了。这时候**绝不能**让它变成负样本——
             # 那等于告诉模型"这里什么都没有"，而它其实标着东西。整张排除掉，并记下来。
@@ -161,6 +187,7 @@ def plan_dataset(
         "excluded": skipped,
         "dropped_boxes": dropped_boxes,
         "val_ratio": val_ratio,
+        "only_approved": only_approved,
     }
 
 
@@ -209,6 +236,20 @@ def write_dataset(name: str, plan: dict, exported_by: str | None = None) -> dict
         for i, n in enumerate(plan["class_names"]):
             f.write(f"  {i}: {n}\n")
 
+    # 计数按**真正落盘的**算，不用 plan 里的预估：中途有图读不到（照片被删、
+    # NAS 断了）时会 continue 掉，两个数就对不上了。meta 是给人看数据集有多大的，
+    # 对不上的话第一次训练就会发现"怎么比说好的少"，然后没人知道少在哪
+    by_stem = {i["stem"]: i for i in plan["items"]}
+    actual_counts = {"train": 0, "val": 0}
+    actual_negatives = {"train": 0, "val": 0}
+    actual_per_class = {n: 0 for n in plan["class_names"]}
+    for m in manifest:
+        actual_counts[m["split"]] += 1
+        if m["n_boxes"] == 0:
+            actual_negatives[m["split"]] += 1
+        for ln in by_stem[m["stem"]]["lines"]:
+            actual_per_class[plan["class_names"][int(ln.split(" ", 1)[0])]] += 1
+
     meta = {
         # kind 是给人和以后的代码看的：这个目录不是 IMU 那套 data_train 的东西
         "kind": "vision",
@@ -217,11 +258,13 @@ def write_dataset(name: str, plan: dict, exported_by: str | None = None) -> dict
         "domain": plan["domain"],
         "task": "detect",
         "class_names": plan["class_names"],
-        "counts": plan["counts"],
-        "negatives": plan["negatives"],
-        "boxes_per_class": plan["boxes_per_class"],
-        "total_boxes": plan["total_boxes"],
+        "counts": actual_counts,
+        "negatives": actual_negatives,
+        "boxes_per_class": actual_per_class,
+        "total_boxes": sum(actual_per_class.values()),
+        "planned_counts": plan["counts"],  # 计划 vs 实际对不上就是有图没读到，看 failed_images
         "excluded": plan["excluded"],
+        "only_approved": plan.get("only_approved", False),
         "val_ratio": plan["val_ratio"],
         "n_images": len(manifest),
         "copied_bytes": copied_bytes,
@@ -230,6 +273,15 @@ def write_dataset(name: str, plan: dict, exported_by: str | None = None) -> dict
         ) + (
             [f"有 {plan['excluded']['all_boxes_dropped']} 张图的框全部被丢弃，整张排除（没有当成负样本）"]
             if plan["excluded"].get("all_boxes_dropped") else []
+        ) + (
+            [f"有 {plan['excluded']['review_rejected']} 张图所属的组被审核打回了，没进数据集"]
+            if plan["excluded"].get("review_rejected") else []
+        ) + (
+            [f"有 {plan['excluded']['review_not_approved']} 张图所属的组还没审核通过（勾了「只要审核通过的」），没进数据集"]
+            if plan["excluded"].get("review_not_approved") else []
+        ) + (
+            [f"有 {plan['excluded']['bad_bbox']} 个框的坐标不合法（库里的脏数据），已丢弃"]
+            if plan["excluded"].get("bad_bbox") else []
         ) + (
             [f"有 {len(failed)} 张图在导出时读不到（照片被删/NAS 断了），没进数据集"] if failed else []
         ),

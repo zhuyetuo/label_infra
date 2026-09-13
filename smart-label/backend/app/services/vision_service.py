@@ -108,6 +108,41 @@ def valid_label_codes(album: str) -> set[str]:
     return {x["code"] for x in DOMAINS[domain_of(album)]["labels"]}
 
 
+# 视觉页图片 token 的有效期。**不复用 media_token_ttl_hours（4 小时）**：
+# 这个 token 是按 (album, rel_path) 签的纯 HMAC，不查库、不带身份、不可吊销，
+# 撤销指派/改派/审核通过都传导不到它，只能等它过期。所以这个"等"必须短。
+# 前端是点开一张图才换一次 token，10 分钟绰绰有余。
+PHOTO_TOKEN_TTL_SEC = 600
+
+_BAD_SEGMENTS = {"", ".", ".."}
+
+
+def clean_rel_path(rel_path: str) -> str:
+    """把请求里的相对路径规范化，不规范就直接拒。
+
+    为什么必须有这个函数：校验路径的是 realpath（只拦跑出相册根的），而算
+    group_key 的是对**原始字符串**切片。两者看的不是同一个路径，`..` 夹在中间
+    时就分叉了——
+
+        group_of("日期/巴利/../lulu/c.jpg") == "日期/巴利"    ← 在 anna 的指派里
+        realpath 之后                       == 日期/lulu/c.jpg ← 是别人的图
+
+    于是权限按 A 组判、文件按 B 组取。这个洞在之前的穿越测试下是绿的，因为
+    那几条只试了跑出相册根的写法（../../etc/passwd），全被 realpath 挡住了。
+
+    与其让 group_of 去猜这些写法算哪个组，不如在入口一律拒掉：正常的前端
+    永远不会发出带 `..`、`.`、`//` 或开头 `/` 的路径。
+    """
+    if not isinstance(rel_path, str) or not rel_path.strip():
+        raise VisionError("路径不能为空")
+    if rel_path.startswith("/") or "\\" in rel_path:
+        raise VisionError("非法路径")
+    parts = rel_path.split("/")
+    if any(p in _BAD_SEGMENTS for p in parts):
+        raise VisionError("非法路径")
+    return "/".join(parts)
+
+
 def group_of(rel_path: str) -> str:
     """一张照片属于哪一「组」：`日期目录/狗名`，散图则是 `日期目录`。
 
@@ -122,11 +157,33 @@ def group_of(rel_path: str) -> str:
 
 
 def check_photo(album: str, rel_path: str) -> str:
-    """照片必须真的在相册目录里（复用 tooth_service 的路径沙箱，不另写一套）"""
+    """照片必须真的在相册目录里（复用 tooth_service 的路径沙箱，不另写一套）。
+
+    先过 clean_rel_path：路径不规范的话，后面算出来的 group_key 就不可信，
+    而 group_key 正是权限判据。
+    """
+    clean_rel_path(rel_path)
     try:
         return tooth_service.resolve_photo(rel_path, album)
     except tooth_service.ToothError as e:
         raise VisionError(str(e)) from e
+
+
+def issue_photo_token(album: str, rel_path: str) -> str:
+    """按 PHOTO_TOKEN_TTL_SEC 签，不走 tooth_service 那个 4 小时的口径。
+
+    签名算法和校验端（material 的 stream 路由）保持一致，只是有效期短得多。
+    """
+    import hashlib
+    import hmac
+    import time
+
+    from app.core.config import settings
+
+    expires_at = int(time.time()) + PHOTO_TOKEN_TTL_SEC
+    payload = f"{album}:{rel_path}:{expires_at}"
+    sig = hmac.new(settings.jwt_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{expires_at}.{sig}"
 
 
 def normalize_bbox(bbox) -> list[float]:

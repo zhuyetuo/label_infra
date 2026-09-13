@@ -14,6 +14,7 @@ from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
+from app.models.vision_annotation import VisionAnnotation, VisionAssignment, VisionAsset
 from app.schemas.envelope import ok
 from app.schemas.user import UserCreate, UserCreateOut, UserOut, UserUpdate
 
@@ -87,6 +88,14 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User
         ("项目", select(func.count()).select_from(Project).where(Project.created_by == user_id)),
         ("标签", select(func.count()).select_from(LabelDefinition).where(LabelDefinition.created_by == user_id)),
         ("审核记录", select(func.count()).select_from(ReviewRecord).where(ReviewRecord.reviewer_id == user_id)),
+        # 视觉标注的三张表也用外键记着是谁画的/谁审的。不列进来的话，删一个标注过
+        # 照片的账号会在下面 db.delete 那一步撞外键报 500，而不是那句友好的提示
+        ("视觉标注", select(func.count()).select_from(VisionAnnotation).where(VisionAnnotation.created_by == user_id)),
+        ("视觉标注状态", select(func.count()).select_from(VisionAsset).where(VisionAsset.updated_by == user_id)),
+        ("视觉标注指派", select(func.count()).select_from(VisionAssignment).where(
+            or_(VisionAssignment.assignee_id == user_id,
+                VisionAssignment.created_by == user_id,
+                VisionAssignment.reviewed_by == user_id))),
     ):
         count = (await db.execute(stmt)).scalar_one()
         if count:

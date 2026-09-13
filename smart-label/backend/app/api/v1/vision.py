@@ -14,6 +14,7 @@ tasks / annotation_* 任何一张。所以这个页面坏掉不会影响任何�
 一堆现有热路径。
 """
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -78,16 +79,55 @@ async def _my_assignments(db: AsyncSession, album: str, user: User) -> dict[str,
     return {r.group_key: r for r in rows}
 
 
-async def _assert_can_read(db: AsyncSession, album: str, rel_path: str, user: User) -> None:
-    if _can_review(user):
-        return
-    mine = await _my_assignments(db, album, user)
-    if svc.group_of(rel_path) not in mine:
-        # 说"没有这张图"而不是"你没权限"：后者等于告诉对方这张图存在
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "没有这张照片")
+# 「这张图不归你」和「这张图不存在」必须是同一个回答。不一样的话，标注员就能
+# 拿任何一个接口当探针：日期目录是 YYYY-MM-DD-ok、狗名就那么几个、文件名是
+# 时间戳格式，全是可枚举的，按回答的差别就能把整个相册的目录结构摸出来。
+# 所以也不能把请求里的路径回显在错误里。
+_NOT_FOUND = "没有这张照片"
 
 
-async def _assert_can_write(db: AsyncSession, album: str, rel_path: str, user: User) -> None:
+def _no_such_photo() -> HTTPException:
+    return HTTPException(status.HTTP_404_NOT_FOUND, _NOT_FOUND)
+
+
+async def _check_readable(db: AsyncSession, album: str, rel_path: str, user: User) -> str:
+    """校验路径 + 判可见性，返回规范化后的相对路径。
+
+    顺序很重要：**先判可见性，再看文件在不在**。反过来的话，"文件不存在"和
+    "不是你的组"会给出不同的回答（前者还会把路径原样回显），那就是一个探针。
+    """
+    try:
+        svc.clean_rel_path(rel_path)
+    except svc.VisionError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+    if not _can_review(user):
+        mine = await _my_assignments(db, album, user)
+        if svc.group_of(rel_path) not in mine:
+            raise _no_such_photo()
+    try:
+        svc.check_photo(album, rel_path)
+    except svc.VisionError as e:
+        # 归属过了但文件不在：对管理员如实说，对标注员仍然是统一的那句
+        raise (HTTPException(status.HTTP_404_NOT_FOUND, str(e)) if _can_review(user) else _no_such_photo()) from e
+    return rel_path
+
+
+async def _check_writable(db: AsyncSession, album: str, rel_path: str, user: User) -> str:
+    """同上，外加「能不能改」。
+
+    这里的顺序有两条互相拉扯的约束，都要满足：
+      - 「管理员也不能直接改已通过的」必须成立（审过的结论被静默改掉，审核就白做了），
+        所以 approved 的检查不能放在 _is_manager 之后；
+      - 但也不能把它放在归属判断之前——那样 anna 往 ben 组写会拿到 409
+        「已通过、锁定了」，而没通过时是 404，一问就知道别人组审到哪了。
+    解法是先判可见性，再判锁定：管理员天然可见，所以对他 approved 照样拦得住。
+    """
+    try:
+        svc.clean_rel_path(rel_path)
+    except svc.VisionError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
     group = svc.group_of(rel_path)
     row = (
         await db.execute(
@@ -97,15 +137,19 @@ async def _assert_can_write(db: AsyncSession, album: str, rel_path: str, user: U
         )
     ).scalar_one_or_none()
 
+    visible = _is_manager(user) or (row is not None and row.assignee_id == user.id)
+    if not visible:
+        raise _no_such_photo()
     if row is not None and row.state == "approved":
-        # 管理员也不能直接改已通过的：审过的结论被人静默改掉，审核就白做了
         raise HTTPException(status.HTTP_409_CONFLICT, "这组已经审核通过、锁定了。要改先让审核员打回。")
-    if _is_manager(user):
-        return
-    if row is None or row.assignee_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "没有这张照片")
-    if row.state not in _EDITABLE_STATES:
+    if not _is_manager(user) and row is not None and row.state not in _EDITABLE_STATES:
         raise HTTPException(status.HTTP_409_CONFLICT, "这组已经提交，等审核结果；被打回后可以继续改。")
+
+    try:
+        svc.check_photo(album, rel_path)
+    except svc.VisionError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    return rel_path
 
 
 @router.get("/labels")
@@ -129,7 +173,8 @@ async def list_photos(album: str = Query("oral"), db: AsyncSession = Depends(get
     except svc.VisionError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     try:
-        folders = tooth_service.list_photos(album)
+        # 扫 NAS 目录是阻塞 IO，扔线程里——NAS 卡一下不该把整个 API 进程拖住
+        folders = await asyncio.to_thread(tooth_service.list_photos, album)
     except tooth_service.ToothError as e:  # 目录不存在 / 素材库 NAS 没挂上
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
 
@@ -182,22 +227,16 @@ async def photo_token(body: dict, db: AsyncSession = Depends(get_db), user: User
     """
     album = body.get("album") or "oral"
     rel_path = body.get("path") or ""
-    try:
-        svc.check_photo(album, rel_path)
-    except svc.VisionError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
-    await _assert_can_read(db, album, rel_path, user)
-    return ok({"token": tooth_service.issue_photo_token(rel_path, album)})
+    await _check_readable(db, album, rel_path, user)
+    # 有效期用 vision 自己的 10 分钟，不是 media 那个 4 小时：这个 token 不查库、
+    # 不带身份、不可吊销，撤销指派之后只能等它过期，所以这个"等"必须短
+    return ok({"token": svc.issue_photo_token(album, rel_path)})
 
 
 @router.get("/annotations")
 async def get_annotations(album: str = Query("oral"), path: str = Query(...), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """一张照片上已有的框 + 这张图的状态和图级属性"""
-    try:
-        svc.check_photo(album, path)
-    except svc.VisionError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
-    await _assert_can_read(db, album, path, user)
+    await _check_readable(db, album, path, user)
     rows = (
         await db.execute(
             select(VisionAnnotation)
@@ -243,7 +282,6 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
     等一张图上百个框了再说。
     """
     try:
-        svc.check_photo(body.album, body.path)
         allowed = svc.valid_label_codes(body.album)
         if body.state not in svc.ASSET_STATES:
             raise svc.VisionError(f"state 只能是 {', '.join(svc.ASSET_STATES)}")
@@ -256,7 +294,7 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
     except svc.VisionError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
 
-    await _assert_can_write(db, body.album, body.path, user)
+    await _check_writable(db, body.album, body.path, user)
 
     await db.execute(
         delete(VisionAnnotation).where(
@@ -315,11 +353,7 @@ async def sam_segment(body: SamIn, db: AsyncSession = Depends(get_db), user: Use
     权限跟保存走同一条判据：能改这张图的人才能用 SAM 点它。否则等于开了个后门，
     谁都能拿它去探别人组里的照片存不存在。
     """
-    try:
-        svc.check_photo(body.album, body.path)
-    except svc.VisionError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-    await _assert_can_write(db, body.album, body.path, user)
+    await _check_writable(db, body.album, body.path, user)
     if not body.points and not body.box:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "至少点一个点")
 
@@ -360,7 +394,9 @@ async def create_assignments(body: AssignIn, db: AsyncSession = Depends(get_db),
         for r in (await db.execute(select(VisionAssignment).where(VisionAssignment.album == body.album))).scalars().all()
     }
     created, moved, locked = 0, 0, []
-    for g in body.group_keys:
+    # 同一个请求里出现重复的 group_key 会连插两条、撞唯一键变成 500。
+    # 前端多选时很容易出现重复，这里去重（保持顺序，便于复现问题）
+    for g in dict.fromkeys(body.group_keys):
         row = existing.get(g)
         if row is None:
             db.add(VisionAssignment(album=body.album, group_key=g, assignee_id=body.assignee_id, created_by=user.id))
@@ -403,7 +439,7 @@ async def submit_assignment(assignment_id: int, db: AsyncSession = Depends(get_d
         raise HTTPException(status.HTTP_409_CONFLICT, "已经提交过了" if row.state == "submitted" else "这组已经通过，不用再交")
 
     try:
-        folders = tooth_service.list_photos(row.album)
+        folders = await asyncio.to_thread(tooth_service.list_photos, row.album)
     except tooth_service.ToothError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
     paths = [
@@ -483,6 +519,11 @@ class ExportIn(BaseModel):
     album: str = "oral"
     name: str = Field(..., description="数据集目录名，字母数字下划线短横线")
     val_ratio: float = Field(0.2, ge=0.0, le=1.0)
+    only_approved: bool = Field(
+        False,
+        description="只要审核通过的组。默认 False：被打回的组一律排除，其余（通过/标注中/没指派）都进——"
+                    "小团队里管理员常常自己标自己不审，全要求通过的话就导不出东西了",
+    )
 
 
 @router.post("/export")
@@ -500,28 +541,44 @@ async def export_dataset(body: ExportIn, db: AsyncSession = Depends(get_db), use
         rows = (
             await db.execute(select(VisionAnnotation).where(VisionAnnotation.album == body.album))
         ).scalars().all()
+        assigns = {
+            r.group_key: r.state
+            for r in (
+                await db.execute(select(VisionAssignment).where(VisionAssignment.album == body.album))
+            ).scalars().all()
+        }
         boxes: dict[str, list[dict]] = {}
         for r in rows:
             boxes.setdefault(r.rel_path, []).append({"label_code": r.label_code, "bbox": svc.load_bbox(r.bbox)})
-        plan = exp.plan_dataset(body.album, [{"rel_path": a.rel_path, "state": a.state} for a in assets], boxes, body.val_ratio)
+        plan = exp.plan_dataset(
+            body.album,
+            [{"rel_path": a.rel_path, "state": a.state, "review_state": assigns.get(svc.group_of(a.rel_path))}
+             for a in assets],
+            boxes, body.val_ratio, only_approved=body.only_approved,
+        )
         if not plan["items"]:
-            raise exp.ExportError("没有一张图是「标完」状态，导出来是空的。先把图标完再导。")
-        meta = exp.write_dataset(body.name, plan, exported_by=user.username)
+            raise exp.ExportError(
+                "没有一张图能进这个数据集。要么还没标完，要么所属的组被打回了/还没审过"
+                "（勾上「只要审核通过的」时，只有通过的组才算）。"
+            )
+        # 复制几百张原图是纯 IO，扔到线程里跑。留在事件循环上会把整个 API 进程
+        # 卡住几十秒——包括样本、任务、审核这些跟视觉毫无关系的现有功能
+        meta = await asyncio.to_thread(exp.write_dataset, body.name, plan, user.username)
     except (exp.ExportError, svc.VisionError) as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     return ok(meta)
 
 
 @router.get("/datasets")
-async def list_datasets():
+async def list_datasets(user: User = Depends(require_role(*_MANAGERS))):  # noqa: ARG001
     """只列视觉数据集（data_train_vision），跟模型训练页那边的列表互不干扰"""
-    return ok(exp.list_datasets())
+    return ok(await asyncio.to_thread(exp.list_datasets))
 
 
 @router.delete("/datasets/{name}")
-async def delete_dataset(name: str):
+async def delete_dataset(name: str, user: User = Depends(require_role(*_MANAGERS))):  # noqa: ARG001
     try:
-        exp.delete_dataset(name)
+        await asyncio.to_thread(exp.delete_dataset, name)
     except exp.ExportError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     return ok({"deleted": name})

@@ -182,3 +182,85 @@ def test_列出与删除只管视觉数据集(nas, plan):
     assert [d["name"] for d in exp.list_datasets()] == ["oral_v1"]
     exp.delete_dataset("oral_v1")
     assert exp.list_datasets() == []
+
+
+# ── 审核结论必须影响导出 ────────────────────────────────────────────────
+#
+# 审查查出来的：导出原来只看 asset 的 done/todo，完全不看组被审成什么样。
+# 审核员明确打回的一批标注照样进训练集，那「打回」这个动作对训练集就毫无作用，
+# 审核等于走个过场。
+
+_ASSETS_REVIEW = [
+    {"rel_path": "2026-09-01-ok/巴利/a.jpg", "state": "done", "review_state": "approved"},
+    {"rel_path": "2026-09-01-ok/lulu/c.jpg", "state": "done", "review_state": "rejected"},
+    {"rel_path": "2026-09-03-ok/巴利/g.jpg", "state": "done", "review_state": None},       # 没指派
+    {"rel_path": "2026-09-02-ok/bibi/d.jpg", "state": "done", "review_state": "submitted"},  # 交了还没审
+]
+_BOXES_REVIEW = {
+    "2026-09-01-ok/巴利/a.jpg": [{"label_code": "canine", "bbox": [0.1, 0.1, 0.2, 0.2]}],
+    "2026-09-01-ok/lulu/c.jpg": [{"label_code": "molar", "bbox": [0.1, 0.1, 0.2, 0.2]}],
+    "2026-09-03-ok/巴利/g.jpg": [{"label_code": "incisor", "bbox": [0.1, 0.1, 0.2, 0.2]}],
+    "2026-09-02-ok/bibi/d.jpg": [{"label_code": "premolar", "bbox": [0.1, 0.1, 0.2, 0.2]}],
+}
+
+
+def test_被打回的组不进数据集():
+    plan = exp.plan_dataset("oral", _ASSETS_REVIEW, _BOXES_REVIEW, 0.0)
+    paths = {i["rel_path"] for i in plan["items"]}
+    assert "2026-09-01-ok/lulu/c.jpg" not in paths, "审核员打回的标注进了训练集"
+    assert plan["excluded"]["review_rejected"] == 1
+
+
+def test_默认允许没审过的进去():
+    """小团队里管理员常常自己标、自己不审。默认就要求审核通过的话，
+    第一版根本导不出东西来——所以默认只挡「明确被打回的」。"""
+    plan = exp.plan_dataset("oral", _ASSETS_REVIEW, _BOXES_REVIEW, 0.0)
+    paths = {i["rel_path"] for i in plan["items"]}
+    assert "2026-09-03-ok/巴利/g.jpg" in paths      # 没指派
+    assert "2026-09-02-ok/bibi/d.jpg" in paths      # 交了还没审
+
+
+def test_勾上只要审核通过的就只剩通过的():
+    plan = exp.plan_dataset("oral", _ASSETS_REVIEW, _BOXES_REVIEW, 0.0, only_approved=True)
+    assert [i["rel_path"] for i in plan["items"]] == ["2026-09-01-ok/巴利/a.jpg"]
+    assert plan["excluded"]["review_not_approved"] == 2
+    assert plan["excluded"]["review_rejected"] == 1
+    assert plan["only_approved"] is True
+
+
+# ── 脏 bbox 不能悄悄进训练集 ────────────────────────────────────────────
+
+@pytest.mark.parametrize("bad", [[0, 0, 0, 0], [0.1, 0.1, 0, 0.2], [0.1], [-0.5, 0.1, 0.2, 0.2], [0.1, 0.1, 2.0, 0.2]])
+def test_非法_bbox_被丢弃而不是写成零面积的行(bad):
+    """读接口对脏数据是兜住的（返回 [0,0,0,0] 让页面还能打开），
+    导出不能跟着兜——一条零面积的 YOLO 行不报错，只会教模型认一个不存在的目标。"""
+    assets = [{"rel_path": "d/x/a.jpg", "state": "done"}]
+    plan = exp.plan_dataset("oral", assets, {"d/x/a.jpg": [{"label_code": "canine", "bbox": bad}]}, 0.0)
+    assert plan["total_boxes"] == 0
+    assert plan["excluded"]["bad_bbox"] == 1
+    # 而且这张图不能因此变成"负样本"——它本来是标了东西的
+    assert plan["items"] == []
+    assert plan["excluded"]["all_boxes_dropped"] == 1
+
+
+def test_meta_的计数是真正落盘的那些(nas, monkeypatch):
+    """中途有图读不到（照片被删/NAS 断）时会跳过，如果 meta 还报 plan 的预估数，
+    第一次训练就会发现"怎么比说好的少"，而且没人知道少在哪。"""
+    plan = exp.plan_dataset("oral", _ASSETS, _BOXES, val_ratio=0.0)
+    from app.services import vision_service as vsvc
+
+    orig = vsvc.check_photo
+    gone = "2026-09-01-ok/巴利/a.jpg"
+
+    def flaky(album, rel_path):
+        if rel_path == gone:
+            raise vsvc.VisionError("文件不存在（模拟导出中途被删）")
+        return orig(album, rel_path)
+
+    monkeypatch.setattr(vsvc, "check_photo", flaky)
+    meta = exp.write_dataset("partial", plan)
+
+    assert meta["counts"]["train"] == len(plan["items"]) - 1
+    assert meta["planned_counts"]["train"] == len(plan["items"]), "计划数要留着，好对出差在哪"
+    assert meta["total_boxes"] == 0 or meta["total_boxes"] < plan["total_boxes"]
+    assert any("读不到" in w for w in meta["warnings"])
