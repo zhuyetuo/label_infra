@@ -155,16 +155,22 @@ async def imu_health(
 
     checked = await asyncio.to_thread(_scan)
     summary: dict[str, int] = {}
+    legacy_n = 0
     items = []
     for s, r in checked:
         summary[r["verdict"]] = summary.get(r["verdict"], 0) + 1
-        if r["verdict"] in health.NEEDS_ATTENTION:
+        if r.get("legacy_imu_numbering"):
+            legacy_n += 1
+        # 老影棚数据即使 verdict 是 ok 也要列出来：数据本身没问题，
+        # 问题在"这个 imu 号是谁的"，不列的话没人会知道
+        if r["verdict"] in health.NEEDS_ATTENTION or r.get("legacy_imu_numbering"):
             items.append({
                 "id": s.id, "sample_code": s.sample_code, "session_date": str(s.session_date or ""),
                 "dog_id": s.dog_id, "imu_csv_path": s.imu_csv_path,
                 "duration_sec": s.video_duration_sec, **r,
             })
-    return ok({"checked": len(checked), "summary": summary, "items": items})
+    return ok({"checked": len(checked), "summary": summary,
+               "legacy_imu_numbering": legacy_n, "items": items})
 
 
 @router.get("/missing-files")

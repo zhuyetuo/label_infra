@@ -115,3 +115,65 @@ def test_该让人看的结论都在清单里(verdict):
 def test_ok_不进清单():
     """全库几千条样本，正常的也列出来就没人看了。"""
     assert "ok" not in health.NEEDS_ATTENTION
+
+
+# ── 影棚新旧数据要分得开 ────────────────────────────────────────────────
+#
+# 同一个 imu 号在新旧数据里指的不是同一个设备：
+#     文件里的 imu2   9-11 及以前 = WT5（lulu 的）   9-12 起 = WT2（bibi 的）
+# 同一张狗档案登记表，对老数据有一半会给出错的狗——而且不报错、界面上看不出来。
+# 采集端从 9-13 起把后缀改成 _yingpeng2，这里据此把老的标出来。
+
+@pytest.mark.parametrize("rel,expected", [
+    ("data_raw/2026_9_10_yingpeng/a_imu2_raw.csv", True),     # 改编号之前
+    ("data_raw/2026_9_11_yingpeng/a_imu2_raw.csv", True),     # 最后一天错的
+    ("data_raw/2026_9_12_yingpeng/a_imu2_raw.csv", False),    # 改编号当天，已经是对的
+    ("data_raw/2026_9_13_yingpeng/a_imu2_raw.csv", False),    # 编号对了、目录还是老名字
+    ("data_raw/2026_9_14_yingpeng2/a_imu2_raw.csv", False),   # 新后缀
+    ("data_raw/2026_9_13_gouchang/a_imu2_raw.csv", False),    # 狗场一直是真实编号
+    ("data_raw/2026_9_10/a_imu2_raw.csv", False),             # 没后缀的老数据，另说
+    ("data_raw/乱七八糟_yingpeng/a.csv", False),               # 日期取不出来 → 不标
+    (None, False),
+])
+def test_认得出影棚老数据(rel, expected):
+    assert health.is_legacy_yingpeng(rel) is expected
+
+
+def test_编号改掉那天之后的不算老数据():
+    """后缀是 9-13 才加的，编号是 9-12 改的——中间那一天多的数据编号已经对了、
+    目录却还叫 _yingpeng。只按后缀判会把这批好数据误标成"归属不可信"，
+    比不标还糟：真正有问题的那批会淹没在误报里，久了就没人看了。"""
+    assert health.is_legacy_yingpeng("d/2026_9_11_yingpeng/x.csv") is True
+    assert health.is_legacy_yingpeng("d/2026_9_12_yingpeng/x.csv") is False
+    assert health.is_legacy_yingpeng("d/2026_9_13_yingpeng/x.csv") is False
+
+
+def test_yingpeng2_不能被当成_yingpeng():
+    """后缀判断最容易翻的地方：endswith('_yingpeng') 对 '_yingpeng2' 是 False，
+    但反过来写成 in 或者去掉数字就会误伤——新数据被标成"归属不可信"，
+    等于这次改后缀白改。"""
+    assert health.is_legacy_yingpeng("d/2026_9_14_yingpeng2/x_imu1_raw.csv") is False
+    assert health.is_legacy_yingpeng("d/2026_9_10_yingpeng/x_imu1_raw.csv") is True
+    # 老后缀 + 老日期才算，9-12 起就算还在老目录里也是对的
+    assert health.is_legacy_yingpeng("d/2026_9_10_yingpeng2/x.csv") is False
+
+
+def test_老数据即使本身健康也要标出来(tmp_path):
+    """数据可能完全正常（覆盖率 100%），问题在"这个 imu 号是谁的"。
+    所以不覆盖 verdict，单独一个字段 + 在原因里说清楚。"""
+    p = tmp_path / "2026_9_10_yingpeng"
+    p.mkdir()
+    rel = f"2026_9_10_yingpeng/{_csv(p, 'a.csv', 14700)}"
+    r = health.check_one(str(tmp_path), rel, duration_sec=295, sample_hz=50.0)
+    assert r["verdict"] == "ok", "数据本身是好的，不该改判"
+    assert r["legacy_imu_numbering"] is True
+    assert "位置号" in r["reason"] and "翻译" in r["reason"]
+
+
+def test_新数据不带这个标记(tmp_path):
+    p = tmp_path / "2026_9_14_yingpeng2"
+    p.mkdir()
+    rel = f"2026_9_14_yingpeng2/{_csv(p, 'a.csv', 14700)}"
+    r = health.check_one(str(tmp_path), rel, duration_sec=295, sample_hz=50.0)
+    assert r["legacy_imu_numbering"] is False
+    assert r["reason"] == ""
