@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,7 @@ from app.schemas.sample import (
     ScanStartResult,
 )
 from app.services.ai_prelabel_service import PrelabelError, ai_label_relpath, infer_sample, replace_candidates
+from app.services import sample_health_service as health
 from app.services.sample_delete_service import delete_samples
 from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progress, start_scan_background
 from app.services.task_service import purge_task_children
@@ -114,6 +115,56 @@ async def delete_samples_bulk(body: SampleDeleteBulk, db: AsyncSession = Depends
     result = await delete_samples(db, samples)
     await db.commit()
     return ok(result)
+
+
+@router.get("/imu-health")
+async def imu_health(
+    limit: int = Query(400, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
+):
+    """体检：哪些样本的 IMU 数据其实用不了。
+
+    起因是一段真实素材——文件名是配对好的（cam1 配 imu1）、画面正常、能预览、
+    能建任务，但视频里烧着的 overlay 从头到尾写着 `[Bibi] MISSING`：它配对的
+    那路 IMU 整段没连上。这种样本在库里跟正常的长得一模一样，人翻不出来，
+    只有等标注员标到一半发现波形是平的，或者更糟——训练集里混进一批没有标签
+    依据的片段。
+
+    只读，不写库、不删文件。判据是 CSV 行数 ÷（视频时长 × 采样率）：把"有文件"
+    和"有数据"区分开。这类判断错一次的代价（误删一天的数据）比漏一次高得多，
+    所以只列出来给人看。
+    """
+    rows = (
+        await db.execute(
+            select(Sample)
+            .where(Sample.imu_csv_path.isnot(None))
+            .order_by(Sample.session_date.desc(), Sample.sample_code)
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    nas_root = settings.nas_root
+    # 逐条读 CSV 是阻塞 IO，几百条就够把事件循环卡住十几秒——扔线程里
+    def _scan():
+        out = []
+        for s in rows:
+            r = health.check_one(nas_root, s.imu_csv_path, s.video_duration_sec, s.sample_hz,
+                                 declared_hz=s.imu_sample_rate_hz)
+            out.append((s, r))
+        return out
+
+    checked = await asyncio.to_thread(_scan)
+    summary: dict[str, int] = {}
+    items = []
+    for s, r in checked:
+        summary[r["verdict"]] = summary.get(r["verdict"], 0) + 1
+        if r["verdict"] in health.NEEDS_ATTENTION:
+            items.append({
+                "id": s.id, "sample_code": s.sample_code, "session_date": str(s.session_date or ""),
+                "dog_id": s.dog_id, "imu_csv_path": s.imu_csv_path,
+                "duration_sec": s.video_duration_sec, **r,
+            })
+    return ok({"checked": len(checked), "summary": summary, "items": items})
 
 
 @router.get("/missing-files")
