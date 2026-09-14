@@ -13,6 +13,9 @@ import {
   setSamplesSensitive,
   updateSample,
   type ScanProgress,
+  listVisionScans,
+  runVisionScan,
+  getVisionScanStatus,
 } from "@/api/samples";
 import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
@@ -38,6 +41,11 @@ export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
+  // 画面扫描结果。一次拉回来按样本查，不每行一个请求——几百行的话那就是几百个请求。
+  // 没扫过的样本**不在这个表里**，查不到就是"未扫描"，不是"没狗"。
+  const { data: vscans } = useQuery({ queryKey: ["vision-scans"], queryFn: listVisionScans });
+  const { data: vstatus } = useQuery({ queryKey: ["vision-scan-status"], queryFn: getVisionScanStatus, retry: false });
+  const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [preview, setPreview] = useState<Sample | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -227,6 +235,78 @@ export default function Samples() {
         />
       ),
     },
+    {
+      // 这一列的全部意义：让人**不点进去**就知道这段该不该看。
+      // 标注员现在只有标到一半发现波形是平的、或者点开视频，才知道这半小时
+      // 狗根本不在画面里（跑开了、被抱走了、摄像头对着空笼子）。
+      //
+      // 「未扫描」和「没狗」必须显示成不同的东西：前者是这个功能还没跑到它，
+      // 后者是跑过了、确认没有。混了的话人分不清"不用看"和"还没查"。
+      title: "画面",
+      key: "vision",
+      width: 110,
+      filters: [
+        { text: "有狗", value: "has_dog" },
+        { text: "大部分空镜", value: "mostly_empty" },
+        { text: "没狗", value: "no_dog" },
+        { text: "没看成", value: "unknown" },
+        { text: "未扫描", value: "unscanned" },
+      ],
+      onFilter: (v: React.Key | boolean, r: Sample) => (vscans?.[String(r.id)]?.verdict ?? "unscanned") === v,
+      render: (_: unknown, r: Sample) => {
+        const hit = vscans?.[String(r.id)];
+        const v = hit?.verdict ?? "unscanned";
+        const METAS: Record<string, { color?: string; text: string; tip: string }> = {
+          has_dog: { color: "green", text: "有狗", tip: "画面里看得到狗" },
+          mostly_empty: { color: "orange", text: "多数空镜", tip: "大部分时间画面里没狗，但不是整段都没有" },
+          no_dog: { color: "red", text: "没狗", tip: "每一路都扫了、整段都没看见狗——这段可以不用看" },
+          unknown: { color: "default", text: "没看成", tip: "扫了但没得出结论（视频读不出、或者有一路没扫成）。不等于没狗" },
+          unscanned: { text: "未扫描", tip: "还没跑过画面扫描。不等于没狗" },
+        };
+        const meta = METAS[v] ?? METAS.unscanned;
+        const cams = hit?.cams ?? [];
+        const detail = cams.length
+          ? cams.map((c) => `${c.cam}: ${c.state === "failed" ? `失败（${c.error ?? "?"}）`
+              : `${c.verdict}，最多 ${c.max_dogs ?? "?"} 只`}`).join("\n")
+          : "";
+        return (
+          <Tooltip title={detail ? `${meta.tip}\n\n${detail}` : meta.tip}>
+            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.text}</Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      // 「要标的那只狗在不在这段画面里」。跟上面那列不是一回事：
+      // 上面是"画面里有没有狗"，这里是"有没有**那只**狗"。
+      //
+      // 判不了是一个明确的第三档，不是灰着不显示——影棚多只狗同场，光看
+      // "有几只狗"判不出哪只是 bibi。判不了时说"不在"的话，影棚每份样本都会
+      // 挂一个错提示，人看两次就再也不信这一列了。
+      title: "那只狗",
+      key: "presence",
+      width: 100,
+      filters: [
+        { text: "在画面里", value: "present" },
+        { text: "不在画面里", value: "absent" },
+        { text: "判不了", value: "unknown" },
+      ],
+      onFilter: (v: React.Key | boolean, r: Sample) => vscans?.[String(r.id)]?.presence?.state === v,
+      render: (_: unknown, r: Sample) => {
+        const p = vscans?.[String(r.id)]?.presence;
+        if (!p) return <Typography.Text type="secondary">-</Typography.Text>;
+        const meta = {
+          present: { color: "green", text: "在" },
+          absent: { color: "red", text: "不在" },
+          unknown: { color: undefined, text: "判不了" },
+        }[p.state];
+        return (
+          <Tooltip title={p.reason}>
+            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.text}</Tag>
+          </Tooltip>
+        );
+      },
+    },
     { title: "时长(秒)", dataIndex: "video_duration_sec", sorter: (a: Sample, b: Sample) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0) },
     { title: "CSV行数", dataIndex: "imu_row_count", sorter: (a: Sample, b: Sample) => (a.imu_row_count ?? 0) - (b.imu_row_count ?? 0), render: (n: number | null) => n ?? "-" },
     {
@@ -367,6 +447,38 @@ export default function Samples() {
         {selected.size > 0 && (
           <>
             <Tag>已勾选 {selected.size}</Tag>
+            {/* 扫描是串行的（同一张卡上还挂着 SAM，并发会把两个一起 OOM），
+                一小时的视频几十秒——所以按钮上要把"要等多久"说清楚，
+                不然人会以为卡死了又点一次 */}
+            <Tooltip
+              title={
+                vstatus?.available
+                  ? `跑一遍画面检测：这几段视频里有没有狗。串行，一小时的视频约几十秒，${selected.size} 份大概 ${Math.ceil(selected.size * 0.7)} 分钟。重扫会覆盖上次结果。`
+                  : (vstatus?.error || "视觉服务里的狗检测不可用")
+              }
+            >
+              <Button
+                size="small"
+                loading={scanning}
+                disabled={!vstatus?.available}
+                onClick={async () => {
+                  setScanning(true);
+                  try {
+                    const r = await runVisionScan([...selected]);
+                    const bad = r.items.filter((x) => x.failed > 0).length;
+                    if (bad) message.warning(`扫完 ${r.samples} 份，其中 ${bad} 份有路没扫成——列表里会显示「没看成」，不是「没狗」`);
+                    else message.success(`扫完 ${r.samples} 份`);
+                    qc.invalidateQueries({ queryKey: ["vision-scans"] });
+                  } catch (e) {
+                    message.error(`扫描失败：${e instanceof Error ? e.message : e}`);
+                  } finally {
+                    setScanning(false);
+                  }
+                }}
+              >
+                扫画面有没有狗
+              </Button>
+            </Tooltip>
             <Select
               size="small"
               allowClear

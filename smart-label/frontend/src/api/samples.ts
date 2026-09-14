@@ -120,3 +120,64 @@ export const listMissingFileSamples = () =>
 
 export const cleanupMissingFileSamples = () =>
   request.post<never, { deleted: number; tasks_deleted: number }>("/samples/missing-files/cleanup");
+
+// ── 画面扫描：这份样本的视频里有没有狗 ─────────────────────────────────
+
+export type VisionVerdict = "has_dog" | "mostly_empty" | "no_dog" | "unknown" | "unscanned";
+
+export interface VisionScanCam {
+  cam: string;
+  state: "ok" | "failed";
+  error: string | null;
+  verdict: string | null;
+  /** 采样点里没狗的比例。**扫不成时为 null**——不是 0 也不是 1 */
+  no_dog_ratio: number | null;
+  max_dogs: number | null;
+  sampled: number | null;
+  duration_sec: number | null;
+  weights: string | null;
+  scanned_at: string | null;
+}
+
+export interface DogPresence {
+  /** present 在画面里 / absent 不在 / unknown 判不了（reason 一定说清楚为什么）*/
+  state: "present" | "absent" | "unknown";
+  reason: string;
+}
+
+/** 已扫过的样本 → 结论。**没扫过的不在这个表里**，调用方据此显示"未扫描" */
+export const listVisionScans = () =>
+  request.get<never, Record<string, {
+    verdict: VisionVerdict;
+    presence: DogPresence;
+    dog_name: string | null;
+    cams: VisionScanCam[];
+  }>>("/samples/vision-scans");
+
+export const runVisionScan = (sample_ids: number[], every_sec = 5) =>
+  request.post<never, { samples: number; items: { sample_code: string; scanned: number; failed: number }[] }>(
+    "/samples/vision-scan", { sample_ids, every_sec },
+  );
+
+export const getVisionScanStatus = () =>
+  request.get<never, { available: boolean; error: string | null; loaded_weights?: string | null; dog_class?: number | null }>(
+    "/samples/vision-scan/status",
+  );
+
+// ── 抓挠：IMU 说有的时候，画面里有没有狗 ───────────────────────────────
+
+export interface ScratchCross {
+  /** agree 对得上 / no_dog 画面里没狗（最该先看）/ unknown 判不了 */
+  state: "agree" | "no_dog" | "unknown";
+  reason: string;
+  points: number;
+}
+
+export const scratchCrosscheck = (sampleId: number, cam?: string) =>
+  request.get<never, {
+    counts: Record<string, number>;
+    items: { id: number; start_time_ms: number; end_time_ms: number; cross: ScratchCross }[];
+    cam: string | null;
+    /** 没扫过画面时**明说**——不然人会以为"一段可疑的都没有" */
+    note: string | null;
+  }>(`/samples/${sampleId}/scratch-crosscheck`, { params: cam ? { cam } : undefined });

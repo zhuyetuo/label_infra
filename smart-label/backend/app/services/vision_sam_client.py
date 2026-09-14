@@ -91,3 +91,51 @@ def _detail(resp: httpx.Response) -> str:
         return str(resp.json().get("detail") or "")
     except Exception:  # noqa: BLE001
         return resp.text[:200]
+
+
+# ── 画面狗检测 ─────────────────────────────────────────────────────────
+#
+# 跟 SAM 同一个服务、同一个开关（VISION_SERVICE_URL），所以复用 enabled()。
+# 但超时不一样：SAM 是交互式的，人在等；扫描是后台任务，一小时的视频按 5 秒
+# 采样要跑几十秒到几分钟。用 SAM 那个 30 秒会把正常的扫描全判成超时。
+_SCAN_TIMEOUT = 600.0
+
+
+async def dog_status() -> dict:
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/dog/status"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}"}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}"}
+
+
+async def scan_dog(video_rel_path: str, every_sec: float = 5.0, conf: float = 0.35) -> dict:
+    """扫一路视频里有没有狗。video_rel_path 相对采集 NAS 根（不是素材库）。"""
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/dog/scan"
+    try:
+        async with httpx.AsyncClient(timeout=_SCAN_TIMEOUT) as client:
+            resp = await client.post(url, json={"path": video_rel_path, "every_sec": every_sec, "conf": conf})
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code == 503:
+        # 模型没装/没起。**必须跟"扫出来没狗"分开**——后者会让人跳过一整段
+        # 真有素材的视频
+        raise SamUnavailable(_detail(resp) or "视觉服务里的狗检测不可用")
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.json()
+
+
+def _detail(resp) -> str:
+    try:
+        return str(resp.json().get("detail", ""))[:300]
+    except Exception:  # noqa: BLE001
+        return resp.text[:300]

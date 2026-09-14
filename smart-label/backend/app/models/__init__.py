@@ -15,6 +15,7 @@ from app.models.model_version import ModelVersion
 from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
+from app.models.sample_vision_scan import SampleVisionScan
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
@@ -31,6 +32,7 @@ __all__ = [
     "Project",
     "Dog",
     "Sample",
+    "SampleVisionScan",
     "Task",
     "LabelDefinition",
     "LabelTemplate",
