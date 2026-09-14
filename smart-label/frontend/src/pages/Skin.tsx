@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
+  Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -1492,6 +1492,22 @@ const loadLinkFilter = (): LinkFilter => {
   };
 };
 
+// 「重新拉取」的进度是估出来的，不是后端报的——那一趟是一次原子计算：
+// 基线要用**库里所有天**的中位数（不只界面上选的范围，见 skin_link_service 里
+// _stats_with_full_baseline 的说明），所以没法按日期切成几段、边算边报进度。
+//
+// 于是拿上一次的实测速度来标定：记住「每天大约几秒」，下次按选中的天数估总时长。
+// 计时是真的，估算是学出来的，越用越准；第一次用下面这个保守默认值。
+// 超过预估也不跳到 100%——封在 99% 并改口说「比预估久」，别让人以为卡死了。
+const LINK_PACE_KEY = "smart-label:skin-link-pace-sec-per-day";
+const LINK_PACE_DEFAULT = 1.5;
+const loadLinkPace = (): number => {
+  try {
+    const v = Number(localStorage.getItem(LINK_PACE_KEY));
+    return Number.isFinite(v) && v > 0 ? v : LINK_PACE_DEFAULT;
+  } catch { return LINK_PACE_DEFAULT; }
+};
+
 function LinkTab(p: {
   opts: SkinOptions;
   onApply: (c: CInputs, meta: { fill_date: string | null; dog_name: string | null; imu: string; source: CSource; ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }) => void;
@@ -1514,6 +1530,9 @@ function LinkTab(p: {
     refetchOnWindowFocus: false,
   });
   const [recomputing, setRecomputing] = useState(false);
+  // 这一趟已经跑了多少秒（真实计时）、预计一共多少秒（按上次速度估）
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [estimateMs, setEstimateMs] = useState(0);
   // 哪些天的标注在上次算完之后改过。不自动重算：改一天会牵动别的天（基线是这只狗
   // 所有算过的天的中位数），而且一次全量是几百次 algo 调用——标注是高频操作，
   // 自动触发等于每存一次草稿就打一轮后端。提醒到位，按钮还是人按。
@@ -1530,6 +1549,12 @@ function LinkTab(p: {
   const pull = async (over?: { from: string; to: string }) => {
     const from = over?.from ?? f.from;
     const to = over?.to ?? f.to;
+    const days = Math.max(1, dayjs(to).diff(dayjs(from), "day") + 1);
+    const t0 = Date.now();
+    setElapsedMs(0);
+    setEstimateMs(days * loadLinkPace() * 1000);
+    // 200ms 一跳：秒数看得出在动，又不至于每帧重渲染整张表
+    const timer = window.setInterval(() => setElapsedMs(Date.now() - t0), 200);
     setRecomputing(true);
     try {
       const r = await skinLinkStats({
@@ -1541,7 +1566,16 @@ function LinkTab(p: {
       if (!r.rows.length) message.info(r.warnings[0] ?? "这段日期里没有样本/任务");
       else message.success(`已重新计算并保存 ${r.rows.length} 行`);
       refetchStale();
+      // 用这次的实测速度修正估算。取指数滑动平均而不是直接覆盖：偶尔一次
+      // 特别慢（别人在跑别的任务、NAS 正忙）不该把下次的估算带偏。
+      try {
+        const pace = (Date.now() - t0) / 1000 / days;
+        if (Number.isFinite(pace) && pace > 0) {
+          localStorage.setItem(LINK_PACE_KEY, String(loadLinkPace() * 0.6 + pace * 0.4));
+        }
+      } catch { /* localStorage 不可用就算了，下次还用默认值 */ }
     } finally {
+      window.clearInterval(timer);
       setRecomputing(false);
     }
   };
@@ -1578,6 +1612,31 @@ function LinkTab(p: {
           人工版包含未审核的草稿
         </Checkbox>
         <Button type="primary" loading={loading} onClick={() => pull()}>重新拉取</Button>
+        {recomputing && (() => {
+          const over = estimateMs > 0 && elapsedMs > estimateMs;
+          // 到不了 100%：真算完了这块整个就没了，停在 99% 比停在 100% 干等要诚实
+          const pct = estimateMs > 0 ? Math.min(99, Math.round((elapsedMs / estimateMs) * 100)) : 0;
+          const sec = (ms: number) => `${Math.round(ms / 1000)} 秒`;
+          return (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 320 }}>
+              <Progress
+                percent={pct}
+                size="small"
+                status={over ? "normal" : "active"}
+                style={{ width: 160, marginBottom: 0 }}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                已用 {sec(elapsedMs)}
+                {over
+                  ? <>，比预估（{sec(estimateMs)}）久了，还在算…</>
+                  : <>，预计还要 {sec(Math.max(0, estimateMs - elapsedMs))}</>}
+              </Typography.Text>
+              <Tooltip title="这一趟是一次整体计算：C 值的基线要用库里所有天的中位数，没法切成几段边算边报进度。所以进度是按上一次的实测速度估的——计时是真的，估算会越用越准。第一次点、或者改了日期范围，估得不准很正常。">
+                <QuestionCircleOutlined style={{ color: "#999" }} />
+              </Tooltip>
+            </span>
+          );
+        })()}
         {data && !loading && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}
@@ -1656,7 +1715,15 @@ function LinkTab(p: {
       )}
       <Table size="small" rowKey={(r) => `${r.date}-${r.imu}`} dataSource={rows} pagination={false} scroll={{ x: "max-content" }}
         columns={[
-          { title: "日期", dataIndex: "date" },
+          // 默认按日期倒序：几百行的时候最想先看最近几天。日期是 YYYY-MM-DD，
+          // 字符串比较就等于时间比较，不用先 parse 成日期
+          {
+            title: "日期",
+            dataIndex: "date",
+            defaultSortOrder: "descend" as const,
+            sorter: (a: LinkRow, b: LinkRow) => a.date.localeCompare(b.date) || a.imu.localeCompare(b.imu),
+            sortDirections: ["descend", "ascend"] as const,
+          },
           { title: "机位 / 狗", render: (_, r: LinkRow) => `${r.imu} / ${p.opts.imu_dog_default_map[r.imu] ?? "?"}` },
           { title: "任务进度", render: (_, r: LinkRow) => (
             <Space size={4}>
