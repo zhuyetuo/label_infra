@@ -37,6 +37,16 @@ interface Props {
   task: Task | null;
   /** 打开时片段列表默认只筛这个标签（皮肤跟踪表跳过来复看「抓挠」用） */
   focusLabelName?: string | null;
+  /**
+   * 同上，但直接给标签 id——列表页已经按类别筛过一轮了（比如项目页筛了「抓挠」，
+   * 只剩那几个任务），点「查看标注」进来就该已经是抓挠，而不是让人在片段面板里
+   * 把同一个筛选再点一遍。
+   *
+   * 跟 focusLabelName 分开两个字段，不是重复：focusIds 还兼着候选面板的
+   * scratchLabelIds（「改成别的」要把抓挠排掉）。列表页筛的可能是「睡觉」，
+   * 混进去会让候选面板把睡觉当成抓挠。这个字段只影响片段列表的初始筛选。
+   */
+  focusLabelIds?: number[];
   labels: LabelDefinition[];
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
@@ -90,6 +100,7 @@ const PANELS_KEY = "smart-label:ws-panels";
 export default function AnnotationWorkspace({
   task,
   focusLabelName,
+  focusLabelIds,
   labels,
   readOnly,
   onClose,
@@ -260,6 +271,17 @@ export default function AnnotationWorkspace({
         ? labels.filter((l) => l.display_name === focusLabelName || l.code === focusLabelName).map((l) => l.id)
         : [],
     [focusLabelName, labels]
+  );
+  // 片段列表打开时默认筛哪几类。focusLabelName（皮肤跟踪表那条路）优先；
+  // 没有就用列表页带过来的 id——项目/任务页筛了「抓挠」，进来就该已经是抓挠。
+  // 不并进 focusIds：那个还兼着候选面板的 scratchLabelIds，见 Props 上的说明。
+  // taskId 也进依赖：同一个项目连着看好几个任务时，focusLabelIds 是同一个数组
+  // 引用、不会变，SegmentPanel 里那个"换任务重新套上默认筛选"的 effect 就不会
+  // 触发——于是只有第一个任务是筛好的，后面几个又回到全部类别。带上 taskId 让
+  // 每次打开都产生一个新引用。
+  const initialSegmentFilter = useMemo(
+    () => (focusIds.length ? focusIds : focusLabelIds ?? []),
+    [focusIds, focusLabelIds, taskId]
   );
   // 「抓挠」在这个项目里的标签 id：候选面板的「改成别的」要把它排掉
   const scratchIds = useMemo(
@@ -1017,7 +1039,7 @@ export default function AnnotationWorkspace({
                     message.success("已退回候选，可以重新判断");
                   }}
                   onCreate={readOnly ? undefined : appendItem}
-                  initialFilterLabels={focusIds}
+                  initialFilterLabels={initialSegmentFilter}
                 />
               ),
             },

@@ -122,6 +122,8 @@ export default function Projects() {
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
+  // 打开工作台时带过去的类别筛选，见 openWorkspace
+  const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
@@ -565,6 +567,10 @@ export default function Projects() {
   const openWorkspace = (task: Task, readOnly: boolean, projectId: number) => {
     setWorkspaceLabels(labelsOf(projectId));
     setWorkspaceReadOnly(readOnly);
+    // 列表这一层已经按类别筛过了（比如只看「抓挠」），带进工作台当片段列表的
+    // 初始筛选——否则进去看到的是全部类别，还得在片段面板里把同一个筛选再点一遍，
+    // 而一份任务动辄几十段，要找的那 3 段抓挠就淹在里面
+    setWorkspaceFocusLabels(filterOf(projectId).labels);
     setWorkspaceTask(task);
   };
 
@@ -1705,6 +1711,7 @@ export default function Projects() {
 
       <AnnotationWorkspace
         task={workspaceTask}
+        focusLabelIds={workspaceFocusLabels}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         onClose={() => setWorkspaceTask(null)}

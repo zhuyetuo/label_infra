@@ -39,6 +39,8 @@ export default function Tasks() {
   const [onlyMine, setOnlyMine] = useState(false);
   const [workspaceTask, setWorkspaceTask] = useState<Task | null>(null);
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
+  // 打开工作台时带过去的类别筛选，见 openWorkspace
+  const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
   // 打开工作台时把该任务所属项目的标签带进去
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
   // 带 ?task=ID&seg=抓挠 直接打开某个任务并把片段筛到该标签（分享链接/外部跳转用；
@@ -77,6 +79,8 @@ export default function Tasks() {
 
   const openWorkspace = (task: Task, readOnly: boolean) => {
     setWorkspaceReadOnly(readOnly);
+    // 跟项目页同理：列表已经按类别筛过，带进去当片段列表的初始筛选
+    setWorkspaceFocusLabels(filterOf(task.project_id).labels);
     setWorkspaceTask(task);
   };
 
@@ -618,6 +622,7 @@ export default function Tasks() {
       <AnnotationWorkspace
         task={workspaceTask}
         focusLabelName={focusLabelName}
+        focusLabelIds={workspaceFocusLabels}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         onClose={() => setWorkspaceTask(null)}
