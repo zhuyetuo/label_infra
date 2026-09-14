@@ -164,3 +164,51 @@ def test_不存在的照片点不了(album, db, run, admin):
             db=db, user=admin,
         ))
     assert e.value.status_code == 400
+
+
+# ── 显式关掉 SAM ────────────────────────────────────────────────────────
+#
+# compose 那边给 VISION_SERVICE_URL 配了默认值（不然每台机器都要手填一次，
+# 忘了就只看到按钮灰着、看不出为什么）。而 compose 的 ${VAR:-默认} 把
+# 「空字符串」也当成没设——实测过 `docker compose config`：.env 里写
+# `VISION_SERVICE_URL=` 照样落到默认值上。
+#
+# 于是「设成空 = 关掉」这条路没了，补一个明说的开关。
+
+@pytest.mark.parametrize("v", ["off", "OFF", "0", "false", "no", "none", "disabled", " off "])
+def test_填这些就是显式关掉(v, run, admin, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "vision_service_url", v)
+    st = run(api.sam_status(user=admin))["data"]
+    assert st["available"] is False
+    assert "显式关掉" in st["error"], f"{v!r} 该被当成关掉，而不是当成一个地址去连"
+
+
+def test_关掉和没配要分得开(run, admin, monkeypatch):
+    """运维看到「没有配」会去查配置；看到「被显式关掉」才知道该去问是谁关的。
+    两种都笼统说成"不可用"的话，第一反应都是去查网络，白查。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "vision_service_url", "")
+    missing = run(api.sam_status(user=admin))["data"]["error"]
+    monkeypatch.setattr(settings, "vision_service_url", "off")
+    turned_off = run(api.sam_status(user=admin))["data"]["error"]
+    assert missing != turned_off
+    assert "没有配" in missing and "显式关掉" in turned_off
+
+
+@pytest.mark.parametrize("v", [
+    "http://192.168.2.140:8385",
+    "http://10.0.0.9:8385",
+    "http://offsite-gpu:8385",      # 里面含 "off" 但不是关掉
+    "http://host/nonexistent",       # 含 "none" 同理
+])
+def test_正常地址不会被误当成关掉(v, monkeypatch):
+    """别拿 in 判断——'offsite-gpu' 里含 off、'nonexistent' 里含 none，
+    用子串匹配的话这两个地址会被静默关掉，而且完全看不出为什么。"""
+    from app.core.config import settings
+    from app.services import vision_sam_client as c
+
+    monkeypatch.setattr(settings, "vision_service_url", v)
+    assert c.enabled() is True
