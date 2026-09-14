@@ -189,12 +189,18 @@ def sample_verdict(rows: list[dict]) -> str:
     if not ok:
         return "unknown"
     verdicts = {r["verdict"] for r in ok}
+
+    # 看见狗是**确定**的：一路看见了，别的路失不失败都不影响这个结论
     if "has_dog" in verdicts:
         return "has_dog"
     if "mostly_empty" in verdicts:
         return "mostly_empty"
-    if verdicts == {"unknown"}:
+
+    # 剩下是"都没看见狗"。这时候有任何一路**没看成**，就不能说"确认没狗"——
+    # 狗完全可能就在那一路里。这里要连 state=failed 的行一起算进来：
+    # 第一版只看 ok 的行，failed 的整个被忽略，于是「一路没狗 + 一路没扫成」
+    # 被判成 no_dog，等于替一段没看过的视频下了结论。
+    unseen = [r for r in rows if r.get("state") != STATE_OK or not r.get("verdict")]
+    if unseen or "unknown" in verdicts:
         return "unknown"
-    # 剩下只可能是 no_dog（可能混着 unknown）。有 unknown 混在里面时不能说
-    # "确认没狗"——那一路根本没看成
-    return "no_dog" if verdicts == {"no_dog"} else "unknown"
+    return "no_dog"

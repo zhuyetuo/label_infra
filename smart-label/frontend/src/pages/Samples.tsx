@@ -276,6 +276,37 @@ export default function Samples() {
         );
       },
     },
+    {
+      // 「要标的那只狗在不在这段画面里」。跟上面那列不是一回事：
+      // 上面是"画面里有没有狗"，这里是"有没有**那只**狗"。
+      //
+      // 判不了是一个明确的第三档，不是灰着不显示——影棚多只狗同场，光看
+      // "有几只狗"判不出哪只是 bibi。判不了时说"不在"的话，影棚每份样本都会
+      // 挂一个错提示，人看两次就再也不信这一列了。
+      title: "那只狗",
+      key: "presence",
+      width: 100,
+      filters: [
+        { text: "在画面里", value: "present" },
+        { text: "不在画面里", value: "absent" },
+        { text: "判不了", value: "unknown" },
+      ],
+      onFilter: (v: React.Key | boolean, r: Sample) => vscans?.[String(r.id)]?.presence?.state === v,
+      render: (_: unknown, r: Sample) => {
+        const p = vscans?.[String(r.id)]?.presence;
+        if (!p) return <Typography.Text type="secondary">-</Typography.Text>;
+        const meta = {
+          present: { color: "green", text: "在" },
+          absent: { color: "red", text: "不在" },
+          unknown: { color: undefined, text: "判不了" },
+        }[p.state];
+        return (
+          <Tooltip title={p.reason}>
+            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.text}</Tag>
+          </Tooltip>
+        );
+      },
+    },
     { title: "时长(秒)", dataIndex: "video_duration_sec", sorter: (a: Sample, b: Sample) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0) },
     { title: "CSV行数", dataIndex: "imu_row_count", sorter: (a: Sample, b: Sample) => (a.imu_row_count ?? 0) - (b.imu_row_count ?? 0), render: (n: number | null) => n ?? "-" },
     {

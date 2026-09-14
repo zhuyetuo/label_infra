@@ -139,11 +139,20 @@ export interface VisionScanCam {
   scanned_at: string | null;
 }
 
+export interface DogPresence {
+  /** present 在画面里 / absent 不在 / unknown 判不了（reason 一定说清楚为什么）*/
+  state: "present" | "absent" | "unknown";
+  reason: string;
+}
+
 /** 已扫过的样本 → 结论。**没扫过的不在这个表里**，调用方据此显示"未扫描" */
 export const listVisionScans = () =>
-  request.get<never, Record<string, { verdict: VisionVerdict; cams: VisionScanCam[] }>>(
-    "/samples/vision-scans",
-  );
+  request.get<never, Record<string, {
+    verdict: VisionVerdict;
+    presence: DogPresence;
+    dog_name: string | null;
+    cams: VisionScanCam[];
+  }>>("/samples/vision-scans");
 
 export const runVisionScan = (sample_ids: number[], every_sec = 5) =>
   request.post<never, { samples: number; items: { sample_code: string; scanned: number; failed: number }[] }>(
@@ -154,3 +163,21 @@ export const getVisionScanStatus = () =>
   request.get<never, { available: boolean; error: string | null; loaded_weights?: string | null; dog_class?: number | null }>(
     "/samples/vision-scan/status",
   );
+
+// ── 抓挠：IMU 说有的时候，画面里有没有狗 ───────────────────────────────
+
+export interface ScratchCross {
+  /** agree 对得上 / no_dog 画面里没狗（最该先看）/ unknown 判不了 */
+  state: "agree" | "no_dog" | "unknown";
+  reason: string;
+  points: number;
+}
+
+export const scratchCrosscheck = (sampleId: number, cam?: string) =>
+  request.get<never, {
+    counts: Record<string, number>;
+    items: { id: number; start_time_ms: number; end_time_ms: number; cross: ScratchCross }[];
+    cam: string | null;
+    /** 没扫过画面时**明说**——不然人会以为"一段可疑的都没有" */
+    note: string | null;
+  }>(`/samples/${sampleId}/scratch-crosscheck`, { params: cam ? { cam } : undefined });
