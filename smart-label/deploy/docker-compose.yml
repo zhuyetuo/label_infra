@@ -52,6 +52,15 @@ services:
       # imu_train/label_service（AI 推理/训练服务），跟本服务在同一台机器上，
       # 容器内不能用 localhost，所以写宿主机内网 IP。.env 里设了会覆盖这里。
       ALGO_SERVICE_URL: ${ALGO_SERVICE_URL:-http://192.168.2.140:8383}
+      # imu_train/vision_service（SAM 辅助标注），跟上面是两个服务两个端口。
+      # 给默认值是为了「git pull && bash up.sh」就能用：现成的 .env 是照
+      # .env.example 抄的，那一行是空的，要每台机器手填一次才开得了 SAM，
+      # 忘了填就只看到按钮灰着、看不出为什么。
+      #
+      # 用 :- 而不是 -：.env 里那行是空字符串，只有 :- 才会落到默认值上。
+      # 代价是没法再用「设成空」来关掉 SAM——所以给了 off 这个显式开关，
+      # 见 vision_sam_client.enabled()。
+      VISION_SERVICE_URL: ${VISION_SERVICE_URL:-http://192.168.2.140:8385}
     ports:
       - "${BACKEND_PORT:-8283}:8283"
     volumes:

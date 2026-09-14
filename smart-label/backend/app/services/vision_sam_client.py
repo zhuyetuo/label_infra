@@ -17,13 +17,22 @@ from app.core.config import settings
 _TIMEOUT = 30.0
 
 
+#: 显式关掉 SAM 的写法。
+#
+# 为什么需要它：compose 那边给 VISION_SERVICE_URL 配了默认值（不然每台机器
+# 都要手填一次，忘了就只看到按钮灰着），而 compose 的 ${VAR:-默认} 把「空字符串」
+# 也当成没设——于是「设成空 = 关掉」这条路没了。这里补一个明说的开关。
+_OFF = {"off", "0", "false", "no", "none", "disabled"}
+
+
 def enabled() -> bool:
-    return bool((settings.vision_service_url or "").strip())
+    v = (settings.vision_service_url or "").strip()
+    return bool(v) and v.lower() not in _OFF
 
 
 async def status() -> dict:
     if not enabled():
-        return {"available": False, "error": "没有配 VISION_SERVICE_URL，SAM 辅助是关着的"}
+        return {"available": False, "error": _off_reason()}
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/sam/status"
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -35,6 +44,15 @@ async def status() -> dict:
         return {"available": False, "error": f"连不上 SAM 服务：{type(e).__name__}"}
 
 
+def _off_reason() -> str:
+    """「没配」和「特意关掉的」要分得开——前者是漏了一步，后者是有人这么决定的。
+    运维看到「没有配」会去查配置，看到「被显式关掉」才知道该去问是谁关的。"""
+    v = (settings.vision_service_url or "").strip()
+    if v and v.lower() in _OFF:
+        return f"SAM 辅助被显式关掉了（VISION_SERVICE_URL={v}）"
+    return "没有配 VISION_SERVICE_URL，SAM 辅助是关着的"
+
+
 class SamUnavailable(Exception):
     """SAM 暂时用不了。调用方据此返回 503，让前端置灰按钮而不是弹红叉。"""
 
@@ -42,7 +60,7 @@ class SamUnavailable(Exception):
 async def segment(material_rel_path: str, points: list[dict], box: list[float] | None = None) -> dict:
     """material_rel_path 是相对素材库根目录的路径（带相册目录那一层）。"""
     if not enabled():
-        raise SamUnavailable("没有配 VISION_SERVICE_URL，SAM 辅助是关着的")
+        raise SamUnavailable(_off_reason())
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/sam/segment"
     payload = {"path": material_rel_path, "points": points}
     if box:
