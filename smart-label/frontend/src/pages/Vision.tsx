@@ -87,9 +87,12 @@ export default function Vision() {
   // 左边清单：现在一屏是三天 x 六只狗 x 十几张，全摊开要滚很久才找得到一张。
   // 折叠 + 只看未标，是"下一张该标哪张"这个动作的最短路径。
   const [listFilter, setListFilter] = useState<"all" | "todo" | "done">("all");
-  // 收起来的组（folder 或 folder/dog）。默认全展开——只有一两组的时候
-  // 默认收起反而要多点一下。组多了人自己会去收。
+  // 收起来的组（folder 或 folder/dog）。默认**全折叠**：现在一个相册是
+  // 三棵树十几个日期、几百张图，全摊开要滚很久才找得到一张。
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // 只在"日期清单本身变了"时重新折叠一次，不能每次 tree 刷新都折——
+  // 存一张图就会刷新一次 query，那样人刚展开的组会被合上，标一张收一次。
+  const seededRef = useRef("");
   const toggle = (k: string) =>
     setCollapsed((prev) => {
       const n = new Set(prev);
@@ -124,6 +127,20 @@ export default function Vision() {
     () => (tree?.folders ?? []).flatMap((f) => f.dogs.flatMap((d) => d.photos.map((p) => ({ ...p, folder: f.folder, dog: d.name })))),
     [tree],
   );
+
+  useEffect(() => {
+    const folders = (tree?.folders ?? []).map((f) => f.folder);
+    if (!folders.length) return;
+    const key = `${album}:${folders.join("|")}`;
+    if (seededRef.current === key) return;
+    seededRef.current = key;
+    // 正在看的那张所在的日期留着展开：刷新页面（?photo=）回来时，
+    // 全折上的话当前这张在清单里根本看不见
+    const openOne = current ? (tree?.folders ?? []).find(
+      (f) => f.dogs.some((d) => d.photos.some((p) => p.rel_path === current))
+    )?.folder : undefined;
+    setCollapsed(new Set(folders.filter((f) => f !== openOne)));
+  }, [tree, album, current]);
   const labelOf = useCallback(
     (code: string) => catalog?.labels.find((l) => l.code === code),
     [catalog],
@@ -353,14 +370,17 @@ export default function Vision() {
     return () => ro.disconnect();
   }, [draw, imgUrl]);
 
-  // Ctrl+滚轮缩放，以光标为中心：放大的时候人盯着的是那颗牙，不是图片中心。
+  // Shift+滚轮缩放，以光标为中心：放大的时候人盯着的是那颗牙，不是图片中心。
   //
-  // 为什么要按住 Ctrl：放大之后图片比视口大，光滚轮得能上下看细节。原来滚轮
+  // 为什么要按住修饰键：放大之后图片比视口大，光滚轮得能上下看细节。原来滚轮
   // 直接缩放，等于把"看"这件事挤掉了——想看下半张只能缩回去再放大。
-  // 顺带白捡一个：触控板双指捏合发的就是 ctrlKey=true 的 wheel 事件。
+  //
+  // 只认 Shift，**不认 Ctrl**：Ctrl+滚轮是浏览器缩放整个页面的快捷键，抢过来
+  // 的话人想缩页面时会发现缩的是图。代价是触控板双指捏合失效——浏览器把捏合
+  // 发成 ctrlKey=true 的 wheel，我们不拦，于是它去缩页面。笔记本上用 Shift+滚轮。
   const onWheel = (e: React.WheelEvent) => {
     if (!imgUrl) return;
-    if (!e.ctrlKey && !e.metaKey) return;   // 不按 Ctrl 就是普通滚动，别拦
+    if (!e.shiftKey) return;   // 不按 Shift 就是普通滚动，别拦
     e.preventDefault();
     const vp = viewportRef.current;
     const img = imgRef.current;
@@ -669,7 +689,13 @@ export default function Vision() {
                          display: "flex", alignItems: "center", gap: 4 }}
               >
                 <span style={{ width: 10 }}>{fOpen ? "▾" : "▸"}</span>
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.folder}</span>
+                {/* 只显示日期，不显示目录路径。狗场那批的目录名是
+                    「雷喏斯达-狗场合作/雷喏斯达20260912」，260px 的栏里截断成
+                    「雷喏斯达-狗场合...」——三行长得一模一样，等于没信息。
+                    完整路径留在 title 里，鼠标停一下能看到。 */}
+                <span title={f.folder} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {f.date ?? f.folder}
+                </span>
                 <span style={{ color: fDone === all.length ? "#52c41a" : "#aaa" }}>{fDone}/{all.length}</span>
               </div>
               {fOpen && dogs.map((d) => (
@@ -775,7 +801,7 @@ export default function Vision() {
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
-              <Tooltip title="Ctrl+滚轮缩放（以光标为中心），普通滚轮上下看；放大后按住右键拖动平移（中键、空格也行）。一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。">
+              <Tooltip title="Shift+滚轮缩放（以光标为中心），普通滚轮上下看；放大后按住右键拖动平移（中键、空格也行）。一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。">
                 <Button size="small" disabled={zoom === 1} onClick={() => setZoom(1)}>
                   {zoom === 1 ? "适应窗口" : `${zoom.toFixed(1)}× 复位`}
                 </Button>
