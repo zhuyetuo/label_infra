@@ -63,6 +63,38 @@ def imu_keys_of_dog(imu_field: str | None, dog_code: str | None) -> list[str]:
     return keys
 
 
+def merge_imu_map(remote: dict[str, str], dog_rows) -> dict[str, str]:
+    """远端那张当底，本地狗档案登记的盖上去、补进来，最后按数字排好。
+
+    抽成独立函数是为了能直接测：合并规则本身（谁盖谁、空名字跳过、撞号告警）
+    才是容易出错的地方，而它原来埋在一个要拉 httpx + 数据库的协程里，
+    测起来只能去测那两个桩。
+
+    dog_rows: (dog_code, name, imu) 三元组，就是 dogs 表查出来的样子。
+    """
+    mapping = dict(remote)
+    # 两只狗登记了同一个设备号时，原来是"谁后查到谁赢"——顺序一变名字就变，
+    # 而且一声不吭。现场表现是工作台标题上写着 bibi（IMU2），可 IMU2 明明是
+    # 巴利的。IMU 号本来就该是全局唯一的（跨场地也是），撞了就是档案填错了，
+    # 得让人看见，不能挑一个装作没事。
+    claimed: dict[str, str] = {}
+    for dog_code, name, imu in dog_rows:
+        name = (name or "").strip()
+        # 名字空着的话界面上会显示成「IMU9 」，还不如退回只显示设备号
+        if not name:
+            continue
+        for key in imu_keys_of_dog(imu, dog_code):
+            if key in claimed and claimed[key] != name:
+                _logger.warning(
+                    "设备号 %s 被多只狗登记：%s 和 %s。IMU 号要全局唯一（两个场地也不能撞），"
+                    "现在按后者显示，去狗档案里把重复的那个改掉。",
+                    key, claimed[key], name,
+                )
+            claimed[key] = name
+            mapping[key] = name
+    return sort_imu_map(mapping)
+
+
 async def imu_dog_map() -> dict[str, str]:
     global _cache, _cache_at
     now = time.monotonic()
@@ -90,26 +122,29 @@ async def imu_dog_map() -> dict[str, str]:
         # 而且一声不吭。现场表现是工作台标题上写着 bibi（IMU2），可 IMU2 明明是
         # 巴利的。IMU 号本来就该是全局唯一的（跨场地也是），撞了就是档案填错了，
         # 得让人看见，不能挑一个装作没事。
-        claimed: dict[str, str] = {}
-        for dog_code, name, imu in rows:
-            name = (name or "").strip()
-            if not name:
-                continue
-            for key in imu_keys_of_dog(imu, dog_code):
-                if key in claimed and claimed[key] != name:
-                    _logger.warning(
-                        "设备号 %s 被多只狗登记：%s 和 %s。IMU 号要全局唯一（两个场地也不能撞），"
-                        "现在按后者显示，去狗档案里把重复的那个改掉。",
-                        key, claimed[key], name,
-                    )
-                claimed[key] = name
-                mapping[key] = name
+        mapping = merge_imu_map(mapping, rows)
     except Exception as e:  # noqa: BLE001 查库失败也不能把任务列表带崩
         _logger.warning("读本地狗档案失败，只用远端对照表：%s", e)
 
-    _cache = mapping
+    _cache = sort_imu_map(mapping)
     _cache_at = now
     return _cache
+
+
+def sort_imu_map(mapping: dict[str, str]) -> dict[str, str]:
+    """把 IMU1..IMU20 按**数字**排好。
+
+    dict 在 JSON 里保持插入顺序，而界面上那排「机位/狗」按钮直接就是
+    Object.keys() 的顺序。不排的话顺序取决于远端返回顺序 + 本地查库顺序；
+    真按字符串排更糟，会排成 IMU1, IMU10, IMU11, ..., IMU2——十只狗以上
+    必然出现，而且看着像是漏了。
+
+    认不出数字的键（真出现了也不该丢）排在最后，按原样的字典序。
+    """
+    def key(k: str):
+        m = re.fullmatch(r"IMU(\d+)", k, re.IGNORECASE)
+        return (0, int(m.group(1)), "") if m else (1, 0, k)
+    return {k: mapping[k] for k in sorted(mapping, key=key)}
 
 
 async def dog_names_by_id(db, dog_ids: set[int]) -> dict[int, str]:

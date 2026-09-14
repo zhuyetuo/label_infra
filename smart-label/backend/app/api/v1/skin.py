@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.sample import Sample
-from app.services.dog_name_service import imu_of
+from app.services.dog_name_service import imu_dog_map, imu_of
 from app.models.annotation import AnnotationRecord
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
@@ -186,11 +186,10 @@ async def get_daily_tracking(
     """
     if date_to < date_from:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
-    try:
-        opts = await _algo("GET", "options")
-        imu_map = (opts or {}).get("imu_dog_default_map") or {}
-    except HTTPException:
-        imu_map = {}
+    # 用合并过的对照表，不是 label_service 那张。那张是写死的（IMU1..IMU8，
+    # 只有影棚那四只），狗场后来加的六只狗（IMU9..IMU20）在里面根本不存在，
+    # 跟踪表就整个漏掉它们——而且不报错，看着像"这几只没数据"
+    imu_map = await imu_dog_map()
     try:
         return ok(await daily_tracking(db, date_from, date_to, imu_map, c_prefer=c_prefer))
     except SkinTrackingError as e:
@@ -277,7 +276,20 @@ async def purge_daily_stats(
 
 @router.get("/options")
 async def options():
-    return ok(await _algo("GET", "options"))
+    """
+    透传 label_service 的选项，但 **imu_dog_default_map 换成合并过的那张**。
+
+    label_service 里那张是写死的：只有 IMU1..IMU8（影棚四只狗）。皮肤页几乎
+    每个地方都吃这张表——周报表那排「机位/狗」按钮就是 Object.keys(它)——
+    于是狗场后来加的六只狗（IMU9..IMU20）在界面上整个不存在，而且不报错，
+    看着像是"这几只还没数据"。
+
+    imu_dog_map() 做的正是该做的事：远端那张当底，本地狗档案登记的盖上去、
+    补进来。狗档案本来就是人在这套系统里自己维护的，它说了算。
+    """
+    data = await _algo("GET", "options") or {}
+    data["imu_dog_default_map"] = await imu_dog_map()
+    return ok(data)
 
 
 @router.post("/questionnaire-score")
