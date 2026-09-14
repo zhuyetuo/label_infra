@@ -91,6 +91,12 @@ class VisionAnnotation(Base):
     bbox 存归一化坐标（0-1 的 x/y/w/h），这样原图缩放、换显示尺寸都不用重算；
     导出 YOLO 时也正好是它要的格式。attrs 里装牙位/分级/严重度这类随类别而变的字段，
     不为每个业务字段单独开列——雏形阶段类别体系还会动，开成列每改一次就要一次迁移。
+
+    polygon 是 SAM 出的掩膜轮廓，可为空。为什么要单独存而不是只留 bbox：SAM 本来
+    就把掩膜算出来了（mask_to_shapes 同时返回框和多边形），只存框等于每点一次就
+    扔一次。而"扔掉"的代价是不对称的——以后想训分割模型，几百张图得从头重标；
+    现在存下来，什么时候想升都不用重标。手画的框没有掩膜，这一列就是 None，
+    导出分割格式时退回用框的四个角。
     """
 
     __tablename__ = "vision_annotations"
@@ -105,6 +111,10 @@ class VisionAnnotation(Base):
     label_code: Mapped[str] = mapped_column(String(40), nullable=False, comment="类别代码，见 vision_service.LABELS")
     bbox: Mapped[str] = mapped_column(Text, nullable=False, comment="JSON [x, y, w, h]，归一化到 0-1，左上角原点")
     attrs: Mapped[str] = mapped_column(Text, nullable=False, default="{}", comment="属性 JSON：牙齿 {tooth_code, ci, gi, visibility}，皮肤 {severity, area_band}")
+    polygon: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="JSON [[x,y], ...]，归一化到 0-1。SAM 出的掩膜轮廓；手画的框没有这个，为 None",
+    )
 
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="human", comment="human 人画的 / ai 模型预标的（雏形阶段只有 human）")
 

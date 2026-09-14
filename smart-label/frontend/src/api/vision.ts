@@ -77,6 +77,8 @@ export interface VisionItem {
   id?: number;
   label_code: string;
   bbox: VisionBox;
+  /** SAM 出的掩膜轮廓，归一化 [[x,y],...]；手画的框没有，为 null */
+  polygon?: number[][] | null;
   attrs: Record<string, number | string>;
   source?: string;
 }
@@ -159,7 +161,7 @@ export const getVisionAnnotations = (album: VisionAlbum, path: string) =>
 export const saveVisionAnnotations = (body: {
   album: VisionAlbum;
   path: string;
-  items: { label_code: string; bbox: VisionBox; attrs: Record<string, number | string> }[];
+  items: { label_code: string; bbox: VisionBox; polygon?: number[][] | null; attrs: Record<string, number | string> }[];
   state: VisionAssetState;
   skip_reason?: string | null;
   asset_attrs?: Record<string, number | string>;

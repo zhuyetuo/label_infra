@@ -290,3 +290,74 @@ def test_导出中途炸了不留半截目录(nas, plan, monkeypatch):
     monkeypatch.setattr(exp.shutil, "copyfile", orig)
     meta = exp.write_dataset("half", plan)
     assert meta["n_images"] > 0
+
+
+# ── 实例分割：把 SAM 算出来的掩膜真的用上 ───────────────────────────────
+#
+# 在这之前，SAM 每次分割同时返回框和掩膜轮廓，但表里只有 bbox——掩膜算完就扔。
+# 以后想训分割模型，几百张图得从头重标一遍。
+
+from app.services.vision_export_service import plan_dataset, to_yolo_line, to_yolo_seg_line
+
+
+def _pts(line: str) -> list[float]:
+    return [float(v) for v in line.split()[1:]]
+
+
+def test_有掩膜就用掩膜():
+    poly = [[0.1, 0.1], [0.3, 0.1], [0.3, 0.4], [0.2, 0.5], [0.1, 0.4]]
+    line = to_yolo_seg_line(2, [0.1, 0.1, 0.2, 0.4], poly)
+    assert line.split()[0] == "2"
+    assert _pts(line) == [v for p in poly for v in p]
+
+
+def test_没掩膜退回用框的四个角():
+    """手画的框本来就没有掩膜，这是常态不是边角情况。
+
+    退回而不是跳过：跳过的话同一张图里手画的框会凭空消失，模型在那几个位置
+    学到的是"这儿没东西"——比边界糙一点有害得多。"""
+    line = to_yolo_seg_line(0, [0.2, 0.3, 0.4, 0.1], None)
+    assert _pts(line) == [0.2, 0.3, 0.6, 0.3, 0.6, 0.4, 0.2, 0.4]
+
+
+@pytest.mark.parametrize("poly", [None, [], [[0.1, 0.1]], [[0.1, 0.1], [0.2, 0.2]]])
+def test_点数不够围不成面的也退回用框(poly):
+    """两个点画出来是一条线，训练时是个零面积的掩膜。"""
+    line = to_yolo_seg_line(1, [0.0, 0.0, 0.5, 0.5], poly)
+    assert len(_pts(line)) == 8
+
+
+def test_seg_跟_det_的坐标口径不一样():
+    """det 是中心点+宽高，seg 是一串顶点（左上角原点）。
+    混了不会报错，只会让模型学到系统性偏移半个框的目标。"""
+    bbox = [0.2, 0.3, 0.4, 0.2]
+    det = to_yolo_line(0, bbox)
+    seg = to_yolo_seg_line(0, bbox, None)
+    assert _pts(det) == [0.4, 0.4, 0.4, 0.2]          # cx cy w h
+    assert _pts(seg)[:2] == [0.2, 0.3]                 # 第一个顶点就是左上角
+
+
+def test_导出计划里能看出有多少条是退回来的():
+    """分割集里这个数高，说明大部分还是手画的框，掩膜边界不会比框更准。
+    不报出来的话，人会以为导的是一份真的分割数据。"""
+    assets = [{"rel_path": "d/dog/a.jpg", "state": "done"}]
+    boxes = {"d/dog/a.jpg": [
+        {"label_code": "incisor", "bbox": [0.1, 0.1, 0.1, 0.1], "polygon": [[0.1, 0.1], [0.2, 0.1], [0.2, 0.2]]},
+        {"label_code": "incisor", "bbox": [0.3, 0.3, 0.1, 0.1]},          # 手画的，没掩膜
+    ]}
+    plan = plan_dataset("oral", assets, boxes, val_ratio=0.0, fmt="seg")
+    assert plan["fmt"] == "seg"
+    assert plan["boxes_without_polygon"] == 1
+    lines = plan["items"][0]["lines"]
+    assert len(_pts(lines[0])) == 6 and len(_pts(lines[1])) == 8
+
+
+def test_不传_fmt_还是原来的检测格式():
+    """检测集已经在用了，不能因为加了分割就把它的行改掉。"""
+    assets = [{"rel_path": "d/dog/a.jpg", "state": "done"}]
+    boxes = {"d/dog/a.jpg": [{"label_code": "incisor", "bbox": [0.2, 0.3, 0.4, 0.2],
+                              "polygon": [[0.1, 0.1], [0.2, 0.1], [0.2, 0.2]]}]}
+    plan = plan_dataset("oral", assets, boxes, val_ratio=0.0)
+    assert plan["fmt"] == "det"
+    assert plan["boxes_without_polygon"] == 0
+    assert _pts(plan["items"][0]["lines"][0]) == [0.4, 0.4, 0.4, 0.2], "有掩膜也不该改变检测导出"

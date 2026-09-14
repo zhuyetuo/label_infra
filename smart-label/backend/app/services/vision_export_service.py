@@ -46,6 +46,25 @@ def to_yolo_line(class_id: int, bbox: list[float]) -> str:
     return f"{class_id} {x + w / 2:.6f} {y + h / 2:.6f} {w:.6f} {h:.6f}"
 
 
+def to_yolo_seg_line(class_id: int, bbox: list[float], polygon: list[list[float]] | None) -> str:
+    """YOLO-seg 的一行：`cls x1 y1 x2 y2 ...`，归一化多边形。
+
+    没有掩膜就**退回用框的四个角**，而不是跳过这一条。跳过的话，同一张图里
+    手画的框会凭空消失，模型在那几个位置学到的是"这儿没东西"——比边界糙一点
+    有害得多。手画的框本来就没有掩膜（只有 SAM 点出来的才有），所以这条路
+    在真实数据里是常态，不是边角情况。
+
+    注意 YOLO-seg 跟 detection 的坐标口径不一样：detection 是中心点+宽高，
+    seg 是一串顶点，直接用左上角原点的归一化坐标，不做中心点换算。
+    """
+    pts = polygon if polygon and len(polygon) >= 3 else None
+    if pts is None:
+        x, y, w, h = bbox
+        pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+    flat = " ".join(f"{v:.6f}" for p in pts for v in p)
+    return f"{class_id} {flat}"
+
+
 # 切分的最小单位就是「组」（日期/狗 = 一次拍摄）。同一次拍摄的照片往往是连拍、
 # 互为近邻，散到 train 和 val 两边会让 val 指标虚高。定义在 vision_service 里，
 # 指派、审核、导出共用同一个——三处各写一份迟早走岔。
@@ -83,10 +102,15 @@ def plan_dataset(
     boxes_by_path: dict[str, list[dict]],
     val_ratio: float = 0.2,
     only_approved: bool = False,
+    fmt: str = "det",
 ) -> dict:
     """纯函数：决定哪些图进数据集、进哪个 split、每张的标注行写什么。
 
-    assets：[{rel_path, state}]；boxes_by_path：{rel_path: [{label_code, bbox}]}
+    assets：[{rel_path, state}]；boxes_by_path：{rel_path: [{label_code, bbox, polygon?}]}
+
+    fmt：det = YOLO 检测（`cls cx cy w h`，默认，跟以前一模一样）；
+         seg = YOLO 分割（`cls x1 y1 ...`）。两种各导各的，不互相覆盖——
+         检测集已经在用了，不能因为加了分割就把它的行改掉。
 
     三条规则写死在这里，不做成开关：
       - state='done' 且零个框 → **显式负样本**，写一个空 txt（ultralytics 认空 txt
@@ -147,7 +171,11 @@ def plan_dataset(
                 skipped["bad_bbox"] += 1
                 n_dropped += 1
                 continue
-            lines.append(to_yolo_line(cid, bbox))
+            lines.append(
+                # b 是这个框，a 是这张图——写成 a.get("polygon") 的话每一条都会
+                # 退回用框，看着像"SAM 掩膜没生效"，而且不报任何错
+                to_yolo_seg_line(cid, bbox, b.get("polygon")) if fmt == "seg" else to_yolo_line(cid, bbox)
+            )
         if raw and not lines and n_dropped:
             # 这张图本来是有标注的，只是全被丢了。这时候**绝不能**让它变成负样本——
             # 那等于告诉模型"这里什么都没有"，而它其实标着东西。整张排除掉，并记下来。
@@ -188,6 +216,14 @@ def plan_dataset(
         "dropped_boxes": dropped_boxes,
         "val_ratio": val_ratio,
         "only_approved": only_approved,
+        "fmt": fmt,
+        # 有多少条是"没有掩膜、退回用框的四个角"的。分割集里这个数高就说明大部分
+        # 还是手画的框，训出来的掩膜边界不会比框更准——得让人看得见，不然会
+        # 以为导的是一份真的分割数据
+        "boxes_without_polygon": (
+            sum(1 for it in items for a in boxes_by_path.get(it["rel_path"], []) if not a.get("polygon"))
+            if fmt == "seg" else 0
+        ),
     }
 
 

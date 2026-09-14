@@ -205,14 +205,36 @@ def test_迁移和模型的列必须一一对应():
     """模型加了列、迁移忘了建，是最经典的坑：本地 create_all 能跑，上线就 500。"""
     import ast
 
-    src = open("alembic/versions/c8e1a4d70f52_add_vision_prototype_tables.py", encoding="utf-8").read()
-    mig = {}
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "create_table":
-            mig[node.args[0].value] = {
-                a.args[0].value for a in node.args[1:]
-                if isinstance(a, ast.Call) and getattr(a.func, "attr", "") == "Column"
-            }
+    import os
+
+    # 扫**全部**迁移，不能只看最初那个建表的：列是可以后来 add_column 加的
+    # （polygon 就是），只看建表文件的话，后加的列会被这条测试误判成"迁移里没有"。
+    # 只看 upgrade()：downgrade 里的 drop_column 不该算进最终形态。
+    mig: dict[str, set[str]] = {}
+    for fn in sorted(os.listdir("alembic/versions")):
+        if not fn.endswith(".py"):
+            continue
+        tree = ast.parse(open(f"alembic/versions/{fn}", encoding="utf-8").read())
+        up = next((f for f in ast.walk(tree)
+                   if isinstance(f, ast.FunctionDef) and f.name == "upgrade"), None)
+        if up is None:
+            continue
+        for node in ast.walk(up):
+            if not isinstance(node, ast.Call):
+                continue
+            attr = getattr(node.func, "attr", "")
+            if attr == "create_table" and node.args:
+                # 用并集不用赋值：文件名的字典序跟迁移的先后没关系
+                # （a7c3e5d9f142 排在 c8e1a4d70f52 前面，但它是后加的 add_column），
+                # 赋值的话后扫到的建表会把先扫到的 add_column 整个盖掉
+                mig.setdefault(node.args[0].value, set()).update(
+                    a.args[0].value for a in node.args[1:]
+                    if isinstance(a, ast.Call) and getattr(a.func, "attr", "") == "Column"
+                )
+            elif attr == "add_column" and len(node.args) >= 2:
+                col = node.args[1]
+                if isinstance(col, ast.Call) and col.args:
+                    mig.setdefault(node.args[0].value, set()).add(col.args[0].value)
     for model in (VisionAsset, VisionAnnotation):
         cols = {c.name for c in model.__table__.columns}
         assert mig.get(model.__tablename__) == cols, model.__tablename__
