@@ -84,6 +84,18 @@ export default function Vision() {
   const [samMode, setSamMode] = useState(false);
   // 只看打了「拿不准」的：攒一批给兽医一次看完，比标一张问一次高效
   const [onlyVet, setOnlyVet] = useState(false);
+  // 左边清单：现在一屏是三天 x 六只狗 x 十几张，全摊开要滚很久才找得到一张。
+  // 折叠 + 只看未标，是"下一张该标哪张"这个动作的最短路径。
+  const [listFilter, setListFilter] = useState<"all" | "todo" | "done">("all");
+  // 收起来的组（folder 或 folder/dog）。默认全展开——只有一两组的时候
+  // 默认收起反而要多点一下。组多了人自己会去收。
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (k: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -319,15 +331,36 @@ export default function Vision() {
   }, [items, selected, labelOf, brush]);
 
   useEffect(() => { draw(); }, [draw]);
+  // 盯着 <img> 的**实际**渲染尺寸重绘。
+  //
+  // 原来是缩放时在 onWheel 里排一次 requestAnimationFrame 再 draw()。那是错的：
+  // setZoom 之后 React 18 批量更新，这一帧 DOM 不一定已经反映新宽度，于是
+  // canvas 按旧宽度铺、图片已经是新宽度——框整体错位。而且 draw 的依赖里
+  // 没有 zoom，那个 useEffect 压根不会因为缩放重跑，rAF 是唯一的重绘时机，
+  // 它一旦赶不上就没有第二次机会。
+  //
+  // ResizeObserver 不看时序，只看结果：尺寸真的变了才重绘，缩放、窗口改大小、
+  // 布局变化（右栏展开收起）全都覆盖到。
   useEffect(() => {
-    const onResize = () => draw();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [draw]);
+    const img = imgRef.current;
+    if (!img || typeof ResizeObserver === "undefined") {
+      const onResize = () => draw();
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(img);
+    return () => ro.disconnect();
+  }, [draw, imgUrl]);
 
-  // 滚轮缩放，以光标为中心：放大的时候人盯着的是那颗牙，不是图片中心
+  // Ctrl+滚轮缩放，以光标为中心：放大的时候人盯着的是那颗牙，不是图片中心。
+  //
+  // 为什么要按住 Ctrl：放大之后图片比视口大，光滚轮得能上下看细节。原来滚轮
+  // 直接缩放，等于把"看"这件事挤掉了——想看下半张只能缩回去再放大。
+  // 顺带白捡一个：触控板双指捏合发的就是 ctrlKey=true 的 wheel 事件。
   const onWheel = (e: React.WheelEvent) => {
     if (!imgUrl) return;
+    if (!e.ctrlKey && !e.metaKey) return;   // 不按 Ctrl 就是普通滚动，别拦
     e.preventDefault();
     const vp = viewportRef.current;
     const img = imgRef.current;
@@ -339,14 +372,14 @@ export default function Vision() {
     const cx = e.clientX - rect.left + vp.scrollLeft;
     const cy = e.clientY - rect.top + vp.scrollTop;
     setZoom(next);
-    // 等新宽度生效之后再按比例修滚动位置
+    // 只修滚动位置，不在这儿 draw()——重绘交给 ResizeObserver，它不看时序。
+    // 滚动位置这件事本身对时序不敏感：早一帧晚一帧只是画面跳一下，不会算错坐标。
     requestAnimationFrame(() => {
       const after = img.clientWidth;
       if (!before || !after) return;
       const k = after / before;
       vp.scrollLeft = cx * k - (e.clientX - rect.left);
       vp.scrollTop = cy * k - (e.clientY - rect.top);
-      draw();
     });
   };
 
@@ -372,7 +405,10 @@ export default function Vision() {
   const onMouseDown = (e: React.MouseEvent) => {
     if (!current || !imgUrl) return;
     // 中键或按住空格 = 平移（放大之后必须能挪，不然只能靠滚动条）
-    if (e.button === 1 || spaceRef.current) {
+    // 右键拖拽平移。放大之后要左右上下看细节，而左键要画框、中键很多鼠标没有、
+    // 空格得腾出一只手——右键是唯一一个「随时能用、又不跟画框抢」的。
+    // 中键和空格原样保留，习惯了那两种的不用改。
+    if (e.button === 2 || e.button === 1 || spaceRef.current) {
       e.preventDefault();
       const vp = viewportRef.current;
       if (vp) panRef.current = { x: e.clientX, y: e.clientY, sl: vp.scrollLeft, st: vp.scrollTop };
@@ -571,6 +607,19 @@ export default function Vision() {
               onChange={(v) => setAlbum(v as VisionAlbum)}
               options={[{ label: "口腔", value: "oral" }, { label: "皮肤", value: "skin" }]}
             />
+            {/* 「未标」用的是 state==="todo"，跳过的不算——那是人看过之后判定
+                不要的，再列进未标里会一直挂在那儿，永远清不完 */}
+            <Segmented
+              size="small"
+              block
+              value={listFilter}
+              onChange={(v) => setListFilter(v as "all" | "todo" | "done")}
+              options={[
+                { label: `全部 ${photos.length}`, value: "all" },
+                { label: `未标 ${photos.filter((p) => p.state === "todo").length}`, value: "todo" },
+                { label: `已标 ${photos.filter((p) => p.state === "done").length}`, value: "done" },
+              ]}
+            />
             {tree?.is_manager && (
               selectMode ? (
                 <Space size={4}>
@@ -600,13 +649,43 @@ export default function Vision() {
             description={tree?.can_review ? "这个相册里没有照片" : "还没有指派给你的照片，找管理员派一组"}
           />
         ) : (
-          (tree?.folders ?? []).map((f) => (
+          (tree?.folders ?? []).map((f) => {
+            // 「标完」= state done。跳过的（skipped）不算标完，但也不算待办——
+            // 它是人看过之后判定不要的，再列进"未标"里会一直挂在那儿
+            const keep = (p: VisionPhoto) =>
+              listFilter === "all" ? true : listFilter === "done" ? p.state === "done" : p.state === "todo";
+            const dogs = f.dogs
+              .map((d) => ({ ...d, photos: d.photos.filter(keep) }))
+              .filter((d) => d.photos.length);
+            if (!dogs.length) return null;
+            const all = f.dogs.flatMap((d) => d.photos);
+            const fDone = all.filter((p) => p.state === "done").length;
+            const fOpen = !collapsed.has(f.folder);
+            return (
             <div key={f.folder} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>{f.folder}</div>
-              {f.dogs.map((d) => (
+              <div
+                onClick={() => toggle(f.folder)}
+                style={{ fontSize: 12, color: "#888", marginBottom: 4, cursor: "pointer",
+                         display: "flex", alignItems: "center", gap: 4 }}
+              >
+                <span style={{ width: 10 }}>{fOpen ? "▾" : "▸"}</span>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.folder}</span>
+                <span style={{ color: fDone === all.length ? "#52c41a" : "#aaa" }}>{fDone}/{all.length}</span>
+              </div>
+              {fOpen && dogs.map((d) => (
                 <div key={d.name} style={{ marginBottom: 6 }}>
                   <div style={{ fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
-                    <span>{d.name}</span>
+                    <span
+                      onClick={() => toggle(`${f.folder}/${d.name}`)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {collapsed.has(`${f.folder}/${d.name}`) ? "▸" : "▾"} {d.name}
+                    </span>
+                    {(() => {
+                      const src = f.dogs.find((x) => x.name === d.name)?.photos ?? [];
+                      const n = src.filter((p) => p.state === "done").length;
+                      return <span style={{ color: n === src.length ? "#52c41a" : "#aaa", fontWeight: 400 }}>{n}/{src.length}</span>;
+                    })()}
                     {d.assignment && <Tag color={ASSIGN_META[d.assignment.state].color} style={{ marginInlineEnd: 0 }}>
                       {ASSIGN_META[d.assignment.state].text}
                     </Tag>}
@@ -640,7 +719,7 @@ export default function Vision() {
                       这组标完了，提交
                     </Button>
                   )}
-                  {d.photos.map((p: VisionPhoto) => (
+                  {!collapsed.has(`${f.folder}/${d.name}`) && d.photos.map((p: VisionPhoto) => (
                     <div
                       key={p.rel_path}
                       onClick={() => tryOpen(p.rel_path)}
@@ -650,7 +729,12 @@ export default function Vision() {
                         display: "flex", justifyContent: "space-between", gap: 6,
                       }}
                     >
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.filename}</span>
+                      {/* 标完的压暗：一眼扫下来，亮的就是还没标的。只靠右边一个小点
+                          的话，几十行里要逐行去找那个点在哪 */}
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                     color: p.state === "done" ? "#8c8c8c" : undefined }}>
+                        {p.state === "done" ? "✓ " : p.state === "skipped" ? "⊘ " : ""}{p.filename}
+                      </span>
                       <span style={{ flexShrink: 0 }}>
                         {p.n_boxes > 0 && <Badge count={p.n_boxes} color="blue" size="small" />}
                         {p.state !== "todo" && (
@@ -662,7 +746,8 @@ export default function Vision() {
                 </div>
               ))}
             </div>
-          ))
+            );
+          })
         )}
       </Card>
 
@@ -690,7 +775,7 @@ export default function Vision() {
                 保存（Ctrl+S）
               </Button>
               <Button size="small" onClick={nextPhoto}>下一张</Button>
-              <Tooltip title="滚轮缩放（以光标为中心）；放大后按住空格或中键拖动平移。一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。">
+              <Tooltip title="Ctrl+滚轮缩放（以光标为中心），普通滚轮上下看；放大后按住右键拖动平移（中键、空格也行）。一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。">
                 <Button size="small" disabled={zoom === 1} onClick={() => setZoom(1)}>
                   {zoom === 1 ? "适应窗口" : `${zoom.toFixed(1)}× 复位`}
                 </Button>
@@ -769,6 +854,8 @@ export default function Vision() {
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
                 onMouseLeave={onMouseUp}
+                // 右键拖拽要吃掉右键菜单，否则一按就弹出来、拖不动
+                onContextMenu={(e) => e.preventDefault()}
               />
             </div>
           </div>
