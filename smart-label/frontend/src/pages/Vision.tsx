@@ -48,9 +48,17 @@ const TOOTH_CODES = (() => {
   return out;
 })();
 
-type Draft = { label_code: string; bbox: VisionBox; attrs: Record<string, number | string> };
+type Draft = {
+  label_code: string;
+  bbox: VisionBox;
+  /** SAM 出的掩膜轮廓，归一化 [[x,y],...]；手画的框没有 */
+  polygon?: number[][] | null;
+  attrs: Record<string, number | string>;
+};
 
-const asDraft = (it: VisionItem): Draft => ({ label_code: it.label_code, bbox: it.bbox, attrs: it.attrs ?? {} });
+const asDraft = (it: VisionItem): Draft => ({
+  label_code: it.label_code, bbox: it.bbox, polygon: it.polygon ?? null, attrs: it.attrs ?? {},
+});
 
 /** 拖动中的临时框 → 归一化，并把负宽高翻正（从右下往左上拖是常见操作） */
 function rectToBox(x0: number, y0: number, x1: number, y1: number, w: number, h: number): VisionBox {
@@ -208,7 +216,8 @@ export default function Vision() {
       saveVisionAnnotations({
         album,
         path: current!,
-        items: items.map((it) => ({ label_code: it.label_code, bbox: it.bbox, attrs: it.attrs })),
+        // polygon 一定要带上，不然存的时候又被丢掉一次——这正是这次要修的那件事
+        items: items.map((it) => ({ label_code: it.label_code, bbox: it.bbox, polygon: it.polygon ?? null, attrs: it.attrs })),
         state,
         asset_attrs: assetAttrs,
         width: natural?.w,
@@ -232,7 +241,9 @@ export default function Vision() {
       // SAM 一次要几百毫秒，这期间人很可能已经翻到下一张了。不认发起时那张的话，
       // 这个框会落到新打开的图上——位置还是按旧图算的
       if (!brush || r.forPath !== current) return;
-      setItems((prev) => [...prev, { label_code: brush, bbox: r.bbox, attrs: {} }]);
+      // 掩膜跟着框一起留下。SAM 本来就把它算出来了，只存框等于每点一次扔一次；
+      // 以后想训分割模型，几百张图得从头重标
+      setItems((prev) => [...prev, { label_code: brush, bbox: r.bbox, polygon: r.polygon, attrs: {} }]);
       setSelected(items.length);
       setDirty(true);
     },
@@ -315,6 +326,24 @@ export default function Vision() {
       const [x, y, bw, bh] = it.bbox;
       const color = labelOf(it.label_code)?.color ?? "#666";
       const on = i === selected;
+      // 有掩膜就把轮廓也描出来。不画的话界面上跟手画的框长得一模一样，
+      // 人不知道这一条到底带没带掩膜——而带不带直接决定它在分割数据集里
+      // 是真轮廓还是退回来的矩形
+      if (it.polygon && it.polygon.length >= 3) {
+        ctx.save();
+        ctx.beginPath();
+        it.polygon.forEach(([px, py]: number[], k: number) =>
+          k ? ctx.lineTo(px * w, py * h) : ctx.moveTo(px * w, py * h));
+        ctx.closePath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 2]);
+        ctx.stroke();
+        ctx.globalAlpha = on ? 0.22 : 0.1;
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.restore();
+      }
       ctx.lineWidth = on ? 3 : 2;
       ctx.strokeStyle = color;
       ctx.strokeRect(x * w, y * h, bw * w, bh * h);

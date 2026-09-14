@@ -235,6 +235,58 @@ def normalize_bbox(bbox) -> list[float]:
     return [round(x, 6), round(y, 6), round(w, 6), round(h, 6)]
 
 
+#: 一个掩膜最多留多少个点。SAM 出的轮廓动辄几百个点，一张图几十个框的话
+#: JSON 能到几 MB——存得下，但每次打开这张图都要传一遍，标注员那边就是卡。
+#: 100 个点足够描一颗牙的轮廓（它本来就是个圆角方块）。
+MAX_POLYGON_POINTS = 100
+
+
+def normalize_polygon(poly) -> list[list[float]] | None:
+    """归一化掩膜轮廓：[[x, y], ...]，全部裁到 0-1。给 None / 空 / 点太少都返回 None。
+
+    跟 bbox 一样是**裁**不是报错：SAM 偶尔会吐出边界外一两个像素，
+    为这个弹错等于让标注员替模型的浮点误差买单。
+
+    点太多就等距抽稀，不是截断——截断会把轮廓剪掉一截，变成一条开口的折线；
+    抽稀只是让边变粗糙，形状还是那个形状。
+    """
+    if poly is None:
+        return None
+    if not isinstance(poly, (list, tuple)):
+        raise VisionError("polygon 应该是 [[x, y], ...]")
+    pts: list[list[float]] = []
+    for p in poly:
+        if not isinstance(p, (list, tuple)) or len(p) != 2:
+            raise VisionError("polygon 的每个点应该是 [x, y]")
+        try:
+            x, y = float(p[0]), float(p[1])
+        except (TypeError, ValueError) as e:
+            raise VisionError("polygon 里有不是数字的值") from e
+        pts.append([round(min(max(x, 0.0), 1.0), 6), round(min(max(y, 0.0), 1.0), 6)])
+    # 少于 3 个点围不成面，存了也没用，还会让下游画出一条线
+    if len(pts) < 3:
+        return None
+    if len(pts) > MAX_POLYGON_POINTS:
+        step = len(pts) / MAX_POLYGON_POINTS
+        pts = [pts[int(i * step)] for i in range(MAX_POLYGON_POINTS)]
+    return pts
+
+
+def load_polygon(raw: str | None) -> list[list[float]] | None:
+    if not raw:
+        return None
+    try:
+        val = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(val, list) and len(val) >= 3:
+        try:
+            return [[float(p[0]), float(p[1])] for p in val]
+        except (TypeError, ValueError, IndexError):
+            return None
+    return None
+
+
 # 犬 modified Triadan 的合法牙位。上颌每象限 10 颗（x01-x10），下颌 11 颗（x01-x11）。
 #
 # 两个容易记反的点：
@@ -308,6 +360,7 @@ def annotation_to_dict(row) -> dict:
         "rel_path": row.rel_path,
         "label_code": row.label_code,
         "bbox": load_bbox(row.bbox),
+        "polygon": load_polygon(getattr(row, "polygon", None)),
         "attrs": load_attrs(row.attrs),
         "source": row.source,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,

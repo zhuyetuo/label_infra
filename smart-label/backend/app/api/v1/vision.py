@@ -262,6 +262,8 @@ async def get_annotations(album: str = Query("oral"), path: str = Query(...), db
 class ItemIn(BaseModel):
     label_code: str
     bbox: list[float] = Field(..., min_length=4, max_length=4, description="[x, y, w, h] 归一化 0-1")
+    # SAM 出的掩膜轮廓。手画的框没有，传 null；不传也行（老前端不会带这个字段）
+    polygon: list[list[float]] | None = Field(None, description="[[x, y], ...] 归一化 0-1；手画的框为 null")
     attrs: dict | None = None
 
 
@@ -292,7 +294,8 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
         for it in body.items:
             if it.label_code not in allowed:
                 raise svc.VisionError(f"这个相册没有类别 {it.label_code}")
-            prepared.append((it.label_code, svc.normalize_bbox(it.bbox), svc.clean_attrs(it.attrs)))
+            prepared.append((it.label_code, svc.normalize_bbox(it.bbox), svc.clean_attrs(it.attrs),
+                             svc.normalize_polygon(it.polygon)))
         asset_attrs = svc.clean_attrs(body.asset_attrs)
     except svc.VisionError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
@@ -304,10 +307,11 @@ async def save_annotations(body: SaveIn, db: AsyncSession = Depends(get_db), use
             VisionAnnotation.album == body.album, VisionAnnotation.rel_path == body.path
         )
     )
-    for label_code, bbox, attrs in prepared:
+    for label_code, bbox, attrs, polygon in prepared:
         db.add(VisionAnnotation(
             album=body.album, rel_path=body.path, label_code=label_code,
             bbox=json.dumps(bbox), attrs=attrs,
+            polygon=json.dumps(polygon) if polygon else None,
             source="human", created_by=user.id,
         ))
 
