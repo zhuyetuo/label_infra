@@ -177,7 +177,11 @@ def group_of(rel_path: str) -> str:
     三处各写一份迟早会走岔，而走岔的后果是标注员看得见不该看的图。
     """
     parts = [p for p in rel_path.split("/") if p]
-    return "/".join(parts[:2]) if len(parts) >= 3 else (parts[0] if parts else "")
+    # 就是「这张照片的父目录」。原来写的是 parts[:2]，对当时仅有的两种形状
+    # （日期/狗/图、日期/图）跟父目录完全等价；狗场那批多一层
+    # （树/日期/狗/品类/图），按 parts[:2] 会把好几只狗算成同一组——
+    # 后果是标注员看得见不该看的图，正是这个函数要防的事。
+    return "/".join(parts[:-1])
 
 
 def check_photo(album: str, rel_path: str) -> str:
