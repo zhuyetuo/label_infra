@@ -120,3 +120,37 @@ export const listMissingFileSamples = () =>
 
 export const cleanupMissingFileSamples = () =>
   request.post<never, { deleted: number; tasks_deleted: number }>("/samples/missing-files/cleanup");
+
+// ── 画面扫描：这份样本的视频里有没有狗 ─────────────────────────────────
+
+export type VisionVerdict = "has_dog" | "mostly_empty" | "no_dog" | "unknown" | "unscanned";
+
+export interface VisionScanCam {
+  cam: string;
+  state: "ok" | "failed";
+  error: string | null;
+  verdict: string | null;
+  /** 采样点里没狗的比例。**扫不成时为 null**——不是 0 也不是 1 */
+  no_dog_ratio: number | null;
+  max_dogs: number | null;
+  sampled: number | null;
+  duration_sec: number | null;
+  weights: string | null;
+  scanned_at: string | null;
+}
+
+/** 已扫过的样本 → 结论。**没扫过的不在这个表里**，调用方据此显示"未扫描" */
+export const listVisionScans = () =>
+  request.get<never, Record<string, { verdict: VisionVerdict; cams: VisionScanCam[] }>>(
+    "/samples/vision-scans",
+  );
+
+export const runVisionScan = (sample_ids: number[], every_sec = 5) =>
+  request.post<never, { samples: number; items: { sample_code: string; scanned: number; failed: number }[] }>(
+    "/samples/vision-scan", { sample_ids, every_sec },
+  );
+
+export const getVisionScanStatus = () =>
+  request.get<never, { available: boolean; error: string | null; loaded_weights?: string | null; dog_class?: number | null }>(
+    "/samples/vision-scan/status",
+  );

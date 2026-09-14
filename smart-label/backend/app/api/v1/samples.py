@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from app.models.clip import ClipJob
 from app.models.inference_run import SampleInferenceRun
 from app.models.media_file import MediaFile
 from app.models.sample import Sample
+from app.models.sample_vision_scan import SampleVisionScan
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
@@ -41,6 +43,8 @@ from app.services.sample_delete_service import delete_samples
 from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progress, start_scan_background
 from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
+from app.services import vision_sam_client
+from app.services import vision_scan_service as vscan
 
 router = APIRouter(prefix="/samples", tags=["samples"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 
@@ -55,6 +59,46 @@ async def list_samples(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Sample).order_by(Sample.created_at.desc()))
     samples = result.scalars().all()
     return ok([SampleOut.model_validate(s).model_dump() for s in samples])
+
+
+# ── 画面扫描：这份样本的视频里有没有狗 ─────────────────────────────────
+
+class VisionScanIn(BaseModel):
+    sample_ids: list[int] = Field(..., min_length=1, max_length=200)
+    every_sec: float = Field(5.0, ge=1.0, le=60.0, description="多少秒看一眼")
+    conf: float = Field(0.35, ge=0.05, le=0.95)
+
+
+@router.get("/vision-scans")
+async def list_vision_scans(db: AsyncSession = Depends(get_db)):
+    """全部已扫结果，按样本聚合。列表页一次拉回来，不每行一个请求。
+
+    没扫过的样本**不出现在这里**——调用方据此显示"未扫描"，而不是"没狗"。
+    """
+    rows = (await db.execute(select(SampleVisionScan))).scalars().all()
+    by_sample: dict[int, list[dict]] = {}
+    for r in rows:
+        by_sample.setdefault(r.sample_id, []).append(vscan.row_to_dict(r))
+    return ok({
+        str(sid): {"verdict": vscan.sample_verdict(cams), "cams": sorted(cams, key=lambda c: c["cam"])}
+        for sid, cams in by_sample.items()
+    })
+
+
+@router.post("/vision-scan")
+async def run_vision_scan(body: VisionScanIn, db: AsyncSession = Depends(get_db)):
+    """扫一批样本的视频。
+
+    串行跑，一小时的视频几十秒——所以一次别丢太多进来，接口会一直等到跑完。
+    扫描是幂等的：同一份样本同一路只留最新一次结果，重扫直接覆盖。
+    """
+    return ok(await vscan.scan_many(db, body.sample_ids, every_sec=body.every_sec, conf=body.conf))
+
+
+@router.get("/vision-scan/status")
+async def vision_scan_status():
+    """狗检测能不能用。跟 SAM 一样：不可用不是事故，是这一项还没开。"""
+    return ok(await vision_sam_client.dog_status())
 
 
 @router.patch("/sensitive")
