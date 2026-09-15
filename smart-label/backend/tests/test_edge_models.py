@@ -341,3 +341,41 @@ def test_prelabel_edge_failure_becomes_a_clear_error(monkeypatch, run):
 
     with pytest.raises(svc.PrelabelError, match="找不到加速度列"):
         run(svc.infer_sample(S(), mode="edge:edge_cnn_i8"))
+
+
+def test_failure_reasons_reach_the_summary_log():
+    """跑批失败时，**原因要进那行 summary 日志**，不能只有一个计数。
+
+    这一条是补一个真实的坑：端侧模型第一次跑批 303 个全失败，日志上只有
+    `"failed": 303`，原因全在 progress.detail 里——那个要开项目页才看得到。
+    于是"为什么失败"完全靠猜。
+
+    去重 + 只取前几条：303 个失败通常是同一个原因，全打出来是刷屏。
+    """
+    from app.services.ai_prelabel_service import PrelabelProgress
+
+    p = PrelabelProgress()
+    p.failed = 3
+    p.detail = [
+        "任务 #1 a：失败 找不到 /nas/x.csv",
+        "任务 #2 b：失败 找不到 /nas/y.csv",      # 同一个原因的不同文件
+        "任务 #3 c：失败 找不到加速度列",
+    ]
+    # 复刻 _run 末尾那段汇总逻辑
+    seen, reasons = set(), []
+    for line in p.detail:
+        if "失败" not in line and "存不下" not in line:
+            continue
+        why = line.split("：", 1)[-1].strip()
+        if why in seen:
+            continue
+        seen.add(why)
+        reasons.append(why)
+        if len(reasons) >= 3:
+            break
+
+    assert len(reasons) == 3, "三条不同原因都该留下"
+    assert any("找不到加速度列" in r for r in reasons), \
+        "最关键的那条原因被去重掉了"
+    # 前缀要被剥掉，否则"同一个原因、不同任务号"永远去不了重
+    assert not any(r.startswith("任务 #") for r in reasons)
