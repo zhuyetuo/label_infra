@@ -22,7 +22,19 @@ _TOOTH_LABELS = [
     {"code": "canine", "name": "犬齿", "color": "#f59e0b", "hotkey": "2"},
     {"code": "premolar", "name": "前臼齿", "color": "#10b981", "hotkey": "3"},
     {"code": "molar", "name": "臼齿", "color": "#a855f7", "hotkey": "4"},
+    # 牙龈单独成一类，不是只做牙框上的 GI 属性。
+    #
+    # 为什么要有这一类：GI 挂在牙框上时，模型只知道"这颗牙附近有炎症"，学不到
+    # "红肿的是**哪一条**龈缘"——炎症长在龈缘那条带上，跟牙冠是两个区域，
+    # 牙框里绝大部分像素是牙面。要让模型直接看牙龈，就得有牙龈自己的框/多边形。
+    #
+    # **必须追加在最后**：导出的 class_id 就是这个列表的下标，插在中间会让已经
+    # 导出的数据集、已经训好的权重里的 class_id 整体错位。
+    {"code": "gingiva", "name": "牙龈", "color": "#e11d48", "hotkey": "5"},
 ]
+
+# 牙齿四类的 code，给"这个属性只对哪些类别有意义"用。
+_TOOTH_ONLY = ["incisor", "canine", "premolar", "molar"]
 
 # 皮肤：按病灶形态，不按疾病名。疾病名要刮片/培养才能确诊，照片上标不准、
 # 标注者之间一致性极差，而且一张图常有多种病因共存。
@@ -51,13 +63,49 @@ _GRADE_0_3 = [
 ]
 
 # 每个框可填的属性。type: grade = 0-3 单选；select = 枚举；tooth_code = 牙位选择器。
+#
+# only_for：这个属性只对哪些类别有意义，前端据此只显示相关的几项。不填 = 所有类别都显示。
+# 这只是显示层的筛选，**不是校验**：老数据里牙框上填过的键照样读得出来、导得出去，
+# 不会因为加了这个字段变成"不认识的属性"。
 _TOOTH_ATTRS = [
-    {"key": "tooth_code", "name": "牙位", "type": "tooth_code",
+    {"key": "tooth_code", "name": "牙位", "type": "tooth_code", "only_for": _TOOTH_ONLY,
      "help": "modified Triadan 三位数。看不出来就留空——留空比猜一个错的好，猜错会顺着牙弓传播成整排错位。"},
-    {"key": "ci", "name": "牙结石 CI", "type": "grade", "options": _GRADE_0_3,
+    {"key": "ci", "name": "牙结石 CI", "type": "grade", "options": _GRADE_0_3, "only_for": _TOOTH_ONLY,
      "help": "Calculus Index 0-3：0 无可见结石，3 牙面大部分被覆盖。"},
     {"key": "gi", "name": "牙龈 GI", "type": "grade", "options": _GRADE_0_3,
-     "help": "Gingivitis Index 0-3：0 无炎症，3 重度炎症/自发出血。"},
+     "help": "Gingivitis Index 0-3：0 无炎症，1 轻微发红不出血，2 发红+探触出血，3 自发出血。"
+             "牙框上填 = 这颗牙旁边的龈缘；牙龈框上填 = 这条龈缘本身。两处都能填，"
+             "老数据里填在牙框上的照样有效。"},
+    # ↓ 牙龈专用。分成"颜色 / 肿胀 / 出血"三项而不是只留一个 GI：
+    # GI 是把三件事糅成一个数的临床量表，标注员之间一致性差（同一张图有人打 1 有人打 2）；
+    # 拆开之后每一项都是照片上看得见的事实，模型也能各学各的。GI 仍然保留，两者不冲突。
+    {"key": "gum_color", "name": "牙龈颜色", "type": "select", "only_for": ["gingiva"],
+     "options": [
+         {"value": "pink", "label": "粉红（正常）"},
+         {"value": "red", "label": "发红"},
+         {"value": "dark_red", "label": "暗红/紫红"},
+         {"value": "pale", "label": "苍白"},
+         {"value": "pigmented", "label": "色素沉着（天生黑斑）"},
+         {"value": "unknown", "label": "看不出（光线/白平衡）"},
+     ],
+     "help": "「色素沉着」是很多犬天生的黑色斑块，不是病变——不单列出来的话会被当成暗红标进去。"
+             "手机白平衡会把整张图偏暖，拿不准就选「看不出」。"},
+    {"key": "gum_swelling", "name": "肿胀", "type": "grade", "only_for": ["gingiva"],
+     "options": [
+         {"value": 0, "label": "0 平贴牙面"},
+         {"value": 1, "label": "1 龈缘略增厚"},
+         {"value": 2, "label": "2 龈缘圆钝外翻"},
+         {"value": 3, "label": "3 明显肿大/增生"},
+     ],
+     "help": "只看龈缘那条带的形态：正常是薄薄一片贴着牙面、边缘是刀刃状的。"},
+    {"key": "gum_bleeding", "name": "出血", "type": "select", "only_for": ["gingiva"],
+     "options": [
+         {"value": "none", "label": "无"},
+         {"value": "present", "label": "看得到血/血痂"},
+         {"value": "unknown", "label": "看不出"},
+     ],
+     "help": "照片只能看到「有没有血」。GI 量表里的「探触出血」要用牙周探针压一下才知道，"
+             "照片上判断不了，别拿这一项去凑 GI=2。"},
     {"key": "visibility", "name": "可见度", "type": "select",
      "options": [{"value": "clear", "label": "清楚"}, {"value": "partial", "label": "部分遮挡"}, {"value": "occluded", "label": "基本挡住"}],
      "help": "被嘴唇挡住多少。挡住大半的牙，分级不可信，导出时会单独标出来。"},
@@ -304,6 +352,9 @@ _ATTR_DOMAINS = {
     "tooth_code": TOOTH_CODES,
     "ci": frozenset(range(4)),
     "gi": frozenset(range(4)),
+    "gum_swelling": frozenset(range(4)),
+    "gum_color": frozenset(["pink", "red", "dark_red", "pale", "pigmented", "unknown"]),
+    "gum_bleeding": frozenset(["none", "present", "unknown"]),
     "severity": frozenset(range(4)),
     "area_band": frozenset(range(4)),
     "visibility": frozenset(["clear", "partial", "occluded", "not_captured"]),

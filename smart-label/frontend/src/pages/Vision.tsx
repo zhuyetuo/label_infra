@@ -677,6 +677,24 @@ export default function Vision() {
     );
   };
 
+  /** 这个属性对这个类别有意义吗。不填 only_for = 所有类别都显示 */
+  const attrApplies = (def: VisionAttrDef, labelCode: string | undefined) =>
+    !def.only_for?.length || (!!labelCode && def.only_for.includes(labelCode));
+
+  /** 改框的类别时，把对新类别不适用的属性丢掉。
+      不丢的话：先当犬齿填了牙位，再改成牙龈，那个牙位就留在库里、还会被导出，
+      而界面上已经看不见了——人根本不知道它还在。 */
+  const attrsForLabel = (attrs: Record<string, number | string> | undefined, labelCode: string) => {
+    const defs = catalog?.item_attrs ?? [];
+    const next: Record<string, number | string> = {};
+    for (const [k, v] of Object.entries(attrs ?? {})) {
+      const def = defs.find((d) => d.key === k);
+      // 认不出来的键原样留着——catalog 以后加减项时，不该顺手把老数据清了
+      if (!def || attrApplies(def, labelCode)) next[k] = v;
+    }
+    return next;
+  };
+
   const setItemAttr = (key: string, v: number | string | undefined) => {
     if (selected == null) return;
     setItems((prev) =>
@@ -1029,13 +1047,33 @@ export default function Vision() {
           </Typography.Text>
         </Typography.Paragraph>
 
+        <Typography.Title level={5}>牙龈怎么标</Typography.Title>
+        <Typography.Paragraph>
+          <b>牙龈是单独一类（快捷键 5）</b>，框<b>龈缘那条带</b>——牙冠根部往上那一条，
+          一段一段地框，不要把整排牙连牙带龈圈进去。<br />
+          选中牙龈框之后，右栏出现的是<b>牙龈颜色 / 肿胀 / 出血</b>；选中牙的框，出现的是
+          <b>牙位 / 牙结石</b>。GI 两边都能填。<br />
+          <Typography.Text type="secondary">
+            为什么牙龈要单独画框、而不是只在牙框上打 GI：GI 挂在牙框上，模型只知道
+            「这颗牙附近有炎症」，学不到红肿的是哪一条龈缘——牙框里绝大部分像素是牙面。
+            <br />
+            颜色里的<b>「色素沉着」</b>是很多犬天生的黑色斑块，不是病变，别当暗红标。
+            光线偏黄拿不准就选「看不出」，比猜一个强。
+            <br />
+            出血只有「有/无」：GI 量表里的「探触出血」要拿牙周探针压一下才知道，
+            照片上判断不了。这里标的是描述性的 GI 0-3，<b>不是牙周病分期（PD0-PD4）</b>——
+            那个要探诊加牙科 X 光，照片给不出，也不要往那个方向写结论。
+          </Typography.Text>
+        </Typography.Paragraph>
+
         <Typography.Title level={5}>推牙位</Typography.Title>
         <Typography.Paragraph>
           先在右栏选好<b>视角</b>（左颊/右颊），再点「推牙位」。它按 Triadan 规则
           以犬齿 x04 和第一臼齿 x09 为锚点沿牙弓递推，缺牙留空号。<br />
           <Typography.Text type="secondary">
             两个锚点少一个就整排不给号——宁可不给，也不要给一个自洽但整排错位的
-            结果。推完请逐颗核对。
+            结果。推完请逐颗核对。牙龈框不参与递推（多一个不是牙的框会让它后面
+            整段编号后移一位），所以牙龈画多少个都不影响牙位。
           </Typography.Text>
         </Typography.Paragraph>
 
@@ -1098,7 +1136,9 @@ export default function Vision() {
                   type={items[selected!].label_code === l.code ? "primary" : "default"}
                   onClick={() => {
                     setItems((prev) => prev.map((it, i) =>
-                      (i === selected ? { ...it, label_code: l.code } : it)));
+                      (i === selected
+                        ? { ...it, label_code: l.code, attrs: attrsForLabel(it.attrs, l.code) }
+                        : it)));
                     setDirty(true);
                   }}
                   style={{ borderLeft: `4px solid ${l.color}` }}
@@ -1107,9 +1147,11 @@ export default function Vision() {
                 </Button>
               ))}
             </Space>
-            {(catalog?.item_attrs ?? []).map((def) =>
-              renderAttr(def, items[selected].attrs?.[def.key], (v) => setItemAttr(def.key, v)),
-            )}
+            {(catalog?.item_attrs ?? [])
+              .filter((def) => attrApplies(def, items[selected!].label_code))
+              .map((def) =>
+                renderAttr(def, items[selected!].attrs?.[def.key], (v) => setItemAttr(def.key, v)),
+              )}
             <Button
               size="small"
               danger

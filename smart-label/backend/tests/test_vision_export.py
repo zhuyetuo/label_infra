@@ -112,8 +112,11 @@ def test_框全被丢弃的图不能变成负样本(plan):
 def test_类别顺序固定且计数正确(plan):
     # class_id 就是这个顺序，要原样写进 meta.json/data.yaml，
     # 否则以后说不清某个权重里的 class_id 3 是哪一类
-    assert plan["class_names"] == ["门齿", "犬齿", "前臼齿", "臼齿"]
-    assert plan["boxes_per_class"] == {"门齿": 1, "犬齿": 1, "前臼齿": 1, "臼齿": 1}
+    # 新类别只能往后追加：前四个的下标是已经导出过的数据集、已经训好的权重在用的，
+    # 插在中间会让它们整体错位，而且不会有任何报错
+    assert plan["class_names"][:4] == ["门齿", "犬齿", "前臼齿", "臼齿"]
+    assert plan["class_names"] == ["门齿", "犬齿", "前臼齿", "臼齿", "牙龈"]
+    assert plan["boxes_per_class"] == {"门齿": 1, "犬齿": 1, "前臼齿": 1, "臼齿": 1, "牙龈": 0}
 
 
 def test_同一次拍摄不跨_split(plan):
