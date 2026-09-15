@@ -3,6 +3,7 @@ import {
   Alert, Badge, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Popconfirm, Radio, Segmented, Select, Slider,
   Space, Spin, Table, Tag, Tooltip, Typography, message,
 } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { materialPhotoUrl } from "@/api/material";
 import {
@@ -83,6 +84,9 @@ export default function Vision() {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   // 当前要画的类别。画完框立刻就带上它，省掉"画框 → 再点类别"的第二步。
   const [brush, setBrush] = useState<string | null>(null);
+  // 操作说明。做成弹窗不是 Tooltip：内容有十几条，悬浮提示放不下，而且看的时候
+  // 人往往要一边看一边试，鼠标一动提示就没了
+  const [helpOpen, setHelpOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
@@ -970,8 +974,95 @@ export default function Vision() {
         )}
       </Card>
 
+      {/* 操作说明。内容不只是快捷键表——把"为什么这么设计"也写进去：
+          SAM 为什么推荐拖框（实测点选给不出牙齿粒度）、两排类别按钮为什么分开
+          （原来一排担两件事，画完一个再切类别会把刚画的改掉）。
+          只列按键的话，人照着做还是会踩同样的坑。 */}
+      <Modal
+        open={helpOpen}
+        onCancel={() => setHelpOpen(false)}
+        footer={null}
+        width={620}
+        title="怎么标"
+      >
+        <Typography.Paragraph style={{ marginBottom: 12 }}>
+          <b>画框</b>：左键在图上拖一个框。选中的类别见右栏最上面那排。
+        </Typography.Paragraph>
+
+        <Typography.Title level={5} style={{ marginTop: 0 }}>两排类别按钮，管的不是一回事</Typography.Title>
+        <Typography.Paragraph>
+          <b>上面那排「下一个框用哪个类别」</b>：只决定你**接下来**要画的框是什么类别，
+          不会动已经画好的框。<br />
+          <b>「选中的框 · 改它的类别」</b>：只改当前选中的那一个框。<br />
+          <Typography.Text type="secondary">
+            分成两处是因为：画完一个框它会自动被选中，如果这时点类别按钮既改 brush
+            又改选中的框，那么「画完犬齿、想让下一个是门齿」就会先把刚画的犬齿改掉。
+          </Typography.Text>
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>快捷键</Typography.Title>
+        <Typography.Paragraph>
+          <b>数字键</b> 切换「下一个框」的类别<br />
+          <b>Shift + 数字</b> 改**选中那个框**的类别（不用动鼠标）<br />
+          <b>Delete / Backspace</b> 删掉选中的框<br />
+          <b>Ctrl + S</b> 保存
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>看清楚一点</Typography.Title>
+        <Typography.Paragraph>
+          <b>Shift + 滚轮</b> 以光标为中心缩放（普通滚轮是上下看）<br />
+          <b>按住右键拖动</b> 平移（中键、空格也行）<br />
+          <Typography.Text type="secondary">
+            一颗牙在适应窗口下只有几十像素，画准框和判分级都得放大。
+          </Typography.Text>
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>SAM 辅助：拖框，别点</Typography.Title>
+        <Typography.Paragraph>
+          开着「SAM 辅助」时，<b>拖一个比目标牙稍大的粗框</b>，SAM 会在框里收紧成
+          贴合的轮廓。你拖的框会先落下，SAM 回来再换掉；收紧失败也不会把你的框吞掉。<br />
+          <Typography.Text type="secondary">
+            点一下也能用，但不推荐：2026-09-15 拿 20 张真实照片实测过，单点提示
+            在牙齿上给不出牙齿粒度——中位数切出来是整个嘴（area 0.111），落在
+            「一颗牙」那一档的 0 张。原因是相邻牙同色、边界连着，SAM 没有依据把
+            「这颗」和「这排」分开。框把范围定死了，这个歧义就没了。
+          </Typography.Text>
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>推牙位</Typography.Title>
+        <Typography.Paragraph>
+          先在右栏选好<b>视角</b>（左颊/右颊），再点「推牙位」。它按 Triadan 规则
+          以犬齿 x04 和第一臼齿 x09 为锚点沿牙弓递推，缺牙留空号。<br />
+          <Typography.Text type="secondary">
+            两个锚点少一个就整排不给号——宁可不给，也不要给一个自洽但整排错位的
+            结果。推完请逐颗核对。
+          </Typography.Text>
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>存成什么状态</Typography.Title>
+        <Typography.Paragraph>
+          <b>保存</b> = 标完了，这张图会进数据集。<b>标完但一个框都没画</b>的图是
+          <b>显式负样本</b>（写一个空 txt，模型会当纯背景图学）——所以「这张没什么可标的」
+          要按保存，不要按跳过。<br />
+          <b>跳过</b> = 这张不要（糊了、拍的不是嘴、重复），不进数据集。
+        </Typography.Paragraph>
+      </Modal>
+
       {/* 右：类别 + 属性 */}
-      <Card size="small" style={{ width: 300 }} styles={{ body: { overflow: "auto", maxHeight: "calc(100vh - 160px)" } }} title="类别与属性">
+      <Card
+        size="small"
+        style={{ width: 300 }}
+        styles={{ body: { overflow: "auto", maxHeight: "calc(100vh - 160px)" } }}
+        title={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            类别与属性
+            <Tooltip title="怎么标（快捷键、SAM 辅助、缩放平移）">
+              <QuestionCircleOutlined style={{ cursor: "pointer", color: "#999" }}
+                                      onClick={() => setHelpOpen(true)} />
+            </Tooltip>
+          </span>
+        }
+      >
         {/* 这一排**只**决定"下一个框用什么类别"，不改已经画好的框。
             原来它顺手把选中的框也改掉了，而画完框又会自动选中它——于是
             「画完犬齿，想让下一个框是门齿」这个再正常不过的动作，会先把刚画的
