@@ -94,6 +94,18 @@ export default function Vision() {
   const [reviewing, setReviewing] = useState(false);
   // SAM 点选模式：开着的时候单击 = 让 SAM 出一个框，而不是拖框
   const [samMode, setSamMode] = useState(false);
+  // 画面上显示哪一层：框 / 分割 / 都显示。默认都显示（跟以前一样）。
+  //
+  // 为什么要能只看一层：牙齿挨着牙齿，一张图十几条标注，框和轮廓叠在一起时
+  // 谁也看不清谁的边——要核对轮廓贴不贴合牙缘，框就是噪声；要核对框有没有
+  // 框歪、有没有漏一颗，半透明的填充又会把边盖住。
+  //
+  // 记在 localStorage 里：这是个人习惯，不该每开一张图就回到默认。
+  const [showLayer, setShowLayer] = useState<"both" | "box" | "mask">(() => {
+    const v = localStorage.getItem("vision.showLayer");
+    return v === "box" || v === "mask" ? v : "both";
+  });
+  useEffect(() => { localStorage.setItem("vision.showLayer", showLayer); }, [showLayer]);
   // 只看打了「拿不准」的：攒一批给兽医一次看完，比标一张问一次高效
   const [onlyVet, setOnlyVet] = useState(false);
   // 左边清单：现在一屏是三天 x 六只狗 x 十几张，全摊开要滚很久才找得到一张。
@@ -362,29 +374,50 @@ export default function Vision() {
       // 有掩膜就把轮廓也描出来。不画的话界面上跟手画的框长得一模一样，
       // 人不知道这一条到底带没带掩膜——而带不带直接决定它在分割数据集里
       // 是真轮廓还是退回来的矩形
-      if (it.polygon && it.polygon.length >= 3) {
+      const hasMask = !!it.polygon && it.polygon.length >= 3;
+      if (hasMask && showLayer !== "box") {
         ctx.save();
         ctx.beginPath();
-        it.polygon.forEach(([px, py]: number[], k: number) =>
+        it.polygon!.forEach(([px, py]: number[], k: number) =>
           k ? ctx.lineTo(px * w, py * h) : ctx.moveTo(px * w, py * h));
         ctx.closePath();
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 2]);
+        // 只看分割时把轮廓画实、画粗一点：这时候人是在核对它贴不贴合牙缘，
+        // 原来那条 1px 虚线是为了跟框区分开，没了框就不需要虚了
+        ctx.lineWidth = showLayer === "mask" ? (on ? 2.5 : 1.5) : 1;
+        if (showLayer !== "mask") ctx.setLineDash([3, 2]);
         ctx.stroke();
         ctx.globalAlpha = on ? 0.22 : 0.1;
         ctx.fillStyle = color;
         ctx.fill();
         ctx.restore();
       }
-      ctx.lineWidth = on ? 3 : 2;
-      ctx.strokeStyle = color;
-      ctx.strokeRect(x * w, y * h, bw * w, bh * h);
+      // 只看分割时，没有掩膜的条目还是要画出来——不画的话它就凭空消失了，
+      // 人会以为这颗牙没标。画成细虚框，正好一眼看出哪些还没有掩膜。
+      const boxOnly = showLayer === "mask" && !hasMask;
+      // 选中的框在「只看分割」时也保留一个淡框：拖动和右下角把手都是按框走的，
+      // 框全藏了就没法改大小了
+      if (showLayer !== "mask" || boxOnly || on) {
+        ctx.save();
+        if (boxOnly || (showLayer === "mask" && on)) {
+          ctx.setLineDash([4, 3]);
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = 0.75;
+        } else {
+          ctx.lineWidth = on ? 3 : 2;
+        }
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x * w, y * h, bw * w, bh * h);
+        ctx.restore();
+      }
       if (on) {
         ctx.fillStyle = color;
-        ctx.globalAlpha = 0.12;
-        ctx.fillRect(x * w, y * h, bw * w, bh * h);
-        ctx.globalAlpha = 1;
+        // 只看分割时不再给框铺底色：铺了就跟掩膜的填充叠成两层，反而看不清轮廓
+        if (showLayer !== "mask") {
+          ctx.globalAlpha = 0.12;
+          ctx.fillRect(x * w, y * h, bw * w, bh * h);
+          ctx.globalAlpha = 1;
+        }
         // 右下角把手：拉大小
         ctx.fillRect((x + bw) * w - 5, (y + bh) * h - 5, 10, 10);
       }
@@ -407,7 +440,7 @@ export default function Vision() {
       ctx.strokeRect(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
       ctx.setLineDash([]);
     }
-  }, [items, selected, labelOf, brush]);
+  }, [items, selected, labelOf, brush, showLayer]);
 
   useEffect(() => { draw(); }, [draw]);
   // 盯着 <img> 的**实际**渲染尺寸重绘。
@@ -926,6 +959,18 @@ export default function Vision() {
                   </Button>
                 </Tooltip>
               )}
+              <Tooltip title="画面上显示哪一层。框和轮廓叠在一起时互相盖边：核对轮廓贴不贴合牙缘就只看分割，核对有没有框歪、漏标就只看框。「只看分割」时没有掩膜的条目会画成细虚框——那正是还没跑过 SAM 的那些。">
+                <Segmented
+                  size="small"
+                  value={showLayer}
+                  onChange={(v) => setShowLayer(v as "both" | "box" | "mask")}
+                  options={[
+                    { label: "框+分割", value: "both" },
+                    { label: "只看框", value: "box" },
+                    { label: "只看分割", value: "mask" },
+                  ]}
+                />
+              </Tooltip>
               <Tooltip title={samOk
                 ? "开着的时候：**拖一个粗框**，SAM 在框里收紧成贴合的轮廓（推荐）；点一下也行，但实测单点在牙齿上分不出「这颗」和「这排」。点已有的框还是选中它。"
                 : (sam?.error || "SAM 辅助没开")}>
@@ -1063,6 +1108,19 @@ export default function Vision() {
             出血只有「有/无」：GI 量表里的「探触出血」要拿牙周探针压一下才知道，
             照片上判断不了。这里标的是描述性的 GI 0-3，<b>不是牙周病分期（PD0-PD4）</b>——
             那个要探诊加牙科 X 光，照片给不出，也不要往那个方向写结论。
+          </Typography.Text>
+        </Typography.Paragraph>
+
+        <Typography.Title level={5}>显示：框 / 分割 / 都显示</Typography.Title>
+        <Typography.Paragraph>
+          工具栏上的 <b>框+分割 / 只看框 / 只看分割</b> 只改显示，<b>不改数据</b>——
+          藏起来的那一层照样存着、照样导出。这个选择会记住。<br />
+          <Typography.Text type="secondary">
+            一张图十几条标注时框和轮廓会互相盖边：要核对轮廓贴不贴合牙缘就只看分割，
+            要核对有没有框歪、漏一颗就只看框。<br />
+            「只看分割」时<b>没有掩膜的条目画成细虚框</b>，不是把它藏了——藏了人会以为
+            这颗牙没标。那些细虚框正好就是还没跑过 SAM 的。选中的那条也会留一个淡框，
+            不然右下角的把手没了，改不了大小。
           </Typography.Text>
         </Typography.Paragraph>
 
