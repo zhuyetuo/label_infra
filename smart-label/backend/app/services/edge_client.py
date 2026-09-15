@@ -40,15 +40,21 @@ def model_of(spec: str) -> str:
     return str(spec)[len(EDGE_PREFIX):] if is_edge(spec) else ""
 
 
+# 跟 vision_sam_client 用同一套写法：compose 里给了默认地址，所以"留空"已经
+# 不能用来关掉它了（${X:-默认} 会落到默认值上）。要显式关就填 off。
+_OFF = {"off", "none", "disabled", "0", "false"}
+
+
 def enabled() -> bool:
-    return bool(settings.edge_service_url)
+    v = (settings.edge_service_url or "").strip()
+    return bool(v) and v.lower() not in _OFF
 
 
 def _base_url() -> str:
-    if not settings.edge_service_url:
+    if not enabled():
         raise EdgeServiceError(
-            "没配 edge_service_url，端侧模型用不了。"
-            "在 algo_tinyml 那台起 edge_service.py，然后把地址配进来。")
+            "端侧推理服务关着（EDGE_SERVICE_URL 是空或 off），端侧模型用不了。\n"
+            "  在 algo_tinyml 那台起 edge_service.py，默认地址是 8900 端口。")
     return settings.edge_service_url.rstrip("/")
 
 
