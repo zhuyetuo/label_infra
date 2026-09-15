@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listEdgeModels } from "@/api/modelEval";
-import { EDGE_MODE_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
+import { EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
 
 /**
  * AI 预标注的「版本」下拉选项：线上模型 + 端侧模型，分两组。
@@ -42,11 +42,21 @@ export function useInferModes() {
       online,
       {
         label: "端侧模型（跑的是烧进项圈的那份 C）",
-        options: edgeModels.map((m) => ({
-          label: `${m.tag}（${m.window} 点 @${m.hz}Hz）`,
-          value: m.spec,
-          title: EDGE_MODE_HINT,
-        })),
+        // 每个端侧模型两个选项：跟线上同一套后处理的（默认，日常用这个），
+        // 和板上原始的。**默认那个排在前面**——用它铺草稿，跟线上版本
+        // 唯一的差别才是模型本身；raw 更碎，是拿来看设备真实输出的。
+        options: edgeModels.flatMap((m) => [
+          {
+            label: `${m.tag} · 稳定版 v2（${m.window} 点 @${m.hz}Hz）`,
+            value: m.spec,
+            title: EDGE_MODE_HINT,
+          },
+          {
+            label: `${m.tag} · 板上原始（${m.window} 点 @${m.hz}Hz）`,
+            value: m.spec_raw ?? `${m.spec}@raw`,
+            title: EDGE_RAW_HINT,
+          },
+        ]),
       },
     ];
   }, [edgeModels]);
