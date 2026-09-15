@@ -5,8 +5,8 @@ import {
 import dayjs from "dayjs";
 import { useQuery } from "@tanstack/react-query";
 import {
-  compareModels, createEvalSet, getEvalRunProgress, listEvalRuns, listEvalSets, startEvalRun,
-  type CompareResult, type VersionDiff, type VersionResult,
+  compareModels, createEvalSet, getEvalRunProgress, listEdgeModels, listEvalRuns, listEvalSets,
+  startEvalRun, type CompareResult, type VersionDiff, type VersionResult,
 } from "@/api/modelEval";
 import { INFER_MODE_LABEL } from "@/utils/inferMode";
 import ThresholdCurve from "@/components/ThresholdCurve";
@@ -24,7 +24,11 @@ import ThresholdCurve from "@/components/ThresholdCurve";
  */
 
 const MODES = ["stable", "viterbi", "raw"];
-const modeLabel = (m: string) => INFER_MODE_LABEL[m] ?? m;
+/** 端侧模型的版本字符串前缀，跟后端 edge_client.EDGE_PREFIX 是同一个约定 */
+const EDGE_PREFIX = "edge:";
+const isEdge = (m: string) => m.startsWith(EDGE_PREFIX);
+const modeLabel = (m: string) =>
+  isEdge(m) ? `端侧 · ${m.slice(EDGE_PREFIX.length)}` : (INFER_MODE_LABEL[m] ?? m);
 
 export default function ModelCompare() {
   const [setId, setSetId] = useState<number | undefined>();
@@ -40,6 +44,9 @@ export default function ModelCompare() {
   const [busy, setBusy] = useState(false);
 
   const { data: runs, refetch: refetchRuns } = useQuery({ queryKey: ["eval-runs"], queryFn: listEvalRuns });
+  // 端侧服务挂着哪些模型。**问服务，不读前端写死的列表**——
+  // 写死的话服务换了模型，这里会出现一个选了就报错的选项
+  const { data: edge } = useQuery({ queryKey: ["edge-models"], queryFn: listEdgeModels });
   const { data: sets, refetch: refetchSets } = useQuery({ queryKey: ["eval-sets"], queryFn: listEvalSets });
   // 跑批期间轮询进度
   const { data: prog } = useQuery({
@@ -149,7 +156,19 @@ export default function ModelCompare() {
           style={{ minWidth: 240 }}
           value={runModes}
           onChange={setRunModes}
-          options={MODES.map((m) => ({ value: m, label: modeLabel(m) }))}
+          options={[
+            { label: "线上模型（algo_service）", options: MODES.map((m) => ({ value: m, label: modeLabel(m) })) },
+            // 端侧那组：服务没配/没起来时这一组是空的，antd 会自动不显示分组标题。
+            // 不写死在前端，是因为写死的话服务换了模型，这里会出现一个
+            // 选了就报错的选项，而错误是"没有这个端侧模型"
+            {
+              label: "端侧模型（跑的是烧进项圈的那份 C）",
+              options: (edge?.models ?? []).map((m) => ({
+                value: m.spec,
+                label: `${m.tag}（${m.window} 点 @${m.hz}Hz）`,
+              })),
+            },
+          ]}
           maxTagCount="responsive"
         />
         <Tooltip title="几个版本对这批样本各跑一遍，结果按 (模型, 版本) 分开存。不写任何草稿，标注员那边不受影响">
@@ -157,6 +176,13 @@ export default function ModelCompare() {
             跑这几个版本
           </Button>
         </Tooltip>
+        {/* 配了但连不上时下拉里那一组是空的，而人看不出为什么——
+            "没开这个功能"和"开了但服务挂了"必须分得开，否则会以为是自己选错了 */}
+        {edge?.enabled && (edge?.models?.length ?? 0) === 0 && (
+          <Tooltip title="后端配了 EDGE_SERVICE_URL，但连不上或者那边没挂模型。去跑 edge_service.py 那台看一下">
+            <Tag color="warning">端侧服务连不上</Tag>
+          </Tooltip>
+        )}
         {prog?.status === "running" && (
           <Space>
             <Progress
