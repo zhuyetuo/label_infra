@@ -142,15 +142,32 @@ export const suggestToothCodes = (body: {
 export const getSamStatus = () =>
   request.get<never, { available: boolean; error?: string | null; device?: string }>("/vision/sam/status");
 
-/** 在图上点一下出一个框。坐标归一化 0-1；label 1=正点 0=负点 */
+/**
+ * SAM 辅助分割。坐标全部归一化 0-1。
+ *
+ * 两种提示，**优先用框**：
+ *   box    拖一个粗框，SAM 在框里收紧成贴合的轮廓
+ *   points 点一下（label 1=正点 0=负点）
+ *
+ * 2026-09-15 实测：单点在牙齿上给不出牙齿粒度。20 张真实照片、点自动落在牙上、
+ * 且已改成挑三个候选里最小的，中位数 area_ratio 仍是 0.111（整个嘴），落在
+ * "一颗牙"那一档的 0 张。相邻牙同色、边界连着，SAM 没依据分"这颗"和"这排"。
+ */
 export const samSegment = (body: {
   album: VisionAlbum;
   path: string;
   points: { x: number; y: number; label: number }[];
+  /** [x, y, w, h] 归一化。给了框就以框为准，点只作辅助 */
+  box?: VisionBox;
 }) =>
-  request.post<never, { bbox: VisionBox; polygon: number[][] | null; score: number }>(
-    "/vision/sam/segment", body, { timeout: 60_000 },
-  );
+  request.post<never, {
+    bbox: VisionBox;
+    polygon: number[][] | null;
+    score: number;
+    /** 三个候选的大小和分数，用来判断挑得对不对 */
+    candidates?: { area_ratio: number; score: number }[];
+    chosen?: number;
+  }>("/vision/sam/segment", body, { timeout: 60_000 });
 
 export const listVisionAnnotators = () =>
   request.get<never, { id: number; name: string; role: string }[]>("/vision/annotators");

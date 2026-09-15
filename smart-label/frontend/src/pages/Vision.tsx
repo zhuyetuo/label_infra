@@ -231,6 +231,35 @@ export default function Vision() {
     },
   });
 
+  // 框提示：拖一个粗框，SAM 在框里收紧成贴合的轮廓。
+  //
+  // 2026-09-15 实测：单点提示在牙齿上**给不出牙齿粒度**。20 张真实照片，
+  // 点自动落在牙上、而且已经改成挑三个候选里最小的，结果中位数 area_ratio
+  // 还是 0.111（整个嘴），落在"一颗牙"那一档的 0 张、>0.03 的 19 张。
+  // 原因是相邻牙同色、边界连着、牙龈紧贴，SAM 没有依据把"这颗"和"这排"分开。
+  //
+  // 框就没这个歧义：范围是人给的，SAM 只负责在里面贴边。
+  const samRefine = useMutation({
+    mutationFn: async ({ idx, box }: { idx: number; box: VisionBox }) => {
+      const forPath = current!;
+      const r = await samSegment({ album, path: forPath, points: [], box });
+      return { ...r, forPath, idx };
+    },
+    onSuccess: (r) => {
+      // 跟点选同一个道理：SAM 几百毫秒里人可能已经翻页了，不认发起时那张就会
+      // 把框落到新图上
+      if (r.forPath !== current) return;
+      setItems((prev) => prev.map((it, i) =>
+        i === r.idx ? { ...it, bbox: r.bbox, polygon: r.polygon } : it));
+      setDirty(true);
+    },
+    onError: () => {
+      // 收紧失败不回滚：人拖的那个粗框本来就是有用的标注，不能因为 SAM 挂了
+      // 就把它吞掉
+      message.warning("SAM 没收紧成，先留着你拖的这个框");
+    },
+  });
+
   const samPick = useMutation({
     mutationFn: async (pt: { x: number; y: number }) => {
       const forPath = current!;
@@ -535,6 +564,16 @@ export default function Vision() {
     const box = rectToBox(d.x0, d.y0, d.x1, d.y1, r.width, r.height);
     // 点一下没拖（<6px）不算画框，否则会到处留下看不见的小框
     if (box[2] * r.width < 6 || box[3] * r.height < 6) return void forceDraw((n) => n + 1);
+    if (samMode && samOk) {
+      // 开着 SAM 时，拖出来的框不是最终结果，是**提示**：让 SAM 在框里收紧成
+      // 贴合的轮廓。框先按你拖的样子落下，SAM 回来再换掉——不先落的话，
+      // SAM 那几百毫秒里画面上什么都没有，人会以为没拖上又拖一次。
+      setItems((prev) => [...prev, { label_code: brush, bbox: box, attrs: {} }]);
+      setSelected(items.length);
+      setDirty(true);
+      samRefine.mutate({ idx: items.length, box });
+      return;
+    }
     setItems((prev) => [...prev, { label_code: brush, bbox: box, attrs: {} }]);
     setSelected(items.length);
     setDirty(true);
@@ -853,7 +892,9 @@ export default function Vision() {
                   </Button>
                 </Tooltip>
               )}
-              <Tooltip title={samOk ? "开着的时候，在牙上点一下就出一个框；点已有的框还是选中它" : (sam?.error || "SAM 辅助没开")}>
+              <Tooltip title={samOk
+                ? "开着的时候：**拖一个粗框**，SAM 在框里收紧成贴合的轮廓（推荐）；点一下也行，但实测单点在牙齿上分不出「这颗」和「这排」。点已有的框还是选中它。"
+                : (sam?.error || "SAM 辅助没开")}>
                 <Button
                   size="small"
                   type={samMode ? "primary" : "default"}
@@ -861,7 +902,7 @@ export default function Vision() {
                   loading={samPick.isPending}
                   onClick={() => setSamMode((v) => !v)}
                 >
-                  SAM 点选
+                  SAM 辅助
                 </Button>
               </Tooltip>
             </Space>

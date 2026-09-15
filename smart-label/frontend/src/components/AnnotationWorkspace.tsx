@@ -16,7 +16,7 @@ import {
 } from "antd";
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
-import { aiPrelabel, getAiLabelInfo, getSampleMedia, type AiLabelInfo } from "@/api/samples";
+import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
@@ -26,6 +26,7 @@ import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
+import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import { INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
@@ -175,6 +176,16 @@ export default function AnnotationWorkspace({
   ).length;
   const [labelId, setLabelId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // 抓挠 ↔ 画面对照：IMU 说在抓挠的时候，画面里有狗吗。
+  // 不需要任何模型——把已标的片段（毫秒）和画面扫描的时间线（秒）叠起来。
+  // 没扫过画面时接口会把 note 说清楚，不会假装"一段可疑的都没有"。
+  const { data: cross } = useQuery({
+    queryKey: ["scratch-cross", sampleId],
+    queryFn: () => scratchCrosscheck(sampleId!),
+    enabled: sampleId != null,
+    retry: false,
+  });
 
   const bus = useMemo(() => new TimeBus(), [taskId]);
   // 片段区间循环：真正的循环逻辑在 bus/视频组件里跑，这里只留一份给按钮高亮/顶部提示用
@@ -1003,6 +1014,51 @@ export default function AnnotationWorkspace({
             saveKeys(PANELS_KEY, next as string[]);
           }}
           items={[
+            ...(cross && (cross.items.length || cross.note) ? [{
+              key: "cross",
+              label: (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  画面对照
+                  {cross.counts?.no_dog ? <Tag color="red">{cross.counts.no_dog} 段画面里没狗</Tag> : null}
+                  {cross.counts?.unknown ? <Tag>{cross.counts.unknown} 段判不了</Tag> : null}
+                  {cross.counts?.agree ? <Tag color="green">{cross.counts.agree} 段对得上</Tag> : null}
+                </span>
+              ),
+              children: (
+                <div style={{ maxHeight: 220, overflow: "auto" }}>
+                  {cross.note && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+                      {cross.note}
+                    </Typography.Text>
+                  )}
+                  {/* 可疑的已经由后端排在前面了——这一块的全部意义就是"先看哪几段"，
+                      按时间排的话人还是得从头翻 */}
+                  {cross.items.map((it: { id: number; start_time_ms: number; end_time_ms: number; cross: ScratchCross }) => {
+                    const META: Record<string, { color: string; text: string }> = {
+                      no_dog: { color: "#d4380d", text: "画面里没狗" },
+                      unknown: { color: "#8c8c8c", text: "判不了" },
+                      agree: { color: "#52c41a", text: "对得上" },
+                    };
+                    const meta = META[it.cross.state] ?? META.unknown;
+                    return (
+                      <div
+                        key={it.id}
+                        onClick={() => bus.seek(it.start_time_ms / 1000)}
+                        title={it.cross.reason}
+                        style={{ cursor: "pointer", fontSize: 12, padding: "3px 6px", borderRadius: 3,
+                                 display: "flex", gap: 8, alignItems: "center" }}
+                      >
+                        <span style={{ color: meta.color, flexShrink: 0, width: 72 }}>{meta.text}</span>
+                        <span style={{ color: "#888" }}>{formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}</span>
+                        <span style={{ color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {it.cross.reason}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ),
+            }] : []),
             {
               key: "segs",
               label: (
