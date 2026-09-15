@@ -186,11 +186,12 @@ def test_plain_mode_still_goes_to_algo_client(on, monkeypatch, run):
     assert called == {"algo": "stable"}
 
 
-def test_edge_batch_always_asks_for_raw(on, monkeypatch, run):
-    """端侧只有 raw。请求体里写死 raw，不把平台的 algo_infer_mode 带过去——
+def test_edge_batch_sends_the_post_mode_from_the_spec(on, monkeypatch, run):
+    """请求体里的 mode 是**版本串解出来的后处理**，不是写死的。
 
-    带过去的话，平台默认是 stable，端侧服务会直接拒绝，而拒绝信息
-    ("端侧模型只有 raw") 看着像端侧服务的毛病，其实是这边传错了。
+    写死 raw 的话，端侧那列会比线上碎一大截，而碎的原因是后处理不同、
+    不是模型不同——对比表看起来像是端侧模型差得多。用户要的是
+    "处理机制跟稳定版 v2 一样，只是模型不一样"。
     """
     sent = {}
 
@@ -208,8 +209,48 @@ def test_edge_batch_always_asks_for_raw(on, monkeypatch, run):
     monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
     run(edge_client.infer_batch([{"path": "a.csv", "sample_id": 1}],
                                 model="edge_cnn_i8"))
-    assert sent["mode"] == "raw"
+    assert sent["mode"] == "viterbi", "默认必须跟线上稳定版 v2 一致"
     assert sent["model"] == "edge_cnn_i8"
+
+    sent.clear()
+    run(edge_client.infer_batch([{"path": "a.csv", "sample_id": 1}],
+                                model="edge_cnn_i8", post_mode="raw"))
+    assert sent["mode"] == "raw"
+
+
+def test_post_mode_is_parsed_from_the_spec():
+    """`edge:x` = 默认 viterbi，`edge:x@raw` = 不做后处理。"""
+    assert edge_client.post_mode_of("edge:edge_cnn_i8") == "viterbi"
+    assert edge_client.post_mode_of("edge:edge_cnn_i8@raw") == "raw"
+    assert edge_client.post_mode_of("edge:edge_cnn_i8@stable") == "stable"
+    assert edge_client.post_mode_of("stable") == ""
+    # 后缀是后处理，模型名不能把它带上——带上就成了"没有这个端侧模型"
+    assert edge_client.model_of("edge:edge_cnn_i8@raw") == "edge_cnn_i8"
+
+
+def test_unknown_post_mode_is_refused_not_silently_defaulted():
+    """悄悄降级的话，结果存进库里标着 @somethig、内容却是 viterbi 的，
+    **而这件事没有任何迹象**。"""
+    with pytest.raises(edge_client.EdgeServiceError, match="不认识"):
+        edge_client.post_mode_of("edge:edge_cnn_i8@smooth")
+
+
+def test_dispatch_carries_the_spec_post_mode(on, monkeypatch, run):
+    """dispatch_batch 也要把后处理带过去——**漏在这里的话上面那几条全是绿的**，
+    因为它们直接调 infer_batch，而平台走的是 dispatch_batch。"""
+    seen = {}
+
+    async def fake_edge(items, model, post_mode="viterbi", **kw):
+        seen["model"], seen["post"] = model, post_mode
+        return []
+
+    monkeypatch.setattr(edge_client, "infer_batch", fake_edge)
+    run(edge_client.dispatch_batch([{"path": "a.csv", "sample_id": 1}],
+                                   mode="edge:edge_cnn_i8@raw"))
+    assert seen == {"model": "edge_cnn_i8", "post": "raw"}
+    run(edge_client.dispatch_batch([{"path": "a.csv", "sample_id": 1}],
+                                   mode="edge:edge_cnn_i8"))
+    assert seen["post"] == "viterbi"
 
 
 def test_non_list_response_is_rejected(on, monkeypatch, run):
@@ -379,3 +420,24 @@ def test_failure_reasons_reach_the_summary_log():
         "最关键的那条原因被去重掉了"
     # 前缀要被剥掉，否则"同一个原因、不同任务号"永远去不了重
     assert not any(r.startswith("任务 #") for r in reasons)
+
+
+def test_endpoint_offers_both_post_modes(on, monkeypatch, run):
+    """界面上每个端侧模型要有两个选项：跟线上同一套后处理的、和板上原始的。
+
+    只给一个的话，人要么看不到板子真实的输出，要么只能看到碎的那份——
+    而"碎"会被读成模型差，其实是后处理的事。
+    """
+    async def fake_available():
+        return [{"tag": "edge_cnn_i8", "classes": ["抓挠"], "window": 16,
+                 "hz": 16, "stride": 8}]
+
+    monkeypatch.setattr(edge_client, "available", fake_available)
+    body = run(api.edge_models())
+    m = body["data"]["models"][0]
+    assert m["spec"] == "edge:edge_cnn_i8"
+    assert m["spec_raw"] == "edge:edge_cnn_i8@raw"
+    # 两个 spec 都要能解回同一个模型、不同的后处理
+    assert edge_client.model_of(m["spec"]) == edge_client.model_of(m["spec_raw"])
+    assert edge_client.post_mode_of(m["spec"]) == "viterbi"
+    assert edge_client.post_mode_of(m["spec_raw"]) == "raw"

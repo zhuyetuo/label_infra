@@ -7,9 +7,12 @@
 从 algo_tinyml 单独起一个服务，这里单独连过去。两边共享同一份 NAS 挂载，
 所以接口里传的还是相对路径，不传文件内容。
 
-端侧服务**只有 raw**，没有 stable/viterbi——那两个是 algo_service 的后处理，
-板子上不存在。传别的 mode 过去会被它明确拒绝，不会悄悄当成 raw 处理；
-这是故意的，否则模型对比里两列看着可比、实际不是一回事。
+**后处理跟线上是同一份代码**：端侧服务的 stable/viterbi 直接调
+imu_train/label_service/postprocess.py，不是另抄一份。所以「端侧 + 稳定版 v2」
+跟线上的「稳定版 v2」之间**只差模型**，对比表里比的才是模型本身。
+
+默认就走 viterbi（= 界面上的稳定版 v2）。想看板子真实会报的碎片段，
+用 `edge:<标签>@raw`——那是端上没有后处理时的样子。
 """
 
 import logging
@@ -35,9 +38,38 @@ def is_edge(spec: str) -> bool:
     return str(spec or "").startswith(EDGE_PREFIX)
 
 
+# 端侧的默认后处理。**不是 raw**：用户要的是"处理机制跟稳定版 v2 一样，
+# 只是模型不一样"。默认 raw 的话，端侧那列会比线上碎一大截，而碎的原因
+# 是后处理不同、不是模型不同——对比表看起来像是端侧模型差得多。
+EDGE_DEFAULT_POST = "viterbi"
+_POST_SEP = "@"
+_POST_MODES = ("raw", "stable", "viterbi")
+
+
 def model_of(spec: str) -> str:
-    """edge:edge_cnn_i8 → edge_cnn_i8"""
-    return str(spec)[len(EDGE_PREFIX):] if is_edge(spec) else ""
+    """edge:edge_cnn_i8 → edge_cnn_i8；edge:edge_cnn_i8@raw → edge_cnn_i8"""
+    if not is_edge(spec):
+        return ""
+    return str(spec)[len(EDGE_PREFIX):].split(_POST_SEP, 1)[0]
+
+
+def post_mode_of(spec: str) -> str:
+    """版本串里带的后处理：edge:x@stable → stable，没带就是默认的。
+
+    不认识的后缀**报错，不当成默认**：悄悄降级的话，结果存进库里标着
+    `@somethig`，内容却是 viterbi 的，而这件事没有任何迹象。
+    """
+    if not is_edge(spec):
+        return ""
+    rest = str(spec)[len(EDGE_PREFIX):].split(_POST_SEP, 1)
+    if len(rest) == 1:
+        return EDGE_DEFAULT_POST
+    mode = rest[1]
+    if mode not in _POST_MODES:
+        raise EdgeServiceError(
+            f"端侧版本 {spec} 里的后处理 {mode!r} 不认识，"
+            f"只支持 {'/'.join(_POST_MODES)}")
+    return mode
 
 
 # 跟 vision_sam_client 用同一套写法：compose 里给了默认地址，所以"留空"已经
@@ -79,7 +111,8 @@ async def available() -> list[dict]:
         return []
 
 
-async def infer_batch(items: list[dict], model: str, labels: list[str] | None = None,
+async def infer_batch(items: list[dict], model: str, post_mode: str = EDGE_DEFAULT_POST,
+                      labels: list[str] | None = None,
                       min_windows: int = 1, max_gap: int = 2) -> list[dict]:
     """一批文件发过去，返回跟 items 一一对应的
     [{sample_id, path, ok, error, result}]，result 结构跟 algo_service 的 /infer 一样。
@@ -89,7 +122,7 @@ async def infer_batch(items: list[dict], model: str, labels: list[str] | None = 
     """
     url = f"{_base_url()}/api/v1/label/infer_batch"
     payload = {
-        "items": items, "mode": "raw", "model": model,
+        "items": items, "mode": post_mode, "model": model,
         "min_windows": min_windows, "max_gap": max_gap,
     }
     if labels:
@@ -126,5 +159,7 @@ async def dispatch_batch(items: list[dict], mode: str | None,
     from app.services import algo_client
 
     if is_edge(mode):
-        return await infer_batch(items, model=model_of(mode), **edge_kw)
+        # post_mode 从版本串里解出来，**不是写死 raw**——见模块开头
+        return await infer_batch(items, model=model_of(mode),
+                                 post_mode=post_mode_of(mode), **edge_kw)
     return await algo_client.infer_batch(items, mode=mode)

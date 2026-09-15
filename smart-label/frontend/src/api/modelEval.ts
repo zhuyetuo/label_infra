@@ -112,6 +112,9 @@ export interface EdgeModel {
   /** 跑批时要传的版本字符串，形如 edge:edge_cnn_i8。后端拼好，前端不自己拼——
    *  拼错的表现是"没有这个端侧模型"，而前端看不出哪里错 */
   spec: string;
+  /** 同一个模型、不做后处理的版本（edge:<标签>@raw），板子真实会报的样子。
+   *  老后端没这个字段，所以可选——hook 那边有兜底拼法 */
+  spec_raw?: string;
   classes: string[];
   window: number;
   hz: number;

@@ -53,8 +53,14 @@ async def edge_models():
     models = await edge_client.available()
     return ok({
         "enabled": edge_client.enabled(),
-        # spec 就是跑批时要传的那个字符串，前端不用自己拼前缀
-        "models": [{**m, "spec": f"{edge_client.EDGE_PREFIX}{m['tag']}"} for m in models],
+        # spec 就是跑批时要传的那个字符串，前端不用自己拼前缀。
+        # spec 走跟线上「稳定版 v2」同一份后处理（比的才只是模型）；
+        # spec_raw 是端上没有后处理时真实会报的样子，更碎。
+        "models": [{
+            **m,
+            "spec": f"{edge_client.EDGE_PREFIX}{m['tag']}",
+            "spec_raw": f"{edge_client.EDGE_PREFIX}{m['tag']}@raw",
+        } for m in models],
     })
 
 
