@@ -389,8 +389,9 @@ async def sam_segment(body: SamIn, db: AsyncSession = Depends(get_db), user: Use
     if not body.points and not body.box:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "至少给一个点或一个框")
 
-    # vision_service 那边的路径是相对素材库根的，要带上相册目录这一层
-    material_rel = f"{tooth_service.ALBUMS[body.album]()}/{body.path}"
+    # vision_service 那边的路径是相对**素材库根**的。老形状要补上相册目录这一层，
+    # 混合树（狗场合作那批）本来就是相对根的，补了反而多一层——见 material_rel
+    material_rel = tooth_service.material_rel(body.path, body.album)
     try:
         data = await sam_client.segment(material_rel, [p.model_dump() for p in body.points], body.box)
     except sam_client.SamUnavailable as e:

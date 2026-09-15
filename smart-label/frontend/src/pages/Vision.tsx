@@ -590,12 +590,24 @@ export default function Vision() {
         if (current && imgUrl && !save.isPending) save.mutate("done");
         return;
       }
-      const hit = catalog?.labels.find((l) => l.hotkey === e.key);
+      // 数字键 = 下一个框用什么；Shift+数字 = 改**选中的那个框**。
+      //
+      // 原来一个键干两件事：既设 brush 又改选中的框。而画完框会自动选中它，
+      // 于是「画完犬齿，按 1 让下一个框是门齿」会先把刚画的犬齿改成门齿。
+      // 拆开之后两个动作都只要一步，而且互不误伤。
+      //
+      // Shift+数字 在键盘上拿到的 e.key 是符号（! @ #…），所以按 e.code 找，
+      // 不按 e.key——按 e.key 的话 Shift 组合永远匹配不上，这条会静默失效。
+      const digit = e.code.startsWith("Digit") ? e.code.slice(5) : null;
+      const hit = catalog?.labels.find((l) => l.hotkey === (e.shiftKey ? digit : e.key));
       if (hit) {
-        setBrush(hit.code);
-        if (selected != null) {
-          setItems((prev) => prev.map((it, i) => (i === selected ? { ...it, label_code: hit.code } : it)));
-          setDirty(true);
+        if (e.shiftKey) {
+          if (selected != null) {
+            setItems((prev) => prev.map((it, i) => (i === selected ? { ...it, label_code: hit.code } : it)));
+            setDirty(true);
+          }
+        } else {
+          setBrush(hit.code);
         }
         return;
       }
@@ -960,20 +972,19 @@ export default function Vision() {
 
       {/* 右：类别 + 属性 */}
       <Card size="small" style={{ width: 300 }} styles={{ body: { overflow: "auto", maxHeight: "calc(100vh - 160px)" } }} title="类别与属性">
-        <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>画框用哪个类别（数字键切换）</div>
+        {/* 这一排**只**决定"下一个框用什么类别"，不改已经画好的框。
+            原来它顺手把选中的框也改掉了，而画完框又会自动选中它——于是
+            「画完犬齿，想让下一个框是门齿」这个再正常不过的动作，会先把刚画的
+            犬齿改成门齿。一排按钮担了两件事，永远有一件是错的。
+            改已画好的框，去下面「选中的框」那一行。 */}
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>下一个框用哪个类别（数字键切换；Shift+数字改选中的框）</div>
         <Space wrap size={4} style={{ marginBottom: 12 }}>
           {(catalog?.labels ?? []).map((l) => (
             <Button
               key={l.code}
               size="small"
               type={brush === l.code ? "primary" : "default"}
-              onClick={() => {
-                setBrush(l.code);
-                if (selected != null) {
-                  setItems((prev) => prev.map((it, i) => (i === selected ? { ...it, label_code: l.code } : it)));
-                  setDirty(true);
-                }
-              }}
+              onClick={() => setBrush(l.code)}
               style={{ borderLeft: `4px solid ${l.color}` }}
             >
               {l.hotkey} {l.name}
@@ -983,9 +994,28 @@ export default function Vision() {
 
         {selected != null && items[selected] ? (
           <>
-            <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>
-              选中的框 · {labelOf(items[selected].label_code)?.name}
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>
+              选中的框 · 改它的类别
             </div>
+            {/* 改的是**这个框**，跟上面那排（下一个框用什么）互不影响。
+                分成两处之后，两个动作都只要一步，而且不会互相误伤。 */}
+            <Space wrap size={4} style={{ marginBottom: 10 }}>
+              {(catalog?.labels ?? []).map((l) => (
+                <Button
+                  key={l.code}
+                  size="small"
+                  type={items[selected!].label_code === l.code ? "primary" : "default"}
+                  onClick={() => {
+                    setItems((prev) => prev.map((it, i) =>
+                      (i === selected ? { ...it, label_code: l.code } : it)));
+                    setDirty(true);
+                  }}
+                  style={{ borderLeft: `4px solid ${l.color}` }}
+                >
+                  {l.name}
+                </Button>
+              ))}
+            </Space>
             {(catalog?.item_attrs ?? []).map((def) =>
               renderAttr(def, items[selected].attrs?.[def.key], (v) => setItemAttr(def.key, v)),
             )}
