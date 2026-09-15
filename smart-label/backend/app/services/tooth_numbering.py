@@ -258,6 +258,10 @@ def suggest(view_code: str, boxes: list[dict], jaw: str | None = None) -> dict:
         for i, b in enumerate(boxes)
     ]
     teeth = [t for t in teeth if t.bbox[2] > 0 and t.bbox[3] > 0]
+    # 不是牙的框（牙龈）不能进来。牙位是沿牙弓递推出来的：多一个不是牙的框，
+    # 排序里就多一个位置，从它往后整段编号全部后移一位——而且结果自洽、看不出来。
+    # 上下颌那一刀也是按中位 cy 切的，牙龈框会把中位线拉偏。
+    teeth = [t for t in teeth if t.label_code in _TYPE_RANGES_UPPER]
     if len(teeth) < 2:
         return {"suggestions": [], "verdict": "too_few", "per_jaw": {}, "reason": "框太少，推不出牙弓序列"}
 

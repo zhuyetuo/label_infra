@@ -22,6 +22,8 @@ export interface VisionAttrDef {
   type: "grade" | "select" | "tooth_code";
   options?: VisionAttrOption[];
   help?: string;
+  /** 只对这些类别显示；不填 = 所有类别都显示 */
+  only_for?: string[];
 }
 
 export interface VisionCatalog {
