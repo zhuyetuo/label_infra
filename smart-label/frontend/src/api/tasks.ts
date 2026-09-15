@@ -65,7 +65,8 @@ export const bulkCreateTasks = (body: {
   sample_ids: number[];
   task_type: TaskType;
   assigned_to?: number;
-  infer_mode?: "stable" | "viterbi" | "raw" | null;
+  // 可以是 stable/viterbi/raw，也可以是端侧模型 edge:<标签>
+  infer_mode?: string | null;
 }) =>
   request.post<never, { created: number; skipped: number; skipped_sample_ids: number[] }>(
     "/tasks/bulk",

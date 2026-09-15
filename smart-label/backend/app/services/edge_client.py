@@ -110,3 +110,21 @@ async def infer_batch(items: list[dict], model: str, labels: list[str] | None = 
     if not isinstance(data, list):
         raise EdgeServiceError("端侧服务 /infer_batch 返回格式不对（不是列表）")
     return data
+
+
+async def dispatch_batch(items: list[dict], mode: str | None,
+                         **edge_kw) -> list[dict]:
+    """按版本字符串选 client：`edge:<标签>` 走端侧，其余走 algo_service。
+
+    **抽出来是因为这段逻辑有两个调用点**（项目批量预标注、模型对比跑批），
+    抄两份的话迟早有一份漏改——而漏改的表现是：`edge:xxx` 发给 algo_service，
+    它认不出这个 mode，多半按默认的 stable 跑。结果存进库里，标签写的是端侧
+    模型，内容却是线上模型。**没有任何迹象。**
+
+    返回的结构两边一样：[{sample_id, path, ok, error, result}]。
+    """
+    from app.services import algo_client
+
+    if is_edge(mode):
+        return await infer_batch(items, model=model_of(mode), **edge_kw)
+    return await algo_client.infer_batch(items, mode=mode)

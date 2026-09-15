@@ -75,7 +75,8 @@ export interface AiLabelInfo {
 export const getAiLabelInfo = (sampleId: number) =>
   request.get<never, AiLabelInfo>(`/samples/${sampleId}/ai-label-info`);
 
-export const aiPrelabel = (sampleId: number, mode: "stable" | "viterbi" | "raw" = "stable", taskId?: number) =>
+/** mode 可以是 stable/viterbi/raw，也可以是端侧模型 edge:<标签> */
+export const aiPrelabel = (sampleId: number, mode: string = "stable", taskId?: number) =>
   request.post<never, PrelabelResult>(`/samples/${sampleId}/ai-prelabel`, undefined, {
     timeout: 180_000,
     params: { mode, ...(taskId != null ? { task_id: taskId } : {}) },

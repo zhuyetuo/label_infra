@@ -155,13 +155,12 @@ def test_edge_spec_goes_to_edge_client_not_algo(on, monkeypatch, run):
     from app.services import algo_client
     monkeypatch.setattr(algo_client, "infer_batch", fake_algo)
 
-    # 直接验分派那一小段逻辑，不拉起整个跑批（那要数据库和 NAS）
-    spec = "edge:edge_cnn_i8"
-    if edge_client.is_edge(spec):
-        out = run(edge_client.infer_batch(
-            [{"path": "a.csv", "sample_id": 7}], model=edge_client.model_of(spec)))
-    else:
-        out = run(algo_client.infer_batch([{"path": "a.csv", "sample_id": 7}], mode=spec))
+    # **直接调 dispatch_batch**，不在测试里把分派逻辑抄一遍。
+    # 抄一遍是循环论证：测的是我在测试里写的那个 if，不是生产代码里那个。
+    # 而生产代码有两个调用点（项目预标注、模型对比跑批），抄两份的话
+    # 漏改的那份不会被任何测试发现。
+    out = run(edge_client.dispatch_batch(
+        [{"path": "a.csv", "sample_id": 7}], "edge:edge_cnn_i8"))
 
     assert called == {"edge": "edge_cnn_i8"}, "不该碰 algo_client"
     assert out[0]["result"]["model_path"] == "edge://edge_cnn_i8.edge"
@@ -183,11 +182,7 @@ def test_plain_mode_still_goes_to_algo_client(on, monkeypatch, run):
     monkeypatch.setattr(algo_client, "infer_batch", fake_algo)
     monkeypatch.setattr(edge_client, "infer_batch", fake_edge)
 
-    spec = "stable"
-    if edge_client.is_edge(spec):
-        run(edge_client.infer_batch([], model=edge_client.model_of(spec)))
-    else:
-        run(algo_client.infer_batch([], mode=spec))
+    run(edge_client.dispatch_batch([], "stable"))
     assert called == {"algo": "stable"}
 
 
@@ -236,3 +231,113 @@ def test_non_list_response_is_rejected(on, monkeypatch, run):
     with pytest.raises(edge_client.EdgeServiceError, match="不是列表"):
         run(edge_client.infer_batch([{"path": "a.csv", "sample_id": 1}],
                                     model="edge_cnn_i8"))
+
+
+# ── 预标注（给标注员铺草稿）那条路 ────────────────────────────────────────
+
+
+def test_prelabel_single_sample_dispatches_to_edge(monkeypatch, run):
+    """样本页那个「AI预标注」按钮，选端侧模型时要走端侧服务。
+
+    **分派错了是最糟的**：发给 algo_service，它认不出这个 mode，多半按默认的
+    stable 跑——草稿铺下去了，标注员照着改，而那些片段根本不是端侧会报的东西。
+    没有任何迹象。
+    """
+    from app.services import ai_prelabel_service as svc
+
+    called = {}
+
+    async def fake_edge(items, model, **kw):
+        called["edge"] = model
+        return [{"sample_id": items[0]["sample_id"], "path": items[0]["path"],
+                 "ok": True, "error": None,
+                 "result": {"model_path": f"edge://{model}.edge", "mode": "raw",
+                            "n_windows": 3, "segments": {}, "candidates": [],
+                            "missing_seconds": 0.0}}]
+
+    async def fake_algo(*a, **kw):
+        called["algo"] = kw.get("mode")
+        return {}
+
+    async def fake_start(sample):
+        return None
+
+    async def fake_store(sample, result, csv_start):
+        called["stored"] = result.get("model_path")
+        return result
+
+    monkeypatch.setattr(svc.edge_client, "infer_batch", fake_edge)
+    monkeypatch.setattr(svc.algo_client, "infer", fake_algo)
+    monkeypatch.setattr(svc, "_csv_start_of", fake_start)
+    monkeypatch.setattr(svc, "_store_and_normalize", fake_store)
+
+    class S:
+        id = 7
+        imu_csv_path = "a.csv"
+        sample_hz = 50
+
+    run(svc.infer_sample(S(), mode="edge:edge_cnn_i8"))
+    assert called.get("edge") == "edge_cnn_i8", "不该碰 algo_client"
+    assert "algo" not in called
+    assert called["stored"] == "edge://edge_cnn_i8.edge"
+
+
+def test_prelabel_single_sample_still_uses_algo_for_plain_modes(monkeypatch, run):
+    """加了端侧之后，原来的 stable/raw/viterbi 必须一点不受影响。"""
+    from app.services import ai_prelabel_service as svc
+
+    called = {}
+
+    async def fake_algo(path, sample_id=None, mode=None, device_hz=None):
+        called["algo"] = mode
+        return {"model_path": "/x/rf.pkl", "mode": mode, "segments": {}}
+
+    async def fake_edge(items, model, **kw):
+        called["edge"] = model
+        return []
+
+    async def fake_start(sample):
+        return None
+
+    async def fake_store(sample, result, csv_start):
+        return result
+
+    monkeypatch.setattr(svc.algo_client, "infer", fake_algo)
+    monkeypatch.setattr(svc.edge_client, "infer_batch", fake_edge)
+    monkeypatch.setattr(svc, "_csv_start_of", fake_start)
+    monkeypatch.setattr(svc, "_store_and_normalize", fake_store)
+
+    class S:
+        id = 7
+        imu_csv_path = "a.csv"
+        sample_hz = 50
+
+    run(svc.infer_sample(S(), mode="stable"))
+    assert called == {"algo": "stable"}
+
+
+def test_prelabel_edge_failure_becomes_a_clear_error(monkeypatch, run):
+    """端侧那边单条失败时，要给一条说得清的错，不能抛 KeyError。
+
+    批量接口的失败是 ok=False + error 字段，不是异常——不处理的话
+    下一行 rows[0]["result"] 会是 None，然后在别处炸出一个跟原因无关的错。
+    """
+    from app.services import ai_prelabel_service as svc
+
+    async def fake_edge(items, model, **kw):
+        return [{"sample_id": 7, "path": "a.csv", "ok": False,
+                 "error": "ValueError: 找不到加速度列", "result": None}]
+
+    async def fake_start(sample):
+        return None
+
+    monkeypatch.setattr(svc.edge_client, "infer_batch", fake_edge)
+    monkeypatch.setattr(svc, "_csv_start_of", fake_start)
+
+    class S:
+        id = 7
+        imu_csv_path = "a.csv"
+        sample_hz = 50
+
+    with pytest.raises(svc.PrelabelError, match="找不到加速度列"):
+        run(svc.infer_sample(S(), mode="edge:edge_cnn_i8"))

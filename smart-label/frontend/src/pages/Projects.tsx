@@ -59,7 +59,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
-import { INFER_MODE_HINT, INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
+import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
+import { useInferModes } from "@/hooks/useInferModes";
 
 // 上次用的预标注版本：用惯哪个就默认哪个，省得每次重选
 const PRELABEL_MODE_KEY = "smart-label:prelabel-mode";
@@ -141,6 +142,8 @@ export default function Projects() {
     () => (getSavedText(PRELABEL_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
   );
   // 新建项目 / 批量导入时 ai_assisted 自动跑预标注用哪个版本
+  // 版本下拉的选项（线上 + 端侧）。端侧有哪几个是问服务拿的，不写死
+  const { options: inferOptions, edgeOffline } = useInferModes();
   const [createInferMode, setCreateInferMode] = useState<InferMode>(
     () => (getSavedText(CREATE_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
   );
@@ -1314,18 +1317,21 @@ export default function Projects() {
                 自己占一行，说明另起一行 */}
             <div>
               <Typography.Text style={{ marginRight: 8 }}>版本：</Typography.Text>
-              <Segmented
+              {/* 原来是 Segmented。加上端侧那两个之后有 5 个选项，Segmented 会很宽，
+                  而且它**不支持分组**——线上和端侧混在一排看不出区别。换成 Select。 */}
+              <Select
                 size="small"
+                style={{ minWidth: 200 }}
                 value={prelabelMode}
                 onChange={(v) => {
                   setPrelabelMode(v as InferMode);
                   saveText(PRELABEL_MODE_KEY, String(v));
                 }}
-                options={INFER_MODE_OPTIONS}
+                options={inferOptions}
               />
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {INFER_MODE_HINT[prelabelMode]}
+              {hintOf(prelabelMode)}
             </Typography.Text>
             <Checkbox
               checked={prelabelOverwrite}
@@ -1420,7 +1426,7 @@ export default function Projects() {
                       render: (_, r: PrelabelRun) =>
                         r.mode || r.model_path ? (
                           <Space size={4}>
-                            {r.mode && <Tag>{INFER_MODE_LABEL[r.mode] ?? r.mode}</Tag>}
+                            {r.mode && <Tag>{modeLabelOf(r.mode)}</Tag>}
                             {r.model_path && (
                               <Tooltip title={r.model_path}>
                                 <span style={{ color: "#999", fontSize: 12 }}>
@@ -1531,7 +1537,7 @@ export default function Projects() {
                   ]}
                 />
                 {createTaskType === "ai_assisted" && (
-                  <Select style={{ width: 130 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+                  <Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} />
                 )}
                 <Select
                   style={{ width: 200 }}
@@ -1692,7 +1698,7 @@ export default function Projects() {
             ]}
           />
           {bulkTaskType === "ai_assisted" && (
-            <Select style={{ width: 130 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={INFER_MODE_OPTIONS} title={INFER_MODE_HINT[createInferMode]} />
+            <Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} />
           )}
           <Typography.Text>指派给</Typography.Text>
           <Select
