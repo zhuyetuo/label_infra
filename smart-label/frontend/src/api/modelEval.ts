@@ -104,3 +104,21 @@ export const startEvalRun = (body: {
 }) => request.post<never, { started: boolean; n_samples: number; modes: string[] }>("/model-eval/run", body);
 
 export const getEvalRunProgress = () => request.get<never, EvalRunProgress>("/model-eval/run/progress");
+
+/** 端侧推理服务上挂着的一个模型。跑的是烧进项圈的那份 C，用来回答
+ *  "这个模型上板之后会是什么效果"。 */
+export interface EdgeModel {
+  tag: string;
+  /** 跑批时要传的版本字符串，形如 edge:edge_cnn_i8。后端拼好，前端不自己拼——
+   *  拼错的表现是"没有这个端侧模型"，而前端看不出哪里错 */
+  spec: string;
+  classes: string[];
+  window: number;
+  hz: number;
+  stride: number;
+}
+
+/** enabled=false 是没配这个服务（功能关着）；enabled=true 但 models 空
+ *  是配了连不上。界面上这两种要分开说——一个是"没开"，一个是"挂了"。 */
+export const listEdgeModels = () =>
+  request.get<never, { enabled: boolean; models: EdgeModel[] }>("/model-eval/edge-models");
