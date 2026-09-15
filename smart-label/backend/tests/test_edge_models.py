@@ -85,7 +85,12 @@ def test_unreachable_service_degrades_to_empty_list(on, run):
 
 
 def test_infer_batch_without_config_says_what_to_do(off, run):
-    with pytest.raises(edge_client.EdgeServiceError, match="edge_service_url"):
+    """关着的时候要说清楚是**关着**，而不是"连不上"。
+
+    （消息里原来提的是 edge_service_url 这个字段名；现在 compose 里有默认
+    地址了，关闭方式是填 off，所以消息也跟着改成说 EDGE_SERVICE_URL。）
+    """
+    with pytest.raises(edge_client.EdgeServiceError, match="EDGE_SERVICE_URL"):
         run(edge_client.infer_batch([{"path": "a.csv", "sample_id": 1}],
                                     model="edge_cnn_i8"))
 

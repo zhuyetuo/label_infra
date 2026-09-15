@@ -76,23 +76,42 @@ def test_compose_uses_colon_dash_for_defaults():
     for name in SERVICE_URLS:
         v = env.get(name, "")
         if "-" not in v:
-            continue            # 没给默认值的（比如 EDGE，默认就是关着）
+            continue            # 没给默认值的（现在三个都给了，留着以防以后加）
         assert ":-" in v, (
             f"{name} 用的是 ${{X-默认}}，应该是 ${{X:-默认}}——"
             "照模板抄出来的 .env 里那行是空字符串，不是未定义")
 
 
-def test_edge_service_defaults_to_off():
-    """端侧服务**默认必须是关着的**，跟另外两个不一样。
+def test_edge_service_has_a_default_address_like_the_others():
+    """端侧服务跟 ALGO/VISION 一样给默认地址：`git pull && bash up.sh` 就能用。
 
-    ALGO/VISION 是线上要用的，给默认地址是为了 `git pull && bash up.sh` 就能跑。
-    端侧服务只在选型阶段起，给它一个默认地址的话，没起服务的机器上
-    模型对比页会一直显示"端侧服务连不上"——一个常态化的红字警告，
-    看久了就没人当回事了。
+    我原来在这里断言的是"默认必须是关着的"，理由是"没起服务的机器上会一直
+    显示连不上"。**那条理由站不住**：同样的情况对 VISION 也成立，
+    而团队早就选了给默认地址那条路——"服务起着就能用，不用在这儿填"。
+    为一个可选服务要求每台机器手填一次，比偶尔看到一个小提示成本高。
+
+    留空已经不能用来关掉它了（${X:-默认} 会落到默认值上），
+    所以要显式关就填 off —— 跟 VISION 同一套写法。
     """
-    v = _compose_env()["EDGE_SERVICE_URL"]
-    assert v.strip() in ("${EDGE_SERVICE_URL:-}", "${EDGE_SERVICE_URL}"), \
-        f"EDGE_SERVICE_URL 的默认值不是空：{v}"
+    v = _compose_env()["EDGE_SERVICE_URL"].strip()
+    assert v.startswith("${EDGE_SERVICE_URL:-http"), \
+        f"EDGE_SERVICE_URL 没给默认地址：{v}"
+
+
+def test_off_switch_actually_disables_the_edge_service(monkeypatch):
+    """既然默认地址baked in 了，`off` 就是唯一的关闭方式——它必须真的管用。
+
+    不管用的话，想关的人填了 off，后端会把 "off" 当成主机名去连，
+    报一个"连不上 http://off/..."，而那看着像网络问题不像配置问题。
+    """
+    from app.services import edge_client
+    for v in ("off", "OFF", "none", "false", "0", ""):
+        monkeypatch.setattr(edge_client.settings, "edge_service_url", v,
+                            raising=False)
+        assert edge_client.enabled() is False, f"{v!r} 没能关掉端侧服务"
+    monkeypatch.setattr(edge_client.settings, "edge_service_url",
+                        "http://x:8900", raising=False)
+    assert edge_client.enabled() is True
 
 
 def test_settings_field_matches_the_env_name():
