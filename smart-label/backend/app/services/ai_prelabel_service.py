@@ -35,7 +35,7 @@ from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.schemas.model_version import PrelabelItem
-from app.services import algo_client
+from app.services import algo_client, edge_client
 from app.services.imu_service import ImuReadError, get_start_timestamp
 from app.services.media_resolver import PathTraversalError, resolve_nas_path
 
@@ -328,10 +328,23 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
     """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。"""
     csv_start = await _csv_start_of(sample)
     try:
-        result = await algo_client.infer(
-            sample.imu_csv_path, sample_id=sample.id, mode=mode, device_hz=sample.sample_hz
-        )
-    except algo_client.AlgoServiceError as e:
+        if edge_client.is_edge(mode):
+            # 端侧服务只有批量接口（端上本来就是一个窗口一个窗口跑的，
+            # 没有"单条"这个概念）。包成一条的批。
+            rows = await edge_client.infer_batch(
+                [{"path": sample.imu_csv_path, "sample_id": sample.id,
+                  "device_hz": sample.sample_hz}],
+                model=edge_client.model_of(mode))
+            if not rows or not rows[0].get("ok"):
+                raise PrelabelError(
+                    f"端侧推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
+            result = rows[0]["result"]
+        else:
+            result = await algo_client.infer(
+                sample.imu_csv_path, sample_id=sample.id, mode=mode,
+                device_hz=sample.sample_hz
+            )
+    except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
         raise PrelabelError(str(e)) from e
     return await _store_and_normalize(sample, result, csv_start)
 
@@ -617,22 +630,24 @@ async def _run_project(
         await db.close()
         try:
             t0 = time.time()
-            results = await algo_client.infer_batch(
-                # 每份文件带上自己的采样率：这批里可能同时有 16Hz 的旧数据和
-                # 50Hz 的新数据，用一个全局值去处理，其中一种必然是错的
-                [
-                    {
-                        "path": p.sample.imu_csv_path,
-                        "sample_id": p.sample.id,
-                        "device_hz": p.sample.sample_hz,
-                    }
-                    for p in prepared
-                ],
-                mode=mode,
-            )
+            # 每份文件带上自己的采样率：这批里可能同时有 16Hz 的旧数据和
+            # 50Hz 的新数据，用一个全局值去处理，其中一种必然是错的
+            batch = [
+                {
+                    "path": p.sample.imu_csv_path,
+                    "sample_id": p.sample.id,
+                    "device_hz": p.sample.sample_hz,
+                }
+                for p in prepared
+            ]
+            # 版本可以是 algo_service 的 mode（raw/stable/viterbi），也可以是
+            # 端侧模型（edge:<标签>）。后者跑的是烧进项圈的那份 C——
+            # 铺出来的草稿就是设备实际会报的东西。
+            # 分派逻辑抽在 edge_client.dispatch_batch，跟模型对比那边共用一份
+            results = await edge_client.dispatch_batch(batch, mode)
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1
-        except algo_client.AlgoServiceError as e:
+        except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
             progress.ai_wait_sec += time.time() - t0
             for p in prepared:
                 progress.failed += 1

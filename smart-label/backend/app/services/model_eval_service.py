@@ -434,11 +434,8 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
                     # "版本"可以是 algo_service 的 mode（raw/stable/viterbi），
                     # 也可以是端侧模型（edge:<标签>）。两者在这张表里是平级的
                     # ——都是"同一批样本、另一种算法"，对比逻辑完全一样。
-                    if edge_client.is_edge(mode):
-                        results = await edge_client.infer_batch(
-                            batch, model=edge_client.model_of(mode))
-                    else:
-                        results = await algo_client.infer_batch(batch, mode=mode)
+                    # 分派跟项目预标注那边共用一份，免得抄两份漏改其中一份
+                    results = await edge_client.dispatch_batch(batch, mode)
                 except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
                     _eval_progress["failed"] += len(part)
                     _eval_progress["detail"].append(f"{mode}：这一批失败 {e}")

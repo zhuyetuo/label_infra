@@ -12,7 +12,7 @@ import {
   Radio,
   Tooltip,
   Typography,
-  message,
+  message, Select
 } from "antd";
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
@@ -28,7 +28,8 @@ import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
-import { INFER_MODE_LABEL, INFER_MODE_OPTIONS, type InferMode } from "@/utils/inferMode";
+import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
+import { useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
@@ -132,6 +133,8 @@ export default function AnnotationWorkspace({
   const [hasCsv, setHasCsv] = useState(false);
   const [prelabeling, setPrelabeling] = useState(false);
   // 稳定版（平滑合并）/ 调试版（逐窗口原始输出），默认稳定版
+  // 版本下拉的选项（线上 + 端侧），问服务拿，不写死
+  const { options: inferOptions } = useInferModes();
   const [prelabelMode, setPrelabelMode] = useState<InferMode>("stable");
   // IMU 总时长，片段列表算"预测覆盖了多少、哪里是空白"要用
   const [durationMs, setDurationMs] = useState<number | null>(null);
@@ -799,7 +802,7 @@ export default function AnnotationWorkspace({
                 /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
                    换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */
                 <Popconfirm
-                  title={`用「${INFER_MODE_LABEL[prelabelMode] ?? prelabelMode}」重新跑一遍？`}
+                  title={`用「${modeLabelOf(prelabelMode)}」重新跑一遍？`}
                   description={
                     <div style={{ maxWidth: 380, whiteSpace: "normal" }}>
                       没人碰过的 AI 片段会被这一版的结果整批替换；
@@ -815,14 +818,16 @@ export default function AnnotationWorkspace({
                   </Button>
                 </Popconfirm>
               )}
+              {/* 原来是 Radio.Group（按钮条）。加上端侧模型之后它**不支持分组**，
+                  线上和端侧会混在一排看不出区别；选项也从 3 个变成 5 个。换成 Select。 */}
               {hasCsv && sampleId != null && labels.length > 0 && (
-                <Tooltip title="稳定版：滞回+合并+过滤；稳定版 v2：Viterbi 解码；调试版：模型逐窗口原始输出">
-                  <Radio.Group
+                <Tooltip title={hintOf(prelabelMode)}>
+                  <Select
                     size="small"
-                    optionType="button"
+                    style={{ minWidth: 190 }}
                     value={prelabelMode}
-                    onChange={(e) => setPrelabelMode(e.target.value)}
-                    options={INFER_MODE_OPTIONS}
+                    onChange={(v) => setPrelabelMode(v as InferMode)}
+                    options={inferOptions}
                   />
                 </Tooltip>
               )}
@@ -839,7 +844,7 @@ export default function AnnotationWorkspace({
                   }
                 >
                   <Tag style={{ marginLeft: 4 }}>
-                    当前：{aiInfo.mode ? INFER_MODE_LABEL[aiInfo.mode] ?? aiInfo.mode : "未知版本"}
+                    当前：{aiInfo.mode ? modeLabelOf(aiInfo.mode) : "未知版本"}
                     {aiInfo.model_path ? ` · ${aiInfo.model_path.split("/").slice(-1)[0]}` : ""}
                   </Tag>
                 </Tooltip>
