@@ -387,7 +387,7 @@ async def sam_segment(body: SamIn, db: AsyncSession = Depends(get_db), user: Use
     """
     await _check_writable(db, body.album, body.path, user)
     if not body.points and not body.box:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "至少点一个点")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "至少给一个点或一个框")
 
     # vision_service 那边的路径是相对素材库根的，要带上相册目录这一层
     material_rel = f"{tooth_service.ALBUMS[body.album]()}/{body.path}"
@@ -401,7 +401,16 @@ async def sam_segment(body: SamIn, db: AsyncSession = Depends(get_db), user: Use
         bbox = svc.normalize_bbox(data.get("bbox"))
     except svc.VisionError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"SAM 返回的框不合法：{e}") from e
-    return ok({"bbox": bbox, "polygon": data.get("polygon"), "score": data.get("score")})
+    return ok({
+        "bbox": bbox,
+        "polygon": data.get("polygon"),
+        "score": data.get("score"),
+        # 三个候选的大小和分数一起带出来。挑得对不对，只有把没被选中的那两个
+        # 也摆出来才判得了——2026-09-15 那次实测就是靠这个才看出"三个候选全是
+        # 大块的"，而不是"挑错了"
+        "candidates": data.get("candidates"),
+        "chosen": data.get("chosen"),
+    })
 
 
 class AssignIn(BaseModel):
