@@ -441,3 +441,98 @@ def test_endpoint_offers_both_post_modes(on, monkeypatch, run):
     assert edge_client.model_of(m["spec"]) == edge_client.model_of(m["spec_raw"])
     assert edge_client.post_mode_of(m["spec"]) == "viterbi"
     assert edge_client.post_mode_of(m["spec_raw"]) == "raw"
+
+
+# ── 版本串里的后处理必须一路走到服务 ──────────────────────────────────────
+#
+# 下面这几条钉的是同一件事在**每个调用点**上都成立。
+# 最初 infer_sample 和 _run 都自己写 `model=model_of(mode)`，漏掉了
+# post_mode——而漏掉之后一切照常：后处理默认就是 viterbi，结果看着完全正常，
+# 只有选了「板上原始」的人拿到的其实是稳定版 v2 的结果。
+# 片段碎不碎会被读成模型好坏，所以这个差异比报错更糟。
+
+
+def _edge_spy(called):
+    async def fake_edge(items, model, post_mode="viterbi", **kw):
+        called["model"], called["post"] = model, post_mode
+        return [{"sample_id": it.get("sample_id"), "path": it.get("path"),
+                 "ok": True, "error": None,
+                 "result": {"model_path": f"edge://{model}.edge",
+                            "mode": post_mode, "n_windows": 3, "segments": {},
+                            "candidates": [], "missing_seconds": 0.0}}
+                for it in items]
+    return fake_edge
+
+
+@pytest.mark.parametrize("spec,want", [
+    ("edge:edge_cnn_i8", "viterbi"),
+    ("edge:edge_rf_d10", "viterbi"),
+    ("edge:edge_cnn_i8@raw", "raw"),
+    ("edge:edge_rf_d10@raw", "raw"),
+])
+def test_single_sample_carries_the_post_mode(monkeypatch, run, spec, want):
+    """工作台单条：两个端侧模型默认都走稳定版 v2，@raw 才是板上原始。"""
+    from app.services import ai_prelabel_service as svc
+
+    called = {}
+
+    async def fake_start(sample):
+        return None
+
+    async def fake_store(sample, result, csv_start):
+        return result
+
+    monkeypatch.setattr(svc.edge_client, "infer_batch", _edge_spy(called))
+    monkeypatch.setattr(svc, "_csv_start_of", fake_start)
+    monkeypatch.setattr(svc, "_store_and_normalize", fake_store)
+
+    class S:
+        id = 7
+        imu_csv_path = "a.csv"
+        sample_hz = 50
+
+    run(svc.infer_sample(S(), mode=spec))
+    assert called["post"] == want, f"{spec} 应该按 {want} 跑，实际 {called['post']}"
+    assert called["model"] == edge_client.model_of(spec)
+
+
+@pytest.mark.parametrize("spec,want", [
+    ("edge:edge_cnn_i8", "viterbi"),
+    ("edge:edge_rf_d10", "viterbi"),
+    ("edge:edge_cnn_i8@raw", "raw"),
+])
+def test_batch_prelabel_carries_the_post_mode(monkeypatch, run, spec, want):
+    """项目批量预标注那条路。**跟上一条是不同的代码路径**，
+    所以两条都要钉——最初漏的就是这两处各漏一次。"""
+    called = {}
+    monkeypatch.setattr(edge_client, "infer_batch", _edge_spy(called))
+    run(edge_client.dispatch_batch(
+        [{"path": "a.csv", "sample_id": 1, "device_hz": 50}], mode=spec))
+    assert called["post"] == want
+    assert called["model"] == edge_client.model_of(spec)
+
+
+def test_both_prelabel_paths_go_through_the_shared_helper():
+    """两个调用点都不能自己拆版本串。
+
+    自己拆的表现不是报错，而是「板上原始」安静地变成稳定版 v2 ——
+    所以只能在源码上钉：这两处不准出现 model_of。
+    """
+    import inspect
+    import re
+
+    from app.services import ai_prelabel_service as svc
+
+    # **函数名要选对**：第一版写的是 svc._run，而批量那段其实在
+    # _run_project 里。变异体（把批量那处改回自己拆）当时照样绿——
+    # 一条只扫了两个不相干函数的"源码检查"，比没有更糟
+    targets = (svc.infer_sample, svc._run, svc._run_project)
+    assert any("edge" in inspect.getsource(f) for f in targets), \
+        "没有一个被扫的函数碰端侧，这条检查在空转"
+    for fn in targets:
+        # 去掉注释行再看：注释里提到 model_of 是在解释**为什么不用它**
+        src = "\n".join(ln for ln in inspect.getsource(fn).splitlines()
+                        if not ln.lstrip().startswith("#"))
+        assert not re.search(r"\bmodel_of\s*\(", src), (
+            f"{fn.__name__} 自己拆了版本串，很可能漏掉 post_mode；"
+            "用 edge_client.infer_spec / dispatch_batch")

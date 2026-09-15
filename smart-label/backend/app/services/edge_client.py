@@ -145,21 +145,33 @@ async def infer_batch(items: list[dict], model: str, post_mode: str = EDGE_DEFAU
     return data
 
 
+async def infer_spec(items: list[dict], spec: str, **edge_kw) -> list[dict]:
+    """按完整版本串（`edge:<标签>[@后处理]`）跑端侧推理。
+
+    **拆版本串这件事只能有一个地方做。** 调用方自己写
+    `model=model_of(spec)` 的话，很容易漏掉 `post_mode=post_mode_of(spec)`——
+    而漏掉之后一切照常：后处理默认就是 viterbi，结果看着完全正常，
+    只有选了「板上原始」的人拿到的其实是稳定版 v2 的结果。
+    **两者的区别是片段碎不碎，而碎不碎会被读成模型好坏。**
+    （这正是 infer_sample / _run 两处最初的写法，没有任何迹象。）
+    """
+    return await infer_batch(items, model=model_of(spec),
+                             post_mode=post_mode_of(spec), **edge_kw)
+
+
 async def dispatch_batch(items: list[dict], mode: str | None,
                          **edge_kw) -> list[dict]:
     """按版本字符串选 client：`edge:<标签>` 走端侧，其余走 algo_service。
 
-    **抽出来是因为这段逻辑有两个调用点**（项目批量预标注、模型对比跑批），
-    抄两份的话迟早有一份漏改——而漏改的表现是：`edge:xxx` 发给 algo_service，
-    它认不出这个 mode，多半按默认的 stable 跑。结果存进库里，标签写的是端侧
-    模型，内容却是线上模型。**没有任何迹象。**
+    **抽出来是因为这段逻辑有三个调用点**（项目批量预标注、工作台单条、
+    模型对比跑批），抄几份的话迟早有一份漏改——而漏改的表现是：
+    `edge:xxx` 发给 algo_service，它认不出这个 mode，多半按默认的 stable 跑。
+    结果存进库里，标签写的是端侧模型，内容却是线上模型。**没有任何迹象。**
 
     返回的结构两边一样：[{sample_id, path, ok, error, result}]。
     """
     from app.services import algo_client
 
     if is_edge(mode):
-        # post_mode 从版本串里解出来，**不是写死 raw**——见模块开头
-        return await infer_batch(items, model=model_of(mode),
-                                 post_mode=post_mode_of(mode), **edge_kw)
+        return await infer_spec(items, mode, **edge_kw)
     return await algo_client.infer_batch(items, mode=mode)
