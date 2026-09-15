@@ -413,7 +413,7 @@ async def start_eval_run(sample_ids: list[int], modes: list[str]) -> bool:
 async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
     global _eval_running
     from app.db.session import SessionLocal
-    from app.services import algo_client
+    from app.services import algo_client, edge_client
     from app.services.ai_prelabel_service import store_run_only
 
     _eval_progress.update(
@@ -429,11 +429,17 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
             for i in range(0, len(samples), chunk):
                 part = samples[i : i + chunk]
                 _eval_progress["current"] = f"{mode} · {i + 1}~{i + len(part)} / {len(samples)}"
+                batch = [{"path": s.imu_csv_path, "sample_id": s.id} for s in part]
                 try:
-                    results = await algo_client.infer_batch(
-                        [{"path": s.imu_csv_path, "sample_id": s.id} for s in part], mode=mode
-                    )
-                except algo_client.AlgoServiceError as e:
+                    # "版本"可以是 algo_service 的 mode（raw/stable/viterbi），
+                    # 也可以是端侧模型（edge:<标签>）。两者在这张表里是平级的
+                    # ——都是"同一批样本、另一种算法"，对比逻辑完全一样。
+                    if edge_client.is_edge(mode):
+                        results = await edge_client.infer_batch(
+                            batch, model=edge_client.model_of(mode))
+                    else:
+                        results = await algo_client.infer_batch(batch, mode=mode)
+                except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
                     _eval_progress["failed"] += len(part)
                     _eval_progress["detail"].append(f"{mode}：这一批失败 {e}")
                     continue

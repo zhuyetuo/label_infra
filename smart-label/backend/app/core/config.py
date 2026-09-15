@@ -99,6 +99,18 @@ class Settings(BaseSettings):
     algo_infer_mode: str = "stable"
     algo_infer_batch_timeout_sec: int = 1800
 
+    # --- 端侧推理服务（algo_tinyml/python/edge_service.py，可选）---
+    # 跑的是固件那份 C，用来回答"这个模型烧到项圈上会是什么效果"。
+    # 跟 algo_service 是两个服务两个端口（它 8383，这个默认 8900）。
+    #
+    # 默认空 = 关着：模型对比里不出现端侧那几个版本，别的功能一概不受影响。
+    # 要开就配 http://<跑 edge_service 那台>:8900
+    #
+    # 有哪些端侧模型**不在这里配**——问服务自己（GET /health）。
+    # 配置跟服务不同步的话，界面上会出现一个选了就报错的选项，
+    # 而错误是"没有这个端侧模型"，绕一圈才知道是配置的事。
+    edge_service_url: str = ""
+
     # --- CORS ---
     cors_allow_origins: list[str] = ["http://localhost:8284"]
 

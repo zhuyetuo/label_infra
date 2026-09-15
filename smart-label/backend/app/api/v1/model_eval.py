@@ -22,6 +22,7 @@ from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services import edge_client
 from app.services.model_eval_service import evaluate, eval_run_progress, list_runs, start_eval_run
 
 router = APIRouter(
@@ -37,6 +38,24 @@ _EVAL_SET_ACTION = "model_eval.set"
 async def available_runs(db: AsyncSession = Depends(get_db)):
     """有哪些 (模型, 版本) 跑过、各覆盖多少样本——对比页的下拉。"""
     return ok(await list_runs(db))
+
+
+@router.get("/edge-models")
+async def edge_models():
+    """端侧服务现在挂着哪些模型，跑批时可以选。
+
+    **问服务，不读配置**：配置跟服务不同步的话，界面上会出现一个选了就报错
+    的选项，而错误是"没有这个端侧模型"，绕一圈才知道是配置的事。
+
+    端侧服务没配或者连不上时返回空列表，不是报错——它是可选的，
+    没有它整个模型对比功能照常用。
+    """
+    models = await edge_client.available()
+    return ok({
+        "enabled": edge_client.enabled(),
+        # spec 就是跑批时要传的那个字符串，前端不用自己拼前缀
+        "models": [{**m, "spec": f"{edge_client.EDGE_PREFIX}{m['tag']}"} for m in models],
+    })
 
 
 class EvalSetIn(BaseModel):
@@ -170,7 +189,10 @@ class EvalRunIn(BaseModel):
     sample_ids: list[int] | None = None
     date_from: _dt.date | None = None
     date_to: _dt.date | None = None
-    # 要跑哪几个版本，一次可以全跑：["stable", "viterbi", "raw"]
+    # 要跑哪几个版本，一次可以全跑：["stable", "viterbi", "raw"]。
+    # 端侧模型也写在这里，形如 "edge:edge_cnn_i8"——它跟 mode 是平级的，
+    # 都是"同一批样本、另一种算法"，对比逻辑完全一样。
+    # 可选的标签从 GET /model-eval/edge-models 拿。
     modes: list[str] = Field(..., min_length=1)
 
 
