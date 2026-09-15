@@ -331,10 +331,12 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
         if edge_client.is_edge(mode):
             # 端侧服务只有批量接口（端上本来就是一个窗口一个窗口跑的，
             # 没有"单条"这个概念）。包成一条的批。
-            rows = await edge_client.infer_batch(
+            # 用 infer_spec，**不自己 model_of 一下**：版本串可能带 `@raw`，
+            # 自己拆很容易只拆一半，而漏掉后处理不报错，只是选了
+            # 「板上原始」的人拿到的其实是稳定版 v2 的结果
+            rows = await edge_client.infer_spec(
                 [{"path": sample.imu_csv_path, "sample_id": sample.id,
-                  "device_hz": sample.sample_hz}],
-                model=edge_client.model_of(mode))
+                  "device_hz": sample.sample_hz}], mode)
             if not rows or not rows[0].get("ok"):
                 raise PrelabelError(
                     f"端侧推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
@@ -665,11 +667,9 @@ async def _run_project(
             # 版本可以是 algo_service 的 mode（raw/stable/viterbi），也可以是
             # 端侧模型（edge:<标签>）。后者跑的是烧进项圈的那份 C——
             # 铺出来的草稿就是设备实际会报的东西。
-            if edge_client.is_edge(mode):
-                results = await edge_client.infer_batch(
-                    batch, model=edge_client.model_of(mode))
-            else:
-                results = await algo_client.infer_batch(batch, mode=mode)
+            # 走 dispatch_batch，两个分支都在它里面——这里自己分一次的话，
+            # 端侧那支很容易漏掉版本串里的 `@后处理`（最初就是这么漏的）
+            results = await edge_client.dispatch_batch(batch, mode)
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1
         except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
