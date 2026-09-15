@@ -505,6 +505,28 @@ async def _record_run(progress: PrelabelProgress) -> None:
         "unmatched_labels": progress.unmatched_labels,
         "error_message": progress.error_message,
     }
+    # **失败原因要进这行日志。**
+    #
+    # 原来只有 failed 这个计数，原因全在 progress.detail 里——那个要开项目页
+    # 才看得到。于是日志上看到的是"failed: 303"，一个纯数字，谁也不知道
+    # 是路径不对、CSV 列名不认、还是模型配错了。查起来只能靠猜。
+    #
+    # 只取前几条、去重：303 个失败通常是同一个原因，全打出来是刷屏。
+    if progress.failed:
+        seen, reasons = set(), []
+        for line in progress.detail:
+            if "失败" not in line and "存不下" not in line:
+                continue
+            # 去掉前面的"任务 #123 xxx："，只留原因——不然去重永远去不掉
+            why = line.split("：", 1)[-1].strip()
+            if why in seen:
+                continue
+            seen.add(why)
+            reasons.append(why)
+            if len(reasons) >= 3:
+                break
+        summary["failure_reasons"] = reasons
+        summary["distinct_failures"] = len(seen)
     _logger.info("project %s ai_prelabel finished: %s", progress.project_id, json.dumps(summary, ensure_ascii=False))
     try:
         async with SessionLocal() as db:
@@ -643,8 +665,11 @@ async def _run_project(
             # 版本可以是 algo_service 的 mode（raw/stable/viterbi），也可以是
             # 端侧模型（edge:<标签>）。后者跑的是烧进项圈的那份 C——
             # 铺出来的草稿就是设备实际会报的东西。
-            # 分派逻辑抽在 edge_client.dispatch_batch，跟模型对比那边共用一份
-            results = await edge_client.dispatch_batch(batch, mode)
+            if edge_client.is_edge(mode):
+                results = await edge_client.infer_batch(
+                    batch, model=edge_client.model_of(mode))
+            else:
+                results = await algo_client.infer_batch(batch, mode=mode)
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1
         except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
