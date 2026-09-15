@@ -76,6 +76,32 @@ def _under(root: str, rel_path: str) -> str | None:
     return full if os.path.isfile(full) else None
 
 
+def material_rel(rel_path: str, album: str = "oral") -> str:
+    """相册内相对路径 → **相对素材库根**的路径。
+
+    这是给 vision_service 用的：它只认相对素材库根的路径（它那边的沙箱根就是
+    素材库），而平台内部一直用的是"相对相册目录"。
+
+    两种形状，跟 resolve_photo 同一套判据，**不能只做前者**：
+
+      老形状  2026-09-01-ok/巴利/a.jpg
+              → 口腔验证/2026-09-01-ok/巴利/a.jpg        （补上相册目录）
+      混合树  雷喏斯达-狗场合作/雷喏斯达20260914/.../x.jpg
+              → 原样                                      （它本来就是相对根的）
+
+    只做前者的话，狗场那批会被拼成
+    `口腔验证/雷喏斯达-狗场合作/...`——vision_service 那边报"文件不存在"，
+    而路径看起来又挺像回事，很难一眼看出多了一层。2026-09-15 就是这么炸的。
+    """
+    try:
+        first = (clean_rel_path(rel_path).split("/") or [""])[0]
+    except ToothError:
+        first = ""
+    if first in mixed_dirs():
+        return rel_path
+    return f"{ALBUMS[album]()}/{rel_path}"
+
+
 def resolve_photo(rel_path: str, album: str = "oral") -> str:
     """相对路径 → 绝对路径，realpath 必须仍在允许的目录之内。
 

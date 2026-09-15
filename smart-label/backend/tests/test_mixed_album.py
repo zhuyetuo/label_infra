@@ -240,3 +240,47 @@ def test_同一只狗的口腔和皮肤不是同一组():
     a = group_of(f"{TREE}/d/001比熊小白/口腔牙齿-x/1.jpg")
     b = group_of(f"{TREE}/d/001比熊小白/皮肤瘙痒-x/1.jpg")
     assert a != b
+
+
+# ── 给 vision_service 的路径：两种形状不能只做一种 ──────────────────────
+#
+# 2026-09-15 现场报错：
+#   SAM 服务返回 422：文件不存在:
+#   口腔验证/雷喏斯达-狗场合作/雷喏斯达20260914/001比熊小白/.../xxx (13).jpg
+#            ^^^^^^^^^^^^^^^^ 多出来的一层
+#
+# 平台内部一直用"相对相册目录"的路径，而 vision_service 只认"相对素材库根"。
+# 转换时无脑补相册目录，混合树那批就会多一层——而拼出来的路径看着还挺像回事，
+# 很难一眼看出问题。
+
+def test_老形状要补上相册目录(material):
+    assert ts.material_rel("2026-09-01-ok/巴利/a.jpg", "oral") == "口腔验证/2026-09-01-ok/巴利/a.jpg"
+
+
+def test_混合树原样不动(material):
+    p = f"{TREE}/雷喏斯达20260914/001比熊小白/口腔牙齿-x/y.jpg"
+    assert ts.material_rel(p, "oral") == p, "补了相册目录就会变成「口腔验证/雷喏斯达-狗场合作/...」"
+
+
+def test_转出来的路径真的能解开(material):
+    """光比字符串不够——最终要拿这个路径去素材库里找文件。"""
+    for album in ("oral", "skin"):
+        for p in _all(album):
+            full = os.path.join(str(material), ts.material_rel(p["rel_path"], album))
+            assert os.path.isfile(full), f"{album}: {p['rel_path']} → {ts.material_rel(p['rel_path'], album)}"
+
+
+def test_关掉混合树之后混合树路径会被当成老形状(material, monkeypatch):
+    """配置里没列这棵树时，它就不是"相对根"的了——这时补相册目录是对的
+    （虽然多半解不开文件），不能凭路径长得像就特殊对待。"""
+    p = f"{TREE}/x/y.jpg"
+    monkeypatch.setattr(settings, "mixed_photo_dirs", "")
+    assert ts.material_rel(p, "oral").startswith("口腔验证/")
+
+
+@pytest.mark.parametrize("bad", ["../x.jpg", "/abs/x.jpg", ""])
+def test_路径不规范时不特殊对待(material, bad):
+    """clean_rel_path 抛了就当成老形状去补前缀——解不开文件自然会报，
+    但不能在这一层就炸掉整个请求。"""
+    out = ts.material_rel(bad, "oral")
+    assert out.startswith("口腔验证/")
