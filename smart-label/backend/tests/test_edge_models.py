@@ -602,25 +602,62 @@ def test_endpoint_offers_the_board_spec(on, monkeypatch, run):
         == {"viterbi", "raw", "board"}
 
 
-def test_edge_option_labels_name_the_algorithm():
-    """下拉里的标签要**直接写出算法**，不能只写在 hover 的提示里。
+def test_edge_option_labels_stay_short():
+    """下拉里的标签**只留名字**，差异放在旁边那个问号里。
 
-    人是扫列表的，不是逐个悬停的。第一版三个选项叫「稳定版 v2 /
-    板上整条链 / 板上原始」——找"流式有界回溯"的人在列表里一个字都看不到，
-    于是以为这个功能没做（真事）。
-
-    这条钉的是前端源码，因为这是个**看得见但测不出来**的问题：
-    功能完全正常，只是没人找得到。
+    中间试过把算法名写进标签（「板上整条链（板上·流式有界回溯）」），
+    结果太长被下拉框截断，而**截断之后先没的恰好是后半句**——
+    也就是真正区分它们的那部分。
     """
     import os
     p = os.path.join(os.path.dirname(__file__), "..", "..",
                      "frontend", "src", "hooks", "useInferModes.ts")
     with open(p, encoding="utf-8") as f:
         src = f.read()
-    # 只看 label，不看注释——注释里正解释着这件事
     labels = [ln for ln in src.splitlines() if "label: `${m.tag}" in ln]
     assert len(labels) == 3, f"端侧应该是三个选项，实际 {len(labels)}"
-    joined = "\n".join(labels)
-    assert "流式有界回溯" in joined, "板上那条没写算法名，找的人看不到"
-    assert "离线 viterbi" in joined, "服务端那条没写算法名，两条就对比不出来"
-    assert "不做后处理" in joined
+    for ln in labels:
+        # 标签里不该再有括号说明
+        assert "（" not in ln.split("`")[1], f"标签又塞说明了：{ln.strip()}"
+
+
+def test_the_help_table_covers_every_option():
+    """那张表要**把六个版本都列上**。
+
+    漏掉一个的话，人在下拉里选到它、点问号却找不到——
+    那比没有这张表更让人困惑。
+    """
+    import os
+    p = os.path.join(os.path.dirname(__file__), "..", "..",
+                     "frontend", "src", "components", "InferModeHelp.tsx")
+    with open(p, encoding="utf-8") as f:
+        src = f.read()
+    for name in ("稳定版", "稳定版 v2", "调试版",
+                 "端侧 · 稳定版 v2", "端侧 · 板上整条链", "端侧 · 板上原始"):
+        assert f'"{name}"' in src, f"表里没有「{name}」这一行"
+    # 三列差异必须都在：模型 / 推理 / 后处理
+    for col in ("模型", "推理", "后处理"):
+        assert f'title: "{col}"' in src, f"表里没有「{col}」这一列"
+    # 算法名要出现在表里（标签里已经没有了，这是唯一写着的地方）
+    assert "流式" in src and "有界回溯" in src, "表里没写板上那份是流式有界回溯"
+    assert "离线 viterbi" in src, "表里没写服务端那份是离线 viterbi"
+
+
+def test_the_help_icon_is_next_to_every_mode_select():
+    """四个用到版本下拉的地方都要有那个问号。
+
+    漏一处的表现是：那个页面上的人看不到差异说明，而别处的人看得到——
+    最难发现的那种不一致。
+    """
+    import os
+    base = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src")
+    n = 0
+    for rel in ("pages/Projects.tsx", "components/AnnotationWorkspace.tsx"):
+        with open(os.path.join(base, rel), encoding="utf-8") as f:
+            src = f.read()
+        selects = src.count("options={inferOptions}")
+        helps = src.count("<InferModeHelp />")
+        assert helps >= selects, \
+            f"{rel} 有 {selects} 个版本下拉，却只有 {helps} 个问号"
+        n += selects
+    assert n >= 4, f"只找到 {n} 个版本下拉，比预期少——是不是漏改了哪个页面"
