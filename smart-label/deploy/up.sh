@@ -16,9 +16,24 @@ if [[ "${1:-}" == "-p" || "${1:-}" == "--pull" ]]; then
   echo ""
 fi
 
-docker compose up -d --build "$@"
+# **不能让 set -e 在这里直接掐掉脚本**：compose 失败时只会留下一句
+# "exit 255"，而真正的原因在 migrate 容器的日志里。掐掉的话下面那些
+# 诊断一句都不会打，人只能对着一个退出码猜。
+if ! docker compose up -d --build "$@"; then
+  echo ""
+  echo "=== ⚠ 起不来 ==="
+  # 迁移是最常见的那个：多头、down_revision 指错、SQL 写错，
+  # 表现全都是 migrate 退出码非 0，而 compose 只说 exit 255
+  if docker compose ps -a --format '{{.Service}}' 2>/dev/null | grep -q '^migrate$'; then
+    echo "--- migrate 最后 30 行 ---"
+    docker compose logs --tail 30 migrate 2>&1 | sed 's/^/    /'
+  fi
+  echo ""
+  echo "看完整日志：docker compose logs migrate"
+  exit 1
+fi
 
-# 数据库迁移是一次性容器，跑挂了后面的服务会连不上表结构对不上的库，
+# 迁移是一次性容器，跑挂了后面的服务会连上一个表结构对不上的库，
 # 这里直接把它的退出码亮出来，别等到用的时候才发现
 if ! docker compose ps -a --status exited --format '{{.Service}} {{.ExitCode}}' 2>/dev/null | grep -q '^migrate 0$'; then
   echo ""
