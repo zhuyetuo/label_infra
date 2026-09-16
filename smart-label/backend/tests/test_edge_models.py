@@ -626,7 +626,7 @@ def test_edge_option_labels_stay_short():
 
 
 def test_the_help_table_covers_every_option():
-    """那张表要**把六个版本都列上**。
+    """那张表要**把下拉里的每一个版本都列上**。
 
     漏掉一个的话，人在下拉里选到它、点问号却找不到——
     那比没有这张表更让人困惑。
@@ -636,8 +636,22 @@ def test_the_help_table_covers_every_option():
                      "frontend", "src", "components", "InferModeHelp.tsx")
     with open(p, encoding="utf-8") as f:
         src = f.read()
-    for name in ("稳定版", "稳定版 v2", "调试版",
-                 "端侧 · 稳定版 v2", "端侧 · 板上整条链", "端侧 · 板上原始"):
+    # **服务端那几行从 INFER_MODE_OPTIONS 推导，不写死名单。**
+    # 写死的话，下拉里加一个版本、忘了补表格，这条测试照样绿——
+    # 而那正是它要防的事。加「稳定版 v2 · 不吞甩身体」时就撞上了。
+    import re
+    opt_p = os.path.join(os.path.dirname(__file__), "..", "..",
+                         "frontend", "src", "utils", "inferMode.ts")
+    with open(opt_p, encoding="utf-8") as f:
+        opts_src = f.read()
+    block = opts_src[opts_src.index("INFER_MODE_OPTIONS"):]
+    block = block[:block.index("];")]
+    names = re.findall(r'label:\s*"([^"]+)"', block)
+    assert len(names) >= 3, f"没解析到下拉选项，这条测试该跟着改了：{names}"
+    for name in names:
+        assert f'"{name}"' in src, f"下拉里有「{name}」，表里没有这一行"
+    # 端侧那三行的标签是拼出来的，单独点名
+    for name in ("端侧 · 稳定版 v2", "端侧 · 板上整条链", "端侧 · 板上原始"):
         assert f'"{name}"' in src, f"表里没有「{name}」这一行"
     # 三列差异必须都在：模型 / 推理 / 后处理
     for col in ("模型", "推理", "后处理"):

@@ -43,8 +43,14 @@ def _base_url() -> str:
     return settings.algo_service_url.rstrip("/")
 
 
+#: 算法服务认的后处理版本。**加了新版本要在这里登记**——不登记的话
+#: _mode() 会把它当成"没传"，**退回默认版本**，而结果存进库里标着新版本名。
+#: 没有任何迹象，对比表里那一列其实是另一个版本跑的。
+ALGO_MODES = ("raw", "stable", "viterbi", "stable_noshake", "viterbi_noshake")
+
+
 def _mode(mode: str | None) -> str:
-    return mode if mode in ("raw", "stable", "viterbi") else settings.algo_infer_mode
+    return mode if mode in ALGO_MODES else settings.algo_infer_mode
 
 
 # 服务端的**另一个模型**：srv:<标签>[@后处理]。
@@ -62,7 +68,7 @@ _POST_SEP = "@"
 # 只是模型不一样"。默认 raw 的话它会比线上那列碎一大截，而碎的原因是
 # 后处理不同、不是模型不同——对比表看起来像这个模型差得多。
 SRV_DEFAULT_POST = "viterbi"
-_SRV_POSTS = ("raw", "stable", "viterbi")
+_SRV_POSTS = ALGO_MODES
 
 
 def is_srv(spec: str) -> bool:

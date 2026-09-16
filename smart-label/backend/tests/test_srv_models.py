@@ -307,3 +307,48 @@ def test_server_models_are_labelled_by_tag_not_directory_name():
     """
     assert "${m.name} ·" not in _code("hooks", "useInferModes.ts"), \
         "服务端模型还在用目录名当标签"
+
+
+# ── 「不吞甩身体」那个新版本 ──────────────────────────────────────────────
+#
+# 跟稳定版 v2 只差一条后处理规则（抓挠不再吞并前后的甩身体）。
+# 做成一个**版本**而不是配置开关，是为了两边能并排存、并排比：
+# 结果按 (样本, 模型, 版本) 存，改配置的话两次跑出来 mode 都是 viterbi，
+# 后一次直接把前一次顶掉。
+
+
+def test_noshake_is_a_recognised_mode():
+    """**必须登记进 ALGO_MODES。**
+
+    不登记的话 _mode() 会把它当成"没传"，**退回默认版本**，
+    而结果存进库里标着 viterbi_noshake——对比表里那一列其实是
+    另一个版本跑的，没有任何迹象。
+    """
+    assert algo_client._mode("viterbi_noshake") == "viterbi_noshake"
+    assert algo_client._mode("stable_noshake") == "stable_noshake"
+
+
+def test_an_unknown_mode_still_falls_back():
+    """没登记的照旧退回默认——这条是为了证明上面那条不是白测的。"""
+    assert algo_client._mode("viterbi_nosuchthing") != "viterbi_nosuchthing"
+
+
+def test_noshake_payload_goes_through_as_is(wire):
+    """发出去的 mode 就是它本身，别在路上被改掉。"""
+    asyncio.run(algo_client.infer_batch([{"path": "a.csv"}], mode="viterbi_noshake"))
+    assert wire.seen["json"]["mode"] == "viterbi_noshake"
+
+
+def test_server_models_can_use_noshake_too():
+    """挂在算法服务上的别的模型也能用这个后处理。
+
+    `_SRV_POSTS` 直接引用 ALGO_MODES，加版本时不用改两处——
+    改两处就一定会漏，而漏掉的表现是"这个组合选了就报错"。
+    """
+    assert algo_client.post_mode_of("srv:acc3@viterbi_noshake") == "viterbi_noshake"
+
+
+def test_the_option_is_in_the_dropdown():
+    code = _code("utils", "inferMode.ts")
+    assert '"viterbi_noshake"' in code, "下拉里没有这个版本"
+    assert "不吞甩身体" in code, "标签里没说清它跟稳定版 v2 差在哪"
