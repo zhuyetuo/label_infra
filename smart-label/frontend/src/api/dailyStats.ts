@@ -10,7 +10,10 @@ export interface DailyStatsVersion {
 
 export interface DailyStatsRow {
   stat_date: string;
-  dog_id: number | null;
+  /** 设备号（IMU5）。狗是**从 sample_code 解析出 IMU 再映射**的，
+   *  不是 Sample.dog_id——那一列在实际数据里基本是空的。
+   *  跟皮肤评估用同一套映射，免得同一个样本在两个页面上判给不同的狗。 */
+  imu: string;
   dog_name: string | null;
   n_samples: number;
   n_windows: number;
