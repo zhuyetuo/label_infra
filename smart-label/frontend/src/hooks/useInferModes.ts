@@ -42,26 +42,36 @@ export function useInferModes() {
       online,
       {
         label: "端侧模型（跑的是烧进项圈的那份 C）",
-        // 每个端侧模型两个选项：跟线上同一套后处理的（默认，日常用这个），
-        // 和板上原始的。**默认那个排在前面**——用它铺草稿，跟线上版本
-        // 唯一的差别才是模型本身；raw 更碎，是拿来看设备真实输出的。
-        options: edgeModels.flatMap((m) => [
-          {
-            label: `${m.tag} · 稳定版 v2（${m.window} 点 @${m.hz}Hz）`,
-            value: m.spec,
-            title: EDGE_MODE_HINT,
-          },
-          {
-            label: `${m.tag} · 板上整条链（${m.window} 点 @${m.hz}Hz）`,
-            value: m.spec_board ?? `${m.spec}@board`,
-            title: EDGE_BOARD_HINT,
-          },
-          {
-            label: `${m.tag} · 板上原始（${m.window} 点 @${m.hz}Hz）`,
-            value: m.spec_raw ?? `${m.spec}@raw`,
-            title: EDGE_RAW_HINT,
-          },
-        ]),
+        // 每个端侧模型三个选项，**默认那个排在前面**——用它铺草稿，
+        // 跟线上版本唯一的差别才是模型本身。
+        //
+        // 标签上**直接写算法**，不要只写在 hover 的提示里——人是扫列表的，
+        // 不是逐个悬停的。第一版三个选项分别叫「稳定版 v2 / 板上整条链 /
+        // 板上原始」，找"流式有界回溯"的人在列表里一个字都看不到，
+        // 以为功能没做。
+        //
+        // 窗口几何（16 点 @16Hz）挪进 title：两个模型都一样，放在标签里
+        // 既占地方又会被下拉框截断，反而把后面的算法名挤没了。
+        options: edgeModels.flatMap((m) => {
+          const geom = `${m.window} 点 @${m.hz}Hz`;
+          return [
+            {
+              label: `${m.tag} · 稳定版 v2（服务端·离线 viterbi）`,
+              value: m.spec,
+              title: `${geom}。${EDGE_MODE_HINT}`,
+            },
+            {
+              label: `${m.tag} · 板上整条链（板上·流式有界回溯）`,
+              value: m.spec_board ?? `${m.spec}@board`,
+              title: `${geom}。${EDGE_BOARD_HINT}`,
+            },
+            {
+              label: `${m.tag} · 板上原始（不做后处理）`,
+              value: m.spec_raw ?? `${m.spec}@raw`,
+              title: `${geom}。${EDGE_RAW_HINT}`,
+            },
+          ];
+        }),
       },
     ];
   }, [edgeModels]);
