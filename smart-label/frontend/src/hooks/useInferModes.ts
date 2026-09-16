@@ -45,28 +45,27 @@ export function useInferModes() {
         // 每个端侧模型三个选项，**默认那个排在前面**——用它铺草稿，
         // 跟线上版本唯一的差别才是模型本身。
         //
-        // 标签上**直接写算法**，不要只写在 hover 的提示里——人是扫列表的，
-        // 不是逐个悬停的。第一版三个选项分别叫「稳定版 v2 / 板上整条链 /
-        // 板上原始」，找"流式有界回溯"的人在列表里一个字都看不到，
-        // 以为功能没做。
+        // 标签**只留名字**，差异放在下拉旁边那个问号里（InferModeHelp）。
         //
-        // 窗口几何（16 点 @16Hz）挪进 title：两个模型都一样，放在标签里
-        // 既占地方又会被下拉框截断，反而把后面的算法名挤没了。
+        // 中间试过把算法名写进标签（「板上整条链（板上·流式有界回溯）」），
+        // 结果太长被下拉框截断，而**截断之后先没的恰好是后半句**——
+        // 也就是真正区分它们的那部分。写进 hover 提示也不行：人是扫列表的，
+        // 不是逐个悬停的。一张表最省事。
         options: edgeModels.flatMap((m) => {
           const geom = `${m.window} 点 @${m.hz}Hz`;
           return [
             {
-              label: `${m.tag} · 稳定版 v2（服务端·离线 viterbi）`,
+              label: `${m.tag} · 稳定版 v2`,
               value: m.spec,
               title: `${geom}。${EDGE_MODE_HINT}`,
             },
             {
-              label: `${m.tag} · 板上整条链（板上·流式有界回溯）`,
+              label: `${m.tag} · 板上整条链`,
               value: m.spec_board ?? `${m.spec}@board`,
               title: `${geom}。${EDGE_BOARD_HINT}`,
             },
             {
-              label: `${m.tag} · 板上原始（不做后处理）`,
+              label: `${m.tag} · 板上原始`,
               value: m.spec_raw ?? `${m.spec}@raw`,
               title: `${geom}。${EDGE_RAW_HINT}`,
             },

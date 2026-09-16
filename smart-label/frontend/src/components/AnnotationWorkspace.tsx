@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import InferModeHelp from "@/components/InferModeHelp";
 import {
   Button,
   Empty,
@@ -831,6 +832,7 @@ export default function AnnotationWorkspace({
                   />
                 </Tooltip>
               )}
+              {hasCsv && sampleId != null && labels.length > 0 && <InferModeHelp />}
               {/* 项目页批量跑过之后，这些片段到底出自哪个模型完全看不出来；换了
                   模型重跑更是。把结果 JSON 里记的版本/模型/时间摆出来 */}
               {aiInfo?.exists && (

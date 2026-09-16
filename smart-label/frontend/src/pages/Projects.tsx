@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import InferModeHelp from "@/components/InferModeHelp";
 import {
   Alert,
   Button,
@@ -1329,6 +1330,7 @@ export default function Projects() {
                 }}
                 options={inferOptions}
               />
+              <InferModeHelp />
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {hintOf(prelabelMode)}
@@ -1537,7 +1539,7 @@ export default function Projects() {
                   ]}
                 />
                 {createTaskType === "ai_assisted" && (
-                  <Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} />
+                  <Space size={6}><Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
                 )}
                 <Select
                   style={{ width: 200 }}
@@ -1698,7 +1700,7 @@ export default function Projects() {
             ]}
           />
           {bulkTaskType === "ai_assisted" && (
-            <Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} />
+            <Space size={6}><Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
           )}
           <Typography.Text>指派给</Typography.Text>
           <Select
