@@ -49,7 +49,7 @@ from app.models.media_file import MediaFile, MediaFileType
 from app.models.sample import ImportStatus, Sample
 from app.models.user import User
 from app.services.sample_dedupe_service import merge_duplicate_samples
-from app.utils.ffprobe import count_csv_rows, measure_csv_hz, probe_video
+from app.utils.ffprobe import count_csv_rows, measure_csv_hz, probe_video_reason
 
 # MySQL 的 range optimizer 有 8MB 内存上限（range_optimizer_max_mem_size），
 # IN 列表长到几千个元素就会放弃走索引范围、退化成全表扫，日志里刷一堆
@@ -313,11 +313,40 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
     return groups
 
 
+def probe_any_cam(nas_root: str, cam_paths: dict[int, str]) -> tuple[dict | None, str | None]:
+    """按 cam1→cam2→cam3 探时长，第一个成功的就用它。→ (probe, 失败说明)
+
+    原来只探 cam1，探不出来样本照建、video_duration_sec 留空，界面上就是
+    `08:00:14 ~ ?`、总时长 `-`，而且**一声不吭**。两件事都要改：
+
+    ① 顺着往下试。同一次录制各路时长一样，cam1 这次读不出来不代表 cam2 也读不
+       出来——真实数据里 2026-09-15 有 7 个样本缺时长，事后单独重探**全部**探得
+       出来，其中一个还是用 cam1 探出来的，说明当时失败的是探测本身、不是文件。
+    ② 全失败的话把**原因**带回去（超时 / 编码坏 / 文件不在），让导入日志里能看见。
+       否则只能事后跑 backfill_video_probe 才知道有这回事。
+    """
+    if not cam_paths:
+        return None, "没有视频路径"
+    fails: list[str] = []
+    for slot in sorted(cam_paths):
+        rel = cam_paths[slot]
+        full = os.path.join(nas_root, rel)
+        if not os.path.isfile(full):
+            fails.append(f"cam{slot} 文件不在")
+            continue
+        got, why = probe_video_reason(full)
+        # duration 为 0/空不算成功：写进去界面从 `?` 变成 `-`，**看着像修好了**
+        if got and got.get("duration_sec"):
+            return got, None
+        fails.append(f"cam{slot} {why or 'duration 为空'}")
+    return None, "；".join(fails)
+
+
 def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) -> dict:
     """一个session的全部探测工作（IO密集，在线程池里跑）。"""
     all_files = [*cam_paths.values(), csv_rel]
     missing = [p for p in all_files if not os.path.isfile(os.path.join(nas_root, p))]
-    probe = probe_video(os.path.join(nas_root, cam_paths[1]))
+    probe, probe_fail = probe_any_cam(nas_root, cam_paths)
     csv_full = os.path.join(nas_root, csv_rel)
     row_count = count_csv_rows(csv_full)
     # 采样率按文件量，不按全局假设：8-11 之前是采集端就降到 16Hz 的，8-11 起才是
@@ -326,8 +355,8 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
     total_size = sum(
         os.path.getsize(os.path.join(nas_root, p)) for p in all_files if os.path.isfile(os.path.join(nas_root, p))
     )
-    return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size,
-            "sample_hz": sample_hz}
+    return {"missing": missing, "probe": probe, "probe_fail": probe_fail,
+            "row_count": row_count, "total_size": total_size, "sample_hz": sample_hz}
 
 
 def genuinely_shared_cams(group: dict) -> dict[int, str]:
@@ -779,6 +808,14 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         cam_paths, csv_rel = info["cam_paths"], info["csv_rel"]
         probe, row_count, total_size, missing = result["probe"], result["row_count"], result["total_size"], result["missing"]
         sample_hz = result.get("sample_hz")
+
+        # 三路都探不出时长的话**说出来**。原来是默默建一个 video_duration_sec
+        # 为空的样本，界面上 `08:00:14 ~ ?`、总时长 `-`，而且 skin_link_service
+        # 要靠这个字段算时间跨度，缺了就会悄悄从一部分分析里掉出去。
+        if result.get("probe_fail"):
+            _progress.detail.append(
+                f"{session_key}：视频时长探不出来（{result['probe_fail']}）——"
+                f"样本照建，之后可以跑 backfill_video_probe 重探")
 
         # 空 CSV 不建样本：文件建出来了但一行数据都没写（采集起来就断了之类），
         # 建了也只是个打开就报错、算不出任何指标的空壳，还得手动去删。
