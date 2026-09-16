@@ -1,6 +1,6 @@
 """服务端的**另一个模型**（`srv:<标签>`）。
 
-AI 服务原来只挂一个模型，"版本"这个字段说的全是后处理。现在可以在同一台
+算法服务（imu_train 的 label_service）原来只挂一个模型，"版本"这个字段说的全是后处理。现在可以在同一台
 服务上挂几个模型并排跑，用来回答"换个模型效果差多少"——比如只用加速计那版。
 
 这里盯的全是**错了不报错**的事，而且这一类在这个链路上特别多：
@@ -86,7 +86,7 @@ def spy(monkeypatch):
 def test_dispatch_sends_the_model_tag(spy):
     """`srv:acc3` 必须带着 model=acc3 发出去。
 
-    不带的话 AI 服务跑的是默认模型，而结果标着 srv:acc3。**没有任何迹象。**
+    不带的话 算法服务跑的是默认模型，而结果标着 srv:acc3。**没有任何迹象。**
     """
     from app.services import edge_client
 
@@ -105,7 +105,7 @@ def test_dispatch_carries_the_postprocess_too(spy):
 def test_plain_modes_still_go_without_a_model(spy):
     """线上那三行**不能**带 model 字段。
 
-    一直带的话，老版本的 AI 服务（没有多模型）会因为多了个未知字段而 422——
+    一直带的话，老版本的算法服务（没有多模型）会因为多了个未知字段而 422——
     那是一次纯粹为了"保持接口一致"造成的故障。
     """
     from app.services import edge_client
@@ -119,7 +119,7 @@ def test_edge_specs_still_go_to_the_edge_service(spy):
 
     asyncio.run(edge_client.dispatch_batch([{"path": "a.csv"}], "edge:edge_rf_d10"))
     assert spy["edge"] == {"spec": "edge:edge_rf_d10"}
-    assert "algo" not in spy, "端侧的版本串跑到 algo_service 去了"
+    assert "algo" not in spy, "端侧的版本串跑到算法服务去了"
 
 
 # ── 单条推理那条路（工作台按钮） ──────────────────────────────────────────
@@ -214,7 +214,7 @@ def wire(monkeypatch):
 def test_payload_omits_model_for_plain_modes(wire):
     """线上那三行发出去的 JSON 里**不能有 model 这个键**。
 
-    一直带的话，老版本的 AI 服务（没有多模型）会因为多了个未知字段而 422——
+    一直带的话，老版本的算法服务（没有多模型）会因为多了个未知字段而 422——
     那是一次纯粹为了"保持接口一致"造成的故障。
     """
     asyncio.run(algo_client.infer_batch([{"path": "a.csv"}], mode="viterbi"))

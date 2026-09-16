@@ -1,9 +1,29 @@
-"""
-调用 algo_service（独立部署的算法服务，通过 HTTP 访问，不合并进本仓库）的
-两个接口：/infer（同步，AI预标注按钮用）、/train + 轮询（提交训练任务）。
+"""调用**算法服务**：`imu_train` 仓库里的 `label_service`。
 
-algo_service 跟这个后端共享同一份 NAS 挂载，这里只传 sample 记录里已有的
-NAS 相对路径，不把 CSV 文件内容塞进请求体。
+/infer（同步，AI 预标注按钮）、/infer_batch（跑批）、/models（挂着哪些模型）、
+/train + 轮询（提交训练任务）、/model/switch（换默认模型）。
+
+## ⚠ 模块名和环境变量名是历史遗留，别被它们带偏
+
+这个模块叫 `algo_client`、配置项叫 `ALGO_SERVICE_URL`、异常叫
+`AlgoServiceError`——但它连的**不是** `algo_service` 那个仓库。
+
+    平台（这里）  ──HTTP──▶  imu_train/label_service   ← 就是这个模块连的
+                  ──HTTP──▶  algo_tinyml/edge_service  ← edge_client 连的
+
+`algo_service` 是**另一条线**、跟平台没有调用关系：它是个定时服务，
+定期从 TDengine 取项圈上报的 IMU 数据、推理完写进 MySQL
+（pet_dog_behavior / pet_dog_daily_summary）。那是内测版本的做法——
+项圈把原始 IMU 全传到服务端流量太大也费电，所以最终方向是端上推理。
+**那个仓库基本不要动。**
+
+名字不改是因为 `ALGO_SERVICE_URL` 已经写在各处部署配置里了，改名要同步改
+部署，而漏改的表现是"AI 服务连不上"，跟改名这件事看不出关系。
+下面的报错文案全部说「算法服务」，不说 algo_service——报错里写错服务名，
+人会跑去查一个根本没参与的服务。
+
+跟这个后端共享同一份 NAS 挂载，所以只传 sample 记录里已有的 NAS 相对路径，
+不把 CSV 内容塞进请求体。
 """
 
 import logging
@@ -88,14 +108,14 @@ async def models() -> list[dict]:
             return []
         return list((resp.json() or {}).get("models") or [])
     except httpx.RequestError as e:
-        _logger.warning("AI 服务连不上 (%s): %s", url, e)
+        _logger.warning("算法服务连不上 (%s): %s", url, e)
         return []
 
 
 async def infer(
     imu_csv_path: str, sample_id: int | None = None, mode: str | None = None, device_hz: float | None = None
 ) -> dict:
-    """同步调用 algo_service /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。
+    """同步调用算法服务 /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。
 
     device_hz 是这份 CSV 的实际采样率：8-11 之前的数据采集端就已经降到 16Hz 存了，
     8-11 起才是 50Hz 原始流。不传的话 AI 服务用它的全局默认值，对另一种就是错的。
@@ -110,10 +130,10 @@ async def infer(
             f"AI 服务推理超时（>{settings.algo_infer_timeout_sec}s），可能有其他推理在排队，稍后再试"
         ) from e
     except httpx.RequestError as e:
-        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
 
     if resp.status_code != 200:
-        raise AlgoServiceError(f"algo_service /infer 返回 {resp.status_code}: {resp.text[:500]}")
+        raise AlgoServiceError(f"算法服务 /infer 返回 {resp.status_code}: {resp.text[:500]}")
     return resp.json()
 
 
@@ -150,28 +170,28 @@ async def infer_batch(items: list[dict], mode: str | None = None,
             f"AI 服务批量推理超时（{len(items)} 个 >{settings.algo_infer_batch_timeout_sec}s）"
         ) from e
     except httpx.RequestError as e:
-        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
 
     if resp.status_code != 200:
-        raise AlgoServiceError(f"algo_service /infer_batch 返回 {resp.status_code}: {resp.text[:500]}")
+        raise AlgoServiceError(f"算法服务 /infer_batch 返回 {resp.status_code}: {resp.text[:500]}")
     data = resp.json()
     if not isinstance(data, list):
-        raise AlgoServiceError("algo_service /infer_batch 返回格式不对（不是列表）")
+        raise AlgoServiceError("算法服务 /infer_batch 返回格式不对（不是列表）")
     return data
 
 
 async def start_train(dataset_spec: dict, model_type: str, tag: str | None = None) -> int:
-    """提交训练任务，返回 algo_service 那边的 job_id。"""
+    """提交训练任务，返回算法服务那边的 job_id。"""
     url = f"{_base_url()}/api/v1/label/train"
     payload = {"dataset": dataset_spec, "model_type": model_type, "tag": tag}
     try:
         async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
             resp = await client.post(url, json=payload)
     except httpx.RequestError as e:
-        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
 
     if resp.status_code != 200:
-        raise AlgoServiceError(f"algo_service /train 返回 {resp.status_code}: {resp.text[:500]}")
+        raise AlgoServiceError(f"算法服务 /train 返回 {resp.status_code}: {resp.text[:500]}")
     return resp.json()["job_id"]
 
 
@@ -182,23 +202,23 @@ async def switch_model(model_path: str) -> dict:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json={"model_path": model_path})
     except httpx.RequestError as e:
-        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
     if resp.status_code != 200:
-        raise AlgoServiceError(f"algo_service /model/switch 返回 {resp.status_code}: {resp.text[:500]}")
+        raise AlgoServiceError(f"算法服务 /model/switch 返回 {resp.status_code}: {resp.text[:500]}")
     return resp.json()
 
 
 async def poll_train(algo_job_id: int) -> dict:
-    """查询 algo_service 那边训练任务的当前状态。"""
+    """查询算法服务那边训练任务的当前状态。"""
     url = f"{_base_url()}/api/v1/label/train/{algo_job_id}"
     try:
         async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
             resp = await client.get(url)
     except httpx.RequestError as e:
-        raise AlgoServiceError(f"无法连接 algo_service ({url}): {e}") from e
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
 
     if resp.status_code == 404:
-        raise AlgoServiceError(f"algo_service 找不到训练任务 #{algo_job_id}")
+        raise AlgoServiceError(f"算法服务找不到训练任务 #{algo_job_id}")
     if resp.status_code != 200:
-        raise AlgoServiceError(f"algo_service /train/{algo_job_id} 返回 {resp.status_code}: {resp.text[:500]}")
+        raise AlgoServiceError(f"算法服务 /train/{algo_job_id} 返回 {resp.status_code}: {resp.text[:500]}")
     return resp.json()

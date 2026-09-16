@@ -2,14 +2,21 @@
 
 跟 algo_client 的关系：**接口一模一样，服务不是同一个**。
 
-为什么不塞进 algo_client：那个连的是 algo_service，线上服务，不能动。
-端侧模型跑的是固件那份 C（tm_prep + tm_invoke，或 tm_features + tm_forest），
-从 algo_tinyml 单独起一个服务，这里单独连过去。两边共享同一份 NAS 挂载，
-所以接口里传的还是相对路径，不传文件内容。
+    平台（这里） ──▶ imu_train/label_service    算法服务，模型跑在服务器上
+                 ──▶ algo_tinyml/edge_service   端侧服务，跑的是固件那份 C
 
-**后处理跟线上是同一份代码**：端侧服务的 stable/viterbi 直接调
+为什么不塞进 algo_client：端侧模型跑的是固件那份 C（tm_prep + tm_invoke，
+或 tm_features + tm_forest）。现在还没有板子，要先回答"这个模型和这套后处理
+上板之后行不行"，所以 algo_tinyml 那边单独起一个服务给平台调——
+**它存在的全部理由就是没有板子时先行验证**。
+两边共享同一份 NAS 挂载，所以接口里传的还是相对路径，不传文件内容。
+
+（顺带澄清一个容易搞错的：`algo_service` 那个仓库跟平台**没有调用关系**。
+它是定时从 TDengine 取项圈数据、推理完写 MySQL 的内测服务，另一条线。）
+
+**后处理跟算法服务是同一份代码**：端侧服务的 stable/viterbi 直接调
 imu_train/label_service/postprocess.py，不是另抄一份。所以「端侧 + 稳定版 v2」
-跟线上的「稳定版 v2」之间**只差模型**，对比表里比的才是模型本身。
+跟算法服务的「稳定版 v2」之间**只差模型**，对比表里比的才是模型本身。
 
 默认就走 viterbi（= 界面上的稳定版 v2）。想看板子真实会报的碎片段，
 用 `edge:<标签>@raw`——那是端上没有后处理时的样子。
