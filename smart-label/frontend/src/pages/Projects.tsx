@@ -61,7 +61,7 @@ import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
-import { useInferModes } from "@/hooks/useInferModes";
+import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 
 // 上次用的预标注版本：用惯哪个就默认哪个，省得每次重选
 const PRELABEL_MODE_KEY = "smart-label:prelabel-mode";
@@ -1322,7 +1322,7 @@ export default function Projects() {
                   而且它**不支持分组**——线上和端侧混在一排看不出区别。换成 Select。 */}
               <Select
                 size="small"
-                style={{ minWidth: 200 }}
+                {...INFER_SELECT_PROPS}
                 value={prelabelMode}
                 onChange={(v) => {
                   setPrelabelMode(v as InferMode);
@@ -1539,7 +1539,7 @@ export default function Projects() {
                   ]}
                 />
                 {createTaskType === "ai_assisted" && (
-                  <Space size={6}><Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
+                  <Space size={6}><Select {...INFER_SELECT_PROPS} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
                 )}
                 <Select
                   style={{ width: 200 }}
@@ -1700,7 +1700,7 @@ export default function Projects() {
             ]}
           />
           {bulkTaskType === "ai_assisted" && (
-            <Space size={6}><Select style={{ minWidth: 150 }} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
+            <Space size={6}><Select {...INFER_SELECT_PROPS} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
           )}
           <Typography.Text>指派给</Typography.Text>
           <Select

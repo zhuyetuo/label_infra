@@ -226,3 +226,84 @@ def test_payload_carries_model_for_srv(wire):
     asyncio.run(algo_client.infer_spec([{"path": "a.csv"}], "srv:acc3@raw"))
     assert wire.seen["json"]["model"] == "acc3"
     assert wire.seen["json"]["mode"] == "raw"
+
+
+# ── 下拉显示：别再被截断 ──────────────────────────────────────────────────
+#
+# 截断过一次，而且**截掉的恰好是区分它们的那部分**：三行端侧模型都显示成
+# 「edge_cnn_i8 · …」，完全分不清谁是谁。
+
+
+def _fe(*parts):
+    import os
+    return os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", *parts)
+
+
+def _read(*parts):
+    with open(_fe(*parts), encoding="utf-8") as f:
+        return f.read()
+
+
+def _code(*parts):
+    """把注释剥掉之后的源码。
+
+    **这个项目里"源码扫描撞上自己的注释"已经出过五次**，最近一次就是
+    这一组：注释里写着 `popupMatchSelectWidth: false` 是关键，于是把那行
+    真代码删掉测试照样绿。`//` 和 `/** */` 两种都要剥——上一版只剥了前者，
+    而那段说明恰好是块注释。
+    """
+    import re
+
+    src = _read(*parts)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)      # 块注释
+    return "\n".join(ln.split("//", 1)[0] for ln in src.splitlines())
+
+
+def test_dropdown_popup_is_not_tied_to_the_trigger_width():
+    """antd 默认让弹出列表跟触发器一样宽，而触发器只有 150~190px。
+
+    不关掉的话选项就会被截断——而截掉的是后半段，也就是真正区分
+    「稳定版 v2 / 板上整条链 / 板上原始」的那部分。
+    """
+    code = _code("hooks", "useInferModes.ts")
+    assert "popupMatchSelectWidth: false" in code, \
+        "弹出列表又跟触发器一样宽了，选项会被截断"
+    assert "popupMatchSelectWidth: true" not in code
+
+
+def test_all_call_sites_share_one_set_of_select_props():
+    """四个调用点共用一份展示参数。
+
+    各写各的话，有的宽有的窄，而窄的那个会把选项截断——上次就是
+    批量建任务那个 minWidth:150 出的问题，而另外三处看着都正常。
+    """
+    for f in (("pages", "Projects.tsx"), ("components", "AnnotationWorkspace.tsx")):
+        src = _read(*f)
+        assert "INFER_SELECT_PROPS" in src, f"{f[-1]} 没用共用的下拉参数"
+        # 版本下拉不能再自己写死宽度
+        assert "minWidth: 150 }} value={createInferMode}" not in src
+
+
+def test_group_labels_stay_short():
+    """分组标题也要短。
+
+    弹出列表按**最长那一行**撑开，标题里塞一句解释会把整个列表撑得很宽，
+    挤掉旁边的东西。三组分别是什么，问号里那张表讲。
+    """
+    import re
+
+    labels = re.findall(r'label:\s*"([^"]+)"', _code("hooks", "useInferModes.ts"))
+    groups = [x for x in labels if x.startswith(("算法服务", "端侧模型"))]
+    assert groups, "没找到分组标题，这条测试该跟着改了"
+    for g in groups:
+        assert len(g) <= 14, f"分组标题太长会把弹出列表撑宽：{g}（{len(g)} 字）"
+
+
+def test_server_models_are_labelled_by_tag_not_directory_name():
+    """服务端模型用 tag 标，不用 name。
+
+    name 是目录名（.../rf/ml_rf.pkl → "rf"），挂两个模型的话下拉里会出现
+    两个一模一样的「rf · 稳定版 v2」，选哪个都不知道自己选了什么。
+    """
+    assert "${m.name} ·" not in _code("hooks", "useInferModes.ts"), \
+        "服务端模型还在用目录名当标签"

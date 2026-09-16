@@ -30,7 +30,7 @@ import { TimeBus } from "@/utils/timeBus";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
-import { useInferModes } from "@/hooks/useInferModes";
+import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
 import "./AnnotationWorkspace.css";
@@ -825,7 +825,7 @@ export default function AnnotationWorkspace({
                 <Tooltip title={hintOf(prelabelMode)}>
                   <Select
                     size="small"
-                    style={{ minWidth: 190 }}
+                    {...INFER_SELECT_PROPS}
                     value={prelabelMode}
                     onChange={(v) => setPrelabelMode(v as InferMode)}
                     options={inferOptions}
