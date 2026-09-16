@@ -677,6 +677,71 @@ async def _backfill_sample_hz(db: AsyncSession, nas_root: str, limit: int = 4000
     return len(measured)
 
 
+async def _backfill_video_duration(db: AsyncSession, nas_root: str, limit: int = 4000) -> int:
+    """给缺时长的老样本重探一遍（界面上那个 `08:00:14 ~ ?`、总时长 `-`）。
+
+    **为什么删掉项目重建也没用**：标注项目删掉重建，samples 表一行都没动；
+    而扫描只处理**没见过的 sample_code**，已有样本的 video_duration_sec 永远
+    不会回头补。所以之前只有手动跑 backfill_video_probe 才会好。
+
+    探测失败大多是**当时**的事（导入时 8 路并发读 NAS 顶到超时），文件本身没问题
+    ——真实数据里 110 个缺时长的样本，重探补回了 95 个。所以跟采样率一样，每次
+    扫描顺手补一遍：这次探不出来的留空，下次再试。
+
+    真的读不出来的（截断 / 编码坏）ffprobe 会立刻非零退出、不重试，所以每次扫描
+    为这些文件付出的代价很小，不会把扫描拖住。
+    """
+    rows = (
+        await db.execute(
+            select(Sample.id, Sample.video_cam1_path, Sample.video_cam2_path,
+                   Sample.video_cam3_path)
+            .where(or_(Sample.video_duration_sec.is_(None), Sample.video_duration_sec <= 0))
+            .limit(limit)
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    def _probe_all(items):
+        out = []
+        for sid, c1, c2, c3 in items:
+            cams = {i: p for i, p in enumerate((c1, c2, c3), 1) if p}
+            got, _why = probe_any_cam(nas_root, cams)
+            if got:
+                out.append((sid, got))
+        return out
+
+    probed = await asyncio.to_thread(_probe_all, list(rows))
+    for sid, got in probed:
+        # 帧率/分辨率**只补空的**：原来有值说明那次探测成功过，别拿另一路的
+        # 参数去盖（各路机位分辨率可能不同）
+        await db.execute(
+            update(Sample)
+            .where(Sample.id == sid)
+            .values(video_duration_sec=got["duration_sec"])
+        )
+        if got.get("fps"):
+            await db.execute(
+                update(Sample)
+                .where(Sample.id == sid, Sample.video_fps.is_(None))
+                .values(video_fps=got["fps"])
+            )
+        if got.get("width"):
+            await db.execute(
+                update(Sample)
+                .where(Sample.id == sid, Sample.video_resolution.is_(None))
+                .values(video_resolution=f"{got['width']}x{got['height']}")
+            )
+    if probed:
+        await db.commit()
+        _progress.detail.append(
+            f"补上 {len(probed)} 个样本的视频时长"
+            + (f"，还有 {len(rows) - len(probed)} 个探不出来"
+               f"（多半是文件截断/编码坏，跑 backfill_video_probe 看详情）"
+               if len(probed) < len(rows) else ""))
+    return len(probed)
+
+
 async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     # 先补登记再扫新数据：登记缺了的话，已有样本的视频点开就是"没有找到可播放的
     # 视频"，而扫描只处理新 sample_code，永远不会回头修已有的
@@ -687,6 +752,9 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
     # 采样率是后加的字段，存量样本都是空的；空的话推理会按全局默认值处理，
     # 对 8-11 之前那批 16Hz 数据就是错的
     await _backfill_sample_hz(db, nas_root)
+    # 缺时长的重探一遍：扫描只处理新 sample_code，已有样本的 video_duration_sec
+    # 不会回头补——所以**删掉标注项目重建也没用**，samples 表一行都没动
+    await _backfill_video_duration(db, nas_root)
     data_raw_dir = os.path.join(nas_root, settings.data_raw_dir)
     if not os.path.isdir(data_raw_dir):
         # 目录不存在多半是容器没挂 NAS（scheduler 之前就漏挂过），直接报错，
