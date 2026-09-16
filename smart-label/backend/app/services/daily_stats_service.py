@@ -30,6 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.dog import Dog
 from app.models.inference_run import SampleInferenceRun
 from app.models.sample import Sample
+from app.services.dog_name_service import imu_keys_of_dog
+from app.services.skin_tracking_service import _imu_of
 
 _logger = logging.getLogger("smart-label.daily_stats")
 
@@ -67,17 +69,34 @@ async def versions(db: AsyncSession) -> list[dict]:
     return out
 
 
+async def _imu_to_dog(db: AsyncSession) -> dict[str, str]:
+    """IMU 编号 → 狗名。
+
+    **跟皮肤评估用同一套映射**（imu_keys_of_dog）。各写各的话，同一个样本
+    在两个页面上会被判给不同的狗——而两边看起来都对。
+    """
+    rows = (await db.execute(select(Dog.dog_code, Dog.name, Dog.imu))).all()
+    out: dict[str, str] = {}
+    for code, name, imu in rows:
+        for key in imu_keys_of_dog(imu, code):
+            out[key] = name or code or key
+    return out
+
+
 async def daily(db: AsyncSession, date_from: date, date_to: date,
                 model_tag: str, mode: str,
                 dog_ids: list[int] | None = None) -> list[dict]:
     """按 (日期, 狗) 汇总各类行为的时长和次数。
 
     一天一只狗可能有好几个样本（分段采集），这里是**求和**。
+
+    狗是从 sample_code 里解析出 IMU 编号再映射的，**不是用 Sample.dog_id**
+    ——那一列在实际数据里基本是空的，按它分组会把所有狗collapse 成一行。
     """
+    imu_map = await _imu_to_dog(db)
     q = (
-        select(SampleInferenceRun, Sample, Dog)
+        select(SampleInferenceRun, Sample)
         .join(Sample, Sample.id == SampleInferenceRun.sample_id)
-        .join(Dog, Dog.id == Sample.dog_id, isouter=True)
         .where(
             SampleInferenceRun.model_tag == model_tag,
             SampleInferenceRun.mode == mode,
@@ -86,18 +105,16 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
             Sample.session_date <= date_to,
         )
     )
-    if dog_ids:
-        q = q.where(Sample.dog_id.in_(dog_ids))
-
     buckets: dict[tuple, dict] = {}
-    for run, sample, dog in (await db.execute(q)).all():
-        key = (sample.session_date, sample.dog_id)
+    for run, sample in (await db.execute(q)).all():
+        imu = _imu_of(sample.sample_code) or "未知设备"
+        key = (sample.session_date, imu)
         b = buckets.get(key)
         if b is None:
             b = buckets[key] = {
                 "stat_date": sample.session_date.isoformat(),
-                "dog_id": sample.dog_id,
-                "dog_name": getattr(dog, "name", None),
+                "imu": imu,
+                "dog_name": imu_map.get(imu),
                 "n_samples": 0,
                 "n_windows": 0,
                 "missing_seconds": 0.0,
@@ -128,7 +145,7 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
         labels = seen + [x for x in extra if x not in seen]
         out.append({
             "stat_date": b["stat_date"],
-            "dog_id": b["dog_id"],
+            "imu": b["imu"],
             "dog_name": b["dog_name"],
             "n_samples": b["n_samples"],
             "n_windows": b["n_windows"],
@@ -138,6 +155,6 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
             "seconds": {k: round(b["seconds"].get(k, 0.0), 1) for k in labels},
             "counts": {k: int(b["counts"].get(k, 0)) for k in labels},
         })
-    out.sort(key=lambda r: (r["stat_date"], r["dog_name"] or "", r["dog_id"] or 0),
+    out.sort(key=lambda r: (r["stat_date"], r["dog_name"] or "", r["imu"]),
              reverse=True)
     return out

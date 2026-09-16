@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Card, DatePicker, Empty, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, Card, DatePicker, Empty, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
 import {
@@ -7,6 +7,7 @@ import {
   listDailyStatsVersions,
   type DailyStatsRow,
 } from "@/api/dailyStats";
+import DailyStatsCharts from "@/components/DailyStatsCharts";
 
 /**
  * 日常统计：每只狗每天各类行为多久、多少次。
@@ -89,12 +90,17 @@ export default function DailyStats() {
     },
     {
       title: "狗",
-      width: 100,
-      render: (_: unknown, r: DailyStatsRow) => r.dog_name || (r.dog_id ? `#${r.dog_id}` : "—"),
+      width: 130,
+      render: (_: unknown, r: DailyStatsRow) => (
+        <Space size={4}>
+          <b>{r.dog_name || "未登记"}</b>
+          <Text type="secondary" style={{ fontSize: 12 }}>{r.imu}</Text>
+        </Space>
+      ),
     },
     ...labels.map((l) => ({
       title: (
-        <Tooltip title={DURATION_FIRST.has(l) ? "状态类：看时长（括号里是段数）" : "事件类：看次数（括号里是总时长）"}>
+        <Tooltip title={DURATION_FIRST.has(l) ? "这一天累计多久" : "这一天累计多久，后面是发生次数"}>
           {l}
         </Tooltip>
       ),
@@ -104,23 +110,19 @@ export default function DailyStats() {
         const n = r.counts[l] ?? 0;
         // 没有时长数据时**不显示 0 秒**——那是"不知道"，不是"是 0"。
         // 显示 0 的话，历史那些行看起来像这只狗一整天没动过
-        if (DURATION_FIRST.has(l)) {
-          return r.has_seconds ? (
-            <Space size={4}>
-              <b>{fmtDur(sec)}</b>
-              <Text type="secondary">({n} 段)</Text>
-            </Space>
-          ) : (
-            <Space size={4}>
+        if (!r.has_seconds) {
+          // **不显示 0**——那是"不知道"，不是"是 0"。
+          // 显示 0 的话，没补过时长的那些天看起来像这只狗一整天没动过
+          return (
+            <Tooltip title="这一行是「每类总时长」这个字段加进来之前跑的。补一下：docker compose exec api python -m app.scripts.backfill_label_seconds">
               <Text type="secondary">时长未记</Text>
-              <Text type="secondary">({n} 段)</Text>
-            </Space>
+            </Tooltip>
           );
         }
         return (
           <Space size={4}>
-            <b>{n} 次</b>
-            {r.has_seconds ? <Text type="secondary">({fmtDur(sec)})</Text> : null}
+            <b>{fmtDur(sec)}</b>
+            {DURATION_FIRST.has(l) ? null : <Text type="secondary">{n} 次</Text>}
           </Space>
         );
       },
@@ -197,19 +199,44 @@ export default function DailyStats() {
           showIcon
           style={{ marginBottom: 12 }}
           message="有些行没有时长数据"
-          description="「每类总时长」是后加的字段，历史结果没有回填（回填要把 NAS 上几万个 JSON 重读一遍，而且那些结果的类别跟现在的模型可能不是一套）。这些行显示「时长未记」——那是不知道，不是 0。重新跑一次那天的预标注就有了。"
+          description={
+            <>
+              <div>「每类总时长」是后加的字段，这些行是它之前跑的，所以只有段数没有时长。</div>
+              <div style={{ marginTop: 6 }}>
+                补一下（读 NAS 上已有的结果 JSON，几分钟，可重复跑）：
+                <code style={{ marginLeft: 6 }}>
+                  docker compose exec api python -m app.scripts.backfill_label_seconds
+                </code>
+              </div>
+            </>
+          }
         />
       ) : null}
       {!versions?.length ? (
         <Empty description="还没有任何推理结果。先在项目里跑一次 AI 预标注。" />
       ) : (
-        <Table
-          rowKey={(r) => `${r.stat_date}-${r.dog_id}`}
-          loading={isFetching}
-          dataSource={data ?? []}
-          columns={columns}
-          size="small"
-          pagination={{ pageSize: 50, showSizeChanger: true }}
+        <Tabs
+          items={[
+            {
+              key: "table",
+              label: "统计表",
+              children: (
+                <Table
+                  rowKey={(r) => `${r.stat_date}-${r.imu}`}
+                  loading={isFetching}
+                  dataSource={data ?? []}
+                  columns={columns}
+                  size="small"
+                  pagination={{ pageSize: 50, showSizeChanger: true }}
+                />
+              ),
+            },
+            {
+              key: "charts",
+              label: "趋势图",
+              children: <DailyStatsCharts rows={data ?? []} labels={labels} />,
+            },
+          ]}
         />
       )}
     </Card>
