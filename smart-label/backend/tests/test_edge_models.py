@@ -600,3 +600,27 @@ def test_endpoint_offers_the_board_spec(on, monkeypatch, run):
         == {"edge_rf_d10"}
     assert {edge_client.post_mode_of(m[k]) for k in ("spec", "spec_raw", "spec_board")} \
         == {"viterbi", "raw", "board"}
+
+
+def test_edge_option_labels_name_the_algorithm():
+    """下拉里的标签要**直接写出算法**，不能只写在 hover 的提示里。
+
+    人是扫列表的，不是逐个悬停的。第一版三个选项叫「稳定版 v2 /
+    板上整条链 / 板上原始」——找"流式有界回溯"的人在列表里一个字都看不到，
+    于是以为这个功能没做（真事）。
+
+    这条钉的是前端源码，因为这是个**看得见但测不出来**的问题：
+    功能完全正常，只是没人找得到。
+    """
+    import os
+    p = os.path.join(os.path.dirname(__file__), "..", "..",
+                     "frontend", "src", "hooks", "useInferModes.ts")
+    with open(p, encoding="utf-8") as f:
+        src = f.read()
+    # 只看 label，不看注释——注释里正解释着这件事
+    labels = [ln for ln in src.splitlines() if "label: `${m.tag}" in ln]
+    assert len(labels) == 3, f"端侧应该是三个选项，实际 {len(labels)}"
+    joined = "\n".join(labels)
+    assert "流式有界回溯" in joined, "板上那条没写算法名，找的人看不到"
+    assert "离线 viterbi" in joined, "服务端那条没写算法名，两条就对比不出来"
+    assert "不做后处理" in joined
