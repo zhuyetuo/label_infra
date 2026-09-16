@@ -41,6 +41,14 @@ const ROWS: Row[] = [
     note: "整条时间轴一起解码，目前效果最好",
   },
   {
+    key: "viterbi-noshake",
+    name: "稳定版 v2 · 不吞甩身体",
+    model: "线上模型",
+    infer: "服务端",
+    post: "服务端 · 离线 viterbi",
+    note: "跟上面那行**只差一条规则**：抓挠不再吞并前后的甩身体。模型一样、解码一样，专门用来看那条规则划不划算",
+  },
+  {
     key: "raw",
     name: "调试版",
     model: "线上模型",
