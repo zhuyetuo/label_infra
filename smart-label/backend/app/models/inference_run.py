@@ -41,6 +41,11 @@ class SampleInferenceRun(Base):
     missing_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     # {类别: 段数}，对比时先看这个就知道差在哪一类
     label_counts: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON {label: n}")
+    # 每个类别的总时长。**光有段数没用**："活动 12 段"说明不了什么，
+    # 日常统计要的是"活动 3.2 小时"。
+    # 存秒数不存分钟：跨天汇总时先取整会一点点攒出误差
+    label_seconds: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="JSON {label: 总秒数}")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

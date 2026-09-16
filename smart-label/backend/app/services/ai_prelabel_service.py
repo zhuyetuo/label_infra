@@ -234,6 +234,38 @@ def ai_label_relpath(imu_csv_path: str) -> str:
     return os.path.join(settings.ai_label_dir, os.path.splitext(rel)[0] + "_ai_label.json")
 
 
+def _label_seconds(segments: dict) -> dict:
+    """每个类别的总时长（秒）。
+
+    片段的时间是字符串，格式跟 algo_service 那边一致（到毫秒）。
+    解析不了、或者起止倒转的那一段**跳过而不是当成 0 秒**——当成 0 的话，
+    一整天的时长会悄悄少一截，而看数字完全正常。
+
+    存秒不存分钟：跨天汇总时先取整会一点点攒出误差。
+    """
+    out: dict[str, float] = {}
+    for lab, items in (segments or {}).items():
+        total = 0.0
+        for s in items or []:
+            a, b = _parse_seg_ts(s.get("start_ts")), _parse_seg_ts(s.get("end_ts"))
+            if a is None or b is None or b <= a:
+                continue
+            total += (b - a).total_seconds()
+        out[lab] = round(total, 1)
+    return out
+
+
+def _parse_seg_ts(v):
+    if not v:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(str(v), fmt)
+        except ValueError:
+            continue
+    return None
+
+
 async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> None:
     """把这一份结果登记进 sample_inference_runs，同 (样本, 模型, 版本) 覆盖自己那条。
 
@@ -242,6 +274,7 @@ async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> N
     """
     segs = result.get("segments") or {}
     label_counts = {k: len(v or []) for k, v in segs.items()}
+    label_seconds = _label_seconds(segs)
     try:
         async with SessionLocal() as db:
             row = (
@@ -268,6 +301,7 @@ async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> N
             row.n_candidates = len(result.get("candidates") or [])
             row.missing_seconds = float(result.get("missing_seconds") or 0.0)
             row.label_counts = json.dumps(label_counts, ensure_ascii=False)
+            row.label_seconds = json.dumps(label_seconds, ensure_ascii=False)
             await db.commit()
     except Exception:  # noqa: BLE001 记不上不影响预标注本身
         _logger.exception("登记推理结果失败 sample=%s", sample.id)
