@@ -550,3 +550,90 @@ def test_ui_offers_both_by_dog_and_by_device():
     assert 'label: "按狗"' in src
     assert 'label: "按设备"' in src
     assert 'mode="multiple"' in src, "不能多选的话没法同时看两只狗"
+
+
+# ── 合计（跟 24 小时对） ──────────────────────────────────────────────────
+
+
+def test_total_seconds_is_the_sum_of_the_columns_shown(run):
+    """合计必须等于表上那几列相加。
+
+    如果这里偷偷把某个没展示的类别也加进去，人会看到"每列加起来不等于合计"，
+    而那种对不上最难查——两个数都"对"，只是口径不一样。
+    """
+    d = _dt.date(2026, 9, 13)
+    secs = {"活动": 8 * 3600, "睡觉": 13 * 3600, "抓挠": 60, "未佩戴": 3600, "甩身体": 0}
+    out = run(svc.daily(_DB([(_Run(secs=secs, counts={}), _Sample(d))]), d, d, "m", "viterbi"))
+    r = out[0]
+    assert r["total_seconds"] == pytest.approx(sum(r["seconds"].values()))
+    assert r["total_seconds"] == pytest.approx(22 * 3600 + 60)
+
+
+def test_total_seconds_excludes_missing_seconds(run):
+    """缺数据**不算进合计**。
+
+    算进去的话合计会凑得很接近 24 小时，反而把"那天没采满"这件事盖住——
+    而这正是人要从合计里看出来的东西。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [(_Run(secs={"睡觉": 3600}, counts={}, missing=1800.0), _Sample(d))]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["total_seconds"] == pytest.approx(3600)
+    assert r["missing_seconds"] == pytest.approx(1800)
+
+
+def test_total_seconds_sums_across_samples_of_the_day(run):
+    """一天几个样本，合计是全天的，不是最后一个样本的。"""
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 3600, "活动": 1800}, counts={}), _Sample(d)),
+        (_Run(secs={"睡觉": 1800}, counts={}), _Sample(d)),
+    ]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["total_seconds"] == pytest.approx(7200)
+
+
+def test_total_seconds_is_none_when_duration_unknown(run):
+    """没有时长数据时合计是 None，**不是 0**。
+
+    给 0 的话那些老行会显示"合计 0 小时，比 24 小时少 24 小时"——
+    看起来像这只狗那天彻底失联，而其实只是这列数据没记。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [(_Run(secs=None, counts={"睡觉": 3}), _Sample(d))]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["has_seconds"] is False
+    assert r["total_seconds"] is None
+
+
+def test_total_can_exceed_a_day_and_is_not_clamped(run):
+    """合计超过 24 小时时**照实给**，不截到 24。
+
+    超过说明样本时间段有重叠（数据重复导入之类）——那是要查的问题。
+    截一下的话它看起来完全正常，问题就永远不会被发现。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 20 * 3600}, counts={}), _Sample(d)),
+        (_Run(secs={"睡觉": 20 * 3600}, counts={}), _Sample(d)),
+    ]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["total_seconds"] == pytest.approx(40 * 3600)
+
+
+def test_ui_shows_a_total_column_and_explains_the_gap():
+    """界面上要有合计列，并且能解释为什么对不上 24 小时。
+
+    只给一个"不对"的数字没用——偏多（重叠，是 bug）和偏少（没采满，正常）
+    是两类完全不同的事，人得知道该不该管。
+    """
+    import os
+    base = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src")
+    with open(os.path.join(base, "pages", "DailyStats.tsx"), encoding="utf-8") as f:
+        page = f.read()
+    assert "合计" in page
+    assert "total_seconds" in page, "合计没用后端算好的那个数"
+    assert "DayTotalHelp" in page, "没有解释对不上的原因"
+    with open(os.path.join(base, "components", "DayTotalHelp.tsx"), encoding="utf-8") as f:
+        help_src = f.read()
+    assert "偏多" in help_src and "偏少" in help_src, "两个方向要分开说"

@@ -205,6 +205,19 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
             "labels": labels,
             "seconds": {k: round(b["seconds"].get(k, 0.0), 1) for k in labels},
             "counts": {k: int(b["counts"].get(k, 0)) for k in labels},
+            # 各类时长之和。**在这里算而不是前端加**：图表、导出、以后可能有的
+            # 告警都要用同一个数，各算各的话会出现"表上 23 小时、图上 24 小时"。
+            #
+            # 只取 labels 里那几列，跟表格显示的是同一批数——如果这里偷偷把
+            # 某个没展示的类别也加进去，人会看到"每列加起来不等于合计"，
+            # 而那种对不上最难查。
+            #
+            # 没有时长数据时给 None 而不是 0：那是"不知道"，
+            # 不是"知道，是 0 秒"。
+            "total_seconds": (
+                round(sum(b["seconds"].get(k, 0.0) for k in labels), 1)
+                if b["has_seconds"] else None
+            ),
         })
     out.sort(key=lambda r: (r["stat_date"], r["dog_name"] or "", r["imu"]),
              reverse=True)
