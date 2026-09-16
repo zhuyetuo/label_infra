@@ -218,6 +218,16 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
     而不是每个 IMU 各一个样本。
     """
     groups: dict[str, dict] = {}
+    # 站点目录 → 这一天**任何一个 session** 里被配对过的 cam 编号。
+    #
+    # 为什么要跨 session 累计：狗场是一间一狗一摄像头，但**不是每场六只狗都在**。
+    # 某一场少一只狗，那个房间的摄像头这一场就没有配对文件——按单个 session 判的话
+    # 它会被当成"公用"，于是**一个空房间的画面被挂给了当场所有的狗**。
+    # 现实里就是这样：16:00 那场 imu17 没上，cam5 那一路没配对，
+    # 结果每只狗都多出一路空房间的地砖。
+    #
+    # 真正的公用（天花板）在**整天所有场次里都没有**配对文件。
+    site_paired_cams: dict[str, set[int]] = {}
     for root, _dirs, files in os.walk(data_raw_dir):
         paired_dir = _is_paired_site_dir(data_raw_dir, root)
         for fname in files:
@@ -241,8 +251,10 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
                         "videos_by_imu": {},
                         "shared_videos": {},
                         "paired_site": False,
+                        "site_dir": root,
                     },
                 )
+                g.setdefault("site_dir", root)
                 if paired_dir:
                     g["paired_site"] = True
                     g["shared_videos"].setdefault(
@@ -264,8 +276,10 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
                     "videos_by_imu": {},
                     "shared_videos": {},
                     "paired_site": False,
+                    "site_dir": root,
                 },
             )
+            g.setdefault("site_dir", root)
             if paired_dir:
                 g["paired_site"] = True
             if ext == "mp4":
@@ -275,6 +289,8 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
                 # 狗场是一间一狗一摄像头，这个配对关系就是采集端 PAIRS 定的，
                 # 丢掉它的后果见下面 cam_paths 那段。
                 g["videos_by_imu"].setdefault(imu_idx, {}).setdefault(cam_idx, rel_path)
+                # 全站点累计：这一路在**今天任何一场**里配对过
+                site_paired_cams.setdefault(root, set()).add(cam_idx)
                 # 同一路摄像头正常只有一份视频；万一撞了（不同 imu 编号的文件名
                 # 巧合落到同一个 cam 编号），保留先扫到的那份，不用后写的覆盖。
                 # 视频文件名上就算带了 dog 编号也不用——同一批视频是给好几只
@@ -290,6 +306,10 @@ def _scan_filesystem(data_raw_dir: str, nas_root: str) -> dict[str, dict]:
                 prev = g["csvs"].get(imu_idx)
                 if prev is None or (_is_raw(rel_path) and not _is_raw(prev["path"])):
                     g["csvs"][imu_idx] = {"path": rel_path, "dog_code": dog_code}
+
+    # 把站点级的结果挂回每个 group，下面组装 cam 的时候用
+    for g in groups.values():
+        g["site_paired_cams"] = set(site_paired_cams.get(g.get("site_dir", ""), ()))
     return groups
 
 
@@ -308,6 +328,63 @@ def _probe_group_sync(nas_root: str, cam_paths: dict[int, str], csv_rel: str) ->
     )
     return {"missing": missing, "probe": probe, "row_count": row_count, "total_size": total_size,
             "sample_hz": sample_hz}
+
+
+def genuinely_shared_cams(group: dict) -> dict[int, str]:
+    """这一场里哪几路是**真·公用**（该挂给当场每只狗）。
+
+    判据：有不带 imu 号的 `{base}_camN_raw.mp4`，**而且这一路在整个站点目录
+    （= 这一天这个场地的所有场次）里从来没有过配对文件**。
+
+    为什么必须按站点目录、不能按单场：狗场一间一狗一摄像头，但**不是每场
+    六只狗都在**。少一只狗的那场，那个房间的摄像头这一场没有配对文件——
+    只看这一场的话它会被当成"公用"，于是**一个空房间的画面被挂给了当场
+    所有的狗**。真实数据里就是这样：16:00 那场 imu17 没上，cam5 没配对，
+    结果每只狗都多出一路空房间的地砖，平台上看起来就是"狗场怎么是 3 路"。
+
+    真正的公用（天花板 cam7）在整天所有场次里都没有配对文件。
+    """
+    videos_by_imu = group.get("videos_by_imu") or {}
+    paired_cams = set(group.get("site_paired_cams") or ())
+    if not paired_cams:
+        # 兜底：没有站点级信息时退回按本场算（老数据/老调用方）
+        paired_cams = {cam for cams in videos_by_imu.values() for cam in cams}
+    return {
+        cam: path
+        for cam, path in (group.get("shared_videos") or {}).items()
+        if cam not in paired_cams
+    }
+
+
+def cams_for_imu(group: dict, imu_idx: int, shared_cams: dict[int, str],
+                 shared_videos: dict[int, str] | None = None) -> dict[int, str]:
+    """这只狗该挂哪几路 → {样本表的槽位: 相对路径}。
+
+    抽成模块级函数是为了**修复脚本能复用同一份逻辑**——各写一份的话，
+    修复脚本算出来的跟导入算出来的迟早不一样，而那时候"修复"反而在改坏。
+
+    非配对站点（影棚、旧数据）一律用共用那三路，行为跟以前完全一样。
+    """
+    videos_by_imu = group.get("videos_by_imu") or {}
+    paired_site = bool(group.get("paired_site")) and bool(videos_by_imu)
+    if not paired_site:
+        return shared_cams
+    own = videos_by_imu.get(imu_idx)
+    if not own:
+        return shared_cams
+    if shared_videos is None:
+        shared_videos = genuinely_shared_cams(group)
+    # 自己那间的画面 + 真公用那路（天花板）。公用的 cam 编号跟自己那路撞了
+    # 就不重复加。
+    cams = dict(own)
+    for cam_idx, path in shared_videos.items():
+        cams.setdefault(cam_idx, path)
+    # samples 表只有 cam1/cam2/cam3 三个位置，按摄像头编号从小到大占位
+    return {
+        slot: path
+        for slot, (_cam, path) in enumerate(sorted(cams.items()), start=1)
+        if slot <= 3
+    }
 
 
 def _plan_cam_path_fix(
@@ -629,39 +706,14 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         videos_by_imu = g.get("videos_by_imu") or {}
         paired_site = bool(g.get("paired_site")) and bool(videos_by_imu)
 
-        # 哪几路是真·公用：有 {base}_camN_raw.mp4、而且这一路没有任何配对文件。
-        # 清理脚本跑过之后只有天花板那路符合（它的 6 份配对被删了，其余各路留的
-        # 恰恰是配对文件）。没跑过清理的目录里每一路都还有自己的 _camN_raw.mp4，
-        # 那些是各房间的原视频、不是公用的——按配对关系走就行，别当公用挂给所有狗，
-        # 不然又回到「每只狗看别人房间」那个错。
-        paired_cams = {cam for cams in videos_by_imu.values() for cam in cams}
-        shared_videos = {
-            cam: path
-            for cam, path in (g.get("shared_videos") or {}).items()
-            if cam not in paired_cams
-        }
+        # 哪几路是真·公用，见 genuinely_shared_cams（抽出去是为了能直接测——
+        # 这段判断错了不报错，只是每只狗多出一路别人/空房间的画面）
+        shared_videos = genuinely_shared_cams(g)
 
         shared_cams = {c: videos[c] for c in (1, 2, 3) if c in videos}
 
         def _cams_for(imu_idx: int) -> dict[int, str]:
-            if not paired_site:
-                return shared_cams
-            own = videos_by_imu.get(imu_idx)
-            if not own:
-                return shared_cams
-            # 自己那间的画面 + 公用那路（天花板）。公用那路只有一份文件、不带
-            # imu 号，6 只狗都挂它——清理脚本删掉 6 份配对副本之后就是这个形状。
-            # 公用的 cam 编号跟自己那路撞了就不重复加（清理前的目录会是这样）。
-            cams = dict(own)
-            for cam_idx, path in shared_videos.items():
-                cams.setdefault(cam_idx, path)
-            # samples 表只有 cam1/cam2/cam3 三个位置，按摄像头编号从小到大占位：
-            # 狗场是「自己那间 + 天花板」两路，正好 cam1/cam2 两个位置。
-            return {
-                slot: path
-                for slot, (_cam, path) in enumerate(sorted(cams.items()), start=1)
-                if slot <= 3
-            }
+            return cams_for_imu(g, imu_idx, shared_cams, shared_videos)
 
         imu_items = sorted(csvs.items())
         for imu_idx, csv_info in imu_items:
