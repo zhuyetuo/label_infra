@@ -536,3 +536,67 @@ def test_both_prelabel_paths_go_through_the_shared_helper():
         assert not re.search(r"\bmodel_of\s*\(", src), (
             f"{fn.__name__} 自己拆了版本串，很可能漏掉 post_mode；"
             "用 edge_client.infer_spec / dispatch_batch")
+
+
+# ── board：整条链都是板上那份 C ────────────────────────────────────────────
+
+
+def test_board_is_a_valid_post_mode():
+    """`edge:x@board` = 让端侧服务用板子上那份后处理（tm_post.c），
+    而不是服务端的 Python。
+
+    选 edge:x 时模型和推理已经是板上那份 C 了，但后处理还是服务端的。
+    @board 把最后这一段也换掉——手里没有板子时，这是唯一能拿真实数据
+    回答「板子会报什么」的办法。
+    """
+    assert edge_client.post_mode_of("edge:edge_rf_d10@board") == "board"
+    assert edge_client.model_of("edge:edge_rf_d10@board") == "edge_rf_d10"
+
+
+def test_board_is_not_the_default():
+    """默认仍然是 viterbi。
+
+    默认成 board 的话，日常铺草稿用的就变成了"板子会报什么"，
+    而那跟线上「稳定版 v2」比多了一层实现差异——对比表里就说不清
+    差的是模型还是后处理了。
+    """
+    assert edge_client.EDGE_DEFAULT_POST == "viterbi"
+    assert edge_client.post_mode_of("edge:edge_rf_d10") == "viterbi"
+
+
+def test_board_reaches_the_service(on, monkeypatch, run):
+    """mode 要真的以 "board" 发出去。"""
+    sent = {}
+
+    async def fake_post(self, url, json=None, **kw):
+        sent.update(json or {})
+
+        class R:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return []
+        return R()
+
+    monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+    run(edge_client.infer_spec([{"path": "a.csv", "sample_id": 1}],
+                               "edge:edge_rf_d10@board"))
+    assert sent["mode"] == "board"
+    assert sent["model"] == "edge_rf_d10"
+
+
+def test_endpoint_offers_the_board_spec(on, monkeypatch, run):
+    """界面上每个端侧模型现在是三个选项：稳定版 v2 / 板上整条链 / 板上原始。"""
+    async def fake_available():
+        return [{"tag": "edge_rf_d10", "classes": ["抓挠"], "window": 16,
+                 "hz": 16, "stride": 8}]
+
+    monkeypatch.setattr(edge_client, "available", fake_available)
+    m = run(api.edge_models())["data"]["models"][0]
+    assert m["spec_board"] == "edge:edge_rf_d10@board"
+    # 三个 spec 解回来是同一个模型、三种后处理
+    assert {edge_client.model_of(m[k]) for k in ("spec", "spec_raw", "spec_board")} \
+        == {"edge_rf_d10"}
+    assert {edge_client.post_mode_of(m[k]) for k in ("spec", "spec_raw", "spec_board")} \
+        == {"viterbi", "raw", "board"}
