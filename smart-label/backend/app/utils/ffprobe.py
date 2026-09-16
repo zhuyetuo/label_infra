@@ -5,34 +5,68 @@ import json
 import subprocess
 from datetime import datetime
 
+#: 单次探测的超时。NAS 上一个 1 小时的 mp4 走网络读，8 路并发的时候
+#: 偶尔会顶到 30 秒——**超时和"文件坏了"是两回事**，见 probe_video_reason。
+PROBE_TIMEOUT_S = 30
+#: 超时后重试一次用的超时（只对超时重试，别的失败重试没有意义）
+PROBE_RETRY_TIMEOUT_S = 120
+
+
+def probe_video_reason(path: str) -> tuple[dict | None, str | None]:
+    """→ (probe 字典, 失败原因)。成功时原因是 None。
+
+    为什么要把原因带出来：原来所有异常都吞成一个 None，于是**超时**和
+    **文件截断/编码坏**在调用方看来一模一样。这两种的处理方式正好相反——
+    超时重试一次就好了，文件坏了重试一万次也没用。混成一句"探测失败"之后
+    导入时只能默默把 video_duration_sec 留空，界面上就是 `08:00:14 ~ ?`。
+
+    超时**重试一次**（用更长的超时）：导入时 8 路并发一起读 NAS，第一次
+    顶到 30 秒是常事，而串行重试一次基本都能过。
+    """
+    timeout = PROBE_TIMEOUT_S
+    for attempt in (1, 2):
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height,r_frame_rate",
+                    "-show_entries", "format=duration",
+                    "-of", "json", path,
+                ],
+                capture_output=True, text=True, timeout=timeout, check=True,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt == 1:
+                timeout = PROBE_RETRY_TIMEOUT_S
+                continue
+            return None, f"超时（{PROBE_TIMEOUT_S}s + 重试 {PROBE_RETRY_TIMEOUT_S}s）"
+        except subprocess.CalledProcessError as e:
+            return None, f"ffprobe 退出码 {e.returncode}：{(e.stderr or '').strip()[:200]}"
+        except OSError as e:
+            return None, f"起不了 ffprobe：{e}"
+        try:
+            data = json.loads(result.stdout)
+            stream = (data.get("streams") or [{}])[0]
+            fmt = data.get("format") or {}
+            fps = None
+            if stream.get("r_frame_rate"):
+                num, _, den = stream["r_frame_rate"].partition("/")
+                if den and int(den) != 0:
+                    fps = round(int(num) / int(den), 2)
+            return {
+                "width": stream.get("width"),
+                "height": stream.get("height"),
+                "fps": fps,
+                "duration_sec": int(float(fmt["duration"])) if fmt.get("duration") else None,
+            }, None
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError) as e:
+            return None, f"输出解析不了：{type(e).__name__}"
+    return None, "超时"
+
 
 def probe_video(path: str) -> dict | None:
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate",
-                "-show_entries", "format=duration",
-                "-of", "json", path,
-            ],
-            capture_output=True, text=True, timeout=30, check=True,
-        )
-        data = json.loads(result.stdout)
-        stream = (data.get("streams") or [{}])[0]
-        fmt = data.get("format") or {}
-        fps = None
-        if stream.get("r_frame_rate"):
-            num, _, den = stream["r_frame_rate"].partition("/")
-            if den and int(den) != 0:
-                fps = round(int(num) / int(den), 2)
-        return {
-            "width": stream.get("width"),
-            "height": stream.get("height"),
-            "fps": fps,
-            "duration_sec": int(float(fmt["duration"])) if fmt.get("duration") else None,
-        }
-    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, IndexError, ValueError):
-        return None
+    """老调用方用的薄封装：只要结果，不要原因。"""
+    return probe_video_reason(path)[0]
 
 
 def measure_csv_hz(path: str, probe_rows: int = 400) -> float | None:
