@@ -28,13 +28,19 @@ async def list_versions(db: AsyncSession = Depends(get_db)):
     return ok(await svc.versions(db))
 
 
+@router.get("/dogs")
+async def list_dogs(db: AsyncSession = Depends(get_db)):
+    """能筛的狗（含它们的设备号）。"""
+    return ok(await svc.dogs(db))
+
+
 @router.get("")
 async def daily(
     date_from: _dt.date = Query(...),
     date_to: _dt.date = Query(...),
     model_tag: str = Query(..., description="哪个模型，从 /versions 拿"),
     mode: str = Query(..., description="哪个版本（stable/viterbi/raw/board）"),
-    dog_ids: str = Query("", description="逗号分隔；空 = 全部"),
+    imus: str = Query("", description="设备号，逗号分隔（IMU5 或 5 都认）；空 = 全部狗"),
     db: AsyncSession = Depends(get_db),
 ):
     """按 (日期, 狗) 汇总。
@@ -47,5 +53,5 @@ async def daily(
     if (date_to - date_from).days > 400:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "一次最多查 400 天")
-    ids = [int(x) for x in dog_ids.split(",") if x.strip().isdigit()]
-    return ok(await svc.daily(db, date_from, date_to, model_tag, mode, ids or None))
+    keys = [x.strip() for x in imus.split(",") if x.strip()]
+    return ok(await svc.daily(db, date_from, date_to, model_tag, mode, keys or None))

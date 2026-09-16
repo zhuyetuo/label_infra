@@ -24,7 +24,7 @@ import logging
 from collections import defaultdict
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dog import Dog
@@ -83,9 +83,47 @@ async def _imu_to_dog(db: AsyncSession) -> dict[str, str]:
     return out
 
 
+async def dogs(db: AsyncSession) -> list[dict]:
+    """能筛的狗。一只狗可能有两个 IMU（轮换充电），都列出来。
+
+    从狗档案取，不从数据里扫：扫数据的话，筛掉一只狗之后剩下的选项
+    也跟着变少，下拉会越点越空。
+    """
+    rows = (await db.execute(
+        select(Dog.dog_code, Dog.name, Dog.imu).order_by(Dog.dog_code)
+    )).all()
+    out = []
+    for code, name, imu in rows:
+        keys = imu_keys_of_dog(imu, code)
+        if not keys:
+            continue
+        out.append({"dog_name": name or code, "imus": keys})
+    return out
+
+
+def _imu_nums(imus: list[str]) -> list[str]:
+    """["IMU5", "5", "IMU5"] → ["5"]。
+
+    下拉传上来的可能是哪种都有；而且「按狗」和「按设备」两种选法可以同时选，
+    同一个设备会出现两次——**要去重**，不然 SQL 里的 or_ 会有重复条件
+    （不会错，但查询计划难看，而且日志里看着像 bug）。
+    顺序稳定：去重不能把顺序打乱，不然同样的筛选条件生成的 SQL 每次不一样，
+    缓存和排查都受影响。
+    """
+    seen, out = set(), []
+    for v in imus:
+        v = str(v).strip().upper()
+        if v.startswith("IMU"):
+            v = v[3:]
+        if v.isdigit() and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 async def daily(db: AsyncSession, date_from: date, date_to: date,
                 model_tag: str, mode: str,
-                dog_ids: list[int] | None = None) -> list[dict]:
+                imus: list[str] | None = None) -> list[dict]:
     """按 (日期, 狗) 汇总各类行为的时长和次数。
 
     一天一只狗可能有好几个样本（分段采集），这里是**求和**。
@@ -94,6 +132,7 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
     ——那一列在实际数据里基本是空的，按它分组会把所有狗collapse 成一行。
     """
     imu_map = await _imu_to_dog(db)
+    want = set(f"IMU{n}" for n in _imu_nums(imus or []))
     q = (
         select(SampleInferenceRun, Sample)
         .join(Sample, Sample.id == SampleInferenceRun.sample_id)
@@ -105,9 +144,21 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
             Sample.session_date <= date_to,
         )
     )
+    if want:
+        # **在 SQL 里先筛掉**：单只狗是最常用的看法，不该每次把全部狗
+        # 拉出来再在内存里丢。
+        #
+        # like '%imu5' 要求以 imu5 结尾，所以不会误中 imu15（那个以 u15 结尾）。
+        # 但它会中 "xxximu5" 这种没有下划线的——下面用 _imu_of 再精确核一次。
+        # 下划线在 LIKE 里是通配符，写进模式要转义，不如这样两步来得稳。
+        q = q.where(or_(*[Sample.sample_code.like(f"%imu{n}")
+                          for n in _imu_nums(imus or [])]))
+
     buckets: dict[tuple, dict] = {}
     for run, sample in (await db.execute(q)).all():
         imu = _imu_of(sample.sample_code) or "未知设备"
+        if want and imu not in want:
+            continue          # SQL 那层是粗筛，这里精确核
         key = (sample.session_date, imu)
         b = buckets.get(key)
         if b is None:
