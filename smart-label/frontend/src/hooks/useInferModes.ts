@@ -16,6 +16,24 @@ import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_
  *
  * 端侧服务没配/没起时，这个 hook 退化成只有线上那一组，别的一切照旧。
  */
+/**
+ * 「版本」下拉统一的展示参数。**四个调用点共用一份**——各写各的话，
+ * 有的宽有的窄，而窄的那个会把选项截断。
+ *
+ * `popupMatchSelectWidth: false` 是关键：antd 默认让弹出列表跟触发器一样宽，
+ * 触发器只有 150~190px，于是「edge_cnn_i8 · 稳定版 v2」被截成
+ * 「edge_cnn_i8 · …」——**截掉的恰好是区分它们的那部分**，
+ * 三行端侧模型看起来一模一样。关掉之后列表按内容撑开，不再截断。
+ *
+ * 触发器本身仍然有宽度上限（不能让它把一行挤没），所以选中之后可能还是
+ * 显示不全——那个靠 hover 的 title 补，跟以前一样。
+ */
+export const INFER_SELECT_PROPS = {
+  popupMatchSelectWidth: false,
+  style: { minWidth: 190 },
+} as const;
+
+
 export function useInferModes() {
   const { data } = useQuery({
     queryKey: ["edge-models"],
@@ -42,24 +60,28 @@ export function useInferModes() {
 
   const options = useMemo(() => {
     const online = {
-      label: "算法服务（imu_train 的 label_service）",
+      // 分组名要短：弹出列表按最长那行撑开，标题太长会把整个列表撑得很宽。
+      // 三组分别是什么，问号里那张表讲（InferModeHelp）
+      label: "算法服务 · 默认模型",
       options: INFER_MODE_OPTIONS.map((o) => ({ ...o, title: INFER_MODE_HINT[o.value] })),
     };
     const server = serverModels.length
       ? [{
-          label: "服务端模型（同一台 AI 服务，换了个模型）",
+          label: "算法服务 · 其它模型",
           // 每个模型两个选项。默认的「稳定版 v2」排在前面——跟线上那三行
           // 用的是同一份后处理，所以跟它们比，差的只有模型本身。
           //
           // 标签**只留名字**，差异放在下拉旁边那个问号里（InferModeHelp）。
+          // 用 tag 不用 name：name 是目录名（.../rf/ml_rf.pkl → "rf"），
+          // 挂两个模型的话会显示成两个一模一样的"rf"
           options: serverModels.flatMap((m) => [
             {
-              label: `${m.name} · 稳定版 v2`,
+              label: `${m.tag} · 稳定版 v2`,
               value: m.spec as string,
               title: `服务端推理。后处理跟线上「稳定版 v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
             },
             {
-              label: `${m.name} · 调试版`,
+              label: `${m.tag} · 调试版`,
               value: (m.spec_raw ?? `${m.spec}@raw`) as string,
               title: `模型逐窗口原始输出，不做后处理。用来看这个模型到底说了什么。${m.model_path}`,
             },
@@ -76,7 +98,7 @@ export function useInferModes() {
       online,
       ...server,
       {
-        label: "端侧模型（跑的是烧进项圈的那份 C）",
+        label: "端侧模型 · 板上 C",
         // 每个端侧模型三个选项，**默认那个排在前面**——用它铺草稿，
         // 跟线上版本唯一的差别才是模型本身。
         //

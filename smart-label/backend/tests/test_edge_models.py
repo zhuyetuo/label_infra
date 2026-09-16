@@ -614,7 +614,11 @@ def test_edge_option_labels_stay_short():
                      "frontend", "src", "hooks", "useInferModes.ts")
     with open(p, encoding="utf-8") as f:
         src = f.read()
-    labels = [ln for ln in src.splitlines() if "label: `${m.tag}" in ln]
+    # **只数端侧那一组**。服务端模型那组现在也用 ${m.tag} 当标签，
+    # 全局数会数到 5 个——这条测试原来就是这么写的，加了服务端那组之后红了。
+    # 端侧组的起点是它的分组标题
+    edge = src[src.index('label: "端侧模型'):]
+    labels = [ln for ln in edge.splitlines() if "label: `${m.tag}" in ln]
     assert len(labels) == 3, f"端侧应该是三个选项，实际 {len(labels)}"
     for ln in labels:
         # 标签里不该再有括号说明
