@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listEdgeModels } from "@/api/modelEval";
-import { EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
+import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
 
 /**
  * AI 预标注的「版本」下拉选项：线上模型 + 端侧模型，分两组。
@@ -50,6 +50,11 @@ export function useInferModes() {
             label: `${m.tag} · 稳定版 v2（${m.window} 点 @${m.hz}Hz）`,
             value: m.spec,
             title: EDGE_MODE_HINT,
+          },
+          {
+            label: `${m.tag} · 板上整条链（${m.window} 点 @${m.hz}Hz）`,
+            value: m.spec_board ?? `${m.spec}@board`,
+            title: EDGE_BOARD_HINT,
           },
           {
             label: `${m.tag} · 板上原始（${m.window} 点 @${m.hz}Hz）`,

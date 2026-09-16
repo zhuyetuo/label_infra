@@ -43,7 +43,12 @@ def is_edge(spec: str) -> bool:
 # 是后处理不同、不是模型不同——对比表看起来像是端侧模型差得多。
 EDGE_DEFAULT_POST = "viterbi"
 _POST_SEP = "@"
-_POST_MODES = ("raw", "stable", "viterbi")
+# board = 用**板子上那份后处理**（algo_tinyml 的 core/tm_post.c）而不是
+# 服务端的 Python。选 edge:<标签> 时模型和推理已经是板上那份 C 了，
+# 但后处理还是服务端的；@board 把最后这一段也换成板上的，
+# 于是整条链都是板子会跑的东西——手里没有板子时，这是唯一能拿真实数据
+# 回答"板子会报什么"的办法。
+_POST_MODES = ("raw", "stable", "viterbi", "board")
 
 
 def model_of(spec: str) -> str:

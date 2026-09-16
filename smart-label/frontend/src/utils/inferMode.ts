@@ -16,8 +16,8 @@ export const isEdgeMode = (m: string) => m.startsWith(EDGE_PREFIX);
  *  同一个模型的两种后处理会被当成两个不同的模型。 */
 export const edgeTagOf = (m: string) => m.slice(EDGE_PREFIX.length).split("@")[0];
 /** 端侧版本用的后处理。不带后缀 = viterbi，跟后端 EDGE_DEFAULT_POST 一致。 */
-export const edgePostOf = (m: string): AlgoMode =>
-  ((m.slice(EDGE_PREFIX.length).split("@")[1] as AlgoMode) || "viterbi");
+export const edgePostOf = (m: string): string =>
+  (m.slice(EDGE_PREFIX.length).split("@")[1] || "viterbi");
 export const INFER_MODE_OPTIONS: { label: string; value: AlgoMode }[] = [
   { label: "稳定版", value: "stable" },
   { label: "稳定版 v2", value: "viterbi" },
@@ -30,22 +30,34 @@ export const INFER_MODE_LABEL: Record<string, string> = Object.fromEntries(
 
 /** 历史记录/回显用的显示名。端侧的标签是运行时才知道的，
  *  所以不在 INFER_MODE_LABEL 那张表里，单独拼。 */
+/** 端侧后处理的显示名。board 不在 INFER_MODE_LABEL 里——它不是
+ *  algo_service 的 mode，是"用板上那份 C 做后处理"。 */
+const EDGE_POST_LABEL: Record<string, string> = { board: "板上整条链" };
 export const modeLabelOf = (m: string) =>
   isEdgeMode(m)
-    ? `端侧 · ${edgeTagOf(m)} · ${INFER_MODE_LABEL[edgePostOf(m)] ?? edgePostOf(m)}`
+    ? `端侧 · ${edgeTagOf(m)} · ${EDGE_POST_LABEL[edgePostOf(m)] ?? INFER_MODE_LABEL[edgePostOf(m)] ?? edgePostOf(m)}`
     : (INFER_MODE_LABEL[m] ?? m);
 
 /** 某个版本的说明文案。端侧的不在 INFER_MODE_HINT 那张表里（它是运行时才知道的），
  *  直接用 INFER_MODE_HINT[m] 会在端侧那几个上拿到 undefined。 */
-export const hintOf = (m: string) =>
-  isEdgeMode(m)
-    ? (edgePostOf(m) === "raw" ? EDGE_RAW_HINT : EDGE_MODE_HINT)
-    : (INFER_MODE_HINT[m as AlgoMode] ?? "");
+export const hintOf = (m: string) => {
+  if (!isEdgeMode(m)) return INFER_MODE_HINT[m as AlgoMode] ?? "";
+  const post = edgePostOf(m);
+  if (post === "raw") return EDGE_RAW_HINT;
+  if (post === "board") return EDGE_BOARD_HINT;
+  return EDGE_MODE_HINT;
+};
 
 /** 端侧 + 线上同一份后处理：对比表里差的只有模型本身。 */
 export const EDGE_MODE_HINT =
   "模型跑的是烧进项圈的那份 C（逐位一致），后处理跟线上「稳定版 v2」"
   + "**是同一份代码**。所以跟线上版本比，差的只有模型本身。";
+/** 端侧 + 板上后处理：整条链都是板子会跑的那份 C。 */
+export const EDGE_BOARD_HINT =
+  "模型、推理、**后处理全是板上那份 C**——手里没有板子时，"
+  + "这一列才真正回答「板子会报什么」。跟上面那个「稳定版 v2」比，"
+  + "差的只有后处理的实现（离线 viterbi vs 板上的流式有界回溯）。"
+  + "两边应该一致，不一致就是真的分家了，值得查。";
 /** 端侧 raw：板子上真实会报的东西。 */
 export const EDGE_RAW_HINT =
   "跑的是烧进项圈的那份 C，而且**不做任何后处理**——板子上真实会报的样子，"

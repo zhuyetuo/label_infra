@@ -60,6 +60,9 @@ async def edge_models():
             **m,
             "spec": f"{edge_client.EDGE_PREFIX}{m['tag']}",
             "spec_raw": f"{edge_client.EDGE_PREFIX}{m['tag']}@raw",
+            # 整条链都是板上那份 C（模型 + 推理 + 后处理）。
+            # 没有板子的时候，这一列才是"板子会报什么"
+            "spec_board": f"{edge_client.EDGE_PREFIX}{m['tag']}@board",
         } for m in models],
     })
 

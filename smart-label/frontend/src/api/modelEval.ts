@@ -115,6 +115,9 @@ export interface EdgeModel {
   /** 同一个模型、不做后处理的版本（edge:<标签>@raw），板子真实会报的样子。
    *  老后端没这个字段，所以可选——hook 那边有兜底拼法 */
   spec_raw?: string;
+  /** 整条链都是板上那份 C（模型 + 推理 + 后处理）。没有板子时，
+   *  这一列才真正回答"板子会报什么" */
+  spec_board?: string;
   classes: string[];
   window: number;
   hz: number;
