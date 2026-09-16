@@ -422,3 +422,131 @@ def test_dog_name_mapping_reuses_the_shared_helper(run):
     names = {r["imu"]: r["dog_name"] for r in out}
     assert names.get("IMU5") == "bibi", f"只填数字的那只没映射上：{names}"
     assert names.get("IMU12") == "dodo", f"一只狗两个设备时第二个没映射上：{names}"
+
+
+# ── 按狗 / 按设备筛 ────────────────────────────────────────────────────────
+
+
+def test_imu_nums_accepts_both_forms_and_dedups():
+    """「IMU5」和「5」都认；重复的去掉，顺序不变。
+
+    「按狗」和「按设备」两种选法可以同时选，同一个设备会出现两次。
+    """
+    assert svc._imu_nums(["IMU5", "5", "IMU5", "IMU9"]) == ["5", "9"]
+    assert svc._imu_nums([" imu12 "]) == ["12"]
+    assert svc._imu_nums(["", "abc", None if False else "x"]) == []
+
+
+def test_filter_narrows_in_sql_not_just_in_python():
+    """筛选要**落到 SQL 里**。
+
+    只在内存里丢的话，看一只狗也要把全部狗的行拉出来——而"看单只狗"
+    是最常用的看法，一天几百个样本、几十天，那是白扫。
+    """
+    import asyncio
+
+    captured = {}
+
+    class FakeDB:
+        def __init__(self):
+            self.n = 0
+
+        async def execute(self, q):
+            self.n += 1
+            if self.n > 1:      # 第一次是查狗档案
+                captured["sql"] = str(q.compile(compile_kwargs={"literal_binds": True}))
+
+            class R:
+                @staticmethod
+                def all():
+                    return []
+            return R()
+
+    d = _dt.date(2026, 9, 13)
+    asyncio.run(svc.daily(FakeDB(), d, d, "m", "viterbi", imus=["IMU5"]))
+    assert "like" in captured["sql"].lower(), "筛选没进 SQL"
+    assert "imu5" in captured["sql"].lower()
+
+
+def test_filter_does_not_leak_similar_device_numbers(run):
+    """筛 IMU5 不能把 IMU15 也带出来。
+
+    `like '%imu5'` 要求以 imu5 结尾，imu15 是以 u15 结尾，所以不会误中。
+    但 like 之后还有一层精确核对（_imu_of）——两层都在，这条钉的是结果。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=5)),
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=15)),
+    ]
+    out = run(svc.daily(_DB(rows), d, d, "m", "viterbi", imus=["IMU5"]))
+    assert [r["imu"] for r in out] == ["IMU5"], out
+
+
+def test_filter_by_dog_takes_all_its_devices(run):
+    """按狗筛要带上它名下全部设备。
+
+    一只狗轮换两个 IMU 充电，只筛其中一个会出现「只看到这只狗一半的日子」
+    ——而表上完全看不出为什么少了几天。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=9)),
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=12)),
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=5)),
+    ]
+    out = run(svc.daily(_DB(rows), d, d, "m", "viterbi", imus=["IMU9", "IMU12"]))
+    assert sorted(r["imu"] for r in out) == ["IMU12", "IMU9"]
+
+
+def test_no_filter_means_all(run):
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=5)),
+        (_Run(secs={"睡觉": 60}, counts={}), _Sample(d, imu=9)),
+    ]
+    assert len(run(svc.daily(_DB(rows), d, d, "m", "viterbi"))) == 2
+    assert len(run(svc.daily(_DB(rows), d, d, "m", "viterbi", imus=[]))) == 2
+
+
+def test_dogs_endpoint_lists_both_devices_of_a_dog(run):
+    """狗列表要把一只狗的两个设备都列出来——前端「按设备」那一组靠它。"""
+    class DogDB:
+        async def execute(self, q):
+            data = [("1", "bibi", "5"), ("2", "dodo", "IMU9，IMU12")]
+
+            class R:
+                @staticmethod
+                def all():
+                    return data
+            return R()
+
+    out = run(svc.dogs(DogDB()))
+    by = {d["dog_name"]: d["imus"] for d in out}
+    assert by["bibi"] == ["IMU5"]
+    assert by["dodo"] == ["IMU9", "IMU12"]
+
+
+def test_dog_options_come_from_the_roster_not_the_data():
+    """下拉的选项从狗档案来，不从当前数据扫。
+
+    从数据扫的话，筛掉一只狗之后剩下的选项也跟着变少——下拉会越点越空。
+    """
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(svc.dogs).strip())
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert "Dog" in names, "没查狗档案"
+    assert "SampleInferenceRun" not in names, "从数据里扫选项了"
+
+
+def test_ui_offers_both_by_dog_and_by_device():
+    """界面上两种选法都要有。"""
+    import os
+    p = os.path.join(os.path.dirname(__file__), "..", "..",
+                     "frontend", "src", "pages", "DailyStats.tsx")
+    with open(p, encoding="utf-8") as f:
+        src = f.read()
+    assert 'label: "按狗"' in src
+    assert 'label: "按设备"' in src
+    assert 'mode="multiple"' in src, "不能多选的话没法同时看两只狗"

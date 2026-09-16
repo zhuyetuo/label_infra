@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
 import {
   listDailyStats,
+  listDailyStatsDogs,
   listDailyStatsVersions,
   type DailyStatsRow,
 } from "@/api/dailyStats";
@@ -45,6 +46,14 @@ export default function DailyStats() {
     dayjs(),
   ]);
   const [version, setVersion] = useState<string>("");
+  // 选中的狗（空 = 全部）。存的是设备号——一只狗可能有两个，一起选上
+  const [imus, setImus] = useState<string[]>([]);
+
+  const { data: dogs } = useQuery({
+    queryKey: ["daily-stats-dogs"],
+    queryFn: listDailyStatsDogs,
+    staleTime: 60_000,
+  });
 
   const { data: versions } = useQuery({
     queryKey: ["daily-stats-versions"],
@@ -58,13 +67,15 @@ export default function DailyStats() {
   const [tag, mode] = picked.split("|");
 
   const { data, isFetching } = useQuery({
-    queryKey: ["daily-stats", range[0].format("YYYY-MM-DD"), range[1].format("YYYY-MM-DD"), tag, mode],
+    queryKey: ["daily-stats", range[0].format("YYYY-MM-DD"), range[1].format("YYYY-MM-DD"),
+               tag, mode, imus.join(",")],
     queryFn: () =>
       listDailyStats({
         date_from: range[0].format("YYYY-MM-DD"),
         date_to: range[1].format("YYYY-MM-DD"),
         model_tag: tag,
         mode,
+        imus: imus.join(","),
       }),
     enabled: Boolean(tag && mode),
   });
@@ -161,6 +172,35 @@ export default function DailyStats() {
             value={range}
             onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
             allowClear={false}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            style={{ minWidth: 220 }}
+            placeholder="全部狗"
+            value={imus}
+            onChange={setImus}
+            maxTagCount="responsive"
+            // 两种选法都给：
+            //   按狗   一次带上它名下全部设备——一只狗轮换两个 IMU 充电，
+            //          只选其中一个会出现"只看到这只狗一半的日子"，
+            //          而表上完全看不出为什么少了几天
+            //   按设备 单个 IMU，用来核对"这两个设备记的是不是同一只狗"
+            options={[
+              {
+                label: "按狗",
+                options: (dogs ?? []).map((d) => ({
+                  value: d.imus.join(","),
+                  label: `${d.dog_name}（${d.imus.join(" / ")}）`,
+                })),
+              },
+              {
+                label: "按设备",
+                options: (dogs ?? []).flatMap((d) =>
+                  d.imus.map((i) => ({ value: i, label: `${i} · ${d.dog_name}` }))
+                ),
+              },
+            ]}
           />
           <Select
             style={{ minWidth: 300 }}

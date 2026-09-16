@@ -26,6 +26,15 @@ export interface DailyStatsRow {
   counts: Record<string, number>;
 }
 
+/** 能筛的狗。一只狗可能有两个 IMU（轮换充电）。 */
+export interface DailyStatsDog {
+  dog_name: string;
+  imus: string[];
+}
+
+export const listDailyStatsDogs = () =>
+  request.get<never, DailyStatsDog[]>("/daily-stats/dogs");
+
 export const listDailyStatsVersions = () =>
   request.get<never, DailyStatsVersion[]>("/daily-stats/versions");
 
@@ -34,5 +43,6 @@ export const listDailyStats = (p: {
   date_to: string;
   model_tag: string;
   mode: string;
-  dog_ids?: string;
+  /** 设备号，逗号分隔。空 = 全部狗 */
+  imus?: string;
 }) => request.get<never, DailyStatsRow[]>("/daily-stats", { params: p });
