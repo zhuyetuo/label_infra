@@ -9,6 +9,7 @@ import {
   type DailyStatsRow,
 } from "@/api/dailyStats";
 import DailyStatsCharts from "@/components/DailyStatsCharts";
+import DayTotalHelp from "@/components/DayTotalHelp";
 
 /**
  * 日常统计：每只狗每天各类行为多久、多少次。
@@ -32,6 +33,9 @@ const { Text } = Typography;
 //   抓挠              是事件，次数才是临床上看的那个数
 //   甩身体            两个都不太要紧，跟着事件走
 const DURATION_FIRST = new Set(["活动", "睡觉", "未佩戴"]);
+
+/** 一天。合计要跟它对——对不上的原因见 DayTotalHelp 那张表 */
+const DAY_SEC = 24 * 3600;
 
 const fmtDur = (sec: number) => {
   if (!sec) return "0";
@@ -138,6 +142,40 @@ export default function DailyStats() {
         );
       },
     })),
+    {
+      title: (
+        <Space size={4}>
+          <Tooltip title="前面几列加起来，不含「缺数据」。跟 24 小时差多少标在后面">
+            合计
+          </Tooltip>
+          <DayTotalHelp />
+        </Space>
+      ),
+      width: 165,
+      render: (_: unknown, r: DailyStatsRow) => {
+        // null = 没有时长数据。**不显示 0**，跟各列一致：那是"不知道"
+        if (r.total_seconds == null) return <Text type="secondary">—</Text>;
+        const diff = r.total_seconds - DAY_SEC;
+        // 15 分钟以内当作"对得上"。窗口是 0.5 秒一步、一天 17 万个窗口，
+        // 四舍五入本身就能差出几分钟，卡太死的话每一行都会标红
+        const ok = Math.abs(diff) <= 15 * 60;
+        return (
+          <Space size={4}>
+            <b>{fmtDur(r.total_seconds)}</b>
+            {ok ? (
+              <Tag color="green">≈24 小时</Tag>
+            ) : (
+              <Tooltip title={diff > 0 ? "比 24 小时多——多半是同一天几个样本的时间段有重叠" : "比 24 小时少——那天没采满，或者有断联缺数据"}>
+                <Tag color={diff > 0 ? "red" : "orange"}>
+                  {diff > 0 ? "+" : "−"}
+                  {fmtDur(Math.abs(diff))}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
     {
       title: (
         <Tooltip title="这一天有多少秒的数据是缺的（蓝牙断联等）。缺得多的话下面那些数天然偏低，别当成「今天没动」">

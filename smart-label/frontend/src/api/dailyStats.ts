@@ -24,6 +24,9 @@ export interface DailyStatsRow {
   labels: string[];
   seconds: Record<string, number>;
   counts: Record<string, number>;
+  /** 各类时长之和，用来跟 24 小时对。**后端算好的**——表和图各自加一遍的话
+   *  会出现"表上 23 小时、图上 24 小时"。没有时长数据时是 null（不知道，不是 0）。 */
+  total_seconds: number | null;
 }
 
 /** 能筛的狗。一只狗可能有两个 IMU（轮换充电）。 */
