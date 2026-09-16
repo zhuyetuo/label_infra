@@ -88,9 +88,36 @@ export default function DayTotalHelp() {
             },
           ]}
         />
-        <Text type="secondary" style={{ display: "block", marginTop: 12 }}>
-          合计 = 前面各类时长相加，**不含「缺数据」**。所以
-          「合计 + 缺数据」才是那天被数据覆盖到的总时长。
+        <Text strong style={{ display: "block", marginTop: 16 }}>
+          一天是这样对平的
+        </Text>
+        <Text style={{ display: "block", marginTop: 4 }}>
+          合计 ＋ 缺数据 ＋ 未采集 ＝ 24 小时
+        </Text>
+        <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+          合计 = 前面各类时长相加，<b>不含</b>「缺数据」。
+          「缺数据」和「未采集」是两回事，分开看才知道该查什么：
+        </Text>
+        <ul style={{ marginTop: 6, paddingLeft: 20 }}>
+          <li>
+            <Text type="secondary">
+              <b>缺数据</b>——在记，但没记上（蓝牙断联）。多了要查设备和连接。
+            </Text>
+          </li>
+          <li>
+            <Text type="secondary">
+              <b>未采集</b>——根本没在记（摘下来充电、当天下午才开始采）。
+              多了不是故障，但那天的数只代表这段时间，不代表一整天。
+            </Text>
+          </li>
+          <li>
+            <Text type="secondary">
+              <b>未采集是负数</b>（显示「超出」）——合计 + 缺数据 超过 24 小时了，
+              说明样本时间段有重叠。<b>这个要查</b>。
+            </Text>
+          </li>
+        </ul>
+        <Text type="secondary" style={{ display: "block", marginTop: 4 }}>
           差在 15 分钟以内标成「≈24 小时」——一天十几万个窗口，
           四舍五入本身就能差出几分钟。
         </Text>

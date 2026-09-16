@@ -39,6 +39,9 @@ _logger = logging.getLogger("smart-label.daily_stats")
 # 列的顺序就变，两天的表放一起看不出哪列是哪列
 LABEL_ORDER = ["活动", "睡觉", "抓挠", "未佩戴", "甩身体"]
 
+# 一天。用来把一行的时间对平：合计 + 缺数据 + 未采集 = 24 小时
+DAY_SECONDS = 24 * 3600
+
 
 def _loads(v) -> dict:
     if not v:
@@ -216,6 +219,21 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
             # 不是"知道，是 0 秒"。
             "total_seconds": (
                 round(sum(b["seconds"].get(k, 0.0) for k in labels), 1)
+                if b["has_seconds"] else None
+            ),
+            # 那天有多少时间**压根没有数据**——不是断联缺的，是根本没在记
+            # （项圈摘下来充电、当天下午才开始采）。
+            #
+            # 这一项是为了让一天能对平：合计 + 缺数据 + 未采集 = 24 小时。
+            # 没有它的话，人看到"合计 12 小时 51 分、缺数据 24 分"，
+            # 剩下那十来个小时去哪了要自己减——而且很容易误以为
+            # 都是断联，从而去查一个不存在的蓝牙问题。
+            #
+            # 合计超过 24 小时时是负数，**照实给**：负的未采集本身就是
+            # "样本时间段有重叠"的信号，截到 0 反而把它藏了。
+            "uncovered_seconds": (
+                round(DAY_SECONDS - b["missing_seconds"]
+                      - sum(b["seconds"].get(k, 0.0) for k in labels), 1)
                 if b["has_seconds"] else None
             ),
         })

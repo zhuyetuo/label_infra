@@ -637,3 +637,75 @@ def test_ui_shows_a_total_column_and_explains_the_gap():
     with open(os.path.join(base, "components", "DayTotalHelp.tsx"), encoding="utf-8") as f:
         help_src = f.read()
     assert "偏多" in help_src and "偏少" in help_src, "两个方向要分开说"
+
+
+# ── 未采集（把一天对平） ──────────────────────────────────────────────────
+
+
+def test_a_day_adds_up_to_exactly_24h(run):
+    """合计 + 缺数据 + 未采集 == 24 小时，一秒不差。
+
+    这是整张表的对账式。对不平的话人没法判断少掉的时间去哪了，
+    只能自己拿 24 减——而减出来的那个数没有名字，容易被当成"都是断联"，
+    从而去查一个不存在的蓝牙问题。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [(_Run(secs={"活动": 4 * 3600 + 37 * 60, "睡觉": 7 * 3600 + 35 * 60,
+                        "抓挠": 60, "未佩戴": 37 * 60}, counts={},
+                  missing=24 * 60.0), _Sample(d))]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert (r["total_seconds"] + r["missing_seconds"]
+            + r["uncovered_seconds"]) == pytest.approx(86400)
+
+
+def test_uncovered_is_not_the_same_thing_as_missing(run):
+    """「没在记」和「在记但断联」要分开。
+
+    合成一个数的话，"那天只戴了 10 小时"（正常）和"戴了一整天但断联 14 小时"
+    （设备坏了）会长得一模一样。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [(_Run(secs={"睡觉": 10 * 3600}, counts={}, missing=600.0), _Sample(d))]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["missing_seconds"] == pytest.approx(600)
+    assert r["uncovered_seconds"] == pytest.approx(86400 - 10 * 3600 - 600)
+
+
+def test_uncovered_goes_negative_on_overlap_instead_of_clamping(run):
+    """时间超过一天时未采集是**负数**，不是 0。
+
+    负数就是"样本时间段有重叠"的信号（同一批数据导入了两次之类）。
+    截到 0 的话这一行看起来跟"刚好采满一天"完全一样，问题永远发现不了。
+    """
+    d = _dt.date(2026, 9, 13)
+    rows = [
+        (_Run(secs={"睡觉": 20 * 3600}, counts={}), _Sample(d)),
+        (_Run(secs={"睡觉": 20 * 3600}, counts={}), _Sample(d)),
+    ]
+    r = run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]
+    assert r["uncovered_seconds"] == pytest.approx(86400 - 40 * 3600)
+    assert r["uncovered_seconds"] < 0
+
+
+def test_uncovered_is_none_when_duration_unknown(run):
+    """没有时长数据时未采集也是 None——算不出来，就别给一个数。"""
+    d = _dt.date(2026, 9, 13)
+    rows = [(_Run(secs=None, counts={"睡觉": 3}), _Sample(d))]
+    assert run(svc.daily(_DB(rows), d, d, "m", "viterbi"))[0]["uncovered_seconds"] is None
+
+
+def test_ui_shows_missing_and_uncovered_separately():
+    """界面上两列都要有，而且缺数据不能因为「小」就显示成「—」。
+
+    显示「—」的话，一行写着「合计 12 小时 51 分 / 缺数据 —」，
+    看着像那天完整覆盖、只是行为只有 12 小时——而真相是只记了 13 个小时。
+    """
+    import os
+    p = os.path.join(os.path.dirname(__file__), "..", "..",
+                     "frontend", "src", "pages", "DailyStats.tsx")
+    with open(p, encoding="utf-8") as f:
+        src = f.read()
+    assert "未采集" in src
+    assert "uncovered_seconds" in src
+    # 小于一分钟时给秒，不给「0 分」——后者看着像没断过
+    assert "秒" in src, "不满一分钟的缺数据会被四舍五入没了"
