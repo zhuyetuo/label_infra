@@ -24,6 +24,17 @@ export interface VisionAttrDef {
   help?: string;
   /** 只对这些类别显示；不填 = 所有类别都显示 */
   only_for?: string[];
+  /** 属于口腔评估打分表的三项之一（面板上单独成一段，带总分） */
+  score_item?: boolean;
+}
+
+/** 口腔评估的打分口径。**只有后端这一份**，前端照着渲染，不另抄那些数字 */
+export interface VisionScoreScheme {
+  name: string;
+  max: number;
+  items: { key: string; name: string; points: number[] }[];
+  note?: string;
+  todo?: string;
 }
 
 export interface VisionCatalog {
@@ -32,6 +43,8 @@ export interface VisionCatalog {
   labels: VisionLabel[];
   item_attrs: VisionAttrDef[];
   asset_attrs: VisionAttrDef[];
+  /** 只有 tooth 域有 */
+  score_scheme?: VisionScoreScheme;
 }
 
 export type VisionAssetState = "todo" | "done" | "skipped";
@@ -42,6 +55,8 @@ export interface VisionPhoto {
   size_bytes: number;
   n_boxes: number;
   state: VisionAssetState;
+  /** 口腔评估总分。三项没填全 = null（「未评」），**不是 0** */
+  oral_score?: number | null;
 }
 
 export type VisionAssignmentState = "open" | "submitted" | "approved" | "rejected";
