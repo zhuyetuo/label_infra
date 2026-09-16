@@ -8,6 +8,16 @@ export type AlgoMode = "stable" | "viterbi" | "raw";
  * "问服务不写死"要避免的事。 */
 export type InferMode = AlgoMode | string;
 
+/** 服务端**另一个模型**的版本前缀，跟后端 algo_client.SRV_PREFIX 同一个约定。
+ *  跟 edge: 的区别：这边跑的是服务器上的 sklearn，那边跑的是烧进项圈的 C。 */
+export const SRV_PREFIX = "srv:";
+export const isSrvMode = (m: string) => m.startsWith(SRV_PREFIX);
+/** srv:acc3@raw → acc3 */
+export const srvTagOf = (m: string) => m.slice(SRV_PREFIX.length).split("@")[0];
+/** 不带后缀 = viterbi，跟后端 SRV_DEFAULT_POST 一致 */
+export const srvPostOf = (m: string): string =>
+  m.slice(SRV_PREFIX.length).split("@")[1] || "viterbi";
+
 /** 端侧模型的版本前缀，跟后端 edge_client.EDGE_PREFIX 是同一个约定 */
 export const EDGE_PREFIX = "edge:";
 export const isEdgeMode = (m: string) => m.startsWith(EDGE_PREFIX);
@@ -34,13 +44,16 @@ export const INFER_MODE_LABEL: Record<string, string> = Object.fromEntries(
  *  algo_service 的 mode，是"用板上那份 C 做后处理"。 */
 const EDGE_POST_LABEL: Record<string, string> = { board: "板上整条链" };
 export const modeLabelOf = (m: string) =>
-  isEdgeMode(m)
+  isSrvMode(m)
+    ? `服务端 · ${srvTagOf(m)} · ${INFER_MODE_LABEL[srvPostOf(m)] ?? srvPostOf(m)}`
+    : isEdgeMode(m)
     ? `端侧 · ${edgeTagOf(m)} · ${EDGE_POST_LABEL[edgePostOf(m)] ?? INFER_MODE_LABEL[edgePostOf(m)] ?? edgePostOf(m)}`
     : (INFER_MODE_LABEL[m] ?? m);
 
 /** 某个版本的说明文案。端侧的不在 INFER_MODE_HINT 那张表里（它是运行时才知道的），
  *  直接用 INFER_MODE_HINT[m] 会在端侧那几个上拿到 undefined。 */
 export const hintOf = (m: string) => {
+  if (isSrvMode(m)) return SRV_MODE_HINT;
   if (!isEdgeMode(m)) return INFER_MODE_HINT[m as AlgoMode] ?? "";
   const post = edgePostOf(m);
   if (post === "raw") return EDGE_RAW_HINT;
@@ -67,3 +80,9 @@ export const INFER_MODE_HINT: Record<AlgoMode, string> = {
   viterbi: "动态规划解码整条时间轴，切换类别要付代价，所有类别统一生效；抓挠同样合并/过滤。跟稳定版对比看哪个更接近人工",
   raw: "模型逐窗口原始输出，活动/睡觉会来回闪，抓挠有很多单窗口噪声。用来看模型到底说了什么",
 };
+
+/** 服务端的另一个模型：跟线上那三行同一台服务、同一套后处理，只换了模型。 */
+export const SRV_MODE_HINT =
+  "同一台 AI 服务、同一份后处理，**只换了模型**。所以跟线上「稳定版 v2」"
+  + "并排跑同一批样本时，差的只有模型本身。跑的是服务器上的 sklearn，"
+  + "**不是**烧进项圈的那份 C——想知道板子会报什么，看端侧那几行。";

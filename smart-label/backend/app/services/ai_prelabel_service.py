@@ -375,6 +375,18 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
                 raise PrelabelError(
                     f"端侧推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
             result = rows[0]["result"]
+        elif algo_client.is_srv(mode):
+            # 服务端的**另一个模型**。这里必须单独分一支：交给
+            # algo_client.infer 的话，`srv:acc3` 不在 raw/stable/viterbi 里，
+            # _mode() 会把它**当成没传**、退回默认后处理和默认模型——
+            # 而结果存进库里标着 srv:acc3。**没有任何迹象。**
+            rows = await algo_client.infer_spec(
+                [{"path": sample.imu_csv_path, "sample_id": sample.id,
+                  "device_hz": sample.sample_hz}], mode)
+            if not rows or not rows[0].get("ok"):
+                raise PrelabelError(
+                    f"推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
+            result = rows[0]["result"]
         else:
             result = await algo_client.infer(
                 sample.imu_csv_path, sample_id=sample.id, mode=mode,

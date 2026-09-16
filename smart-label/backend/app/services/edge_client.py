@@ -173,10 +173,15 @@ async def dispatch_batch(items: list[dict], mode: str | None,
     `edge:xxx` 发给 algo_service，它认不出这个 mode，多半按默认的 stable 跑。
     结果存进库里，标签写的是端侧模型，内容却是线上模型。**没有任何迹象。**
 
-    返回的结构两边一样：[{sample_id, path, ok, error, result}]。
+    `srv:<标签>` 也走 algo_service，但**要带上模型标签**——不带的话它跑的是
+    默认模型，结果却标着 srv:acc3。**没有任何迹象。**
+
+    返回的结构三条路一样：[{sample_id, path, ok, error, result}]。
     """
     from app.services import algo_client
 
     if is_edge(mode):
         return await infer_spec(items, mode, **edge_kw)
+    if algo_client.is_srv(mode):
+        return await algo_client.infer_spec(items, mode)
     return await algo_client.infer_batch(items, mode=mode)
