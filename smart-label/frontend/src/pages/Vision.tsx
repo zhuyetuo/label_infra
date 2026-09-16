@@ -14,6 +14,7 @@ import {
   type VisionAlbum, type VisionAssetState, type VisionAssignment, type VisionAssignmentState,
   type VisionAttrDef, type VisionBox, type VisionDatasetMeta, type VisionItem, type VisionPhoto,
 } from "@/api/vision";
+import OralScoreHelp from "@/components/OralScoreHelp";
 
 // 视觉标注工作台（雏形）：在素材库的口腔/皮肤照片上画框、打类别、填属性。
 //
@@ -674,6 +675,28 @@ export default function Vision() {
   }, [catalog, selected, current, imgUrl, save]);
 
   // ── 属性面板 ────────────────────────────────────────────────────────
+  const setAssetAttr = (key: string, v: number | string | undefined) => {
+    setAssetAttrs((prev) => {
+      const next = { ...prev };
+      if (v === undefined || v === null) delete next[key];
+      else next[key] = v;
+      return next;
+    });
+    setDirty(true);
+  };
+
+  /** 口腔评估总分。**在前端现算**，选一档就能看到，不用先保存再刷新。
+      分值就是存进去的值（选项 value 即分数），所以这里只是相加，没有第二份权重表。
+      三项没填全给 null——漏填当 0 算的话，一条"20 分，轻"会盖住一张其实
+      没看牙结石的照片。 */
+  const scoreItems = catalog?.score_scheme?.items ?? [];
+  const oralMissing = scoreItems
+    .filter((it) => typeof assetAttrs[it.key] !== "number")
+    .map((it) => it.name);
+  const oralTotal = oralMissing.length
+    ? null
+    : scoreItems.reduce((sum, it) => sum + (assetAttrs[it.key] as number), 0);
+
   const renderAttr = (def: VisionAttrDef, value: number | string | undefined, onChange: (v: number | string | undefined) => void) => {
     const control =
       def.type === "tooth_code" ? (
@@ -897,6 +920,11 @@ export default function Vision() {
                         {p.state === "done" ? "✓ " : p.state === "skipped" ? "⊘ " : ""}{p.filename}
                       </span>
                       <span style={{ flexShrink: 0 }}>
+                        {/* 口腔评估总分。没填全的**不显示 0**，什么都不显示——
+                            列表上一个 0 分会被当成"看过了，没问题" */}
+                        {typeof p.oral_score === "number" && (
+                          <span style={{ color: "#722ed1", marginRight: 4 }}>{p.oral_score} 分</span>
+                        )}
                         {p.n_boxes > 0 && <Badge count={p.n_boxes} color="blue" size="small" />}
                         {p.state !== "todo" && (
                           <Badge status={p.state === "done" ? "success" : "warning"} style={{ marginLeft: 4 }} />
@@ -1228,11 +1256,36 @@ export default function Vision() {
           </Typography.Text>
         )}
 
-        {!!catalog?.asset_attrs?.length && current && (
+        {!!catalog?.score_scheme && current && (
+          <>
+            <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>
+              {catalog.score_scheme.name}
+              <OralScoreHelp scheme={catalog.score_scheme} />
+            </div>
+            {catalog.asset_attrs
+              .filter((def) => def.score_item)
+              .map((def) => renderAttr(def, assetAttrs[def.key], (v) => setAssetAttr(def.key, v)))}
+            <div style={{ fontSize: 13, marginTop: 2 }}>
+              合计：
+              {oralTotal === null ? (
+                <Typography.Text type="secondary">
+                  未评（还差 {oralMissing.join("、")}）
+                </Typography.Text>
+              ) : (
+                <b>
+                  {oralTotal} / {catalog.score_scheme.max}
+                </b>
+              )}
+            </div>
+          </>
+        )}
+
+        {!!catalog?.asset_attrs?.some((d) => !d.score_item) && current && (
           <>
             <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
             <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>这张图整体</div>
-            {catalog.asset_attrs.map((def) =>
+            {catalog.asset_attrs.filter((def) => !def.score_item).map((def) =>
               renderAttr(def, assetAttrs[def.key], (v) => {
                 setAssetAttrs((prev) => {
                   const next = { ...prev };

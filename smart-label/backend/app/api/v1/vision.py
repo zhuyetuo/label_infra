@@ -207,6 +207,13 @@ async def list_photos(album: str = Query("oral"), db: AsyncSession = Depends(get
     # 「拿不准，等兽医看」要能在列表上筛出来——攒一批让兽医一次看完，
     # 比标一张问一次高效得多
     need_vet = {r.rel_path for r in assets if svc.load_attrs(r.attrs).get("need_vet") == "yes"}
+    # 口腔评估总分挂到列表上：兽医想知道的是「这只狗这次几分、比上次高了没有」，
+    # 一张一张点开看填了什么回答不了这个问题。三项没填全的是 None，列表上显示
+    # 「未评」——**不显示一个把缺项当 0 算出来的分数**
+    scores = (
+        {r.rel_path: svc.oral_score(svc.load_attrs(r.attrs))["total"] for r in assets}
+        if svc.domain_of(album) == "tooth" else {}
+    )
     for folder in folders:
         for dog in folder["dogs"]:
             group = svc.group_of(dog["photos"][0]["rel_path"]) if dog["photos"] else ""
@@ -217,6 +224,7 @@ async def list_photos(album: str = Query("oral"), db: AsyncSession = Depends(get
                 p["n_boxes"] = int(counts.get(p["rel_path"], 0))
                 p["state"] = states.get(p["rel_path"], "todo")
                 p["need_vet"] = p["rel_path"] in need_vet
+                p["oral_score"] = scores.get(p["rel_path"])
     return ok({"album": album, "folders": folders, "can_review": _can_review(user), "is_manager": _is_manager(user)})
 
 

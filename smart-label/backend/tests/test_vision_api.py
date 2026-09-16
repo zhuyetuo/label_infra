@@ -341,3 +341,20 @@ def test_111_被拒时说清楚为什么(album, db, user, run):
         _save(run, db, user, items=[{"label_code": "canine", "bbox": [0.1, 0.1, 0.1, 0.1], "attrs": {"tooth_code": 111}}])
     assert "不存在" in str(e.value.detail)
     assert "110" in str(e.value.detail), "要告诉他正确的上限是多少"
+
+
+def test_口腔评估总分挂在列表上(album, db, user, run):
+    """兽医要看的是「这只狗这次几分、比上次高了没有」，一张一张点开回答不了。
+
+    三项没填全的**给 null，不给 0**——列表上一个 0 分会被当成"看过了，没问题"。
+    """
+    _save(run, db, user, items=[], state="done",
+          asset_attrs={"oral_redness": 10, "oral_swelling": 15, "oral_calculus": 5})
+    run(api.save_annotations(
+        api.SaveIn(album="oral", path=_P2, items=[], state="done",
+                   asset_attrs={"oral_redness": 20}), db=db, user=user))
+
+    got = run(api.list_photos(album="oral", db=db, user=user))["data"]
+    scores = {p["filename"]: p["oral_score"]
+              for f in got["folders"] for d in f["dogs"] for p in d["photos"]}
+    assert scores == {"a.jpg": 30, "b.jpg": None}, scores

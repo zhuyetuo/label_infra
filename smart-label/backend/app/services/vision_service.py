@@ -119,8 +119,61 @@ _SKIN_ATTRS = [
      "help": "占这个部位的比例，不测绝对面积——手机照片没有标定物，绝对面积跨次不可比。"},
 ]
 
+# ── 口腔评估打分（周医生那张加权表） ──────────────────────────────────────
+#
+# 三项各自的档位**就是分值**（0/10/20 这些数字是周医生定的，不是我们配的），
+# 相加得总分。存的是分值本身而不是档位序号：兽医读导出的时候看到的就是他那张
+# 表上的数，不用再对一遍映射。代价是万一以后调权重，老数据得跑一次迁移——
+# 这件事写在这里，免得到时候直接改 _ORAL_SCORE_ITEMS 了事、把历史分数改成
+# 另一套口径而没人发现。
+#
+# **不做 PD 分期（牙周炎 I–IV 期）**：分期要靠牙周探诊深度和 X 光看牙槽骨吸收，
+# 一张掀唇照片给不了。硬从照片上"推"一个期数出来，读的人会当成诊断。
+#
+# 另一套方案（CI/GI 指数 0–3）**还没做**——逐颗牙的 CI/GI 已经有了（框属性
+# _TOOTH_ATTRS 里的 ci/gi），缺的是整张图按指数算总分那一套。界面上留了提示。
+_ORAL_SCORE_ITEMS = [
+    {"key": "oral_redness", "name": "牙龈发红", "points": [0, 10, 20],
+     "labels": ["0 正常粉红", "10 局部发红", "20 明显发红/大面积"]},
+    {"key": "oral_swelling", "name": "牙龈肿胀", "points": [0, 10, 15, 20],
+     "labels": ["0 平贴牙面", "10 龈缘略增厚", "15 龈缘圆钝外翻", "20 明显肿大/增生"]},
+    {"key": "oral_calculus", "name": "牙结石", "points": [0, 5, 10, 20],
+     "labels": ["0 无可见结石", "5 少量点状", "10 成片附着", "20 大部分牙面被覆盖"]},
+]
+
+#: 三项都满分。前端画进度条要用，别在两边各写一个 60。
+ORAL_SCORE_MAX = sum(max(x["points"]) for x in _ORAL_SCORE_ITEMS)
+
+
+def oral_score(attrs: dict) -> dict:
+    """三项相加 → {total, items, missing, complete}。
+
+    **缺项不当 0 算**。三项里漏填一项而总分照给的话，一条"20 分，轻"会盖住
+    一张其实没看牙结石的照片——漏填和"确实没有"在总分上长得一模一样。所以
+    没填全的时候 total 给 None，missing 说清楚缺哪几项。
+    """
+    items, missing, total = [], [], 0
+    for spec in _ORAL_SCORE_ITEMS:
+        v = attrs.get(spec["key"])
+        if not isinstance(v, int) or isinstance(v, bool) or v not in spec["points"]:
+            missing.append(spec["name"])
+            items.append({"key": spec["key"], "name": spec["name"], "points": None})
+            continue
+        total += v
+        items.append({"key": spec["key"], "name": spec["name"], "points": v})
+    return {"total": None if missing else total, "max": ORAL_SCORE_MAX,
+            "items": items, "missing": missing, "complete": not missing}
+
+
 # 图级属性：一张照片整体的信息，不属于某个框。
 _TOOTH_ASSET_ATTRS = [
+    *[
+        {"key": s["key"], "name": s["name"], "type": "grade", "score_item": True,
+         "options": [{"value": p, "label": lb} for p, lb in zip(s["points"], s["labels"])],
+         "help": "周医生那张表的档位，选项前面的数字就是分值，三项相加是总分。"
+                 "拿不准就先别填——漏填和「确实是 0」在总分上分不开，所以没填全不给总分。"}
+        for s in _ORAL_SCORE_ITEMS
+    ],
     {"key": "view_code", "name": "视角", "type": "select",
      "options": [
          {"value": "left", "label": "左颊"}, {"value": "right", "label": "右颊"},
@@ -173,7 +226,20 @@ def domain_of(album: str) -> str:
 def catalog(album: str) -> dict:
     """这个相册的标签体系，给前端渲染按钮和属性面板"""
     domain = domain_of(album)
-    return {"album": album, "domain": domain, **DOMAINS[domain]}
+    out = {"album": album, "domain": domain, **DOMAINS[domain]}
+    if domain == "tooth":
+        # 打分口径只有这一份。前端照着渲染和算总分，**不另抄一遍那几个数字**——
+        # 抄一遍的话调权重时界面上的总分和导出的总分会不一样，而且没人会发现
+        out["score_scheme"] = {
+            "name": "口腔评估",
+            "max": ORAL_SCORE_MAX,
+            "items": [{"key": s["key"], "name": s["name"], "points": s["points"]}
+                      for s in _ORAL_SCORE_ITEMS],
+            "note": "分期（牙周炎 I–IV 期）不在这里：要靠牙周探诊深度和 X 光看牙槽骨吸收，"
+                    "照片上推不出来。",
+            "todo": "另一套 CI/GI 指数（0–3）的整图总分还没做；逐颗牙的 CI/GI 已经可以在框上填。",
+        }
+    return out
 
 
 def valid_label_codes(album: str) -> set[str]:
@@ -364,6 +430,8 @@ _ATTR_DOMAINS = {
     "body_site": frozenset(
         x["value"] for x in _SKIN_ASSET_ATTRS[0]["options"]
     ),
+    # 口腔评估三项：合法值就是那张表上的分值本身（不是 0-3 档位号）
+    **{s["key"]: frozenset(s["points"]) for s in _ORAL_SCORE_ITEMS},
 }
 
 
