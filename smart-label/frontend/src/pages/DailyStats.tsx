@@ -39,6 +39,10 @@ const DAY_SEC = 24 * 3600;
 
 const fmtDur = (sec: number) => {
   if (!sec) return "0";
+  // 不满一分钟的**给秒**。四舍五入到分的话 40 秒的断联会显示成「1 分」、
+  // 20 秒会显示成「0 分」——后者看着像没断过，而缺数据这一列的用处
+  // 恰恰是"到底缺了没有"
+  if (sec < 60) return `${Math.round(sec)} 秒`;
   const h = Math.floor(sec / 3600);
   const m = Math.round((sec % 3600) / 60);
   return h ? `${h} 小时 ${m} 分` : `${m} 分`;
@@ -165,7 +169,7 @@ export default function DailyStats() {
             {ok ? (
               <Tag color="green">≈24 小时</Tag>
             ) : (
-              <Tooltip title={diff > 0 ? "比 24 小时多——多半是同一天几个样本的时间段有重叠" : "比 24 小时少——那天没采满，或者有断联缺数据"}>
+              <Tooltip title={diff > 0 ? "比 24 小时多——多半是同一天几个样本的时间段有重叠" : "比 24 小时少。少掉的那些去哪了，看右边「缺数据」和「未采集」两列：加起来正好是这个差值"}>
                 <Tag color={diff > 0 ? "red" : "orange"}>
                   {diff > 0 ? "+" : "−"}
                   {fmtDur(Math.abs(diff))}
@@ -178,17 +182,46 @@ export default function DailyStats() {
     },
     {
       title: (
-        <Tooltip title="这一天有多少秒的数据是缺的（蓝牙断联等）。缺得多的话下面那些数天然偏低，别当成「今天没动」">
+        <Tooltip title="记录期间断联缺掉的时间（蓝牙掉线等）。跟「未采集」不是一回事：这个是在记但没记上，那个是根本没在记">
           缺数据
         </Tooltip>
       ),
       width: 110,
+      // **一直显示，不用「—」代替小数值**。之前 60 秒以下显示「—」，
+      // 结果一行写着"合计 12 小时 51 分 / 缺数据 —"，看着像这一天
+      // 完整覆盖了、只是行为只有 12 小时——而真相是那天只记了 13 个小时
       render: (_: unknown, r: DailyStatsRow) =>
         r.missing_seconds > 60 ? (
           <Tag color="orange">{fmtDur(r.missing_seconds)}</Tag>
+        ) : r.missing_seconds > 0 ? (
+          <Text type="secondary">{fmtDur(r.missing_seconds)}</Text>
         ) : (
-          <Text type="secondary">—</Text>
+          <Text type="secondary">0</Text>
         ),
+    },
+    {
+      title: (
+        <Tooltip title="那天压根没在记的时间 = 24 小时 − 合计 − 缺数据。项圈摘下来充电、或者当天下午才开始采，都算在这里">
+          未采集
+        </Tooltip>
+      ),
+      width: 130,
+      render: (_: unknown, r: DailyStatsRow) => {
+        if (r.uncovered_seconds == null) return <Text type="secondary">—</Text>;
+        // 负数 = 合计 + 缺数据 超过了 24 小时，也就是样本时间段有重叠。
+        // **这个要标出来**：它是数据重复导入的信号，显示成 0 就看着正常了
+        if (r.uncovered_seconds < -60) {
+          return (
+            <Tooltip title="合计 + 缺数据 超过 24 小时了，说明这一天几个样本的时间段有重叠——多半是同一批数据导入了两次">
+              <Tag color="red">超出 {fmtDur(-r.uncovered_seconds)}</Tag>
+            </Tooltip>
+          );
+        }
+        if (r.uncovered_seconds <= 15 * 60) {
+          return <Text type="secondary">{fmtDur(Math.max(0, r.uncovered_seconds))}</Text>;
+        }
+        return <Tag color="default">{fmtDur(r.uncovered_seconds)}</Tag>;
+      },
     },
     {
       title: "样本 / 窗口",
