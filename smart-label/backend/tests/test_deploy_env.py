@@ -125,3 +125,53 @@ def test_settings_field_matches_the_env_name():
     for name in SERVICE_URLS:
         assert name.lower() in fields, \
             f"环境变量 {name} 在 Settings 里没有对应字段 {name.lower()}"
+
+
+# ── up.sh 不能承诺它没验证过的事 ──────────────────────────────────────────
+
+
+def _up_sh() -> str:
+    p = os.path.join(os.path.dirname(__file__), "..", "..", "deploy", "up.sh")
+    with open(p, encoding="utf-8") as f:
+        return f.read()
+
+
+def test_up_sh_waits_for_the_services_to_actually_answer():
+    """容器 Started ≠ 服务能用。
+
+    api 起来之后还要 import 一堆东西、连 MySQL、建连接池。以前脚本在
+    `docker compose up -d` 之后直接打"=== 已启动 ===" 加地址，而那时候点进去
+    是白屏——**脚本承诺了它没验证过的事**。看到成功横幅的人会以为坏的是
+    别的地方，然后去查一个根本不存在的问题。
+    """
+    s = _up_sh()
+    assert "/health" in s, "没有等 api 的健康检查"
+    assert "curl" in s, "没有真的去请求，那就只是 sleep 猜时间"
+
+
+def test_up_sh_does_not_print_success_when_it_is_not_ready():
+    """没起来时**不能**打成功横幅。
+
+    照旧打一遍地址、让人对着白屏猜是不是自己电脑的问题，
+    比不打还糟。
+    """
+    s = _up_sh()
+    assert "有服务没起来" in s, "没起来时没有区别对待"
+    # 成功那句话只能出现在 READY=0 的分支里
+    i_ok = s.find("可以用了")
+    i_bad = s.find("有服务没起来")
+    assert i_ok >= 0 and i_bad >= 0
+    assert 'if [ "$READY" = 0 ]' in s, "没有按就绪状态分支"
+
+
+def test_up_sh_exits_nonzero_when_not_ready():
+    """没起来要用退出码说出来——脚本套在别的命令里时，
+    静默成功会让后面的步骤接着跑。"""
+    s = _up_sh()
+    assert 'exit 1' in s, "没起来也返回 0，调用方看不出来"
+
+
+def test_up_sh_tells_you_where_to_look():
+    """失败时要说去哪看，不是只说失败。"""
+    s = _up_sh()
+    assert "docker compose logs" in s

@@ -29,9 +29,47 @@ fi
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 HOST_IP="${HOST_IP:-<服务器IP>}"
+API_PORT="${BACKEND_PORT:-8283}"
+WEB_PORT="${FRONTEND_PORT:-8284}"
+
+# ── 等到真的能用再说"已启动" ──────────────────────────────────────────────
+#
+# 容器 Started ≠ 服务能用。api 那个容器起来之后还要 import 一堆东西、连 MySQL、
+# 建连接池，前端 nginx 起得快但要等 api 通了才有数据。
+#
+# 以前这里直接打"=== 已启动 ===" 加地址，而那时候点进去是白屏或者 502——
+# **脚本承诺了它没验证过的事**。看到成功横幅的人会以为坏的是别的地方，
+# 然后去查一个根本不存在的问题。
+wait_for() {
+    local what=$1 url=$2 tries=${3:-60} i
+    for ((i = 1; i <= tries; i++)); do
+        if curl -fsS -o /dev/null --max-time 2 "$url" 2>/dev/null; then
+            echo "  ✓ $what（等了 ${i}s）"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "  ✗ $what 等了 ${tries}s 还没通：$url"
+    return 1
+}
 
 echo ""
-echo "=== smart-label 已启动 ==="
-echo "前端页面: http://${HOST_IP}:${FRONTEND_PORT:-8284}"
-echo "API 文档: http://${HOST_IP}:${BACKEND_PORT:-8283}/docs"
+echo "▶ 等服务真的起来（容器 Started 不等于能用）"
+READY=0
+wait_for "API   " "http://127.0.0.1:${API_PORT}/health" 90 || READY=1
+wait_for "前端  " "http://127.0.0.1:${WEB_PORT}/" 30 || READY=1
+
+echo ""
+if [ "$READY" = 0 ]; then
+    echo "=== smart-label 可以用了 ==="
+else
+    # 没起来就**别打成功横幅**。这里最容易的就是照旧打一遍地址，
+    # 然后让人对着一个白屏猜是不是自己电脑的问题
+    echo "=== ⚠ 有服务没起来，下面的地址现在多半打不开 ==="
+    echo "    docker compose ps          看谁没起"
+    echo "    docker compose logs -f api 看 api 为什么不通"
+fi
+echo "前端页面: http://${HOST_IP}:${WEB_PORT}"
+echo "API 文档: http://${HOST_IP}:${API_PORT}/docs"
 echo "日志文件: $(cd ../.. && pwd)/logs/smart-label/  (api.log / access.log / scheduler.log，按天切留 14 天)"
+[ "$READY" = 0 ] || exit 1
