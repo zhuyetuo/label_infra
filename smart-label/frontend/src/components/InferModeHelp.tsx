@@ -49,6 +49,22 @@ const ROWS: Row[] = [
     note: "模型逐窗口原始输出，用来看模型到底说了什么",
   },
   {
+    key: "srv",
+    name: "服务端 · <别的模型>",
+    model: "另一个模型",
+    infer: "服务端",
+    post: "服务端 · 离线 viterbi",
+    note: "同一台 AI 服务、同一份后处理，只换了模型。跟上面的「稳定版 v2」比，差的只有模型本身",
+  },
+  {
+    key: "srv-raw",
+    name: "服务端 · <别的模型> · 调试版",
+    model: "另一个模型",
+    infer: "服务端",
+    post: "无",
+    note: "那个模型逐窗口的原始输出",
+  },
+  {
     key: "edge",
     name: "端侧 · 稳定版 v2",
     model: "板上 C",
@@ -77,7 +93,10 @@ const ROWS: Row[] = [
 const cell = (v: string) =>
   v === "无" ? <Text type="secondary">无</Text>
     : v.startsWith("板上") ? <Tag color="purple">{v}</Tag>
-      : <Text>{v}</Text>;
+      // 「另一个模型」也标个色：这一列只有三种取值，不标的话
+      // 「线上模型」和「另一个模型」两行文字长得太像，扫的时候分不开
+      : v === "另一个模型" ? <Tag color="blue">{v}</Tag>
+        : <Text>{v}</Text>;
 
 export default function InferModeHelp() {
   const [open, setOpen] = useState(false);
@@ -114,6 +133,11 @@ export default function InferModeHelp() {
           ]}
         />
         <Text type="secondary" style={{ display: "block", marginTop: 12 }}>
+          「服务端 · &lt;别的模型&gt;」= 同一台 AI 服务上挂着的另一份模型（比如只用加速计的那版）。
+          **跑的还是服务器上的 sklearn，不是板子上的 C**——想知道板子会报什么，看下面端侧那三行。
+          有几个可选取决于服务上挂了几个（LABEL_MODELS），没挂就不显示这一组。
+        </Text>
+        <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
           「板上 C」= 烧进项圈的那份 C 代码，服务这边编成 .so 跑，**跟板子是同一个源文件**。
           端侧那三行只有后处理不同，可以并排跑来看板上那套跟服务端那套差多少。
         </Text>

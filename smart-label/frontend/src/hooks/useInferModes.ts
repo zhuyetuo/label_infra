@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listEdgeModels } from "@/api/modelEval";
+import { listEdgeModels, listServerModels } from "@/api/modelEval";
 import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
 
 /**
@@ -26,20 +26,55 @@ export function useInferModes() {
     retry: false,
   });
 
+  // AI 服务上除了默认那个之外还挂着的模型（只用加速计那种实验模型）。
+  // 跟端侧那组**分开列**：一个跑服务器上的 sklearn，一个跑烧进项圈的 C，
+  // 混在一组里人会以为实验模型也是板子会跑的东西
+  const { data: srv } = useQuery({
+    queryKey: ["server-models"],
+    queryFn: listServerModels,
+    staleTime: 30_000,
+    retry: false,
+  });
+
   const edgeModels = data?.models ?? [];
+  // 默认模型不列：它就是「稳定版 / 稳定版 v2 / 调试版」那三行
+  const serverModels = (srv?.models ?? []).filter((m) => !m.is_default && m.spec);
 
   const options = useMemo(() => {
     const online = {
       label: "线上模型（algo_service）",
       options: INFER_MODE_OPTIONS.map((o) => ({ ...o, title: INFER_MODE_HINT[o.value] })),
     };
+    const server = serverModels.length
+      ? [{
+          label: "服务端模型（同一台 AI 服务，换了个模型）",
+          // 每个模型两个选项。默认的「稳定版 v2」排在前面——跟线上那三行
+          // 用的是同一份后处理，所以跟它们比，差的只有模型本身。
+          //
+          // 标签**只留名字**，差异放在下拉旁边那个问号里（InferModeHelp）。
+          options: serverModels.flatMap((m) => [
+            {
+              label: `${m.name} · 稳定版 v2`,
+              value: m.spec as string,
+              title: `服务端推理。后处理跟线上「稳定版 v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
+            },
+            {
+              label: `${m.name} · 调试版`,
+              value: (m.spec_raw ?? `${m.spec}@raw`) as string,
+              title: `模型逐窗口原始输出，不做后处理。用来看这个模型到底说了什么。${m.model_path}`,
+            },
+          ]),
+        }]
+      : [];
+
     if (!edgeModels.length) {
       // 一个都没有时**不显示空的分组标题**——那会让人以为是加载失败。
       // 端侧服务是可选的，没有它这个下拉跟以前一模一样
-      return [online];
+      return [online, ...server];
     }
     return [
       online,
+      ...server,
       {
         label: "端侧模型（跑的是烧进项圈的那份 C）",
         // 每个端侧模型三个选项，**默认那个排在前面**——用它铺草稿，
@@ -73,7 +108,7 @@ export function useInferModes() {
         }),
       },
     ];
-  }, [edgeModels]);
+  }, [edgeModels, serverModels]);
 
   return {
     options,

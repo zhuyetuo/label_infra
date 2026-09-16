@@ -22,7 +22,7 @@ from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.services import edge_client
+from app.services import algo_client, edge_client
 from app.services.model_eval_service import evaluate, eval_run_progress, list_runs, start_eval_run
 
 router = APIRouter(
@@ -63,6 +63,38 @@ async def edge_models():
             # 整条链都是板上那份 C（模型 + 推理 + 后处理）。
             # 没有板子的时候，这一列才是"板子会报什么"
             "spec_board": f"{edge_client.EDGE_PREFIX}{m['tag']}@board",
+        } for m in models],
+    })
+
+
+@router.get("/server-models")
+async def server_models():
+    """AI 服务（imu_train 的 label_service）现在挂着哪些模型。
+
+    跟 /edge-models 是**两回事**：那边跑的是烧进项圈的那份 C，这边跑的是
+    服务器上的 sklearn。一个只用加速计的实验模型属于这边，不属于那边——
+    放错组的话，人会以为它是板子会跑的东西。
+
+    默认那个模型（is_default）就是界面上「线上模型」那三行用的，
+    **不用在下拉里重复列一遍**；这里列出来是为了让人知道默认的是哪一份。
+
+    服务是老版本（没有 /models 这个端点）时返回空列表，不是报错——
+    多模型是可选功能，没有它下拉跟以前一模一样。
+    """
+    models = await algo_client.models()
+    return ok({
+        # spec 就是跑批时要传的那个字符串，前端不用自己拼前缀。
+        # 默认模型不给 spec：它就是「稳定版 / 稳定版 v2 / 调试版」那三行，
+        # 再给一个 srv:default 会变成同一个东西有两种写法，
+        # 而两种写法存进库里是两个不同的 model_tag，对比表里会分成两列
+        "models": [{
+            **m,
+            "spec": None if m.get("is_default")
+                    else f"{algo_client.SRV_PREFIX}{m['tag']}",
+            "spec_raw": None if m.get("is_default")
+                        else f"{algo_client.SRV_PREFIX}{m['tag']}@raw",
+            "spec_stable": None if m.get("is_default")
+                           else f"{algo_client.SRV_PREFIX}{m['tag']}@stable",
         } for m in models],
     })
 

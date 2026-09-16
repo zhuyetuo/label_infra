@@ -128,3 +128,35 @@ export interface EdgeModel {
  *  是配了连不上。界面上这两种要分开说——一个是"没开"，一个是"挂了"。 */
 export const listEdgeModels = () =>
   request.get<never, { enabled: boolean; models: EdgeModel[] }>("/model-eval/edge-models");
+
+/** AI 服务（imu_train 的 label_service）上挂着的一个模型。
+ *
+ *  跟 EdgeModel 是**两回事**：那边跑的是烧进项圈的那份 C，这边跑的是
+ *  服务器上的 sklearn。只用加速计那种实验模型属于这边——放进端侧组的话，
+ *  人会以为它是板子会跑的东西。 */
+export interface ServerModel {
+  tag: string;
+  /** 默认那个 = 界面上「稳定版 / 稳定版 v2 / 调试版」用的那份模型。
+   *  它的 spec 是 null：再给一个 srv:default 会让同一个东西有两种写法，
+   *  而两种写法存进库里是两个不同的 model_tag，对比表里会分成两列 */
+  is_default: boolean;
+  /** 跑批时要传的版本串（srv:<标签>），默认模型是 null */
+  spec: string | null;
+  spec_raw: string | null;
+  spec_stable: string | null;
+  /** 目录名，给人看的 */
+  name: string;
+  model_path: string;
+  /** 还没被用过的模型是懒加载的，这时候类别/几何是 null——
+   *  为了列个下拉就把每个 50MB 的 pkl 都加载一遍太贵 */
+  loaded: boolean;
+  classes: string[] | null;
+  hz: number | null;
+  window_s: number | null;
+  stride_s: number | null;
+}
+
+/** AI 服务是老版本（没有 /models 端点）时返回空列表，不是报错——
+ *  多模型是可选功能，没有它下拉跟以前一模一样。 */
+export const listServerModels = () =>
+  request.get<never, { models: ServerModel[] }>("/model-eval/server-models");
