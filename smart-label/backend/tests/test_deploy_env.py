@@ -175,3 +175,18 @@ def test_up_sh_tells_you_where_to_look():
     """失败时要说去哪看，不是只说失败。"""
     s = _up_sh()
     assert "docker compose logs" in s
+
+
+def test_up_sh_shows_migrate_logs_when_compose_fails():
+    """compose 起不来时要**把 migrate 的日志打出来**。
+
+    最常见的失败就是迁移（多头、down_revision 指错、SQL 写错），
+    而 compose 只说一句 "exit 255"——真正的原因在 migrate 容器里。
+
+    更要紧的是 set -e：不拦住的话脚本在 compose 那一行就被掐掉，
+    下面所有诊断一句都不会打，人只能对着一个退出码猜。
+    """
+    s = _up_sh()
+    assert "if ! docker compose up" in s, \
+        "compose 失败会被 set -e 直接掐掉，后面的诊断打不出来"
+    assert "logs --tail" in s and "migrate" in s, "没有把 migrate 的日志打出来"
