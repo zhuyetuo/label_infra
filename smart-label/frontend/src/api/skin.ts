@@ -93,7 +93,7 @@ export type LinkStaleness = {
   computed_days: number;
   range: { from: string; to: string } | null;
 };
-/** 哪些天的标注在上次算完之后又改过了。一条聚合查询，不碰 algo_service。 */
+/** 哪些天的标注在上次算完之后又改过了。一条聚合查询，不碰算法服务。 */
 export const skinLinkStaleness = () => request.get<never, LinkStaleness>("/skin/link/staleness");
 
 export const getSkinOptions = () => request.get<never, SkinOptions>("/skin/options");

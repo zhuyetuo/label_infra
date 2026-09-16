@@ -42,7 +42,7 @@ export function useInferModes() {
 
   const options = useMemo(() => {
     const online = {
-      label: "线上模型（algo_service）",
+      label: "算法服务（imu_train 的 label_service）",
       options: INFER_MODE_OPTIONS.map((o) => ({ ...o, title: INFER_MODE_HINT[o.value] })),
     };
     const server = serverModels.length

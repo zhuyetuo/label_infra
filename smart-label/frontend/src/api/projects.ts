@@ -32,7 +32,8 @@ export interface PrelabelProgress {
 }
 
 /** 项目下待认领/标注中且没人动过的任务批量跑 AI 预标注（后台），用 status 轮询进度 */
-/** 版本可以是 algo_service 的 mode，也可以是端侧模型（edge:<标签>）。
+/** 版本可以是算法服务（imu_train 的 label_service）的后处理 mode，
+ *  也可以是 srv:<标签> / edge:<标签>。
  *  端侧那几个是运行时才知道的（问服务），所以只能是 string——
  *  写成联合类型的话每加一个端侧模型都要改前端代码。 */
 export type InferMode = string;

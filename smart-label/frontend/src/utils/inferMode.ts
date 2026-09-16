@@ -1,7 +1,8 @@
 /** AI 预标注版本选项：稳定版（滞回+合并）/ 稳定版 v2（Viterbi 解码）/ 调试版（逐窗口原始输出） */
 export type AlgoMode = "stable" | "viterbi" | "raw";
 
-/** 版本可以是 algo_service 的 mode，也可以是端侧模型（edge:<标签>）。
+/** 版本可以是算法服务（imu_train 的 label_service）的后处理 mode，
+ *  也可以是它上面挂的另一个模型（srv:<标签>）或端侧模型（edge:<标签>）。
  *
  * 端侧那几个是运行时才知道的（问服务），所以类型上只能是 string——
  * 写成联合类型的话每加一个端侧模型都要改前端代码，而那正是
@@ -41,7 +42,7 @@ export const INFER_MODE_LABEL: Record<string, string> = Object.fromEntries(
 /** 历史记录/回显用的显示名。端侧的标签是运行时才知道的，
  *  所以不在 INFER_MODE_LABEL 那张表里，单独拼。 */
 /** 端侧后处理的显示名。board 不在 INFER_MODE_LABEL 里——它不是
- *  algo_service 的 mode，是"用板上那份 C 做后处理"。 */
+ *  算法服务的 mode，是"用板上那份 C 做后处理"。 */
 const EDGE_POST_LABEL: Record<string, string> = { board: "板上整条链" };
 export const modeLabelOf = (m: string) =>
   isSrvMode(m)

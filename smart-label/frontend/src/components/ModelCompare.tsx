@@ -157,7 +157,7 @@ export default function ModelCompare() {
           value={runModes}
           onChange={setRunModes}
           options={[
-            { label: "线上模型（algo_service）", options: MODES.map((m) => ({ value: m, label: modeLabel(m) })) },
+            { label: "算法服务（imu_train 的 label_service）", options: MODES.map((m) => ({ value: m, label: modeLabel(m) })) },
             // 端侧那组：服务没配/没起来时这一组是空的，antd 会自动不显示分组标题。
             // 不写死在前端，是因为写死的话服务换了模型，这里会出现一个
             // 选了就报错的选项，而错误是"没有这个端侧模型"
