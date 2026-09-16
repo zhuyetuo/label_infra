@@ -33,6 +33,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.sample import Sample
+from app.models.sample_vision_scan import SampleVisionScan
 from app.services.sample_import_service import (
     _scan_filesystem,
     cams_for_imu,
@@ -65,7 +66,8 @@ async def run(date_filter, apply: bool, limit: int) -> int:
             q = q.where(Sample.session_date == date_filter)
         samples = (await db.execute(q.limit(limit))).scalars().all()
 
-        n_seen = n_diff = n_skip = 0
+        n_seen = n_diff = n_skip = n_scan_cleared = 0
+        wrong_dog_codes: list[str] = []
         for sm in samples:
             imu_idx = _imu_of(sm.sample_code)
             session_key = sm.sample_code.rsplit("_imu", 1)[0]
@@ -90,15 +92,36 @@ async def run(date_filter, apply: bool, limit: int) -> int:
 
             n_diff += 1
             print(f"  {sm.sample_code}   {len(cur)} 路 → {len(want)} 路")
+            wrong_dog = False
             for slot in (1, 2, 3):
                 a, b = cur.get(slot), want.get(slot)
                 if a == b:
                     continue
                 print(f"      cam{slot}: {os.path.basename(a) if a else '（空）'}")
                 print(f"           →  {os.path.basename(b) if b else '（清空）'}")
+                # 原来那一路挂的是**别的 imu 的房间**——这种样本的人工标注
+                # 是对着错的画面做的，光改路径不够，得回去复查
+                if a and "_imu" in os.path.basename(a):
+                    other = os.path.basename(a).split("_imu")[1].split("_")[0]
+                    if other.isdigit() and int(other) != imu_idx:
+                        wrong_dog = True
+            if wrong_dog:
+                print(f"      ⚠ 这个样本原来挂的是**别的狗的房间**，"
+                      f"已有的人工标注要复查")
+                wrong_dog_codes.append(sm.sample_code)
             if apply:
                 for slot, col in enumerate(_SLOTS, 1):
                     setattr(sm, col, want.get(slot))
+                # 视觉扫描结果按 (样本, cam槽位) 存，**不记录视频路径**。
+                # 路径改了而扫描结果留着的话，那些"这段没狗"的判断对应的是
+                # 旧视频——而且完全看不出来。删掉，让它重扫。
+                stale = (await db.execute(
+                    select(SampleVisionScan).where(
+                        SampleVisionScan.sample_id == sm.id)
+                )).scalars().all()
+                for row in stale:
+                    await db.delete(row)
+                n_scan_cleared += len(stale)
 
         if apply and n_diff:
             await db.commit()
@@ -106,6 +129,20 @@ async def run(date_filter, apply: bool, limit: int) -> int:
     print()
     print(f"配对站点的样本 {n_seen} 个，其中 {n_diff} 个需要改，跳过 {n_skip} 个"
           f"（非配对站点 / 扫不到对应目录）")
+    if wrong_dog_codes:
+        print()
+        print(f"⚠ 其中 {len(wrong_dog_codes)} 个样本原来挂的是**别的狗的房间**——")
+        print("  那些样本上已有的人工标注是对着错的画面做的，**光改路径不够**，")
+        print("  要回去复查（或者直接作废重标）。样本号：")
+        for c in wrong_dog_codes[:20]:
+            print(f"    {c}")
+        if len(wrong_dog_codes) > 20:
+            print(f"    …… 还有 {len(wrong_dog_codes) - 20} 个")
+    if apply and n_scan_cleared:
+        print()
+        print(f"顺带清掉了 {n_scan_cleared} 条视觉扫描结果——它们是按 (样本, cam槽位)"
+              "存的、不记路径，")
+        print("  路径改了之后就对应错了视频。重新跑一次视觉扫描即可。")
     if n_diff and not apply:
         print("\n**没有写库**（dry-run）。确认上面的改动没问题再加 --apply。")
     elif n_diff:
