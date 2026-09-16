@@ -164,3 +164,89 @@ def test_slots_are_tried_in_numeric_order(monkeypatch, slots):
     monkeypatch.setattr(mod.os.path, "isfile", lambda p: True)
     probe_any_cam("/nas", slots)
     assert calls[0].endswith("a.mp4")
+
+
+# ── 重新扫描要回头修已有样本 ───────────────────────────────────────────────
+
+
+def test_rescan_backfills_existing_samples(db, run, monkeypatch):
+    """**删掉标注项目重建没用**——samples 表一行都没动。
+
+    扫描只处理没见过的 sample_code，已有样本的 video_duration_sec 不会回头补，
+    所以界面上还是 `08:00:14 ~ ?`。真实情况就是这样：用户删了项目重新生成，
+    问号照旧，只有手动跑 backfill_video_probe 才好。
+
+    修法跟采样率那个字段一样：每次扫描顺手补一遍缺时长的。
+    """
+    import app.services.sample_import_service as mod
+    from app.models.sample import Sample
+
+    good = Sample(sample_code="s_ok", video_cam1_path="a.mp4", imu_csv_path="a.csv", created_by=1)
+    broken = Sample(sample_code="s_bad", video_cam1_path="b.mp4", imu_csv_path="b.csv", created_by=1)
+    keep = Sample(sample_code="s_keep", video_cam1_path="c.mp4", imu_csv_path="c.csv", created_by=1,
+                  video_duration_sec=1234, video_fps=25.0,
+                  video_resolution="640x480")
+    # 缺时长、但**帧率分辨率是有的**：那次探测成功过，只是 duration 没读出来。
+    # 补时长可以，别拿另一路的参数去盖——各路机位分辨率可能不一样
+    partial = Sample(sample_code="s_partial", video_cam1_path="a.mp4",
+                     imu_csv_path="d.csv", created_by=1,
+                     video_fps=25.0, video_resolution="640x480")
+    for s in (good, broken, keep, partial):
+        db.add(s)
+    run(db.commit())
+
+    def fake(nas_root, cams):
+        if cams.get(1) == "a.mp4":
+            return {"duration_sec": 3585, "fps": 50.0,
+                    "width": 1280, "height": 720}, None
+        return None, "cam1 ffprobe 退出码 1：moov atom not found"
+
+    monkeypatch.setattr(mod, "probe_any_cam", fake)
+    n = run(mod._backfill_video_duration(db, "/nas"))
+
+    assert n == 2
+    # 从库里重新查，**不要**用手上那个 ORM 对象——expire_on_commit=False，
+    # 它拿的是缓存值，update 写没写进去根本看不出来
+    from sqlalchemy import select
+
+    rows = run(db.execute(select(
+        Sample.sample_code, Sample.video_duration_sec, Sample.video_fps,
+        Sample.video_resolution))).all()
+    got = {r[0]: tuple(r[1:]) for r in rows}
+
+    assert got["s_ok"] == (3585, 50.0, "1280x720")
+    # 探不出来的留空，下次扫描再试——**不要**写个 0 进去装作修好了
+    assert got["s_bad"][0] is None
+    # 已经有值的不参与，更不能被别的机位的分辨率盖掉
+    assert got["s_keep"] == (1234, 25.0, "640x480")
+    assert got["s_partial"] == (3585, 25.0, "640x480"), \
+        "时长要补上，但原有的帧率/分辨率不能被 1280x720 盖掉"
+
+
+def test_rescan_reports_how_many_are_still_broken(db, run, monkeypatch):
+    """扫描日志里要看得见还剩几个探不出来，否则这事又悄悄过去了。"""
+    import app.services.sample_import_service as mod
+    from app.models.sample import Sample
+
+    db.add(Sample(sample_code="s1", video_cam1_path="a.mp4", imu_csv_path="a.csv", created_by=1))
+    db.add(Sample(sample_code="s2", video_cam1_path="b.mp4", imu_csv_path="b.csv", created_by=1))
+    run(db.commit())
+    monkeypatch.setattr(mod, "probe_any_cam", lambda r, c: (
+        ({"duration_sec": 100, "fps": 25.0, "width": 1, "height": 2}, None)
+        if c.get(1) == "a.mp4" else (None, "坏了")))
+    mod._progress.detail.clear()
+    run(mod._backfill_video_duration(db, "/nas"))
+    line = " ".join(mod._progress.detail)
+    assert "补上 1 个样本的视频时长" in line
+    assert "还有 1 个探不出来" in line
+
+
+def test_rescan_calls_the_backfill(monkeypatch):
+    """_do_scan 里必须真的调它——写了函数不挂上去等于没写。"""
+    import inspect
+
+    import app.services.sample_import_service as mod
+
+    src = inspect.getsource(mod._do_scan)
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "_backfill_video_duration(" in code
