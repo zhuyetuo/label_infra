@@ -48,6 +48,7 @@ import {
   reopenTask,
 } from "@/api/tasks";
 import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
+import { defaultTemplateId } from "@/utils/defaultTemplate";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
 import { listLabels } from "@/api/labels";
@@ -66,6 +67,10 @@ import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 // 上次用的预标注版本：用惯哪个就默认哪个，省得每次重选
 const PRELABEL_MODE_KEY = "smart-label:prelabel-mode";
 const CREATE_MODE_KEY = "smart-label:create-infer-mode";
+// 新建项目时上次选的标签模板：一段时间里建的项目基本都套同一个模板，
+// 每次都要从下拉里重新找一遍很烦。存 "none" 表示上次是特意清掉不套的。
+const CREATE_TEMPLATE_KEY = "smart-label:create-template-id";
+
 // 「连已经有 AI 片段的也重跑」也记住：换了模型想全量刷新时，每个项目都要重勾
 // 一遍太烦，而这个选择在一轮刷新里通常是一致的
 const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
@@ -260,7 +265,11 @@ export default function Projects() {
 
   const openCreate = () => {
     setEditing(null);
-    form.setFieldsValue({ name: "", description: "", templateId: templates?.[0]?.id });
+    form.setFieldsValue({
+      name: "",
+      description: "",
+      templateId: defaultTemplateId(getSavedText(CREATE_TEMPLATE_KEY, ""), templates?.map((t) => t.id) ?? []),
+    });
     setCreateSelected(new Set());
     setCreateTaskType("ai_assisted");
     // 默认指派给自己（管理员/超管建项目大多是自己先调试），不想要就在下拉里清掉进公共池
@@ -295,6 +304,8 @@ export default function Projects() {
 
   const handleSubmit = async ({ templateId, ...values }: FormValues) => {
     setCreating(true);
+    // 新建时记住这次选的模板（清掉了也记，下次就不默认套）；编辑项目那条路不算
+    if (!editing) saveText(CREATE_TEMPLATE_KEY, templateId == null ? "none" : String(templateId));
     try {
       let projectId = editing?.id;
       // 每天一个项目：按样本的采集日期分组，一组建一个，名字就用那天的日期。
