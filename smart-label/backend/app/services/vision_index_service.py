@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.sample import Sample
@@ -168,25 +169,33 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             seen.add(path)
             paths.append((s.sample_code, path))
     progress.total = len(paths)
-    for code, path in paths:
-        if project_id in _cancelled:
-            progress.log(f"已取消，剩下 {progress.total - progress.processed} 路没建")
-            break
-        progress.current = code
-        try:
-            r = await build_fn(path, force=force)
-        except Exception as e:  # noqa: BLE001
-            progress.failed += 1
+    # 几路一起建：视觉服务那边 GPU 有锁，但解码是各自的 CPU，两三路并行能把 GPU 喂饱。
+    # 再多没意义（GPU 排队），还占显存
+    sem = asyncio.Semaphore(max(1, settings.vision_index_concurrency))
+
+    async def one(code: str, path: str) -> None:
+        async with sem:
+            if project_id in _cancelled:
+                return
+            progress.current = code
+            try:
+                r = await build_fn(path, force=force)
+            except Exception as e:  # noqa: BLE001
+                progress.failed += 1
+                progress.processed += 1
+                progress.log(f"{code}：失败 {type(e).__name__}: {e}")
+                return
             progress.processed += 1
-            progress.log(f"{code}：失败 {type(e).__name__}: {e}")
-            continue
-        progress.processed += 1
-        if r.get("cached"):
-            progress.cached += 1
-            progress.log(f"{code}：已有索引（{r.get('n', 0)} 帧）")
-        else:
-            progress.built += 1
-            progress.log(f"{code}：建好 {r.get('n', 0)} 帧，{r.get('seconds', 0)} 秒")
+            if r.get("cached"):
+                progress.cached += 1
+                progress.log(f"{code}：已有索引（{r.get('n', 0)} 帧）")
+            else:
+                progress.built += 1
+                progress.log(f"{code}：建好 {r.get('n', 0)} 帧，{r.get('seconds', 0)} 秒")
+
+    await asyncio.gather(*(one(code, path) for code, path in paths))
+    if project_id in _cancelled and progress.processed < progress.total:
+        progress.log(f"已取消，剩下 {progress.total - progress.processed} 路没建")
 
 
 # ── 找相似 → 候选 ─────────────────────────────────────────────────────

@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     # 默认空 = 关着：视觉标注页上 SAM 按钮置灰，其它功能一概不受影响。
     # 要开就配 http://<跑 SAM 那台>:8385
     vision_service_url: str = ""
+    # 建画面索引时几路视频一起送：视觉服务 GPU 有锁，但解码是各自的 CPU，
+    # 两三路并行能把 GPU 喂饱；再多只是排队占显存
+    vision_index_concurrency: int = 3
     # /infer 是同步推理，AI 服务那边还加了锁排队，一次几十秒很正常，单独放宽。
     # 前端 axios 给这个请求 180s、nginx proxy_read_timeout 300s，这里要比前端略短，
     # 这样超时是后端报出清楚的 502 而不是前端先断掉。
