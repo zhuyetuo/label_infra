@@ -1,4 +1,4 @@
-"""内置「舔/啃（IMU 候选）」标签模板：启动时自动建，套用后候选能确认，改过不被覆盖。"""
+"""内置「抓/舔/啃/蹭」标签模板：启动时自动建，套用后候选能确认，改过不被覆盖。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
 from app.models.user import User, UserRole
-from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template, template_rows
+from app.services.grooming_labels import (
+    GROUPS, OLD_TEMPLATE_NAMES, TEMPLATE_DESC, TEMPLATE_NAME, _OLD_GROUP_COLORS,
+    ensure_grooming_template, template_rows,
+)
 
 
 def _admin(db, run, active=True):
@@ -155,3 +158,81 @@ def test_lifespan_really_seeds_the_template(db, run, monkeypatch):
     run(boot())
     assert _tpl(db, run) is not None
     assert len(_items(db, run, _tpl(db, run).id)) == 19
+
+
+def _hue(hex_):
+    import colorsys
+    r, g, b = [int(hex_[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    return colorsys.rgb_to_hls(r, g, b)[0]
+
+
+def test_colors_same_hue_within_group_distinct_everywhere():
+    rows = template_rows() + [r for r in GROUPS_PARENTS()]
+    colors = [r.color for r in rows]
+    assert len(set(c.upper() for c in colors)) == len(colors)   # 全部不重样
+    for code, _n, pcolor, _t, parts in GROUPS:
+        hues = [_hue(pcolor)] + [_hue(c) for _c, _n2, c in parts]
+        assert max(hues) - min(hues) < 0.02, code                 # 组内同色相
+    parents = [g[2] for g in GROUPS]
+    assert len({round(_hue(c), 1) for c in parents}) == 4       # 组间色相分开
+
+
+def GROUPS_PARENTS():
+    from app.services.grooming_labels import Row
+    return [Row(g[0], g[1], g[2], 0) for g in GROUPS if not g[3]]
+
+
+def test_old_name_is_renamed_not_duplicated(db, run):
+    admin = _admin(db, run)
+    old = LabelTemplate(name=OLD_TEMPLATE_NAMES[0], description="老的", created_by=admin.id)
+    db.add(old)
+    run(db.flush())
+    db.add(LabelTemplateItem(template_id=old.id, code="lick_body", display_name="舔身体", color="#FF8C42", sort_order=100))
+    run(db.commit())
+
+    assert run(ensure_grooming_template(db)) == "updated"
+    all_tpl = run(db.execute(select(LabelTemplate))).scalars().all()
+    assert len(all_tpl) == 1 and all_tpl[0].id == old.id
+    assert all_tpl[0].name == TEMPLATE_NAME and all_tpl[0].description == TEMPLATE_DESC
+    codes = {i.code for i in _items(db, run, old.id)}
+    assert "lick_body" in codes and "scratch_head" in codes and "rub_body" in codes
+    assert "lick_body_fore" not in codes    # 舔那组还有一条在，不补
+
+
+def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
+    """上一版整组一个色：还是旧色的换新色并同步到跟着它的项目标签；管理员改过的不动。"""
+    admin = _admin(db, run)
+    tpl = LabelTemplate(name=TEMPLATE_NAME, created_by=admin.id)
+    db.add(tpl)
+    run(db.flush())
+    for r in template_rows():
+        grp = r.parent_code or r.code
+        db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=r.display_name,
+                                 color=_OLD_GROUP_COLORS[grp], sort_order=r.sort_order))
+    run(db.flush())
+    items = {i.code: i for i in _items(db, run, tpl.id)}
+    items["chew_body_hind"].color = "#000000"        # 管理员自己改过
+    p = Project(name="p", created_by=admin.id)
+    db.add(p)
+    run(db.flush())
+    follow = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔身体-前肢爪",
+                             color="#FF8C42", template_item_id=items["lick_body_fore"].id, created_by=admin.id)
+    detached = LabelDefinition(project_id=p.id, code="lick_body_hind", display_name="舔身体-后肢臀尾",
+                               color="#FF8C42", template_item_id=None, created_by=admin.id)
+    db.add(follow)
+    db.add(detached)
+    run(db.commit())
+
+    assert run(ensure_grooming_template(db)) == "updated"
+    want = {r.code: r.color for r in template_rows()}
+    got = {i.code: i.color for i in _items(db, run, tpl.id)}
+    assert got["lick_body_fore"] == want["lick_body_fore"] == "#8F3800"
+    assert got["lick_body"] == want["lick_body"] == "#FF8C42"     # 父标签本色没变
+    assert got["chew_body_hind"] == "#000000"
+    assert got["scratch_head"] == want["scratch_head"]
+    run(db.refresh(follow))
+    run(db.refresh(detached))
+    assert follow.color == "#8F3800"
+    assert detached.color == "#FF8C42"
+
+    assert run(ensure_grooming_template(db)) == "exists"

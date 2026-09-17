@@ -15,7 +15,7 @@ logger = logging.getLogger("smart-label")
 
 
 async def _seed_builtin_templates():
-    """内置的「舔/啃（IMU 候选）」标签模板：没有就建，有了不碰。
+    """内置的「抓/舔/啃/蹭」标签模板：没有就建，有了不碰。
 
     库还没起来 / 还没建管理员时不能让 API 起不来——记一条日志，下次重启再试。
     """
@@ -28,7 +28,7 @@ async def _seed_builtin_templates():
         if result == "created":
             logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
         elif result == "updated":
-            logger.info("内置标签模板「%s」补上了新加的组", TEMPLATE_NAME)
+            logger.info("内置标签模板「%s」补上了新加的组 / 换了新配色", TEMPLATE_NAME)
         elif result == "no_admin":
             logger.warning("还没有管理员账号，内置标签模板「%s」这次没建，下次启动再试", TEMPLATE_NAME)
     except Exception:  # noqa: BLE001
