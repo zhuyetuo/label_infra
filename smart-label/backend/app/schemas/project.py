@@ -47,3 +47,17 @@ class ProjectPrelabelRequest(BaseModel):
     overwrite_ai: bool = False
     # stable=稳定版 / raw=调试版，留空用 settings.algo_infer_mode
     mode: str | None = None
+
+
+class ProjectVisionSeekRequest(BaseModel):
+    """画面找片段（视觉大模型走 API）。task_ids 留空 = 项目下待认领/标注中的全部任务。"""
+
+    task_ids: list[int] | None = None
+    # 只找这几个父类（舔身体/啃身体/抓挠/蹭身体）；留空 = 项目里有的全找
+    labels: list[str] | None = None
+    cam: str = "cam1"
+    # 每个视频最多送多少段去问模型——这是花费的上限
+    max_clips: int = 120
+    min_conf: float = 0.5
+    # 只做本地筛选、不问模型、不写候选：先看会送多少段
+    dry_run: bool = False

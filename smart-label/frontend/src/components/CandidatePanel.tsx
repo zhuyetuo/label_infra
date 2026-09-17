@@ -17,12 +17,15 @@ const REASON_LABEL: Record<AiCandidate["reason"], string> = {
   // 只靠加速度姿态挑出来的：头伸到某个部位并保持住。给「舔/啃哪个部位」攒标注用，
   // 人只看这几段，不用翻 24 小时视频
   grooming: "姿态像舔/啃",
+  // 视觉大模型看视频挑出来的：画面里狗在做这个动作。类别是项目里选的那几类（含部位）
+  vision: "画面看像",
 };
 
 const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   low_conf: "orange",
   spectral: "purple",
   grooming: "cyan",
+  vision: "magenta",
 };
 
 interface Props {

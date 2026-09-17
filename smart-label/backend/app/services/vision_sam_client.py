@@ -139,3 +139,42 @@ def _detail(resp) -> str:
         return str(resp.json().get("detail", ""))[:300]
     except Exception:  # noqa: BLE001
         return resp.text[:300]
+
+
+# ── 画面找片段（视觉大模型走 API） ──────────────────────────────────────
+#
+# 一小时视频：那边本地筛选一两分钟，再按 max_clips 送去问模型，几段并行、
+# 每段一两秒。给半小时的超时——它是后台任务，没人在页面上干等。
+_SEEK_TIMEOUT = 1800.0
+
+
+async def seek_status() -> dict:
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/seek/status"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}"}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}"}
+
+
+async def seek_video(video_rel_path: str, labels: list[dict], **params) -> dict:
+    """在一路视频里找像 labels 里那些行为的片段。labels: [{name, description, parts}]。
+    params 原样透传（max_clips / dry_run / start_s / end_s / min_conf ...）。"""
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/seek"
+    try:
+        async with httpx.AsyncClient(timeout=_SEEK_TIMEOUT) as client:
+            resp = await client.post(url, json={"path": video_rel_path, "labels": labels, **params})
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code == 503:
+        raise SamUnavailable(_detail(resp) or "视觉服务里的找片段不可用")
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.json()

@@ -7,6 +7,7 @@ import {
   Collapse,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Progress,
@@ -77,6 +78,12 @@ const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
 // 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
+import {
+  cancelVisionSeek,
+  getVisionSeekStatus,
+  startVisionSeek,
+  type VisionSeekProgress,
+} from "@/api/projects";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
 import type { LabelDefinition, Project, Task, TaskStatus } from "@/types";
 
@@ -155,6 +162,16 @@ export default function Projects() {
   );
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
+  // 画面找片段：视觉大模型（API）看视频挑出像舔/啃/抓/蹭的几秒，写成候选给人确认
+  const [seekTarget, setSeekTarget] = useState<Project | null>(null);
+  const [seekProgress, setSeekProgress] = useState<Record<number, VisionSeekProgress>>({});
+  const [seekLabels, setSeekLabels] = useState<string[]>([]);
+  const [seekCam, setSeekCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
+  const [seekMaxClips, setSeekMaxClips] = useState(120);
+  const [seekLimit, setSeekLimit] = useState<number | null>(null);
+  const [seekDryRun, setSeekDryRun] = useState(true);
+  const [seekStarting, setSeekStarting] = useState(false);
+  const seekPrevRef = useRef<Record<number, string>>({});
 
   // 秒数 → "约 3 分钟" / "约 1 小时 20 分钟" / "不到 1 分钟"，进度条旁边和弹窗里都用
   const fmtEta = (sec: number | null | undefined) => {
@@ -214,12 +231,52 @@ export default function Projects() {
     });
   };
 
+  const pollSeek = async (ids: number[]) => {
+    const results = await Promise.all(ids.map((id) => getVisionSeekStatus(id).catch(() => null)));
+    setSeekProgress((prev) => {
+      const next = { ...prev };
+      results.forEach((p, i) => {
+        if (p) next[ids[i]] = p;
+      });
+      return next;
+    });
+    results.forEach((p, i) => {
+      if (!p) return;
+      const id = ids[i];
+      const was = seekPrevRef.current[id];
+      seekPrevRef.current[id] = p.status;
+      if (was === "running" && p.status !== "running") {
+        if (p.status === "done") {
+          message.success(
+            p.dry_run
+              ? `预览完成：${p.succeeded} 个任务，本地筛出 ${p.clips_candidate} 段会送去问模型（没花钱）`
+              : `画面找片段完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选，约 $${p.est_usd}`,
+            8
+          );
+        } else if (p.status === "error") {
+          message.error(`画面找片段出错：${p.error_message}`);
+        }
+        refresh();
+      }
+    });
+  };
+
   // 页面打开先各查一次（刷新页面时正在跑的还能接着看进度），之后只轮询在跑的
   const projectIds = (data ?? []).map((p) => p.id).join(",");
   useEffect(() => {
     if (!projectIds) return;
     pollPrelabel(projectIds.split(",").map(Number));
+    pollSeek(projectIds.split(",").map(Number));
   }, [projectIds]);
+  const seekRunningIds = Object.values(seekProgress)
+    .filter((p) => p.status === "running")
+    .map((p) => p.project_id)
+    .join(",");
+  useEffect(() => {
+    if (!seekRunningIds) return;
+    const timer = setInterval(() => pollSeek(seekRunningIds.split(",").map(Number)), 3000);
+    return () => clearInterval(timer);
+  }, [seekRunningIds]);
   const runningIds = Object.values(prelabelProgress)
     .filter((p) => p.status === "running")
     .map((p) => p.project_id)
@@ -247,6 +304,38 @@ export default function Projects() {
       setPrelabelTarget(null);
     } finally {
       setPrelabelStarting(false);
+    }
+  };
+
+  // 画面找片段只认这四个父类（vision_service 有它们的一句话描述），部位子标签自动带上
+  const SEEK_GROUPS = ["舔身体", "啃身体", "抓挠", "蹭身体"];
+  const seekableLabels = (projectId: number) =>
+    SEEK_GROUPS.filter((n) => (allLabels ?? []).some((l) => l.project_id === projectId && l.is_active && l.display_name === n));
+  const seekEligible = (projectId: number) =>
+    tasksOf(projectId).filter((t) => t.status === "PENDING_ASSIGN" || t.status === "IN_PROGRESS");
+  const openSeek = (p: Project) => {
+    setSeekLabels(seekableLabels(p.id));
+    setSeekLimit(null);
+    setSeekTarget(p);
+    pollSeek([p.id]);
+  };
+  const handleStartSeek = async () => {
+    if (!seekTarget) return;
+    setSeekStarting(true);
+    try {
+      const eligible = seekEligible(seekTarget.id).map((t) => t.id);
+      await startVisionSeek(seekTarget.id, {
+        task_ids: seekLimit != null && seekLimit < eligible.length ? eligible.slice(0, seekLimit) : undefined,
+        labels: seekLabels,
+        cam: seekCam,
+        max_clips: seekMaxClips,
+        dry_run: seekDryRun,
+      });
+      message.info(seekDryRun ? "预览已开始（不问模型、不花钱），进度在项目行里看" : "已开始，进度在项目行里看");
+      await pollSeek([seekTarget.id]);
+      setSeekTarget(null);
+    } finally {
+      setSeekStarting(false);
     }
   };
 
@@ -1218,6 +1307,52 @@ export default function Projects() {
                       {pp.finished_at != null && `（${new Date(pp.finished_at * 1000).toLocaleString("zh-CN", { hour12: false })}）`}
                     </Typography.Text>
                   )}
+                  {(() => {
+                    const sp = seekProgress[p.id];
+                    if (!sp || sp.status === "idle") return null;
+                    if (sp.status === "running") {
+                      return (
+                        <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
+                          <Progress
+                            size="small"
+                            status="active"
+                            strokeColor="#eb2f96"
+                            percent={sp.total ? Math.round((sp.processed / sp.total) * 100) : 0}
+                            format={() => `${sp.dry_run ? "预览" : "画面"} ${sp.processed}/${sp.total}`}
+                          />
+                          <Space size={4}>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选 · 约 $${sp.est_usd}`}
+                              {" · "}已用 {fmtClock(sp.elapsed_sec)}
+                            </Typography.Text>
+                            <Popconfirm
+                              title="停止找片段？"
+                              description="正在问的这个视频会跑完，之后的不再发；已写好的候选保留"
+                              onConfirm={async () => {
+                                await cancelVisionSeek(p.id);
+                                message.success("正在停止");
+                              }}
+                            >
+                              <Button size="small" danger type="link" style={{ padding: 0 }}>
+                                停止
+                              </Button>
+                            </Popconfirm>
+                          </Space>
+                        </div>
+                      );
+                    }
+                    if (sp.total > 0) {
+                      return (
+                        <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
+                          上次画面找片段{sp.dry_run ? "（预览）" : ""}：{sp.succeeded} 个任务，
+                          {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选，约 $${sp.est_usd}`}
+                          {sp.status === "cancelled" && "（已停止）"}
+                          {sp.status === "error" && `（出错：${sp.error_message}）`}
+                        </Typography.Text>
+                      );
+                    }
+                    return null;
+                  })()}
                 <Space size={4} wrap>
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
@@ -1287,6 +1422,14 @@ export default function Projects() {
                   >
                     AI预标注
                   </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={seekProgress[p.id]?.status === "running"}
+                    onClick={() => openSeek(p)}
+                  >
+                    画面找片段
+                  </Button>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -1322,6 +1465,105 @@ export default function Projects() {
         ]}
       />
 
+      <Modal
+        title={`画面找片段 - ${seekTarget?.name ?? ""}`}
+        open={seekTarget != null}
+        onCancel={() => setSeekTarget(null)}
+        onOk={handleStartSeek}
+        okText={seekDryRun ? "预览（不花钱）" : "开始找"}
+        confirmLoading={seekStarting}
+        okButtonProps={{
+          disabled:
+            !seekTarget ||
+            seekLabels.length === 0 ||
+            seekEligible(seekTarget.id).length === 0 ||
+            seekProgress[seekTarget.id]?.status === "running" ||
+            (!seekDryRun && seekProgress[seekTarget.id]?.service?.available === false),
+        }}
+        destroyOnClose
+      >
+        {seekTarget && (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              让视觉大模型看视频，把像<b>舔 / 啃 / 抓挠 / 蹭</b>的几秒挑出来，写成「疑似片段」候选，
+              工作台里逐条确认或排除，确认了 IMU 片段就随之落下。不用人从 24 小时视频里翻。
+            </Typography.Paragraph>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              流程：本地先筛「画面里有狗且在动」的几秒窗（不花钱）→ 裁出狗那一块、抽几帧问大模型（走 API，按段计费）
+              → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限；先用「预览」看会送多少段。
+            </Typography.Text>
+            {seekProgress[seekTarget.id]?.service?.available === false && (
+              <Alert
+                type="warning"
+                showIcon
+                message={`视觉服务那边找片段不可用：${seekProgress[seekTarget.id]?.service?.error ?? ""}（预览不需要它问模型，还能跑）`}
+              />
+            )}
+            {seekableLabels(seekTarget.id).length === 0 ? (
+              <Alert type="error" showIcon message="项目里没有 舔身体 / 啃身体 / 抓挠 / 蹭身体 这几个标签，先去标签管理套用「抓/舔/啃/蹭」模板" />
+            ) : (
+              <div>
+                <Typography.Text style={{ marginRight: 8 }}>找哪些：</Typography.Text>
+                <Select
+                  mode="multiple"
+                  size="small"
+                  style={{ minWidth: 280 }}
+                  value={seekLabels}
+                  onChange={(v) => setSeekLabels(v)}
+                  options={seekableLabels(seekTarget.id).map((n) => ({ value: n, label: n }))}
+                />
+              </div>
+            )}
+            <Space wrap>
+              <span>
+                看哪一路：
+                <Select size="small" value={seekCam} onChange={(v) => setSeekCam(v)} style={{ width: 90 }}
+                  options={[{ value: "cam1", label: "cam1" }, { value: "cam2", label: "cam2" }, { value: "cam3", label: "cam3" }]} />
+              </span>
+              <span>
+                每个视频最多送：
+                <InputNumber size="small" min={1} max={2000} value={seekMaxClips} onChange={(v) => setSeekMaxClips(v ?? 120)} style={{ width: 90 }} /> 段
+              </span>
+              <span>
+                只跑前：
+                <InputNumber size="small" min={1} max={seekEligible(seekTarget.id).length || 1} value={seekLimit ?? undefined}
+                  placeholder="全部" onChange={(v) => setSeekLimit(v ?? null)} style={{ width: 90 }} /> 个任务
+              </span>
+            </Space>
+            <Checkbox checked={seekDryRun} onChange={(e) => setSeekDryRun(e.target.checked)}>
+              只预览：本地筛一遍，看会送多少段，<b>不问模型、不花钱、不写候选</b>
+            </Checkbox>
+            <Typography.Text>
+              本次将处理 <b>{Math.min(seekLimit ?? Infinity, seekEligible(seekTarget.id).length)}</b> 个待认领/标注中的任务。
+              一小时视频本地筛选一两分钟，问模型每段一两秒、几段并行。
+            </Typography.Text>
+            {(() => {
+              const sp = seekProgress[seekTarget.id];
+              if (!sp || sp.status === "idle") return null;
+              return (
+                <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    上一次/当前{sp.dry_run ? "（预览）" : ""}：
+                    {sp.status === "running" ? "进行中" : sp.status === "done" ? "已完成" : sp.status === "cancelled" ? "已停止" : "出错"}，
+                    {sp.processed}/{sp.total}，成功 {sp.succeeded}，跳过 {sp.skipped}，失败 {sp.failed}，
+                    会送/已送 {sp.clips_candidate}/{sp.clips_sent} 段，候选 {sp.candidates} 条，约 ${sp.est_usd}，
+                    {sp.status === "running" ? "已用" : "总耗时"} {fmtClock(sp.elapsed_sec)}
+                    {sp.labels.length > 0 && `，找的是 ${sp.labels.join("、")}`}
+                  </Typography.Text>
+                  {sp.error_message && <Alert style={{ marginTop: 6 }} type="error" showIcon message={sp.error_message} />}
+                  {sp.detail.length > 0 && (
+                    <div style={{ maxHeight: 160, overflow: "auto", marginTop: 6, fontSize: 12, color: "#666" }}>
+                      {sp.detail.slice(-30).map((line, i) => (
+                        <div key={i}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </Space>
+        )}
+      </Modal>
       <Modal
         title={`批量 AI 预标注 - ${prelabelTarget?.name ?? ""}`}
         open={prelabelTarget != null}

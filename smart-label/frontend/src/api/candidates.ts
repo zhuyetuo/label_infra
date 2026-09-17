@@ -11,8 +11,9 @@ export interface AiCandidate {
   confidence: number | null;
   /** 陀螺仪 4–8Hz 能量占比，抓挠的独立物理证据 */
   spec: number | null;
-  /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 / grooming=姿态像舔啃（只靠加速度，跟模型无关） */
-  reason: "low_conf" | "spectral" | "grooming";
+  /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 / grooming=姿态像舔啃（只靠加速度，跟模型无关）
+   *  / vision=画面里看着像（视觉大模型看视频挑出来的，类别是项目里选的） */
+  reason: "low_conf" | "spectral" | "grooming" | "vision";
   status: "pending" | "confirmed" | "rejected" | "uncertain";
   /** 确认成了哪个类别；空 = 就是抓挠，有值 = 人看完判成别的动作 */
   decided_label_id: number | null;

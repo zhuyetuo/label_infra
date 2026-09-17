@@ -81,3 +81,54 @@ export const assignProject = (id: number, userId: number | null, includeClaimed 
     user_id: userId,
     include_claimed: includeClaimed,
   });
+
+// ── 画面找片段（视觉大模型走 API） ───────────────────────────────────
+
+export interface VisionSeekProgress {
+  status: "idle" | "running" | "done" | "cancelled" | "error";
+  project_id: number;
+  dry_run: boolean;
+  total: number;
+  processed: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  /** 写进去的候选条数 */
+  candidates: number;
+  /** 本地筛出来会送的段数（dry_run 看这个） */
+  clips_candidate: number;
+  /** 真送去问模型的段数 */
+  clips_sent: number;
+  /** 估算花了多少美元（数量级，账以 Anthropic 后台为准） */
+  est_usd: number;
+  current_task_id: number | null;
+  current_sample_code: string | null;
+  labels: string[];
+  detail: string[];
+  error_message: string | null;
+  elapsed_sec: number;
+  finished_at: number | null;
+  /** 视觉服务那边找片段能不能用（没配 key / 没起服务） */
+  service?: { available: boolean; error?: string | null; model?: string };
+}
+
+export interface VisionSeekRequest {
+  task_ids?: number[];
+  /** 只找这几个父类（舔身体/啃身体/抓挠/蹭身体）；留空 = 项目里有的全找 */
+  labels?: string[];
+  cam?: "cam1" | "cam2" | "cam3";
+  /** 每个视频最多送多少段去问模型——花费上限 */
+  max_clips?: number;
+  min_conf?: number;
+  /** 只做本地筛选、不问模型、不写候选：先看会送多少段 */
+  dry_run?: boolean;
+}
+
+export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
+  request.post<never, { started: boolean }>(`/projects/${id}/vision-seek`, body);
+
+export const getVisionSeekStatus = (id: number) =>
+  request.get<never, VisionSeekProgress>(`/projects/${id}/vision-seek/status`);
+
+export const cancelVisionSeek = (id: number) =>
+  request.post<never, { stopped: boolean }>(`/projects/${id}/vision-seek/cancel`);

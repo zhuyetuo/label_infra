@@ -20,6 +20,8 @@ from app.schemas.envelope import ok
 from app.services.ai_prelabel_service import get_progress as get_prelabel_progress
 from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
 from app.services.ai_prelabel_service import cancel_project_prelabel, start_project_prelabel
+from app.services import vision_sam_client
+from app.services import vision_seek_service as vseek
 from app.services.task_scope import visible_project_ids
 from app.services.task_service import purge_task_children
 from app.schemas.project import (
@@ -29,6 +31,7 @@ from app.schemas.project import (
     ProjectOut,
     ProjectPrelabelRequest,
     ProjectUpdate,
+    ProjectVisionSeekRequest,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -131,6 +134,45 @@ async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: A
         project_id, task_ids=body.task_ids, overwrite_ai=body.overwrite_ai, mode=body.mode
     )
     return ok({"started": started, "queued": not started})
+
+
+@router.post("/{project_id}/vision-seek", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db: AsyncSession = Depends(get_db)):
+    """用画面找片段（后台跑，GET .../vision-seek/status 轮询）。
+
+    vision_service 先在本地筛出"有狗且在动"的几秒窗，再抽帧问视觉大模型（API），
+    像的写成候选（reason=vision），工作台「疑似片段」里确认。dry_run 只筛不问，
+    先看会送多少段再决定花不花这个钱。
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    if body.cam not in ("cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    if not (1 <= body.max_clips <= 2000):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "max_clips 要在 1~2000 之间")
+    st = await vision_sam_client.seek_status()
+    if not st.get("available") and not body.dry_run:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
+    params = vseek.SeekParams(labels=body.labels, cam=body.cam, max_clips=body.max_clips,
+                              min_conf=body.min_conf, dry_run=body.dry_run)
+    started = await vseek.start(project_id, body.task_ids, params)
+    if not started:
+        raise HTTPException(status.HTTP_409_CONFLICT, "这个项目正在找，等它跑完")
+    return ok({"started": True})
+
+
+@router.get("/{project_id}/vision-seek/status")
+async def vision_seek_status(project_id: int):
+    d = vseek.get_progress(project_id).to_dict()
+    d["service"] = await vision_sam_client.seek_status()
+    return ok(d)
+
+
+@router.post("/{project_id}/vision-seek/cancel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def cancel_vision_seek(project_id: int):
+    """停：正在问的那个视频会跑完，之后的不再发。"""
+    return ok({"stopped": vseek.cancel(project_id)})
 
 
 @router.get("/{project_id}/ai-prelabel/status")
