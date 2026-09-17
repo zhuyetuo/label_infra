@@ -668,6 +668,22 @@ export default function Projects() {
     return ids.reduce((sum, id) => sum + (lc[id]?.n ?? 0), 0);
   };
 
+  // 「片段」列的排序键。候选（疑似抓挠）不算片段，只按段数排的话，一个项目里
+  // 全是"0 段 + N 条候选"的任务就全部并列，点表头看着毫无反应。所以段数相同再
+  // 比待判断的候选数、再比候选总数；点了「疑似抓挠」筛选时候选优先。
+  const segmentsOrder = (a: Task, b: Task, labelIds: number[], candFirst: boolean) => {
+    const keys = (t: Task) => {
+      const seg = segCount(t, labelIds);
+      const pend = t.cand_pending ?? 0;
+      const cand = t.cand_count ?? 0;
+      return candFirst ? [pend, cand, seg] : [seg, pend, cand];
+    };
+    const ka = keys(a);
+    const kb = keys(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return 0;
+  };
+
   const statusSummary = (projectId: number) => {
     const counts: Partial<Record<TaskStatus, number>> = {};
     for (const t of tasksOf(projectId)) counts[t.status] = (counts[t.status] ?? 0) + 1;
@@ -1014,7 +1030,7 @@ export default function Projects() {
                     // 标题会随「含类别」筛选变，不能拿它当 key——记住的排序会认不出来
                     key: "segments",
                     width: 260,
-                    sorter: (a: Task, b: Task) => segCount(a, f.labels) - segCount(b, f.labels),
+                    sorter: (a: Task, b: Task) => segmentsOrder(a, b, f.labels, f.cand),
                     sortDirections: ["descend", "ascend", "descend"],
                     render: (_, task: Task) => {
                       const lc = task.label_counts ?? {};
