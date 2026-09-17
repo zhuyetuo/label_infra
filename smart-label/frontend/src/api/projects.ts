@@ -159,6 +159,7 @@ export interface VisionIndexProgress {
   service?: { available: boolean; error?: string | null; model?: string; indexed_videos?: number };
 }
 
+/** cam：all = 样本有几路建几路；cam1/2/3 是样本里的槽位（视角1/2/3），不是现场摄像头编号 */
 export const startVisionIndex = (id: number, body: { task_ids?: number[]; cam?: string; force?: boolean }) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-index`, body);
 

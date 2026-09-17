@@ -186,7 +186,7 @@ export default function Projects() {
   // 画面向量索引：建一次，之后工作台里「找相似」免费瞬间
   const [indexTarget, setIndexTarget] = useState<Project | null>(null);
   const [indexProgress, setIndexProgress] = useState<Record<number, VisionIndexProgress>>({});
-  const [indexCam, setIndexCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
+  const [indexCam, setIndexCam] = useState<"all" | "cam1" | "cam2" | "cam3">("all");
   const [indexForce, setIndexForce] = useState(false);
   const [indexStarting, setIndexStarting] = useState(false);
   const indexPrevRef = useRef<Record<number, string>>({});
@@ -1597,13 +1597,22 @@ export default function Projects() {
             <Space wrap>
               <span>
                 哪一路：
-                <Select size="small" value={indexCam} onChange={(v) => setIndexCam(v)} style={{ width: 90 }}
-                  options={[{ value: "cam1", label: "cam1" }, { value: "cam2", label: "cam2" }, { value: "cam3", label: "cam3" }]} />
+                <Select size="small" value={indexCam} onChange={(v) => setIndexCam(v)} style={{ width: 200 }}
+                  options={[
+                    { value: "all", label: "全部（有几路建几路）" },
+                    { value: "cam1", label: "视角1（cam1）" },
+                    { value: "cam2", label: "视角2（cam2）" },
+                    { value: "cam3", label: "视角3（cam3）" },
+                  ]} />
               </span>
               <Checkbox checked={indexForce} onChange={(e) => setIndexForce(e.target.checked)}>
                 已有索引的也重建
               </Checkbox>
             </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              视角1/2/3 是<b>每只狗样本里的槽位</b>（跟工作台里的视角1/2/3 一样：自己房间的机位、公共区机位……），
+              不是现场 1~7 号摄像头的编号。一只狗最多配三路，所以这里只有三个。
+            </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               一小时视频一两分钟（狗检测每秒一帧）。已经建过的直接跳过。
               {indexProgress[indexTarget.id]?.service?.indexed_videos != null && ` 视觉服务上已有 ${indexProgress[indexTarget.id]?.service?.indexed_videos} 路索引。`}

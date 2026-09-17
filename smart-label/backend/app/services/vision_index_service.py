@@ -123,15 +123,16 @@ async def project_videos(db: AsyncSession, project_id: int, cam: str,
 
 async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | None, cam: str,
                       force: bool, progress: IndexProgress, build_fn=None) -> None:
-    """同一路视频只建一次（几个任务共用一个样本时）。"""
+    """同一路视频只建一次（几个任务共用一个样本时）。cam="all" = 样本有几路建几路。"""
     build_fn = build_fn or vc.embed_build
-    rows = await project_videos(db, project_id, cam, task_ids)
+    cams = ["cam1", "cam2", "cam3"] if cam == "all" else [cam]
     seen: set[str] = set()
     paths = []
-    for _t, s, path in rows:
-        if path not in seen:
-            seen.add(path)
-            paths.append((s.sample_code, path))
+    for c in cams:
+        for _t, s, path in await project_videos(db, project_id, c, task_ids):
+            if path not in seen:
+                seen.add(path)
+                paths.append((f"{s.sample_code} {c}", path))
     progress.total = len(paths)
     for code, path in paths:
         if project_id in _cancelled:

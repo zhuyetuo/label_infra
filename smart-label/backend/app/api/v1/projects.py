@@ -191,7 +191,9 @@ async def cancel_vision_seek(project_id: int):
 
 class VisionIndexIn(BaseModel):
     task_ids: list[int] | None = None
-    cam: str = "cam1"
+    # all = 样本有几路建几路。cam1/2/3 是**样本里的槽位**（该狗自己房间的机位 / 公共区机位），
+    # 不是现场的 1~7 号摄像头编号
+    cam: str = "all"
     force: bool = False
 
 
@@ -200,8 +202,8 @@ async def start_vision_index(project_id: int, body: VisionIndexIn, db: AsyncSess
     """给项目里的视频建画面向量索引（后台）。建好之后工作台里能「找相似」，免费、瞬间。"""
     if await db.get(Project, project_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
-    if body.cam not in ("cam1", "cam2", "cam3"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    if body.cam not in ("all", "cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 all / cam1 / cam2 / cam3")
     st = await vision_sam_client.embed_status()
     if not st.get("available"):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面向量模型不可用")
