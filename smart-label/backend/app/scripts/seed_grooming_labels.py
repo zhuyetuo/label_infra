@@ -8,6 +8,9 @@ label_service 现在会把姿态像舔/啃的片段当候选送上来，label_na
 找不到就报 422「项目里没有「舔身体」标签」。这个脚本就是把它（以及后面区分部位
 要用的一组子标签）一次加齐，省得去标签管理页一条条敲。
 
+平常更方便的是标签管理页 → 套用模板 → 「舔/啃（IMU 候选）」（服务启动时自动建好）；
+这个脚本多做的一件事是把部位子标签挂到父标签下（parent_id），模板套用做不到这点。
+
 加的东西：
 
     舔身体          ← 候选默认落在这个上面
@@ -34,49 +37,8 @@ from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models.label import LabelDefinition
 from app.models.project import Project
-from app.models.user import User, UserRole
-
-# (code, display_name, color)。code 项目内唯一，display_name 要跟 label_service 的
-# GROOM_LABEL 一致（默认「舔身体」），候选就是按这个名字来找标签的。
-BASE_LABELS: list[tuple[str, str, str]] = [
-    ("lick_body", "舔身体", "#FF8C42"),
-    ("chew_body", "啃身体", "#C0392B"),
-]
-
-# 部位分组按"IMU 能不能分得开"来定，不按解剖学：头戴 IMU 时舔前爪 / 舔后躯 /
-# 舔侧腹的头部姿态差异最大，生殖区肛周动作幅度最特殊，所以先分这四组。
-BODY_PARTS: list[tuple[str, str]] = [
-    ("fore", "前肢爪"),
-    ("hind", "后肢臀尾"),
-    ("trunk", "躯干侧腹"),
-    ("groin", "生殖区肛周"),
-]
-
-# 第一批放在现有标签后面。现有项目的标签 sort_order 一般在 0~20 之间，
-# 从 100 起排不会插到中间去。
-SORT_BASE = 100
-
-
-@dataclass
-class Row:
-    code: str
-    display_name: str
-    color: str
-    sort_order: int
-    parent_code: str | None = None
-
-
-def wanted_rows(with_parts: bool = True) -> list[Row]:
-    """要保证存在的全部标签，父在前子在后（子要用父的 id）。"""
-    rows: list[Row] = []
-    for i, (code, name, color) in enumerate(BASE_LABELS):
-        rows.append(Row(code, name, color, SORT_BASE + i * 10))
-    if with_parts:
-        for i, (code, name, color) in enumerate(BASE_LABELS):
-            for j, (pcode, pname) in enumerate(BODY_PARTS):
-                rows.append(Row(f"{code}_{pcode}", f"{name}-{pname}", color,
-                                SORT_BASE + i * 10 + 1 + j, parent_code=code))
-    return rows
+from app.models.user import User
+from app.services.grooming_labels import BASE_LABELS, BODY_PARTS, Row, pick_admin, wanted_rows  # noqa: F401
 
 
 @dataclass
@@ -139,13 +101,7 @@ async def pick_user(db, user_id: int | None) -> User | None:
     """created_by 用谁：指定了就用指定的，否则挑一个在职的 super_admin / admin。"""
     if user_id is not None:
         return await db.get(User, user_id)
-    for role in (UserRole.super_admin, UserRole.admin):
-        u = (await db.execute(
-            select(User).where(User.role == role, User.is_active.is_(True)).order_by(User.id).limit(1)
-        )).scalar_one_or_none()
-        if u is not None:
-            return u
-    return None
+    return await pick_admin(db)
 
 
 def describe(actions: list[Action]) -> str:
