@@ -20,7 +20,7 @@ from app.schemas.envelope import ok
 from app.services.ai_prelabel_service import get_progress as get_prelabel_progress
 from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
 from app.services.ai_prelabel_service import cancel_project_prelabel, start_project_prelabel
-from app.services import vision_sam_client
+from app.services import llm_provider_service, vision_sam_client
 from app.services import vision_seek_service as vseek
 from app.services.task_scope import visible_project_ids
 from app.services.task_service import purge_task_children
@@ -151,11 +151,23 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
     if not (1 <= body.max_clips <= 2000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "max_clips 要在 1~2000 之间")
-    st = await vision_sam_client.seek_status()
-    if not st.get("available") and not body.dry_run:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
+    if body.provider:
+        # 选了哪家就用哪家配的 key；配错在这里就报，别等后台跑起来才发现
+        try:
+            await llm_provider_service.resolve(db, body.provider, body.model)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+        st = await vision_sam_client.seek_status()
+        if not st.get("providers") and not body.dry_run:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                st.get("error") or "视觉服务连不上或版本太旧（不支持选模型），先 git pull 重启它")
+    else:
+        st = await vision_sam_client.seek_status()
+        if not st.get("available") and not body.dry_run:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
     params = vseek.SeekParams(labels=body.labels, cam=body.cam, max_clips=body.max_clips,
-                              min_conf=body.min_conf, dry_run=body.dry_run)
+                              min_conf=body.min_conf, dry_run=body.dry_run,
+                              provider=body.provider, model=body.model)
     started = await vseek.start(project_id, body.task_ids, params)
     if not started:
         raise HTTPException(status.HTTP_409_CONFLICT, "这个项目正在找，等它跑完")

@@ -104,12 +104,14 @@ export interface VisionSeekProgress {
   current_task_id: number | null;
   current_sample_code: string | null;
   labels: string[];
+  /** 用的哪家哪个模型，如 anthropic:claude-opus-5；空 = 视觉服务环境变量里那把 */
+  llm: string | null;
   detail: string[];
   error_message: string | null;
   elapsed_sec: number;
   finished_at: number | null;
-  /** 视觉服务那边找片段能不能用（没配 key / 没起服务） */
-  service?: { available: boolean; error?: string | null; model?: string };
+  /** 视觉服务那边找片段能不能用（没配 key / 没起服务）；providers 有值 = 新版，支持选模型 */
+  service?: { available: boolean; error?: string | null; model?: string; providers?: string[] };
 }
 
 export interface VisionSeekRequest {
@@ -122,6 +124,9 @@ export interface VisionSeekRequest {
   min_conf?: number;
   /** 只做本地筛选、不问模型、不写候选：先看会送多少段 */
   dry_run?: boolean;
+  /** 用哪家的哪个模型（「大模型 API」页配的）；不传 = 视觉服务环境变量里那把 Claude key */
+  provider?: string;
+  model?: string;
 }
 
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>

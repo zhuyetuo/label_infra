@@ -31,7 +31,7 @@ def _out(c: AiCandidate) -> dict:
     return {
         "id": c.id, "task_id": c.task_id, "round_no": c.round_no, "label_name": c.label_name,
         "start_time_ms": c.start_time_ms, "end_time_ms": c.end_time_ms,
-        "confidence": c.confidence, "spec": c.spec, "reason": c.reason,
+        "confidence": c.confidence, "spec": c.spec, "reason": c.reason, "model": c.model,
         "status": c.status.value, "decided_by": c.decided_by,
         # 确认成了哪个类别（空 = 就是抓挠）：列表里要显示「已确认 → 甩身体」
         "decided_label_id": c.decided_label_id,

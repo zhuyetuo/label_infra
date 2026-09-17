@@ -235,6 +235,12 @@ export default function CandidatePanel({
                 <Tag color={REASON_COLOR[c.reason] ?? "orange"}>{REASON_LABEL[c.reason] ?? c.reason}</Tag>
                 {/* 不是抓挠的候选要看得出是哪类——列表里混着两种，光看时间分不出 */}
                 {c.label_name !== "抓挠" && <Tag>{c.label_name}</Tag>}
+                {/* 两个模型各跑一遍时并排放着，得看得出哪条是谁给的 */}
+                {c.model && (
+                  <Tag style={{ marginRight: 0, fontSize: 11 }} title={c.model}>
+                    {c.model.split(":")[1] ?? c.model}
+                  </Tag>
+                )}
               </Space>
             ),
           },

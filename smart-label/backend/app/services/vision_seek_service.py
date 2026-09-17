@@ -35,6 +35,7 @@ from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
+from app.services import llm_provider_service as llmsvc
 from app.services import vision_sam_client as vc
 from app.services.ai_prelabel_service import CandidateItem
 from app.services.grooming_labels import GROUPS
@@ -71,8 +72,13 @@ def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None) 
     return out
 
 
+@dataclass
+class VisionCandidate(CandidateItem):
+    model: str | None = None
+
+
 def segments_to_candidates(segments: list[dict], label_names: set[str],
-                           min_conf: float = 0.0) -> list[CandidateItem]:
+                           min_conf: float = 0.0, model: str | None = None) -> list[VisionCandidate]:
     """视觉服务返回的片段（秒）→ 候选（毫秒）。
 
     带部位且项目里有「父名-部位」这个标签时，候选直接落到部位标签上；
@@ -100,29 +106,34 @@ def segments_to_candidates(segments: list[dict], label_names: set[str],
             continue
         part = s.get("body_part")
         name = f"{label}-{part}" if part and f"{label}-{part}" in label_names else label
-        out.append(CandidateItem(label_name=name, start_time_ms=max(0, s_ms), end_time_ms=e_ms,
-                                 confidence=conf, spec=None, reason=REASON))
+        out.append(VisionCandidate(label_name=name, start_time_ms=max(0, s_ms), end_time_ms=e_ms,
+                                   confidence=conf, spec=None, reason=REASON, model=model))
     out.sort(key=lambda c: c.start_time_ms)
     return out
 
 
-async def replace_vision_candidates(db: AsyncSession, task: Task, cands: list[CandidateItem]) -> int:
-    """只换这个任务当前轮里**画面来的、还没人判过的**候选。IMU 来的那些不碰，
-    人已经确认/排除的也不碰（那是训练数据）。"""
-    old = (await db.execute(
-        select(AiCandidate).where(
-            AiCandidate.task_id == task.id,
-            AiCandidate.round_no == task.round_no,
-            AiCandidate.reason == REASON,
-            AiCandidate.status == CandidateStatus.pending,
-        )
-    )).scalars().all()
+async def replace_vision_candidates(db: AsyncSession, task: Task, cands: list[VisionCandidate],
+                                    model: str | None = None) -> int:
+    """只换这个任务当前轮里**同一个模型给的、还没人判过的**画面候选。
+
+    IMU 来的不碰，人已经确认/排除的不碰（那是训练数据），**别的模型给的也不碰**——
+    同一批用两个模型各跑一遍就是为了并排看谁更准，第二个把第一个冲掉就没法比了。
+    model=None 只换没记模型的老候选。
+    """
+    q = select(AiCandidate).where(
+        AiCandidate.task_id == task.id,
+        AiCandidate.round_no == task.round_no,
+        AiCandidate.reason == REASON,
+        AiCandidate.status == CandidateStatus.pending,
+        AiCandidate.model == model if model is not None else AiCandidate.model.is_(None),
+    )
+    old = (await db.execute(q)).scalars().all()
     for o in old:
         await db.delete(o)
     for c in cands:
         db.add(AiCandidate(task_id=task.id, round_no=task.round_no, label_name=c.label_name,
                            start_time_ms=c.start_time_ms, end_time_ms=c.end_time_ms,
-                           confidence=c.confidence, spec=None, reason=REASON))
+                           confidence=c.confidence, spec=None, reason=REASON, model=c.model))
     return len(cands)
 
 
@@ -150,6 +161,7 @@ class SeekProgress:
     current_task_id: int | None = None
     current_sample_code: str | None = None
     labels: list[str] = field(default_factory=list)
+    llm: str | None = None        # 用的哪家哪个模型，如 anthropic:claude-opus-5；空 = 视觉服务环境变量里那把
     detail: list[str] = field(default_factory=list)
     error_message: str | None = None
     started_at: float | None = None
@@ -197,6 +209,8 @@ class SeekParams:
     clip_s: float = 6.0
     stride_s: float = 3.0
     motion_min: float = 0.02
+    provider: str | None = None       # 用哪家；None = 视觉服务环境变量里的 Claude key（老方式）
+    model: str | None = None          # 哪个模型；None = 那一家的默认模型
 
 
 async def start(project_id: int, task_ids: list[int] | None, params: SeekParams) -> bool:
@@ -242,6 +256,13 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
         raise RuntimeError("项目里没有可找的类别（舔身体/啃身体/抓挠/蹭身体），先套用「抓/舔/啃/蹭」模板")
     label_names = {l.display_name for l in labels if l.is_active}
 
+    llm = None
+    model_tag = None
+    if params.provider:
+        llm = await llmsvc.resolve(db, params.provider, params.model)     # 配错了在这里报，一个任务都不跑
+        model_tag = f"{llm['provider']}:{llm['model']}"
+    progress.llm = model_tag
+
     query = select(Task).where(
         Task.project_id == project_id,
         Task.status.in_([TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS]),
@@ -267,6 +288,8 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             continue
         kw = {"max_clips": params.max_clips, "min_conf": params.min_conf, "dry_run": params.dry_run,
               "clip_s": params.clip_s, "stride_s": params.stride_s, "motion_min": params.motion_min}
+        if llm is not None:
+            kw["llm"] = llm
         if task.segment_start_ms is not None and task.segment_end_ms is not None:
             kw["start_s"] = task.segment_start_ms / 1000.0
             kw["end_s"] = task.segment_end_ms / 1000.0
@@ -286,8 +309,8 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             progress.processed += 1
             progress.log(f"任务 #{task.id} {code}：会送 {st.get('clips_candidate', 0)} 段（预览，没问模型）")
             continue
-        cands = segments_to_candidates(r.get("segments") or [], label_names, params.min_conf)
-        n = await replace_vision_candidates(db, task, cands)
+        cands = segments_to_candidates(r.get("segments") or [], label_names, params.min_conf, model=model_tag)
+        n = await replace_vision_candidates(db, task, cands, model=model_tag)
         await db.commit()
         progress.candidates += n
         progress.succeeded += 1

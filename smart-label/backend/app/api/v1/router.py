@@ -8,6 +8,7 @@ from app.api.v1 import (
     dogs,
     imu,
     label_templates,
+    llm_providers,
     labels,
     material,
     media,
@@ -31,6 +32,7 @@ api_router.include_router(users.router)
 api_router.include_router(projects.router)
 api_router.include_router(labels.router)
 api_router.include_router(label_templates.router)
+api_router.include_router(llm_providers.router)
 api_router.include_router(samples.router)
 api_router.include_router(samples.scoped_router)
 api_router.include_router(tasks.router)
