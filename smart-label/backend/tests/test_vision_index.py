@@ -147,20 +147,20 @@ def test_overlaps():
     assert not vi.overlaps(0, 10, 10, 20) and not vi.overlaps(10, 20, 0, 10)
 
 
-def test_一间一狗的场地只用自己房间那一路_影棚全用(db, run):
+def test_按现场布局选路_狗场只用自己单间_影棚全用并提醒(db, run):
     u = User(username="b", password_hash="x", display_name="b", role=UserRole.admin)
     db.add(u)
     run(db.flush())
     p = Project(name="q", created_by=u.id)
     db.add(p)
     run(db.flush())
-    # 狗场：cam1 自己房间，cam2 公共区（六只狗都在）
-    g = Sample(sample_code="multicam_1", video_cam1_path="data_raw/2026_9_13_gouchang/a_cam1.mp4",
-               video_cam2_path="data_raw/2026_9_13_gouchang/a_cam7.mp4", imu_csv_path="x.csv", created_by=u.id)
-    # 影棚：三路都是公共的
-    y = Sample(sample_code="multicam_2", video_cam1_path="data_raw/2026_9_13/b_cam1.mp4",
-               video_cam2_path="data_raw/2026_9_13/b_cam2.mp4", video_cam3_path="data_raw/2026_9_13/b_cam3.mp4",
-               imu_csv_path="y.csv", created_by=u.id)
+    # 狗场 imu15（旺财，4 号单间）：cam1 槽 = cam4 自己单间，cam2 槽 = cam7 公共区
+    g = Sample(sample_code="multicam_1_imu15", video_cam1_path="data_raw/2026_9_13_gouchang/m_cam4_imu15_raw.mp4",
+               video_cam2_path="data_raw/2026_9_13_gouchang/m_cam7_raw.mp4", imu_csv_path="x.csv", created_by=u.id)
+    # 影棚 imu3（巴利）：三路都是公共的
+    y = Sample(sample_code="multicam_2_imu3", video_cam1_path="data_raw/2026_9_13_yingpeng/b_cam1_imu3_raw.mp4",
+               video_cam2_path="data_raw/2026_9_13_yingpeng/b_cam2_imu3_raw.mp4",
+               video_cam3_path="data_raw/2026_9_13_yingpeng/b_cam3_imu3_raw.mp4", imu_csv_path="y.csv", created_by=u.id)
     db.add(g)
     db.add(y)
     run(db.flush())
@@ -171,6 +171,7 @@ def test_一间一狗的场地只用自己房间那一路_影棚全用(db, run):
     run(db.commit())
     assert vi.usable_cams(g) == ["cam1"]
     assert vi.usable_cams(y) == ["cam1", "cam2", "cam3"]
+    assert vi.is_multi_dog(g, "cam1") is False and vi.is_multi_dog(g, "cam2") is True and vi.is_multi_dog(y, "cam1") is True
 
     calls = []
 
@@ -180,14 +181,27 @@ def test_一间一狗的场地只用自己房间那一路_影棚全用(db, run):
 
     prog = vi.IndexProgress(status="running", project_id=p.id)
     run(vi.run_project(db, p.id, None, "all", False, prog, build_fn=build))
-    assert sorted(calls) == ["data_raw/2026_9_13/b_cam1.mp4", "data_raw/2026_9_13/b_cam2.mp4",
-                             "data_raw/2026_9_13/b_cam3.mp4", "data_raw/2026_9_13_gouchang/a_cam1.mp4"]
+    assert sorted(calls) == ["data_raw/2026_9_13_gouchang/m_cam4_imu15_raw.mp4",
+                             "data_raw/2026_9_13_yingpeng/b_cam1_imu3_raw.mp4",
+                             "data_raw/2026_9_13_yingpeng/b_cam2_imu3_raw.mp4",
+                             "data_raw/2026_9_13_yingpeng/b_cam3_imu3_raw.mp4"]
 
     db.add(LabelDefinition(project_id=p.id, code="l", display_name="舔身体", created_by=u.id))
     run(db.commit())
     fn = _search({"hits": [{}], "searched": 4, "missing": [],
-                  "segments": [{"path": "data_raw/2026_9_13/b_cam2.mp4", "start_s": 1, "end_s": 4, "score": 0.9, "n": 1},
-                               {"path": "data_raw/2026_9_13_gouchang/a_cam1.mp4", "start_s": 5, "end_s": 8, "score": 0.8, "n": 1}]})
+                  "segments": [{"path": "data_raw/2026_9_13_yingpeng/b_cam2_imu3_raw.mp4", "start_s": 1, "end_s": 4, "score": 0.9, "n": 1},
+                               {"path": "data_raw/2026_9_13_gouchang/m_cam4_imu15_raw.mp4", "start_s": 5, "end_s": 8, "score": 0.8, "n": 1}]})
     r = run(vi.find_similar(db, tg, vi.SimilarParams(label_name="舔身体", t_s=3.0), search_fn=fn))
-    assert "data_raw/2026_9_13_gouchang/a_cam7.mp4" not in fn.calls[0]["paths"]     # 公共区不搜
-    assert r["written"] == 2 and r["multi_dog_candidates"] == 1                      # 影棚那条要提醒
+    assert "data_raw/2026_9_13_gouchang/m_cam7_raw.mp4" not in fn.calls[0]["paths"]     # 公共区不搜
+    assert r["written"] == 2 and r["multi_dog_candidates"] == 1                          # 影棚那条要提醒
+
+
+def test_认不出场地的老数据照常全用(db, run):
+    u = User(username="c", password_hash="x", display_name="c", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    s = Sample(sample_code="multicam_9_imu2", video_cam1_path="data_raw/2026_9_1/a_cam1_imu2_raw.mp4",
+               video_cam2_path="data_raw/2026_9_1/a_cam2_imu2_raw.mp4", imu_csv_path="z.csv", created_by=u.id)
+    db.add(s)
+    run(db.commit())
+    assert vi.usable_cams(s) == ["cam1", "cam2"] and vi.is_multi_dog(s, "cam1") is False
