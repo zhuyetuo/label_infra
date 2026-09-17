@@ -22,6 +22,8 @@ from app.models.label import LabelDefinition
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.envelope import ok
+from app.services import vision_index_service as vindex
+from app.services import vision_sam_client
 from app.services.task_scope import apply_task_scope
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
@@ -259,3 +261,44 @@ async def decide(
     await db.commit()
     await db.refresh(cand)
     return ok(_out(cand))
+
+
+class SimilarIn(BaseModel):
+    """以图搜图 / 一句话搜 → 候选。t_s 和 text 二选一。"""
+    task_id: int
+    label_name: str
+    cam: str = "cam1"
+    t_s: float | None = None
+    text: str | None = None
+    scope: str = "project"     # project / task
+    top_k: int = 60
+    min_score: float = 0.0
+
+
+@router.post("/similar")
+async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """在工作台里看到一帧（比如舔尾巴），把项目里长得像的几秒全挑出来当候选。
+
+    靠的是画面向量索引（项目页「建画面索引」先建好），不问大模型、不花钱。
+    候选 reason=similar，标签是这里选的；跟已有同标签重叠的不重复写。
+    """
+    task = await _visible_task(db, body.task_id, user)
+    if body.cam not in ("cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    if body.scope not in ("project", "task"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope 只能是 project / task")
+    if not (1 <= body.top_k <= 2000):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "top_k 要在 1~2000")
+    label = (await db.execute(select(LabelDefinition.id).where(
+        LabelDefinition.project_id == task.project_id, LabelDefinition.display_name == body.label_name,
+        LabelDefinition.is_active.is_(True)).limit(1))).scalar_one_or_none()
+    if label is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"项目里没有「{body.label_name}」标签")
+    params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
+                                  scope=body.scope, top_k=body.top_k, min_score=body.min_score)
+    try:
+        return ok(await vindex.find_similar(db, task, params))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e

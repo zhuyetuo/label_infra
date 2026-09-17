@@ -82,6 +82,12 @@ const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
 import { listLlmProviders } from "@/api/llmProviders";
 import {
+  cancelVisionIndex,
+  getVisionIndexStatus,
+  startVisionIndex,
+  type VisionIndexProgress,
+} from "@/api/projects";
+import {
   cancelVisionSeek,
   getVisionSeekStatus,
   startVisionSeek,
@@ -177,6 +183,32 @@ export default function Projects() {
   const { data: llmProviders } = useQuery({ queryKey: ["llm-providers"], queryFn: listLlmProviders, enabled: isAdmin });
   const [seekStarting, setSeekStarting] = useState(false);
   const seekPrevRef = useRef<Record<number, string>>({});
+  // 画面向量索引：建一次，之后工作台里「找相似」免费瞬间
+  const [indexTarget, setIndexTarget] = useState<Project | null>(null);
+  const [indexProgress, setIndexProgress] = useState<Record<number, VisionIndexProgress>>({});
+  const [indexCam, setIndexCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
+  const [indexForce, setIndexForce] = useState(false);
+  const [indexStarting, setIndexStarting] = useState(false);
+  const indexPrevRef = useRef<Record<number, string>>({});
+  const pollIndex = async (ids: number[]) => {
+    const results = await Promise.all(ids.map((id) => getVisionIndexStatus(id).catch(() => null)));
+    setIndexProgress((prev) => {
+      const next = { ...prev };
+      results.forEach((p, i) => {
+        if (p) next[ids[i]] = p;
+      });
+      return next;
+    });
+    results.forEach((p, i) => {
+      if (!p) return;
+      const was = indexPrevRef.current[ids[i]];
+      indexPrevRef.current[ids[i]] = p.status;
+      if (was === "running" && p.status !== "running") {
+        if (p.status === "done") message.success(`画面索引完成：新建 ${p.built} 路，已有 ${p.cached} 路，失败 ${p.failed} 路`, 6);
+        else if (p.status === "error") message.error(`建索引出错：${p.error_message}`);
+      }
+    });
+  };
 
   // 秒数 → "约 3 分钟" / "约 1 小时 20 分钟" / "不到 1 分钟"，进度条旁边和弹窗里都用
   const fmtEta = (sec: number | null | undefined) => {
@@ -272,7 +304,17 @@ export default function Projects() {
     if (!projectIds) return;
     pollPrelabel(projectIds.split(",").map(Number));
     pollSeek(projectIds.split(",").map(Number));
+    pollIndex(projectIds.split(",").map(Number));
   }, [projectIds]);
+  const indexRunningIds = Object.values(indexProgress)
+    .filter((p) => p.status === "running")
+    .map((p) => p.project_id)
+    .join(",");
+  useEffect(() => {
+    if (!indexRunningIds) return;
+    const timer = setInterval(() => pollIndex(indexRunningIds.split(",").map(Number)), 3000);
+    return () => clearInterval(timer);
+  }, [indexRunningIds]);
   const seekRunningIds = Object.values(seekProgress)
     .filter((p) => p.status === "running")
     .map((p) => p.project_id)
@@ -1361,6 +1403,38 @@ export default function Projects() {
                     }
                     return null;
                   })()}
+                  {(() => {
+                    const ip = indexProgress[p.id];
+                    if (!ip || ip.status === "idle") return null;
+                    if (ip.status === "running") {
+                      return (
+                        <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
+                          <Progress size="small" status="active" strokeColor="#2f54eb"
+                            percent={ip.total ? Math.round((ip.processed / ip.total) * 100) : 0}
+                            format={() => `索引 ${ip.processed}/${ip.total}`} />
+                          <Space size={4}>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {ip.current ?? ""} · 已用 {fmtClock(ip.elapsed_sec)}
+                            </Typography.Text>
+                            <Popconfirm title="停止建索引？" description="正在建的这一路会建完，之后的不再建；建好的保留"
+                              onConfirm={async () => { await cancelVisionIndex(p.id); message.success("正在停止"); }}>
+                              <Button size="small" danger type="link" style={{ padding: 0 }}>停止</Button>
+                            </Popconfirm>
+                          </Space>
+                        </div>
+                      );
+                    }
+                    if (ip.total > 0) {
+                      return (
+                        <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
+                          上次画面索引（{ip.cam}）：新建 {ip.built}，已有 {ip.cached}，失败 {ip.failed}
+                          {ip.status === "cancelled" && "（已停止）"}
+                          {ip.status === "error" && `（出错：${ip.error_message}）`}
+                        </Typography.Text>
+                      );
+                    }
+                    return null;
+                  })()}
                 <Space size={4} wrap>
                   <span>共 {total}</span>
                   {(Object.keys(counts) as TaskStatus[]).map((s) => (
@@ -1438,6 +1512,17 @@ export default function Projects() {
                   >
                     画面找片段
                   </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={indexProgress[p.id]?.status === "running"}
+                    onClick={() => {
+                      setIndexTarget(p);
+                      pollIndex([p.id]);
+                    }}
+                  >
+                    建画面索引
+                  </Button>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -1473,6 +1558,68 @@ export default function Projects() {
         ]}
       />
 
+      <Modal
+        title={`建画面索引 - ${indexTarget?.name ?? ""}`}
+        open={indexTarget != null}
+        onCancel={() => setIndexTarget(null)}
+        okText="开始建"
+        confirmLoading={indexStarting}
+        okButtonProps={{
+          disabled:
+            !indexTarget ||
+            indexProgress[indexTarget.id]?.status === "running" ||
+            indexProgress[indexTarget.id]?.service?.available === false,
+        }}
+        onOk={async () => {
+          if (!indexTarget) return;
+          setIndexStarting(true);
+          try {
+            await startVisionIndex(indexTarget.id, { cam: indexCam, force: indexForce });
+            message.info("已开始，进度在项目行里看");
+            await pollIndex([indexTarget.id]);
+            setIndexTarget(null);
+          } finally {
+            setIndexStarting(false);
+          }
+        }}
+        destroyOnClose
+      >
+        {indexTarget && (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              给项目里每路视频每秒一帧框出狗、算成向量存起来（本地跑 SigLIP，不花钱）。
+              建好之后在工作台「疑似片段」里点「找相似」：看到一帧舔尾巴，几秒钟把整个项目里长得像的段全挑出来。
+              索引建一次就够，加新标签不用重建。
+            </Typography.Paragraph>
+            {indexProgress[indexTarget.id]?.service?.available === false && (
+              <Alert type="warning" showIcon message={`视觉服务那边向量模型不可用：${indexProgress[indexTarget.id]?.service?.error ?? ""}`} />
+            )}
+            <Space wrap>
+              <span>
+                哪一路：
+                <Select size="small" value={indexCam} onChange={(v) => setIndexCam(v)} style={{ width: 90 }}
+                  options={[{ value: "cam1", label: "cam1" }, { value: "cam2", label: "cam2" }, { value: "cam3", label: "cam3" }]} />
+              </span>
+              <Checkbox checked={indexForce} onChange={(e) => setIndexForce(e.target.checked)}>
+                已有索引的也重建
+              </Checkbox>
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              一小时视频一两分钟（狗检测每秒一帧）。已经建过的直接跳过。
+              {indexProgress[indexTarget.id]?.service?.indexed_videos != null && ` 视觉服务上已有 ${indexProgress[indexTarget.id]?.service?.indexed_videos} 路索引。`}
+            </Typography.Text>
+            {(() => {
+              const ip = indexProgress[indexTarget.id];
+              if (!ip || ip.status === "idle" || !ip.detail.length) return null;
+              return (
+                <div style={{ maxHeight: 160, overflow: "auto", fontSize: 12, color: "#666", background: "#fafafa", padding: 8 }}>
+                  {ip.detail.slice(-30).map((line, i) => (<div key={i}>{line}</div>))}
+                </div>
+              );
+            })()}
+          </Space>
+        )}
+      </Modal>
       <Modal
         title={`画面找片段 - ${seekTarget?.name ?? ""}`}
         open={seekTarget != null}

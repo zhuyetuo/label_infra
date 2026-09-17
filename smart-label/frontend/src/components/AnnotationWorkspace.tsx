@@ -13,7 +13,7 @@ import {
   Radio,
   Tooltip,
   Typography,
-  message, Select
+  message, Select, Input, InputNumber, Checkbox
 } from "antd";
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
@@ -21,7 +21,7 @@ import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiL
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
-import { repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
+import { findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -194,6 +194,39 @@ export default function AnnotationWorkspace({
   const bus = useMemo(() => new TimeBus(), [taskId]);
   // 片段区间循环：真正的循环逻辑在 bus/视频组件里跑，这里只留一份给按钮高亮/顶部提示用
   const [loopRange, setLoopRange] = useState<{ startMs: number; endMs: number } | null>(null);
+  // 「找相似」：视频当前在第几秒（高频更新，放 ref 不放 state）
+  const curSecRef = useRef(0);
+  useEffect(() => bus.onTime((sec) => { curSecRef.current = sec; }), [bus]);
+  const [similarOpen, setSimilarOpen] = useState(false);
+  const [similarLabel, setSimilarLabel] = useState<string | null>(null);
+  const [similarText, setSimilarText] = useState("");
+  const [similarUseText, setSimilarUseText] = useState(false);
+  const [similarScope, setSimilarScope] = useState<"project" | "task">("project");
+  const [similarTopK, setSimilarTopK] = useState(60);
+  const [similarAtSec, setSimilarAtSec] = useState(0);
+  const [similarRunning, setSimilarRunning] = useState(false);
+  const runSimilar = async () => {
+    if (taskId == null || !similarLabel) return;
+    setSimilarRunning(true);
+    try {
+      const r = await findSimilarCandidates({
+        task_id: taskId,
+        label_name: similarLabel,
+        t_s: similarUseText ? undefined : similarAtSec,
+        text: similarUseText ? similarText.trim() : undefined,
+        scope: similarScope,
+        top_k: similarTopK,
+      });
+      message.success(
+        `找到 ${r.segments} 段（${r.hits} 个命中，搜了 ${r.searched} 路视频${r.missing ? `，${r.missing} 路还没建索引` : ""}），新写入 ${r.written} 条候选`,
+        8
+      );
+      setSimilarOpen(false);
+      setCandidates(await listCandidates(taskId));
+    } finally {
+      setSimilarRunning(false);
+    }
+  };
   // 弹窗是常驻挂载的（task=null 时只是 open=false），所以换任务/重新打开时这份
   // React state 不会自己归零——之前就是因为这个，关掉再进来顶上还挂着「正在循环
   // 播放」，可视频其实没在循环。这里跟着 bus 走：换 bus 就按新 bus 的实际状态重置。
@@ -597,6 +630,59 @@ export default function AnnotationWorkspace({
   }, [taskId, readOnly, labels]);
 
   return (
+    <>
+    <Modal
+      title="找相似的画面 → 候选"
+      open={similarOpen}
+      onCancel={() => setSimilarOpen(false)}
+      onOk={runSimilar}
+      okText="找"
+      confirmLoading={similarRunning}
+      okButtonProps={{ disabled: !similarLabel || (similarUseText && !similarText.trim()) }}
+      destroyOnClose
+    >
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。
+          不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
+          先在项目页「建画面索引」，没建的视频搜不到。
+        </Typography.Text>
+        <div>
+          <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
+          <Select
+            size="small"
+            style={{ minWidth: 220 }}
+            showSearch
+            optionFilterProp="label"
+            placeholder="找到的段打什么标签"
+            value={similarLabel ?? undefined}
+            onChange={(v) => setSimilarLabel(v)}
+            options={labels.map((l) => ({ value: l.display_name, label: l.display_name }))}
+          />
+        </div>
+        <Checkbox checked={similarUseText} onChange={(e) => setSimilarUseText(e.target.checked)}>
+          不用当前画面，用一句英文描述搜（如 dog licking its tail）
+        </Checkbox>
+        {similarUseText ? (
+          <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" />
+        ) : (
+          <Typography.Text>
+            样例：当前视角1 第 <b>{similarAtSec}</b> 秒那一帧（先把视频停在最像的那一帧再点）
+          </Typography.Text>
+        )}
+        <Space wrap>
+          <span>
+            范围：
+            <Select size="small" value={similarScope} onChange={(v) => setSimilarScope(v)} style={{ width: 130 }}
+              options={[{ value: "project", label: "整个项目" }, { value: "task", label: "只在本任务" }]} />
+          </span>
+          <span>
+            最多取：
+            <InputNumber size="small" min={1} max={2000} value={similarTopK} onChange={(v) => setSimilarTopK(v ?? 60)} style={{ width: 90 }} /> 个命中
+          </span>
+        </Space>
+      </Space>
+    </Modal>
     <Modal
       title={
         // 左边是"这是什么"（任务/狗/样本 + 播放控件），右边是"我能干什么"
@@ -1124,6 +1210,14 @@ export default function AnnotationWorkspace({
                   controlsPortalTarget={candControlsHost}
                   candidates={candidates}
                   labels={labels}
+                  onFindSimilar={
+                    readOnly
+                      ? undefined
+                      : () => {
+                          setSimilarAtSec(Math.round(curSecRef.current * 10) / 10);
+                          setSimilarOpen(true);
+                        }
+                  }
                   scratchLabelIds={focusIds.length ? focusIds : scratchIds}
                   readOnly={readOnly}
                   onSeek={(ms) => bus.seek(ms / 1000)}
@@ -1166,5 +1260,6 @@ export default function AnnotationWorkspace({
       </Spin>
       </div>
     </Modal>
+    </>
   );
 }

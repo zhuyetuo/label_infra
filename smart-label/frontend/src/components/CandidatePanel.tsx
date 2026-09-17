@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, message } from "antd";
-import { DownOutlined, QuestionCircleOutlined, RetweetOutlined } from "@ant-design/icons";
+import { DownOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 
@@ -19,6 +19,8 @@ const REASON_LABEL: Record<AiCandidate["reason"], string> = {
   grooming: "姿态像舔/啃",
   // 视觉大模型看视频挑出来的：画面里狗在做这个动作。类别是项目里选的那几类（含部位）
   vision: "画面看像",
+  // 画面向量索引：拿一帧样例（或一句话）在整个项目里找长得像的几秒。不问大模型，免费
+  similar: "画面相似",
 };
 
 const REASON_COLOR: Record<AiCandidate["reason"], string> = {
@@ -26,6 +28,7 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   spectral: "purple",
   grooming: "cyan",
   vision: "magenta",
+  similar: "geekblue",
 };
 
 interface Props {
@@ -54,6 +57,8 @@ interface Props {
    * 一排筛选、一排说明、一排分页三行下来，能看的片段就剩四五条
    */
   controlsPortalTarget?: HTMLElement | null;
+  /** 「找相似」：拿当前画面（或一句话）在项目里找长得像的几秒。没建索引时不给 */
+  onFindSimilar?: () => void;
 }
 
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
@@ -77,6 +82,7 @@ export default function CandidatePanel({
   onUndo,
   onBeforeDecide,
   controlsPortalTarget,
+  onFindSimilar,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const [busy, setBusy] = useState<number | null>(null);
@@ -165,6 +171,13 @@ export default function CandidatePanel({
           { label: `全部 ${candidates.length}`, value: "all" },
         ]}
       />
+      {onFindSimilar && (
+        <Tooltip title="拿视频当前这一帧（比如正在舔尾巴）在整个项目里找长得像的几秒，写成候选。靠画面向量索引，不问大模型、不花钱">
+          <Button size="small" icon={<SearchOutlined />} onClick={onFindSimilar}>
+            找相似
+          </Button>
+        </Tooltip>
+      )}
       {justDecided.size > 0 && filter === "pending" && (
         <Tooltip title="刚处理过的这几条暂时留着不受筛选影响，方便核对；核对完可以收起来">
           <Button size="small" onClick={() => setJustDecided(new Set())}>
