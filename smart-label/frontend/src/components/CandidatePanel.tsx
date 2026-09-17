@@ -14,6 +14,15 @@ import { formatMs } from "@/components/SegmentPanel";
 const REASON_LABEL: Record<AiCandidate["reason"], string> = {
   low_conf: "模型低置信",
   spectral: "频谱像抓挠",
+  // 只靠加速度姿态挑出来的：头伸到某个部位并保持住。给「舔/啃哪个部位」攒标注用，
+  // 人只看这几段，不用翻 24 小时视频
+  grooming: "姿态像舔/啃",
+};
+
+const REASON_COLOR: Record<AiCandidate["reason"], string> = {
+  low_conf: "orange",
+  spectral: "purple",
+  grooming: "cyan",
 };
 
 interface Props {
@@ -217,9 +226,13 @@ export default function CandidatePanel({
           },
           {
             title: "线索",
-            width: 130,
+            width: 150,
             render: (_, c: AiCandidate) => (
-              <Tag color={c.reason === "spectral" ? "purple" : "orange"}>{REASON_LABEL[c.reason]}</Tag>
+              <Space size={2}>
+                <Tag color={REASON_COLOR[c.reason] ?? "orange"}>{REASON_LABEL[c.reason] ?? c.reason}</Tag>
+                {/* 不是抓挠的候选要看得出是哪类——列表里混着两种，光看时间分不出 */}
+                {c.label_name !== "抓挠" && <Tag>{c.label_name}</Tag>}
+              </Space>
             ),
           },
           {
@@ -289,7 +302,7 @@ export default function CandidatePanel({
                 {!readOnly && c.status === "pending" && (
                   <>
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
-                      确认是抓挠
+                      确认是{c.label_name}
                     </Button>
                     {otherLabels.length > 0 && (
                       <Dropdown
