@@ -72,6 +72,11 @@ def test_建索引_同一路只建一次_失败不带倒(db, run):
     prog2 = vi.IndexProgress(status="running", project_id=p.id)
     run(vi.run_project(db, p.id, None, "cam2", False, prog2, build_fn=cached))
     assert calls == ["d/s2_cam2.mp4"] and prog2.cached == 1     # s1 没 cam2
+    # all：有几路建几路，仍然每路只一次
+    calls.clear()
+    prog3 = vi.IndexProgress(status="running", project_id=p.id)
+    run(vi.run_project(db, p.id, None, "all", False, prog3, build_fn=cached))
+    assert sorted(calls) == ["d/s1_cam1.mp4", "d/s2_cam1.mp4", "d/s2_cam2.mp4"] and prog3.total == 3
 
 
 def _search(result):
