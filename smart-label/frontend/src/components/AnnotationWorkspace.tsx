@@ -1110,7 +1110,11 @@ export default function AnnotationWorkspace({
               key: "cands",
               label: (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  {candidates.some((c) => c.reason === "grooming") ? "疑似抓挠 / 舔啃" : "疑似抓挠"}（
+                  {candidates.some((c) => c.reason === "vision")
+                    ? "疑似片段"
+                    : candidates.some((c) => c.reason === "grooming")
+                      ? "疑似抓挠 / 舔啃"
+                      : "疑似抓挠"}（
                   {candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
                   <span ref={setCandControlsHost} style={{ display: "inline-flex" }} />
                 </span>

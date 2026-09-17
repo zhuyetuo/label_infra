@@ -61,6 +61,9 @@ class AsyncSessionShim:
     async def get(self, model, pk):
         return self._s.get(model, pk)
 
+    async def delete(self, obj):
+        self._s.delete(obj)
+
     def close(self):
         self._s.close()
 
