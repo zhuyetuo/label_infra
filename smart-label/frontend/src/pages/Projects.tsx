@@ -1610,8 +1610,9 @@ export default function Projects() {
               </Checkbox>
             </Space>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              视角1/2/3 是<b>每只狗样本里的槽位</b>（跟工作台里的视角1/2/3 一样：自己房间的机位、公共区机位……），
-              不是现场 1~7 号摄像头的编号。一只狗最多配三路，所以这里只有三个。
+              视角1/2/3 是<b>每只狗样本里的槽位</b>（跟工作台里的视角1/2/3 一样），不是现场摄像头编号。
+              「全部」的意思：狗场只建每只狗自己房间那一路（公共区几只狗同在，对不上是哪只的 IMU）；
+              影棚三路都是公共的，全建。
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               一小时视频一两分钟（狗检测每秒一帧）。已经建过的直接跳过。

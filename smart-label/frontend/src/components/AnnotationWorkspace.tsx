@@ -221,6 +221,9 @@ export default function AnnotationWorkspace({
         `找到 ${r.segments} 段（${r.hits} 个命中，搜了 ${r.searched} 路视频${r.missing ? `，${r.missing} 路还没建索引` : ""}），新写入 ${r.written} 条候选`,
         8
       );
+      if (r.multi_dog_candidates > 0) {
+        message.warning(`其中 ${r.multi_dog_candidates} 条落在多狗同场的任务上（影棚 / 公共区），画面里那只不一定是这条 IMU 的狗，确认时对着标题上的狗名看清`, 10);
+      }
       setSimilarOpen(false);
       setCandidates(await listCandidates(taskId));
     } finally {
@@ -645,7 +648,7 @@ export default function AnnotationWorkspace({
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。
           不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
-          先在项目页「建画面索引」，没建的视频搜不到。
+          先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只。
         </Typography.Text>
         <div>
           <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
