@@ -85,39 +85,31 @@ if [ "${SKIP_PLATFORM:-0}" != "1" ]; then
 fi
 
 # ── 2. imu_train：label_service + vision_service ───────────────────────
+# 这一步整个交给 imu_train 自己的 ./up.sh deploy（同一套逻辑只写一份）：
+# git pull + 子模块 → label_service 依赖变了才重建镜像否则 -u/-d → vision_service 停了再起 → 探健康
 if [ -d "$IMU_TRAIN/.git" ]; then
     step "2/3 imu_train（$IMU_TRAIN）"
-    OLD_REV="$(git -C "$IMU_TRAIN" rev-parse HEAD 2>/dev/null || echo none)"
-    if ! run git -C "$IMU_TRAIN" pull --ff-only; then
-        fail "imu_train git pull 失败（本地有改动？先 git stash）"
-    fi
-    # 子模块要跟着钉的版本走，不然采集端代码是旧的
-    run git -C "$IMU_TRAIN" submodule update --init --recursive >/dev/null 2>&1 || true
-    NEW_REV="$(git -C "$IMU_TRAIN" rev-parse HEAD 2>/dev/null || echo none)"
-
-    if [ "${SKIP_LABEL:-0}" != "1" ]; then
-        echo
-        echo "▸ label_service（IMU 推理，docker）"
-        GPU_FLAG=""
-        [ "${DEPLOY_GPU:-0}" = "1" ] && GPU_FLAG="-g"
-        if changed_between "$IMU_TRAIN" "$OLD_REV" "$NEW_REV" label_service/Dockerfile label_service/requirements-docker.txt; then
-            echo "  依赖变了 → 重建镜像（冷缓存十几分钟，喝口水）"
-            ( cd "$IMU_TRAIN" && run bash label_service/up.sh $GPU_FLAG ) || fail "label_service 重建没成"
+    if [ -x "$IMU_TRAIN/up.sh" ] || [ -f "$IMU_TRAIN/up.sh" ]; then
+        IMU_ONLY=()
+        if [ "${SKIP_LABEL:-0}" = "1" ] && [ "${SKIP_VISION:-0}" != "1" ]; then IMU_ONLY=(--only vision); fi
+        if [ "${SKIP_VISION:-0}" = "1" ] && [ "${SKIP_LABEL:-0}" != "1" ]; then IMU_ONLY=(--only label); fi
+        if [ "${SKIP_LABEL:-0}" = "1" ] && [ "${SKIP_VISION:-0}" = "1" ]; then
+            echo "  两个都跳过"
         else
-            # -u：镜像不动，配置/环境变量变了就重建容器；然后 -d 重启让挂载的新代码生效
-            ( cd "$IMU_TRAIN" && run bash label_service/up.sh $GPU_FLAG -u && run bash label_service/up.sh $GPU_FLAG -d ) \
-                || fail "label_service 重启没成"
+            # 旧版 imu_train 还没有 deploy 子命令：先 pull 一次拿到新脚本再调
+            if ! grep -q "deploy)" "$IMU_TRAIN/up.sh" 2>/dev/null; then
+                run git -C "$IMU_TRAIN" pull --ff-only || true
+            fi
+            # 不走 run()：up.sh 自己认 DRY_RUN，DRY 时也要真调它才看得到它打算跑什么
+            echo "  \$ (cd $IMU_TRAIN && ./up.sh deploy ${IMU_ONLY[*]+${IMU_ONLY[*]}})"
+            ( cd "$IMU_TRAIN" && export DRY_RUN="$DRY" DEPLOY_GPU="${DEPLOY_GPU:-0}" && bash ./up.sh deploy ${IMU_ONLY[@]+"${IMU_ONLY[@]}"} ) \
+                || fail "imu_train 那边有没成的（往上翻）"
         fi
-    fi
-
-    if [ "${SKIP_VISION:-0}" != "1" ]; then
-        echo
-        echo "▸ vision_service（SAM / 狗检测 / 找片段 / 向量索引，宿主机 python）"
-        ( cd "$IMU_TRAIN" && run bash vision_service/run.sh down; run bash vision_service/run.sh -d ) \
-            || fail "vision_service 起不来（看 $IMU_TRAIN/vision_service/.run.log）"
+    else
+        fail "$IMU_TRAIN/up.sh 不存在"
     fi
 else
-    step "2/3 imu_train：$IMU_TRAIN 不存在，跳过（另一台机器的话在那台上跑 IMU_TRAIN_DIR=... 这个脚本，或 SKIP_PLATFORM=1）"
+    step "2/3 imu_train：$IMU_TRAIN 不存在，跳过（在跑 imu_train 的那台机器上：cd ~/imu_train && ./up.sh deploy）"
 fi
 
 # ── 3. 健康检查 ────────────────────────────────────────────────────────
@@ -145,15 +137,17 @@ probe_any() {   # $1 名字 $2.. 若干 url；通了的那个 url 走 stdout，�
 [ "${SKIP_PLATFORM:-0}" != "1" ] && { probe "平台 API   " "http://127.0.0.1:${API_PORT}/health" 30 || fail "平台 API 不通"; }
 [ "${SKIP_PLATFORM:-0}" != "1" ] && { probe "平台前端  " "http://127.0.0.1:${WEB_PORT}/" 10 || fail "平台前端不通"; }
 
+# 平台配的那两个地址（可能在另一台机器上）能不能从这里连到——imu_train 在本机时
+# 它自己的 deploy 已经探过本机端口，这里探的是平台真正要用的地址
 if [ "${SKIP_LABEL:-0}" != "1" ]; then
-    probe_any "label_service" "http://127.0.0.1:8383/health" "${LABEL_URL%/}/health" >/dev/null || fail "label_service 不通"
+    probe_any "label_service（平台用的地址）" "${LABEL_URL%/}/health" >/dev/null || fail "label_service 平台配的地址不通：${LABEL_URL}"
 fi
 if [ "${SKIP_VISION:-0}" != "1" ]; then
-    VU="$(probe_any "vision_service" "http://127.0.0.1:8385/health" "${VISION_URL%/}/health")" || fail "vision_service 不通"
-    if [ -n "${VU:-}" ] && [ "$DRY" != "1" ]; then
+    VU="$(probe_any "vision_service（平台用的地址）" "${VISION_URL%/}/health")" || fail "vision_service 平台配的地址不通：${VISION_URL}"
+    if [ -n "${VU:-}" ] && [ "$DRY" != "1" ] && [ ! -d "$IMU_TRAIN/.git" ]; then
         base="${VU%/health}"
         echo "    狗检测   available=$(json_field "$base/api/v1/dog/status" available)"
-        echo "    找片段   available=$(json_field "$base/api/v1/seek/status" available)   （false = 环境变量没 key；用「大模型 API」页配的 key 不看这个）"
+        echo "    找片段   available=$(json_field "$base/api/v1/seek/status" available)"
         echo "    向量索引 available=$(json_field "$base/api/v1/embed/status" available)   indexed=$(json_field "$base/api/v1/embed/status" indexed_videos)"
         echo "    SAM      available=$(json_field "$base/api/v1/sam/status" available)"
     fi
