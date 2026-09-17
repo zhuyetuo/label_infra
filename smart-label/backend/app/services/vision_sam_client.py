@@ -193,3 +193,59 @@ async def llm_test(llm: dict) -> dict:
     if resp.status_code != 200:
         raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
     return resp.json()
+
+
+# ── 画面向量索引（以图搜图 / 一句话搜） ──────────────────────────────────
+_EMBED_BUILD_TIMEOUT = 1800.0
+
+
+async def embed_status() -> dict:
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/embed/status"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}"}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}"}
+
+
+async def _post(path: str, body: dict, timeout: float) -> dict:
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=body)
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code == 503:
+        raise SamUnavailable(_detail(resp) or "视觉服务这一项不可用")
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.json()
+
+
+async def embed_build(video_rel_path: str, every_sec: float = 1.0, force: bool = False) -> dict:
+    return await _post("/api/v1/embed/build", {"path": video_rel_path, "every_sec": every_sec, "force": force},
+                       _EMBED_BUILD_TIMEOUT)
+
+
+async def embed_indexed(paths: list[str]) -> dict[str, bool]:
+    if not paths:
+        return {}
+    return await _post("/api/v1/embed/indexed", {"paths": paths}, 30)
+
+
+async def embed_search(paths: list[str], *, text: str | None = None, ref: dict | None = None,
+                       top_k: int = 50, min_score: float = 0.0, gap_s: float = 3.0,
+                       exclude_self_s: float = 10.0) -> dict:
+    body = {"paths": paths, "top_k": top_k, "min_score": min_score, "gap_s": gap_s, "exclude_self_s": exclude_self_s}
+    if text is not None:
+        body["text"] = text
+    if ref is not None:
+        body["ref"] = ref
+    return await _post("/api/v1/embed/search", body, 120)

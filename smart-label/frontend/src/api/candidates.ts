@@ -13,7 +13,7 @@ export interface AiCandidate {
   spec: number | null;
   /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 / grooming=姿态像舔啃（只靠加速度，跟模型无关）
    *  / vision=画面里看着像（视觉大模型看视频挑出来的，类别是项目里选的） */
-  reason: "low_conf" | "spectral" | "grooming" | "vision";
+  reason: "low_conf" | "spectral" | "grooming" | "vision" | "similar";
   /** 画面候选是哪家哪个模型给的，如 anthropic:claude-opus-5；IMU 来的为空 */
   model?: string | null;
   status: "pending" | "confirmed" | "rejected" | "uncertain";
@@ -46,3 +46,20 @@ export const decideCandidate = (
     label_id: labelId ?? null,
     uncertain_reason: uncertainReason ?? null,
   });
+
+
+/** 以图搜图 / 一句话搜（画面向量索引）→ 候选。t_s 和 text 二选一 */
+export const findSimilarCandidates = (body: {
+  task_id: number;
+  label_name: string;
+  cam?: "cam1" | "cam2" | "cam3";
+  t_s?: number;
+  text?: string;
+  scope?: "project" | "task";
+  top_k?: number;
+  min_score?: number;
+}) =>
+  request.post<
+    never,
+    { written: number; hits: number; segments: number; searched: number; missing: number; per_task: { task_id: number; candidates: number }[] }
+  >("/candidates/similar", body, { timeout: 120000 });

@@ -7,6 +7,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from app.services.ai_prelabel_service import get_progress as get_prelabel_progre
 from app.services.ai_prelabel_service import list_run_history as list_prelabel_history
 from app.services.ai_prelabel_service import cancel_project_prelabel, start_project_prelabel
 from app.services import llm_provider_service, vision_sam_client
+from app.services import vision_index_service as vindex
 from app.services import vision_seek_service as vseek
 from app.services.task_scope import visible_project_ids
 from app.services.task_service import purge_task_children
@@ -185,6 +187,39 @@ async def vision_seek_status(project_id: int):
 async def cancel_vision_seek(project_id: int):
     """停：正在问的那个视频会跑完，之后的不再发。"""
     return ok({"stopped": vseek.cancel(project_id)})
+
+
+class VisionIndexIn(BaseModel):
+    task_ids: list[int] | None = None
+    cam: str = "cam1"
+    force: bool = False
+
+
+@router.post("/{project_id}/vision-index", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def start_vision_index(project_id: int, body: VisionIndexIn, db: AsyncSession = Depends(get_db)):
+    """给项目里的视频建画面向量索引（后台）。建好之后工作台里能「找相似」，免费、瞬间。"""
+    if await db.get(Project, project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    if body.cam not in ("cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    st = await vision_sam_client.embed_status()
+    if not st.get("available"):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面向量模型不可用")
+    if not await vindex.start(project_id, body.task_ids, body.cam, body.force):
+        raise HTTPException(status.HTTP_409_CONFLICT, "这个项目正在建索引，等它跑完")
+    return ok({"started": True})
+
+
+@router.get("/{project_id}/vision-index/status")
+async def vision_index_status(project_id: int):
+    d = vindex.get_progress(project_id).to_dict()
+    d["service"] = await vision_sam_client.embed_status()
+    return ok(d)
+
+
+@router.post("/{project_id}/vision-index/cancel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def cancel_vision_index(project_id: int):
+    return ok({"stopped": vindex.cancel(project_id)})
 
 
 @router.get("/{project_id}/ai-prelabel/status")
