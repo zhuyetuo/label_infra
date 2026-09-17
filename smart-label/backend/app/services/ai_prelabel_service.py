@@ -142,7 +142,9 @@ def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str 
             continue
         out.append(
             CandidateItem(
-                label_name=scratch_label,
+                # label_service 现在会给每条候选的类别（疑似舔/啃是「舔身体」）。
+                # 老版本不给这个字段，那就是抓挠——别让老服务的候选全变成没类别
+                label_name=str(c.get("label") or scratch_label),
                 start_time_ms=max(0, s_ms),
                 end_time_ms=e_ms,
                 confidence=float(c["conf_mean"]) if c.get("conf_mean") is not None else None,
