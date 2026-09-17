@@ -34,7 +34,10 @@ class AiCandidate(Base):
     end_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     spec: Mapped[float | None] = mapped_column(Float, nullable=True, comment="陀螺仪 4–8Hz 能量占比")
-    reason: Mapped[str] = mapped_column(String(20), nullable=False, comment="low_conf / spectral")
+    reason: Mapped[str] = mapped_column(String(20), nullable=False, comment="low_conf / spectral / grooming / vision")
+    # 画面候选（reason=vision）是哪家哪个模型给的，如 anthropic:claude-opus-5。
+    # 同一批任务用两个模型各跑一遍，就能按这个对比谁更准。IMU 来的候选为空
+    model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     status: Mapped[CandidateStatus] = mapped_column(
         Enum(CandidateStatus), nullable=False, default=CandidateStatus.pending, server_default="pending"
     )

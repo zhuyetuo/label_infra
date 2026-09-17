@@ -202,3 +202,57 @@ def test_start_同一项目不重复起(monkeypatch):
 
 async def _noop(started, a):
     started.append(a)
+
+
+def test_选了哪家就带_llm_过去_候选记模型_不同模型互不冲(db, run, monkeypatch):
+    from app.services import llm_provider_service as llmsvc
+
+    u, p, (s1, _), (t1, _, _) = _world(db, run)
+    run(llmsvc.ensure_rows(db))
+    row = run(llmsvc.get_row(db, "gemini"))
+    row.api_key = "gk"
+    run(db.commit())
+    calls = []
+    segs = {"d/s1_cam1.mp4": [{"start_s": 10, "end_s": 16, "label": "舔身体", "confidence": 0.9}]}
+
+    prog = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(provider="gemini", model="gemini-2.5-flash"), prog,
+                       seek_fn=_fake_seek(calls, segs)))
+    assert calls[0]["llm"] == {"provider": "gemini", "model": "gemini-2.5-flash", "api_key": "gk",
+                               "base_url": "https://generativelanguage.googleapis.com/v1beta", "price_in": 0.0, "price_out": 0.0}
+    assert prog.llm == "gemini:gemini-2.5-flash"
+    assert [(c.label_name, c.model) for c in _cands(db, run, t1.id)] == [("舔身体", "gemini:gemini-2.5-flash")]
+
+    # 换一家再跑同一批：第一家的候选留着，两家并排
+    row2 = run(llmsvc.get_row(db, "anthropic"))
+    row2.api_key = "ak"
+    run(db.commit())
+    prog2 = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(provider="anthropic"), prog2, seek_fn=_fake_seek(calls, segs)))
+    assert calls[1]["llm"]["model"] == "claude-opus-5" and calls[1]["llm"]["price_in"] == 5.0
+    assert sorted(c.model for c in _cands(db, run, t1.id)) == ["anthropic:claude-opus-5", "gemini:gemini-2.5-flash"]
+
+    # 同一家重跑：只换自己那份
+    prog3 = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(provider="gemini", model="gemini-2.5-flash"), prog3,
+                       seek_fn=_fake_seek(calls, {"d/s1_cam1.mp4": []})))
+    assert [c.model for c in _cands(db, run, t1.id)] == ["anthropic:claude-opus-5"]
+
+    # 没选哪家：不带 llm（视觉服务用环境变量），候选 model 为空
+    prog4 = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(), prog4, seek_fn=_fake_seek(calls, segs)))
+    assert "llm" not in calls[-1] and prog4.llm is None
+    assert sorted(str(c.model) for c in _cands(db, run, t1.id)) == ["None", "anthropic:claude-opus-5"]
+
+
+def test_选的那家没配_key_一个任务都不跑(db, run):
+    from app.services import llm_provider_service as llmsvc
+    import pytest
+
+    u, p, _, (t1, _, _) = _world(db, run)
+    run(llmsvc.ensure_rows(db))
+    calls = []
+    prog = vs.SeekProgress(status="running", project_id=p.id)
+    with pytest.raises(ValueError, match="API key"):
+        run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(provider="openai"), prog, seek_fn=_fake_seek(calls)))
+    assert calls == [] and prog.total == 0

@@ -178,3 +178,18 @@ async def seek_video(video_rel_path: str, labels: list[dict], **params) -> dict:
     if resp.status_code != 200:
         raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
     return resp.json()
+
+
+async def llm_test(llm: dict) -> dict:
+    """让视觉服务用这把 key 发一句最短的话，看通不通。"""
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/llm/test"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, json={"llm": llm})
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.json()

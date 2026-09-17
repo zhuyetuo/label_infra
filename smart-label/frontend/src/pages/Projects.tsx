@@ -71,6 +71,8 @@ const CREATE_MODE_KEY = "smart-label:create-infer-mode";
 // 新建项目时上次选的标签模板：一段时间里建的项目基本都套同一个模板，
 // 每次都要从下拉里重新找一遍很烦。存 "none" 表示上次是特意清掉不套的。
 const CREATE_TEMPLATE_KEY = "smart-label:create-template-id";
+// 画面找片段上次用的哪家哪个模型，"provider|model"
+const SEEK_LLM_KEY = "smart-label:seek-llm";
 
 // 「连已经有 AI 片段的也重跑」也记住：换了模型想全量刷新时，每个项目都要重勾
 // 一遍太烦，而这个选择在一轮刷新里通常是一致的
@@ -78,6 +80,7 @@ const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
 // 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
+import { listLlmProviders } from "@/api/llmProviders";
 import {
   cancelVisionSeek,
   getVisionSeekStatus,
@@ -170,6 +173,8 @@ export default function Projects() {
   const [seekMaxClips, setSeekMaxClips] = useState(120);
   const [seekLimit, setSeekLimit] = useState<number | null>(null);
   const [seekDryRun, setSeekDryRun] = useState(true);
+  const [seekLlm, setSeekLlm] = useState<string>(() => getSavedText(SEEK_LLM_KEY, ""));
+  const { data: llmProviders } = useQuery({ queryKey: ["llm-providers"], queryFn: listLlmProviders, enabled: isAdmin });
   const [seekStarting, setSeekStarting] = useState(false);
   const seekPrevRef = useRef<Record<number, string>>({});
 
@@ -330,7 +335,10 @@ export default function Projects() {
         cam: seekCam,
         max_clips: seekMaxClips,
         dry_run: seekDryRun,
+        provider: seekLlm ? seekLlm.split("|")[0] : undefined,
+        model: seekLlm ? seekLlm.split("|")[1] : undefined,
       });
+      saveText(SEEK_LLM_KEY, seekLlm);
       message.info(seekDryRun ? "预览已开始（不问模型、不花钱），进度在项目行里看" : "已开始，进度在项目行里看");
       await pollSeek([seekTarget.id]);
       setSeekTarget(null);
@@ -1514,6 +1522,29 @@ export default function Projects() {
                 />
               </div>
             )}
+            <div>
+              <Typography.Text style={{ marginRight: 8 }}>用哪个模型：</Typography.Text>
+              <Select
+                size="small"
+                style={{ minWidth: 320 }}
+                value={seekLlm}
+                onChange={(v) => setSeekLlm(v)}
+                options={[
+                  { value: "", label: "视觉服务环境变量里的 Claude key（老方式）" },
+                  ...(llmProviders ?? [])
+                    .filter((p) => p.enabled && (p.has_key || p.key_optional))
+                    .flatMap((p) =>
+                      p.models.map((m) => ({
+                        value: `${p.provider}|${m.name}`,
+                        label: `${p.display_name} · ${m.name}${m.price_in ? `（$${m.price_in}/$${m.price_out} 每百万）` : ""}`,
+                      }))
+                    ),
+                ]}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                在「大模型 API」页配 key 和模型。换一个模型再跑同一批，两家的候选会并排放着，不互相覆盖
+              </Typography.Text>
+            </div>
             <Space wrap>
               <span>
                 看哪一路：
@@ -1549,6 +1580,7 @@ export default function Projects() {
                     会送/已送 {sp.clips_candidate}/{sp.clips_sent} 段，候选 {sp.candidates} 条，约 ${sp.est_usd}，
                     {sp.status === "running" ? "已用" : "总耗时"} {fmtClock(sp.elapsed_sec)}
                     {sp.labels.length > 0 && `，找的是 ${sp.labels.join("、")}`}
+                    {sp.llm && `，模型 ${sp.llm}`}
                   </Typography.Text>
                   {sp.error_message && <Alert style={{ marginTop: 6 }} type="error" showIcon message={sp.error_message} />}
                   {sp.detail.length > 0 && (

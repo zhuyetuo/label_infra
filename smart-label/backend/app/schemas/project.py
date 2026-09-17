@@ -61,3 +61,7 @@ class ProjectVisionSeekRequest(BaseModel):
     min_conf: float = 0.5
     # 只做本地筛选、不问模型、不写候选：先看会送多少段
     dry_run: bool = False
+    # 用哪家（anthropic / openai / doubao / gemini）的哪个模型，在「大模型 API」页配。
+    # 留空 = 视觉服务环境变量里那把 Claude key（老方式）
+    provider: str | None = None
+    model: str | None = None

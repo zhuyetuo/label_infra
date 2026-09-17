@@ -8,6 +8,7 @@ import Dogs from "@/pages/Dogs";
 import Labels from "@/pages/Labels";
 import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
+import LlmProviders from "@/pages/LlmProviders";
 import Tooth from "@/pages/Tooth";
 import DailyStats from "@/pages/DailyStats";
 import Skin from "@/pages/Skin";
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/vision" element={<Vision />} />
         <Route path="/training" element={<Training />} />
         <Route path="/users" element={<Users />} />
+        <Route path="/llm-providers" element={<LlmProviders />} />
         <Route path="/" element={<Navigate to="/tasks" replace />} />
       </Route>
     </Routes>
