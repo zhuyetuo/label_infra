@@ -27,6 +27,8 @@ async def _seed_builtin_templates():
             result = await ensure_grooming_template(db)
         if result == "created":
             logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
+        elif result == "updated":
+            logger.info("内置标签模板「%s」补上了新加的组", TEMPLATE_NAME)
         elif result == "no_admin":
             logger.warning("还没有管理员账号，内置标签模板「%s」这次没建，下次启动再试", TEMPLATE_NAME)
     except Exception:  # noqa: BLE001
