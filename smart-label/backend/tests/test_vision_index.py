@@ -102,7 +102,8 @@ def test_找相似_命中落到对应任务_短任务只收自己区间_重叠�
     fn = _search(result)
     r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="舔身体-后肢臀尾", t_s=42.0, top_k=30), search_fn=fn))
     call = fn.calls[0]
-    assert sorted(call["paths"]) == ["d/s1_cam1.mp4", "d/s2_cam1.mp4"]
+    # 不是一间一狗的场地：样本有几路搜几路（s2 有 cam2）
+    assert sorted(call["paths"]) == ["d/s1_cam1.mp4", "d/s2_cam1.mp4", "d/s2_cam2.mp4"]
     assert call["ref"] == {"path": "d/s1_cam1.mp4", "t": 42.0} and call["text"] is None and call["top_k"] == 30
     assert r["written"] == 3 and r["searched"] == 2
     assert [(c.start_time_ms, c.end_time_ms, c.reason, c.model) for c in _cands(db, run, t1.id)] == [(200000, 203000, "similar", "siglip")]
@@ -137,10 +138,56 @@ def test_找相似_参数错报人话(db, run):
     with pytest.raises(ValueError, match="cam2"):
         run(vi.find_similar(db, t1, vi.SimilarParams(label_name="x", t_s=1, cam="cam2"), search_fn=fn))
     with pytest.raises(ValueError, match="没有可搜"):
-        run(vi.find_similar(db, t1, vi.SimilarParams(label_name="x", text="a", cam="cam3"), search_fn=fn))
+        run(vi.find_similar(db, t1, vi.SimilarParams(label_name="x", text="a", cam="cam3", scope="task"), search_fn=fn))
     assert fn.calls == []
 
 
 def test_overlaps():
     assert vi.overlaps(0, 10, 5, 15) and vi.overlaps(5, 6, 0, 10)
     assert not vi.overlaps(0, 10, 10, 20) and not vi.overlaps(10, 20, 0, 10)
+
+
+def test_一间一狗的场地只用自己房间那一路_影棚全用(db, run):
+    u = User(username="b", password_hash="x", display_name="b", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    p = Project(name="q", created_by=u.id)
+    db.add(p)
+    run(db.flush())
+    # 狗场：cam1 自己房间，cam2 公共区（六只狗都在）
+    g = Sample(sample_code="multicam_1", video_cam1_path="data_raw/2026_9_13_gouchang/a_cam1.mp4",
+               video_cam2_path="data_raw/2026_9_13_gouchang/a_cam7.mp4", imu_csv_path="x.csv", created_by=u.id)
+    # 影棚：三路都是公共的
+    y = Sample(sample_code="multicam_2", video_cam1_path="data_raw/2026_9_13/b_cam1.mp4",
+               video_cam2_path="data_raw/2026_9_13/b_cam2.mp4", video_cam3_path="data_raw/2026_9_13/b_cam3.mp4",
+               imu_csv_path="y.csv", created_by=u.id)
+    db.add(g)
+    db.add(y)
+    run(db.flush())
+    tg = Task(project_id=p.id, sample_id=g.id, task_type=TaskType.ai_assisted, status=TaskStatus.PENDING_ASSIGN, created_by=u.id)
+    ty = Task(project_id=p.id, sample_id=y.id, task_type=TaskType.ai_assisted, status=TaskStatus.PENDING_ASSIGN, created_by=u.id)
+    db.add(tg)
+    db.add(ty)
+    run(db.commit())
+    assert vi.usable_cams(g) == ["cam1"]
+    assert vi.usable_cams(y) == ["cam1", "cam2", "cam3"]
+
+    calls = []
+
+    async def build(path, force=False):
+        calls.append(path)
+        return {"n": 1, "cached": False}
+
+    prog = vi.IndexProgress(status="running", project_id=p.id)
+    run(vi.run_project(db, p.id, None, "all", False, prog, build_fn=build))
+    assert sorted(calls) == ["data_raw/2026_9_13/b_cam1.mp4", "data_raw/2026_9_13/b_cam2.mp4",
+                             "data_raw/2026_9_13/b_cam3.mp4", "data_raw/2026_9_13_gouchang/a_cam1.mp4"]
+
+    db.add(LabelDefinition(project_id=p.id, code="l", display_name="舔身体", created_by=u.id))
+    run(db.commit())
+    fn = _search({"hits": [{}], "searched": 4, "missing": [],
+                  "segments": [{"path": "data_raw/2026_9_13/b_cam2.mp4", "start_s": 1, "end_s": 4, "score": 0.9, "n": 1},
+                               {"path": "data_raw/2026_9_13_gouchang/a_cam1.mp4", "start_s": 5, "end_s": 8, "score": 0.8, "n": 1}]})
+    r = run(vi.find_similar(db, tg, vi.SimilarParams(label_name="舔身体", t_s=3.0), search_fn=fn))
+    assert "data_raw/2026_9_13_gouchang/a_cam7.mp4" not in fn.calls[0]["paths"]     # 公共区不搜
+    assert r["written"] == 2 and r["multi_dog_candidates"] == 1                      # 影棚那条要提醒

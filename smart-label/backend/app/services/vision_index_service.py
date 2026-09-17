@@ -22,6 +22,7 @@ from app.db.session import SessionLocal
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
+from app.services import dog_presence_service as presence
 from app.services import vision_sam_client as vc
 from app.services.vision_seek_service import video_path_of
 
@@ -104,6 +105,25 @@ async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: boo
         _cancelled.discard(project_id)
 
 
+def day_dir_of(sample: Sample) -> str | None:
+    p = sample.video_cam1_path or ""
+    return p.split("/")[-2] if "/" in p else None
+
+
+def usable_cams(sample: Sample) -> list[str]:
+    """这份样本哪几路能拿来当 IMU 的候选。
+
+    狗场：六个单间各一只狗一个摄像头（样本的 cam1），外加一个公共区摄像头（cam2）。
+    公共区里几只狗同时在，画面里找到"有狗在舔"也对不上是哪只的 IMU——所以一间一狗的
+    场地只用 cam1。影棚：四只狗三个公共摄像头，没有"自己的那一路"，只能全用，
+    命中的候选要人看清是哪只狗（工作台标题上有狗名）。
+    """
+    present = [c for c in ("cam1", "cam2", "cam3") if video_path_of(sample, c)]
+    if presence.is_one_dog_site(sample.sample_code, day_dir_of(sample)):
+        return [c for c in present if c == "cam1"]
+    return present
+
+
 async def project_videos(db: AsyncSession, project_id: int, cam: str,
                          task_ids: list[int] | None = None) -> list[tuple[Task, Sample, str]]:
     """项目里待认领/标注中的任务 → (task, sample, 那一路的视频路径)。没那一路的不在里面。"""
@@ -115,9 +135,13 @@ async def project_videos(db: AsyncSession, project_id: int, cam: str,
     out = []
     for t in tasks:
         s = await db.get(Sample, t.sample_id)
-        path = video_path_of(s, cam) if s else None
-        if path:
-            out.append((t, s, path))
+        if s is None:
+            continue
+        cams = usable_cams(s) if cam == "all" else [cam]
+        for c in cams:
+            path = video_path_of(s, c)
+            if path:
+                out.append((t, s, path))
     return out
 
 
@@ -125,14 +149,12 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
                       force: bool, progress: IndexProgress, build_fn=None) -> None:
     """同一路视频只建一次（几个任务共用一个样本时）。cam="all" = 样本有几路建几路。"""
     build_fn = build_fn or vc.embed_build
-    cams = ["cam1", "cam2", "cam3"] if cam == "all" else [cam]
     seen: set[str] = set()
     paths = []
-    for c in cams:
-        for _t, s, path in await project_videos(db, project_id, c, task_ids):
-            if path not in seen:
-                seen.add(path)
-                paths.append((f"{s.sample_code} {c}", path))
+    for _t, s, path in await project_videos(db, project_id, cam, task_ids):
+        if path not in seen:
+            seen.add(path)
+            paths.append((s.sample_code, path))
     progress.total = len(paths)
     for code, path in paths:
         if project_id in _cancelled:
@@ -209,10 +231,15 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     if params.scope == "task":
         rows = [(task, sample, own_path)] if own_path else []
     else:
-        rows = await project_videos(db, task.project_id, params.cam)
+        # 整个项目：每份样本只搜能对上 IMU 的那几路（一间一狗的场地只搜自己房间那一路）
+        rows = await project_videos(db, task.project_id, "all")
     by_path: dict[str, list[Task]] = {}
-    for t, _s, path in rows:
+    _code_of: dict[int, str | None] = {}
+    _day_of: dict[int, str | None] = {}
+    for t, s_, path in rows:
         by_path.setdefault(path, []).append(t)
+        _code_of[t.id] = s_.sample_code if s_ else None
+        _day_of[t.id] = day_dir_of(s_) if s_ else None
     paths = list(by_path)
     if not paths:
         raise ValueError("这个范围里没有可搜的视频")
@@ -237,6 +264,9 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
             written += n
             per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t)})
     await db.commit()
+    # 多狗同场（影棚）的命中要提醒：画面里那只不一定是这条 IMU 的狗
+    multi = sum(pt["candidates"] for pt in per_task
+                if not presence.is_one_dog_site(_code_of.get(pt["task_id"]), _day_of.get(pt["task_id"])))
     return {"written": written, "hits": len(r.get("hits", [])), "segments": len(r.get("segments", [])),
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
-            "query": r.get("query"), "per_task": per_task}
+            "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi}

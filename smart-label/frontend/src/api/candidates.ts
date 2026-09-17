@@ -61,5 +61,14 @@ export const findSimilarCandidates = (body: {
 }) =>
   request.post<
     never,
-    { written: number; hits: number; segments: number; searched: number; missing: number; per_task: { task_id: number; candidates: number }[] }
+    {
+      written: number;
+      hits: number;
+      segments: number;
+      searched: number;
+      missing: number;
+      per_task: { task_id: number; candidates: number }[];
+      /** 落在多狗同场（影棚）任务上的候选数：画面里那只不一定是这条 IMU 的狗，确认时要看清 */
+      multi_dog_candidates: number;
+    }
   >("/candidates/similar", body, { timeout: 120000 });
