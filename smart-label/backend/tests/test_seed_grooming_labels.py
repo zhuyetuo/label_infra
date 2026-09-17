@@ -12,7 +12,7 @@ from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.scripts.seed_grooming_labels import (
-    BASE_LABELS, BODY_PARTS, apply_plan, describe, pick_user, plan, wanted_rows,
+    GROUPS, apply_plan, describe, pick_user, plan, wanted_rows,
 )
 
 
@@ -36,8 +36,8 @@ def _labels(db, run, pid):
 
 def test_wanted_rows_parents_before_children_and_no_dupes():
     rows = wanted_rows()
-    assert [r.display_name for r in rows[:2]] == ["舔身体", "啃身体"]
-    assert len(rows) == len(BASE_LABELS) * (1 + len(BODY_PARTS))
+    assert [r.display_name for r in rows[:4]] == ["舔身体", "啃身体", "抓挠", "蹭身体"]
+    assert len(rows) == sum(1 + len(g[4]) for g in GROUPS) == 20
     assert len({r.code for r in rows}) == len(rows)
     assert len({r.display_name for r in rows}) == len(rows)
     seen = set()
@@ -47,7 +47,7 @@ def test_wanted_rows_parents_before_children_and_no_dupes():
     # 库里 code / display_name 都是 String(50)
     assert all(len(r.code) <= 50 and len(r.display_name) <= 50 for r in rows)
     assert all(r.parent_code is None for r in wanted_rows(with_parts=False))
-    assert len(wanted_rows(with_parts=False)) == 2
+    assert len(wanted_rows(with_parts=False)) == 4
 
 
 def test_fresh_project_gets_everything_and_candidate_lookup_works(db, run):
@@ -55,10 +55,10 @@ def test_fresh_project_gets_everything_and_candidate_lookup_works(db, run):
     actions = run(plan(db, p.id))
     assert all(a.kind == "create" for a in actions)
     counts = run(apply_plan(db, p.id, admin.id, actions))
-    assert counts == {"create": 10, "keep": 0, "reactivate": 0}
+    assert counts == {"create": 20, "keep": 0, "reactivate": 0}
 
     labels = _labels(db, run, p.id)
-    assert len(labels) == 10
+    assert len(labels) == 20
     # 候选确认走的就是这条查询：display_name == label_name
     hit = run(db.execute(select(LabelDefinition.id).where(
         LabelDefinition.project_id == p.id,
@@ -83,7 +83,7 @@ def test_second_run_changes_nothing(db, run):
     actions = run(plan(db, p.id))
     assert all(a.kind == "keep" for a in actions)
     counts = run(apply_plan(db, p.id, admin.id, actions))
-    assert counts["create"] == 0 and counts["keep"] == 10
+    assert counts["create"] == 0 and counts["keep"] == 20
     assert sorted(l.id for l in _labels(db, run, p.id)) == ids
 
 
@@ -100,7 +100,7 @@ def test_hand_made_label_with_other_code_is_kept_and_used_as_parent(db, run):
     assert kinds["啃身体"] == "create"
     run(apply_plan(db, p.id, admin.id, actions))
     labels = _labels(db, run, p.id)
-    assert len(labels) == 10
+    assert len(labels) == 20
     by_name = {l.display_name: l for l in labels}
     assert by_name["舔身体"].id == mine.id
     assert by_name["舔身体"].code == "tian" and by_name["舔身体"].color == "#000"
@@ -118,7 +118,7 @@ def test_same_code_different_name_counts_as_present(db, run):
     assert a.kind == "keep" and a.existing_name == "啃咬身体"
     assert "「啃咬身体」" in describe(actions)
     run(apply_plan(db, p.id, admin.id, actions))
-    assert len(_labels(db, run, p.id)) == 10
+    assert len(_labels(db, run, p.id)) == 20
 
 
 def test_inactive_label_is_reactivated(db, run):
@@ -132,14 +132,14 @@ def test_inactive_label_is_reactivated(db, run):
     assert sum(a.kind == "reactivate" for a in actions) == 1
     run(apply_plan(db, p.id, admin.id, actions))
     assert all(l.is_active for l in _labels(db, run, p.id))
-    assert len(_labels(db, run, p.id)) == 10
+    assert len(_labels(db, run, p.id)) == 20
 
 
-def test_no_parts_only_two(db, run):
+def test_no_parts_only_parents(db, run):
     admin, _, p = _seed_users_project(db, run)
     actions = run(plan(db, p.id, with_parts=False))
     run(apply_plan(db, p.id, admin.id, actions))
-    assert sorted(l.display_name for l in _labels(db, run, p.id)) == ["啃身体", "舔身体"]
+    assert sorted(l.display_name for l in _labels(db, run, p.id)) == ["啃身体", "抓挠", "舔身体", "蹭身体"]
 
 
 def test_plan_alone_writes_nothing(db, run):
@@ -172,7 +172,7 @@ def test_pick_user_prefers_admin_and_honors_explicit(db, run):
 def test_describe_lists_every_row(db, run):
     _, _, p = _seed_users_project(db, run)
     text = describe(run(plan(db, p.id)))
-    assert text.count("新增") == 10
+    assert text.count("新增") == 20
     assert "舔身体  [lick_body]" in text
 
 
@@ -196,13 +196,13 @@ def test_cli_preview_then_apply(db, run, monkeypatch, capsys):
 
     assert mod.main(["--project", str(p.id)]) == 0
     out = capsys.readouterr().out
-    assert "预览" in out and "10 条要改" in out
+    assert "预览" in out and "20 条要改" in out
     assert _labels(db, run, p.id) == []          # 预览不写
 
     assert mod.main(["--project", str(p.id), "--apply"]) == 0
     out = capsys.readouterr().out
-    assert "新增 10" in out and "created_by=adm" in out
-    assert len(_labels(db, run, p.id)) == 10
+    assert "新增 20" in out and "created_by=adm" in out
+    assert len(_labels(db, run, p.id)) == 20
 
     assert mod.main(["--project", str(p.id), "--apply"]) == 0
     assert "都齐了" in capsys.readouterr().out
@@ -223,4 +223,21 @@ def test_cli_no_admin_refuses_without_user(db, run, monkeypatch, capsys):
     assert _labels(db, run, p.id) == []
     assert mod.main(["--project", str(p.id), "--apply", "--user", str(worker.id), "--no-parts"]) == 0
     got = _labels(db, run, p.id)
-    assert len(got) == 2 and all(l.created_by == worker.id for l in got)
+    assert len(got) == 4 and all(l.created_by == worker.id for l in got)
+
+
+def test_existing_scratch_label_is_reused_as_parent(db, run):
+    """项目里早就有「抓挠」（code 是老的）：不再加一个，抓挠-部位挂到它下面。"""
+    admin, _, p = _seed_users_project(db, run)
+    old = LabelDefinition(project_id=p.id, code="scratching", display_name="抓挠", color="#f00",
+                          sort_order=1, created_by=admin.id)
+    db.add(old)
+    run(db.commit())
+    actions = run(plan(db, p.id))
+    assert {a.row.display_name: a.kind for a in actions}["抓挠"] == "keep"
+    run(apply_plan(db, p.id, admin.id, actions))
+    labels = _labels(db, run, p.id)
+    assert sum(l.display_name == "抓挠" for l in labels) == 1
+    by_name = {l.display_name: l for l in labels}
+    assert by_name["抓挠-头颈耳"].parent_id == old.id
+    assert by_name["蹭身体-臀尾肛周"].parent_id == by_name["蹭身体"].id

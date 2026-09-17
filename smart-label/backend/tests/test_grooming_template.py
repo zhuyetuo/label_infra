@@ -8,7 +8,7 @@ from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
 from app.models.user import User, UserRole
-from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template, wanted_rows
+from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template, template_rows
 
 
 def _admin(db, run, active=True):
@@ -36,12 +36,15 @@ def test_created_once_with_all_items(db, run):
     names = [i.display_name for i in items]
     assert names[0] == "舔身体" and names[5] == "啃身体"   # 父在前，四个部位跟在后面
     assert {(i.code, i.display_name, i.color, i.sort_order) for i in items} == \
-        {(r.code, r.display_name, r.color, r.sort_order) for r in wanted_rows()}
-    assert len(items) == 10
+        {(r.code, r.display_name, r.color, r.sort_order) for r in template_rows()}
+    assert len(items) == 19
+    # 「抓挠」本身不进模板（项目里已有，带进去会变成两个），只带部位
+    assert "抓挠" not in names and "抓挠-头颈耳" in names and "蹭身体" in names
+    assert "scratch" not in {i.code for i in items}
 
     assert run(ensure_grooming_template(db)) == "exists"
     assert run(db.execute(select(LabelTemplate))).scalars().all().__len__() == 1
-    assert len(_items(db, run, tpl.id)) == 10
+    assert len(_items(db, run, tpl.id)) == 19
 
 
 def test_admin_edits_survive_restart(db, run):
@@ -49,13 +52,36 @@ def test_admin_edits_survive_restart(db, run):
     run(ensure_grooming_template(db))
     tpl = _tpl(db, run)
     items = _items(db, run, tpl.id)
-    for i in items[2:]:
-        db._s.delete(i)
+    # 每组只留一条，改一个颜色
+    keep = {"lick_body", "chew_body_fore", "scratch_head", "rub_body"}
+    for i in items:
+        if i.code not in keep:
+            db._s.delete(i)
     items[0].color = "#123456"
     run(db.commit())
     assert run(ensure_grooming_template(db)) == "exists"
     left = _items(db, run, tpl.id)
-    assert len(left) == 2 and left[0].color == "#123456"
+    assert {i.code for i in left} == keep and left[0].color == "#123456"
+
+
+def test_missing_whole_group_is_topped_up_on_restart(db, run):
+    """老版本模板只有舔/啃两组：重启后补上抓挠部位和蹭两组，原有的不动。"""
+    _admin(db, run)
+    run(ensure_grooming_template(db))
+    tpl = _tpl(db, run)
+    for i in _items(db, run, tpl.id):
+        if i.code.startswith(("scratch", "rub_body")):
+            db._s.delete(i)
+    lick = next(i for i in _items(db, run, tpl.id) if i.code == "lick_body")
+    lick.display_name = "舔"
+    run(db.commit())
+    assert len(_items(db, run, tpl.id)) == 10
+
+    assert run(ensure_grooming_template(db)) == "updated"
+    items = _items(db, run, tpl.id)
+    assert len(items) == 19
+    assert next(i for i in items if i.code == "lick_body").display_name == "舔"
+    assert run(ensure_grooming_template(db)) == "exists"
 
 
 def test_no_admin_means_nothing_written_and_retry_later(db, run):
@@ -128,4 +154,4 @@ def test_lifespan_really_seeds_the_template(db, run, monkeypatch):
 
     run(boot())
     assert _tpl(db, run) is not None
-    assert len(_items(db, run, _tpl(db, run).id)) == 10
+    assert len(_items(db, run, _tpl(db, run).id)) == 19

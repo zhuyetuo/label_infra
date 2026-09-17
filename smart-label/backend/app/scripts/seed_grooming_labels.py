@@ -15,11 +15,15 @@ label_service 现在会把姿态像舔/啃的片段当候选送上来，label_na
 
     舔身体          ← 候选默认落在这个上面
     啃身体
+    抓挠            ← 项目里一般已经有，有就用现成的
+    蹭身体
     舔身体-前肢爪   舔身体-后肢臀尾   舔身体-躯干侧腹   舔身体-生殖区肛周
     啃身体-前肢爪   啃身体-后肢臀尾   啃身体-躯干侧腹   啃身体-生殖区肛周
+    抓挠-头颈耳     抓挠-躯干侧腹     抓挠-胸腹         抓挠-后肢臀尾
+    蹭身体-头脸口鼻 蹭身体-背部翻滚   蹭身体-躯干侧腹   蹭身体-臀尾肛周
 
 带部位的挂在对应父标签下（parent_id）。确认候选时下拉「改成别的」就能直接选到
-具体部位；不想分那么细就 --no-parts 只加两个。
+具体部位；不想分那么细就 --no-parts 只加父标签。
 
 可以反复跑：display_name 或 code 已经有了的跳过；之前停用掉的会重新启用。
 默认只打印计划，加 --apply 才写库。
@@ -38,7 +42,7 @@ from app.db.session import SessionLocal
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User
-from app.services.grooming_labels import BASE_LABELS, BODY_PARTS, Row, pick_admin, wanted_rows  # noqa: F401
+from app.services.grooming_labels import GROUPS, Row, pick_admin, wanted_rows  # noqa: F401
 
 
 @dataclass
@@ -146,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--project", type=int, required=True, help="项目 id")
     ap.add_argument("--apply", action="store_true", help="真写库；不加只预览")
-    ap.add_argument("--no-parts", action="store_true", help="只加「舔身体」「啃身体」两个，不加部位子标签")
+    ap.add_argument("--no-parts", action="store_true", help="只加父标签，不加部位子标签")
     ap.add_argument("--user", type=int, default=None, help="created_by 用哪个用户 id；默认挑一个管理员")
     args = ap.parse_args(argv)
     return asyncio.run(run(args.project, args.apply, not args.no_parts, args.user))
