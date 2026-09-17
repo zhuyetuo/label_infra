@@ -22,7 +22,7 @@ from app.db.session import SessionLocal
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
-from app.services import dog_presence_service as presence
+from app.services import site_layout
 from app.services import vision_sam_client as vc
 from app.services.vision_seek_service import video_path_of
 
@@ -111,17 +111,29 @@ def day_dir_of(sample: Sample) -> str | None:
 
 
 def usable_cams(sample: Sample) -> list[str]:
-    """这份样本哪几路能拿来当 IMU 的候选。
+    """这份样本哪几路能拿来当 IMU 的候选：按现场布局表（site_layout，抄自采集端配置）
+    看每一路视频是这只狗自己单间的摄像头还是公共区。
 
-    狗场：六个单间各一只狗一个摄像头（样本的 cam1），外加一个公共区摄像头（cam2）。
-    公共区里几只狗同时在，画面里找到"有狗在舔"也对不上是哪只的 IMU——所以一间一狗的
-    场地只用 cam1。影棚：四只狗三个公共摄像头，没有"自己的那一路"，只能全用，
-    命中的候选要人看清是哪只狗（工作台标题上有狗名）。
+    狗场：自己单间那一路用，公共区（cam7）不用——几只狗同在，画面里找到的对不上是谁的 IMU。
+    影棚：三路全是公共的，只能全用，命中的候选要人看清是哪只狗。
+    认不出来的（老数据、别的场地）按能用处理，别把老数据挡掉。
     """
-    present = [c for c in ("cam1", "cam2", "cam3") if video_path_of(sample, c)]
-    if presence.is_one_dog_site(sample.sample_code, day_dir_of(sample)):
-        return [c for c in present if c == "cam1"]
-    return present
+    out = []
+    for c in ("cam1", "cam2", "cam3"):
+        path = video_path_of(sample, c)
+        if not path:
+            continue
+        kind = site_layout.classify(path, sample.sample_code, day_dir_of(sample))
+        if kind == "public" and site_layout.site_of(sample.sample_code, day_dir_of(sample), path) == "gouchang":
+            continue        # 狗场公共区：不用
+        out.append(c)
+    return out
+
+
+def is_multi_dog(sample: Sample, cam: str) -> bool:
+    """这一路画面里可能有别的狗（影棚 / 公共区）。"""
+    path = video_path_of(sample, cam)
+    return site_layout.classify(path, sample.sample_code, day_dir_of(sample)) == "public"
 
 
 async def project_videos(db: AsyncSession, project_id: int, cam: str,
@@ -234,12 +246,12 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
         # 整个项目：每份样本只搜能对上 IMU 的那几路（一间一狗的场地只搜自己房间那一路）
         rows = await project_videos(db, task.project_id, "all")
     by_path: dict[str, list[Task]] = {}
-    _code_of: dict[int, str | None] = {}
-    _day_of: dict[int, str | None] = {}
+    _multi_of: dict[int, bool] = {}
     for t, s_, path in rows:
         by_path.setdefault(path, []).append(t)
-        _code_of[t.id] = s_.sample_code if s_ else None
-        _day_of[t.id] = day_dir_of(s_) if s_ else None
+        if s_ is not None:
+            kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
+            _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
     paths = list(by_path)
     if not paths:
         raise ValueError("这个范围里没有可搜的视频")
@@ -264,9 +276,8 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
             written += n
             per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t)})
     await db.commit()
-    # 多狗同场（影棚）的命中要提醒：画面里那只不一定是这条 IMU 的狗
-    multi = sum(pt["candidates"] for pt in per_task
-                if not presence.is_one_dog_site(_code_of.get(pt["task_id"]), _day_of.get(pt["task_id"])))
+    # 多狗同场（影棚 / 公共区）的命中要提醒：画面里那只不一定是这条 IMU 的狗
+    multi = sum(pt["candidates"] for pt in per_task if _multi_of.get(pt["task_id"]))
     return {"written": written, "hits": len(r.get("hits", [])), "segments": len(r.get("segments", [])),
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi}
