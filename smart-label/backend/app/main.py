@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,33 @@ from app.core.logging_setup import setup_logging
 setup_logging("api")
 logger = logging.getLogger("smart-label")
 
-app = FastAPI(title="smart-label", version="0.1.0")
+
+async def _seed_builtin_templates():
+    """内置的「舔/啃（IMU 候选）」标签模板：没有就建，有了不碰。
+
+    库还没起来 / 还没建管理员时不能让 API 起不来——记一条日志，下次重启再试。
+    """
+    from app.db.session import SessionLocal
+    from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template
+
+    try:
+        async with SessionLocal() as db:
+            result = await ensure_grooming_template(db)
+        if result == "created":
+            logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
+        elif result == "no_admin":
+            logger.warning("还没有管理员账号，内置标签模板「%s」这次没建，下次启动再试", TEMPLATE_NAME)
+    except Exception:  # noqa: BLE001
+        logger.exception("建内置标签模板「%s」失败，跳过", TEMPLATE_NAME)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    await _seed_builtin_templates()
+    yield
+
+
+app = FastAPI(title="smart-label", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
