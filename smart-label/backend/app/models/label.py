@@ -9,7 +9,7 @@ from app.db.base import Base
 class LabelDefinition(Base):
     """
     行为标签体系，管理员通过后台 CRUD 维护，不写死为 ENUM。
-    parent_id 预留分层字段，当前阶段一律为 NULL（不启用分层）。
+    parent_id 是层级标签的上级（舔身体 → 前爪 → 前左爪），没有上级为 NULL。
 
     标签属于某个项目：同一份数据在不同项目里要标的东西不一样，所以 code 只在
     项目内唯一，不同项目可以各自有同名的 code。

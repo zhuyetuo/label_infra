@@ -13,14 +13,14 @@ label_service 现在会把姿态像舔/啃的片段当候选送上来，label_na
 
 加的东西：
 
-    舔身体          ← 候选默认落在这个上面
-    啃身体
+    舔              ← 候选默认落在这个上面（老项目叫「舔身体」，也认）
+    啃
     抓挠            ← 项目里一般已经有，有就用现成的
-    蹭身体
-    舔身体-前爪 -前左爪 -前右爪 -后爪 -后左爪 -后右爪 -躯干侧腹 -生殖区肛周
-    啃身体-前爪 -前左爪 -前右爪 -后爪 -后左爪 -后右爪 -躯干侧腹 -生殖区肛周
-    抓挠-头颈耳     抓挠-躯干侧腹     抓挠-胸腹         抓挠-后肢臀尾
-    蹭身体-头脸口鼻 蹭身体-背部翻滚   蹭身体-躯干侧腹   蹭身体-臀尾肛周
+    蹭
+    舔-前爪（→ 前左爪 / 前右爪）  舔-后爪（→ 后左爪 / 后右爪）  舔-躯干侧腹  舔-生殖区肛周
+    啃-前爪（→ 前左爪 / 前右爪）  啃-后爪（→ 后左爪 / 后右爪）  啃-躯干侧腹  啃-生殖区肛周
+    抓挠-头颈耳  抓挠-躯干侧腹  抓挠-胸腹  抓挠-后肢臀尾
+    蹭-头脸口鼻  蹭-背部翻滚  蹭-躯干侧腹  蹭-臀尾肛周
 
 带部位的挂在对应父标签下（parent_id）。确认候选时下拉「改成别的」就能直接选到
 具体部位；不想分那么细就 --no-parts 只加父标签。
@@ -42,7 +42,7 @@ from app.db.session import SessionLocal
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User
-from app.services.grooming_labels import GROUPS, Row, pick_admin, wanted_rows  # noqa: F401
+from app.services.grooming_labels import GROUPS, Row, alias_names, pick_admin, wanted_rows  # noqa: F401
 
 
 @dataclass
@@ -65,7 +65,7 @@ async def plan(db, project_id: int, with_parts: bool = True) -> list[Action]:
     for row in wanted_rows(with_parts):
         # 同名优先：候选确认是按 display_name 找的，名字对上就算有，
         # 哪怕 code 是人手敲的别的写法
-        hit = by_name.get(row.display_name) or by_code.get(row.code)
+        hit = next((by_name[n] for n in alias_names(row.display_name) if n in by_name), None) or by_code.get(row.code)
         if hit is None:
             actions.append(Action("create", row))
         elif not hit.is_active:
@@ -92,9 +92,13 @@ async def apply_plan(db, project_id: int, user_id: int, actions: list[Action]) -
             await db.flush()
             id_by_code[a.row.code] = label.id
         else:
+            label = await db.get(LabelDefinition, a.existing_id)
             if a.kind == "reactivate":
-                label = await db.get(LabelDefinition, a.existing_id)
                 label.is_active = True
+            # 本来就有、但还没挂上级的（老项目按模板套的），顺手挂上
+            parent_id = id_by_code.get(a.row.parent_code) if a.row.parent_code else None
+            if label.parent_id is None and parent_id is not None and parent_id != label.id:
+                label.parent_id = parent_id
             id_by_code[a.row.code] = a.existing_id
         counts[a.kind] += 1
     await db.commit()

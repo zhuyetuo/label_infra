@@ -20,11 +20,17 @@ async def _seed_builtin_templates():
     库还没起来 / 还没建管理员时不能让 API 起不来——记一条日志，下次重启再试。
     """
     from app.db.session import SessionLocal
+    from app.services import label_tree
     from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template
 
     try:
         async with SessionLocal() as db:
             result = await ensure_grooming_template(db)
+            # 老项目按模板套过的标签还没挂父子关系：按模板条目的 parent_code 补上
+            linked = await label_tree.link_from_templates(db)
+            if linked:
+                await db.commit()
+                logger.info("按模板给 %d 条项目标签补上了上级", linked)
         if result == "created":
             logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
         elif result == "updated":

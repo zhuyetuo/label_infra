@@ -6,6 +6,8 @@ export interface LabelTemplateItem {
   display_name: string;
   color?: string | null;
   sort_order: number;
+  /** 上级标签的 code（层级：舔 → 前爪 → 前左爪）。可以是模板里另一条，也可以是项目里已有的 code */
+  parent_code?: string | null;
 }
 
 export interface LabelTemplate {
@@ -41,6 +43,6 @@ export const deleteLabelTemplate = (id: number) => request.delete<never, null>(`
 
 /** 把模板套用到项目；项目里已有同 code 的标签会被跳过 */
 export const applyLabelTemplate = (templateId: number, projectId: number) =>
-  request.post<never, { created: number; skipped: number; skipped_codes: string[] }>(
+  request.post<never, { created: number; skipped: number; skipped_codes: string[]; linked: number }>(
     `/label-templates/${templateId}/apply-to/${projectId}`
   );

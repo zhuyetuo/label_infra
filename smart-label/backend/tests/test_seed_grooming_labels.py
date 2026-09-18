@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
+from app.services.grooming_labels import walk_parts
 from app.scripts.seed_grooming_labels import (
     GROUPS, apply_plan, describe, pick_user, plan, wanted_rows,
 )
@@ -36,8 +37,8 @@ def _labels(db, run, pid):
 
 def test_wanted_rows_parents_before_children_and_no_dupes():
     rows = wanted_rows()
-    assert [r.display_name for r in rows[:4]] == ["舔身体", "啃身体", "抓挠", "蹭身体"]
-    assert len(rows) == sum(1 + len(g[4]) for g in GROUPS) == 28
+    assert [r.display_name for r in rows[:4]] == ["舔", "啃", "抓挠", "蹭"]
+    assert len(rows) == sum(1 + len(list(walk_parts(g[4], g[0], g[1]))) for g in GROUPS) == 28
     assert len({r.code for r in rows}) == len(rows)
     assert len({r.display_name for r in rows}) == len(rows)
     seen = set()
@@ -62,18 +63,18 @@ def test_fresh_project_gets_everything_and_candidate_lookup_works(db, run):
     # 候选确认走的就是这条查询：display_name == label_name
     hit = run(db.execute(select(LabelDefinition.id).where(
         LabelDefinition.project_id == p.id,
-        (LabelDefinition.display_name == "舔身体") | (LabelDefinition.code == "舔身体"),
+        (LabelDefinition.display_name == "舔") | (LabelDefinition.code == "舔"),
     ).limit(1))).scalar_one_or_none()
     assert hit is not None
     by_name = {l.display_name: l for l in labels}
-    assert by_name["舔身体-前爪"].parent_id == by_name["舔身体"].id
-    assert by_name["啃身体-生殖区肛周"].parent_id == by_name["啃身体"].id
-    assert by_name["舔身体"].parent_id is None
+    assert by_name["舔-前爪"].parent_id == by_name["舔"].id
+    assert by_name["啃-生殖区肛周"].parent_id == by_name["啃"].id
+    assert by_name["舔"].parent_id is None
     assert all(l.created_by == admin.id for l in labels)
     assert all(l.is_active for l in labels)
     assert all(l.color for l in labels)
     # 排序：父、它的子、下一个父、它的子
-    assert [l.display_name for l in labels][:3] == ["舔身体", "舔身体-前爪", "舔身体-前左爪"]
+    assert [l.display_name for l in labels][:3] == ["舔", "舔-前爪", "舔-前左爪"]
 
 
 def test_second_run_changes_nothing(db, run):
@@ -90,21 +91,21 @@ def test_second_run_changes_nothing(db, run):
 def test_hand_made_label_with_other_code_is_kept_and_used_as_parent(db, run):
     """标签管理页里人先加过「舔身体」（code 随手写的）：不重复加，子标签挂到它下面。"""
     admin, _, p = _seed_users_project(db, run)
-    mine = LabelDefinition(project_id=p.id, code="tian", display_name="舔身体", color="#000",
+    mine = LabelDefinition(project_id=p.id, code="tian", display_name="舔", color="#000",
                            sort_order=3, created_by=admin.id)
     db.add(mine)
     run(db.commit())
     actions = run(plan(db, p.id))
     kinds = {a.row.display_name: a.kind for a in actions}
-    assert kinds["舔身体"] == "keep"
-    assert kinds["啃身体"] == "create"
+    assert kinds["舔"] == "keep"
+    assert kinds["啃"] == "create"
     run(apply_plan(db, p.id, admin.id, actions))
     labels = _labels(db, run, p.id)
     assert len(labels) == 28
     by_name = {l.display_name: l for l in labels}
-    assert by_name["舔身体"].id == mine.id
-    assert by_name["舔身体"].code == "tian" and by_name["舔身体"].color == "#000"
-    assert by_name["舔身体-躯干侧腹"].parent_id == mine.id
+    assert by_name["舔"].id == mine.id
+    assert by_name["舔"].code == "tian" and by_name["舔"].color == "#000"
+    assert by_name["舔-躯干侧腹"].parent_id == mine.id
     assert "code 相同" not in describe(actions)
 
 
@@ -124,7 +125,7 @@ def test_same_code_different_name_counts_as_present(db, run):
 def test_inactive_label_is_reactivated(db, run):
     admin, _, p = _seed_users_project(db, run)
     run(apply_plan(db, p.id, admin.id, run(plan(db, p.id))))
-    lick = next(l for l in _labels(db, run, p.id) if l.display_name == "舔身体")
+    lick = next(l for l in _labels(db, run, p.id) if l.display_name == "舔")
     lick.is_active = False
     run(db.commit())
     actions = run(plan(db, p.id))
@@ -139,7 +140,7 @@ def test_no_parts_only_parents(db, run):
     admin, _, p = _seed_users_project(db, run)
     actions = run(plan(db, p.id, with_parts=False))
     run(apply_plan(db, p.id, admin.id, actions))
-    assert sorted(l.display_name for l in _labels(db, run, p.id)) == ["啃身体", "抓挠", "舔身体", "蹭身体"]
+    assert sorted(l.display_name for l in _labels(db, run, p.id)) == ["啃", "抓挠", "舔", "蹭"]
 
 
 def test_plan_alone_writes_nothing(db, run):
@@ -173,7 +174,7 @@ def test_describe_lists_every_row(db, run):
     _, _, p = _seed_users_project(db, run)
     text = describe(run(plan(db, p.id)))
     assert text.count("新增") == 28
-    assert "舔身体  [lick_body]" in text
+    assert "舔  [lick_body]" in text
 
 
 def _fake_session_local(db):
@@ -240,4 +241,4 @@ def test_existing_scratch_label_is_reused_as_parent(db, run):
     assert sum(l.display_name == "抓挠" for l in labels) == 1
     by_name = {l.display_name: l for l in labels}
     assert by_name["抓挠-头颈耳"].parent_id == old.id
-    assert by_name["蹭身体-臀尾肛周"].parent_id == by_name["蹭身体"].id
+    assert by_name["蹭-臀尾肛周"].parent_id == by_name["蹭"].id

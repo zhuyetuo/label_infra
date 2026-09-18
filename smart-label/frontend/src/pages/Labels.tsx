@@ -12,6 +12,7 @@ import LabelTemplates from "@/pages/LabelTemplates";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
 import type { LabelDefinition } from "@/types";
+import { byId, descendantIds, flatten, shortName } from "@/utils/labelTree";
 
 // 标签模板本来是单独一个导航项，并进这里做成第二个 Tab——它跟"标签"本来就是
 // 同一件事（给标注用的标签），不用单独占一条侧边栏。
@@ -31,6 +32,7 @@ interface FormValues {
   display_name: string;
   color?: string;
   sort_order?: number;
+  parent_id?: number | null;
 }
 
 function LabelDefinitionsPanel() {
@@ -59,11 +61,13 @@ function LabelDefinitionsPanel() {
   const handleApplyTemplate = async () => {
     if (projectId == null || applyTemplateId == null) return;
     const r = await applyLabelTemplate(applyTemplateId, projectId);
+    const linked = r.linked ? `，给已有的 ${r.linked} 个补上了上级` : "";
     if (r.created === 0 && r.skipped > 0) {
-      message.warning(`本项目已有这些标签，全部跳过：${r.skipped_codes.join("、")}`);
+      if (r.linked) message.success(`标签都已经有了${linked}`);
+      else message.warning(`本项目已有这些标签，全部跳过：${r.skipped_codes.join("、")}`);
     } else {
       message.success(
-        `已添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}`
+        `已添加 ${r.created} 个标签${r.skipped ? `，跳过已存在的 ${r.skipped} 个` : ""}${linked}`
       );
     }
     setApplyOpen(false);
@@ -104,6 +108,7 @@ function LabelDefinitionsPanel() {
       display_name: "",
       color: nextColor,
       sort_order: (data?.length ?? 0) + 1,
+      parent_id: null,
     });
     setOpen(true);
   };
@@ -115,6 +120,7 @@ function LabelDefinitionsPanel() {
       display_name: label.display_name,
       color: label.color ?? PRESET_COLORS[0],
       sort_order: label.sort_order,
+      parent_id: label.parent_id,
     });
     setOpen(true);
   };
@@ -125,6 +131,7 @@ function LabelDefinitionsPanel() {
         display_name: values.display_name,
         color: values.color,
         sort_order: values.sort_order,
+        parent_id: values.parent_id ?? null,
       });
       message.success("已保存");
     } else {
@@ -132,13 +139,26 @@ function LabelDefinitionsPanel() {
         message.warning("请先选择项目");
         return;
       }
-      await createLabel({ ...values, project_id: projectId });
+      await createLabel({ ...values, parent_id: values.parent_id ?? null, project_id: projectId });
       message.success("创建成功");
     }
     setOpen(false);
     form.resetFields();
     refresh();
   };
+
+  const labelMap = byId(data ?? []);
+  const flat = flatten(data ?? []);
+  const rows = flat.map((f) => f.label);
+  const depthOf = new Map(flat.map((f) => [f.label.id, f.depth]));
+  // 上级候选：同项目里除了自己和自己子孙以外的标签，带缩进
+  const excluded = editing ? descendantIds(data ?? [], [editing.id]) : new Set<number>();
+  const parentOptions = flat
+    .filter((f) => !excluded.has(f.label.id))
+    .map((f) => ({
+      value: f.label.id,
+      label: `${"　".repeat(f.depth)}${f.depth ? "└ " : ""}${f.label.display_name}`,
+    }));
 
   return (
     <div>
@@ -162,20 +182,36 @@ function LabelDefinitionsPanel() {
       <Table
         rowKey="id"
         loading={isLoading}
-        dataSource={data}
+        // 按层级排：父在前、子缩进跟在后面，一眼看出谁挂在谁下面
+        dataSource={rows}
         columns={[
           { title: "ID", dataIndex: "id", width: 60 },
           { title: "code", dataIndex: "code" },
           {
             title: "显示名",
             render: (_, l: LabelDefinition) => (
-              <Space>
+              <Space style={{ paddingLeft: (depthOf.get(l.id) ?? 0) * 18 }}>
+                {(depthOf.get(l.id) ?? 0) > 0 && <span style={{ color: "#bbb" }}>└</span>}
                 <Tag color={l.color ?? undefined} style={{ fontSize: 13 }}>
                   {l.display_name}
                 </Tag>
                 {!l.is_active && <Tag>已停用</Tag>}
               </Space>
             ),
+          },
+          {
+            title: (
+              <Tooltip title="层级标签：看得清标最细的（舔-前左爪），看不清停在上级（舔-前爪 / 舔）。标了细的自动算进上级：统计、导出都按树算">
+                上级
+              </Tooltip>
+            ),
+            width: 140,
+            render: (_, l: LabelDefinition) =>
+              l.parent_id != null && labelMap.get(l.parent_id) ? (
+                <Tag color={labelMap.get(l.parent_id)!.color ?? undefined}>{labelMap.get(l.parent_id)!.display_name}</Tag>
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
           },
           {
             title: "颜色",
@@ -301,6 +337,13 @@ function LabelDefinitionsPanel() {
           </Form.Item>
           <Form.Item name="sort_order" label="排序（越小越靠前）">
             <InputNumber min={0} style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item
+            name="parent_id"
+            label="上级标签（可不填）"
+            extra="层级标签：工作台第一行只显示没有上级的大类，选了大类才展开它的子类。看得清标最细的，看不清停在上级；标了细的自动算进上级"
+          >
+            <Select allowClear showSearch optionFilterProp="label" placeholder="没有上级" options={parentOptions} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block>
             {editing ? "保存" : "创建"}

@@ -34,6 +34,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
+import { chainOf, childrenMap, descendantIds, related as labelsRelated, shortName } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -92,8 +93,9 @@ interface VideoSrc {
 const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", "#13c2c2"];
 const HEARTBEAT_MS = 30_000;
 // 片段循环播放时前后各多放这么多毫秒，让人看得到"起止前后是什么动作"
-// 快捷键顺序跟参考工具一致：1-9、0，然后 q w e r t y，再 a s d f g h
-const HOTKEYS = "1234567890qwertyasdfgh".split("");
+// 快捷键按层级分行：第一行大类用数字键，第二行（选中大类的子类）用 q 那一排，
+// 第三行用 a 那一排，第四行 z 那一排。键盘上的一行对应屏幕上的一行，不用记
+const ROW_KEYS = ["1234567890", "qwertyuiop", "asdfghjkl;", "zxcvbnm,./"].map((r) => r.split(""));
 // 波形区（单条波形模式）默认露出的高度：六条通道全都渲染在里面，这个盒子只
 // 卡住"一条通道 + 顶部说明 + 底部日期行"的高度，刚好够，多出来的部分往下滚
 // 才看得到，不占视频的地盘。
@@ -358,15 +360,30 @@ export default function AnnotationWorkspace({
   // 引用、不会变，SegmentPanel 里那个"换任务重新套上默认筛选"的 effect 就不会
   // 触发——于是只有第一个任务是筛好的，后面几个又回到全部类别。带上 taskId 让
   // 每次打开都产生一个新引用。
+  // 层级：筛「抓挠」把它的子类（抓挠-头颈耳……）一起带上，标了细的也是抓挠
   const initialSegmentFilter = useMemo(
-    () => (focusIds.length ? focusIds : focusLabelIds ?? []),
-    [focusIds, focusLabelIds, taskId]
+    () => [...descendantIds(labels, focusIds.length ? focusIds : focusLabelIds ?? [])],
+    [focusIds, focusLabelIds, taskId, labels]
   );
   // 「抓挠」在这个项目里的标签 id：候选面板的「改成别的」要把它排掉
+  // 只排父标签本身：「改成别的」里还得能选到「抓挠-头颈耳」这种细分
   const scratchIds = useMemo(
     () => labels.filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id),
     [labels]
   );
+  // 层级标签：第一行只摆大类（没有上级的），选了哪个大类下面才展开它的子类，再下一层同理
+  const labelChildren = useMemo(() => childrenMap(labels), [labels]);
+  const labelRows = useMemo(() => {
+    const rows: { parent: LabelDefinition | null; items: LabelDefinition[] }[] = [{ parent: null, items: labelChildren.get(null) ?? [] }];
+    if (labelId != null) {
+      for (const node of chainOf(labelById, labelId)) {
+        const kids = labelChildren.get(node.id) ?? [];
+        if (kids.length) rows.push({ parent: node, items: kids });
+      }
+    }
+    return rows.slice(0, ROW_KEYS.length);
+  }, [labels, labelId, labelChildren, labelById]);
+  const selectedChain = useMemo(() => new Set(labelId != null ? chainOf(labelById, labelId).map((l) => l.id) : []), [labelId, labelById]);
   const colorOf = (id: number) =>
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
   const nameOf = (id: number) => labelById.get(id)?.display_name ?? `#${id}`;
@@ -510,7 +527,7 @@ export default function AnnotationWorkspace({
       // 新结果里跟"人工已经定过"的片段撞在一起的，多半是同一段被这一版又标了
       // 一遍。不自动删——起止可能不一样，值得对比——但要标出来让人一眼看见
       const overlaps = (a: LabelItem, b: LabelItem) =>
-        a.start_time_ms < b.end_time_ms && b.start_time_ms < a.end_time_ms && a.label_id === b.label_id;
+        a.start_time_ms < b.end_time_ms && b.start_time_ms < a.end_time_ms && labelsRelated(labelById, a.label_id, b.label_id);
       const dup = new Set<number>();
       for (const c of created) {
         if (kept.some((k) => overlaps(c, k))) dup.add(c.id);
@@ -649,16 +666,20 @@ export default function AnnotationWorkspace({
         setLabelId(null);
         return;
       }
-      const idx = HOTKEYS.indexOf(e.key.toLowerCase());
-      if (idx >= 0 && idx < labels.length) {
+      const k = e.key.toLowerCase();
+      for (let r = 0; r < labelRows.length; r++) {
+        const idx = ROW_KEYS[r].indexOf(k);
+        if (idx < 0 || idx >= labelRows[r].items.length) continue;
         e.preventDefault();
+        const id = labelRows[r].items[idx].id;
         // 再按一次同一个键就取消选中，跟点按钮的行为一致
-        setLabelId((prev) => (prev === labels[idx].id ? null : labels[idx].id));
+        setLabelId((prev) => (prev === id ? null : id));
+        return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [taskId, readOnly, labels]);
+  }, [taskId, readOnly, labelRows]);
 
   // ── 下面四个面板 ─────────────────────────────────────────────────────
   // 每个面板一个 Collapse，按 panelOrder 的顺序摆，panelHidden 里的不摆。
@@ -1335,28 +1356,43 @@ export default function AnnotationWorkspace({
         {!readOnly && (
           <div style={{ margin: "12px 0", padding: 8, background: "#fafafa", borderRadius: 4 }}>
             <Space wrap size={6} style={{ marginBottom: 8 }}>
-              {labels.map((l, i) => {
-                const selected = labelId === l.id;
-                const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
-                return (
-                  <Button
-                    key={l.id}
-                    size="small"
-                    onClick={() => setLabelId(selected ? null : l.id)}
-                    style={{
-                      borderColor: c,
-                      color: selected ? "#fff" : c,
-                      background: selected ? c : "#fff",
-                      fontWeight: selected ? 600 : 400,
-                    }}
-                  >
-                    {l.display_name}
-                    {i < HOTKEYS.length && (
-                      <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{HOTKEYS[i]}</span>
-                    )}
-                  </Button>
-                );
-              })}
+              {labelRows.map((row, r) => (
+                <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {row.parent && (
+                    <Tooltip title={`「${row.parent.display_name}」的子类。看得清就选具体的；看不清停在上级也行，标了细的自动算进上级`}>
+                      <span style={{ color: "#999", fontSize: 12, marginLeft: r > 1 ? 8 : 0 }}>
+                        {shortName(labelById, row.parent)} ›
+                      </span>
+                    </Tooltip>
+                  )}
+                  {row.items.map((l, i) => {
+                    const selected = labelId === l.id;
+                    const onPath = !selected && selectedChain.has(l.id);
+                    const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
+                    const kids = (labelChildren.get(l.id) ?? []).length;
+                    return (
+                      <Button
+                        key={l.id}
+                        size="small"
+                        onClick={() => setLabelId(selected ? null : l.id)}
+                        style={{
+                          borderColor: c,
+                          color: selected ? "#fff" : c,
+                          background: selected ? c : "#fff",
+                          fontWeight: selected || onPath ? 600 : 400,
+                          boxShadow: onPath ? `inset 0 0 0 1px ${c}` : undefined,
+                        }}
+                      >
+                        {row.parent ? shortName(labelById, l) : l.display_name}
+                        {kids > 0 && <span style={{ marginLeft: 3, opacity: 0.6, fontSize: 10 }}>▾</span>}
+                        {i < ROW_KEYS[r].length && (
+                          <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{ROW_KEYS[r][i]}</span>
+                        )}
+                      </Button>
+                    );
+                  })}
+                </span>
+              ))}
               {labels.length === 0 && (
                 <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
               )}

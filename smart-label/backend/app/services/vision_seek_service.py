@@ -38,41 +38,52 @@ from app.models.task import Task, TaskStatus
 from app.services import llm_provider_service as llmsvc
 from app.services import vision_sam_client as vc
 from app.services.ai_prelabel_service import CandidateItem
-from app.services.grooming_labels import GROUPS
+from app.services import label_tree
+from app.services.grooming_labels import GROUPS, alias_names
 
 _logger = logging.getLogger("smart-label.vision_seek")
 
 REASON = "vision"
 
-# 给模型看的一句话：这个动作长什么样。按 grooming_labels 里的分组走，项目里有
+# 给模型看的一句话：这个动作长什么样。按 grooming_labels 里的分组（code）走，项目里有
 # 哪些父标签就送哪些；部位子标签有的也一并送去让它选。
 DESCRIPTIONS: dict[str, str] = {
-    "舔身体": "狗用舌头反复舔自己身体的某处，头低下贴着那个部位，持续几秒以上",
-    "啃身体": "狗用牙齿啃咬自己身体的某处（常见啃爪子、啃尾根），头贴着那个部位小幅度地啃",
-    "抓挠": "狗用后腿快速抓挠自己身体（耳朵、脖子、侧腹等），后腿有节奏地来回蹬",
-    "蹭身体": "狗把身体某处在地面、墙面或物体上蹭：蹭脸、仰躺翻滚蹭背、侧身蹭墙、坐着拖屁股",
+    "lick_body": "狗用舌头反复舔自己身体的某处，头低下贴着那个部位，持续几秒以上",
+    "chew_body": "狗用牙齿啃咬自己身体的某处（常见啃爪子、啃尾根），头贴着那个部位小幅度地啃",
+    "scratch": "狗用后腿快速抓挠自己身体（耳朵、脖子、侧腹等），后腿有节奏地来回蹬",
+    "rub_body": "狗把身体某处在地面、墙面或物体上蹭：蹭脸、仰躺翻滚蹭背、侧身蹭墙、坐着拖屁股",
 }
 
 
 def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None) -> list[dict]:
     """项目标签 → 送给视觉服务的 [{name, description, parts}]。
 
-    只送 GROUPS 里那四类（有描述、模型分得清），项目里没有的不送；
-    部位取项目里实际存在的「父名-部位」子标签。wanted 传了就只送这几个父类。
+    只送 GROUPS 里那四类（有描述、模型分得清），项目里没有的不送。父标签按 code
+    或名字（新旧名都认：「舔」「舔身体」）找，送项目里实际的显示名；部位取它的
+    全部子孙标签（层级）加上按「父名-部位」命名的（老项目没挂父子关系也认）。
+    wanted 传了就只送这几个父类（按显示名）。
     """
-    names = {l.display_name for l in labels if l.is_active}
+    active = [l for l in labels if l.is_active]
+    names = {l.display_name for l in active}
     out = []
-    for code, name, _color, _tpl, parts in GROUPS:
-        if name not in names:
+    for code, name, _color, _tpl, _parts in GROUPS:
+        parent = next((l for l in active if l.code == code), None) or \
+            next((l for l in active if l.display_name in alias_names(name)), None)
+        if parent is None:
             continue
-        if wanted is not None and name not in wanted:
+        if wanted is not None and parent.display_name not in wanted:
             continue
-        # 部位按「父名-xxx」取项目里真有的：模板里的按模板顺序在前，项目自己加的
-        # （或老版本模板留下的「前肢爪」这种旧名）跟在后面，都送去让模型选
-        have_parts = [p for _c, p, _col in parts if f"{name}-{p}" in names]
-        have_parts += sorted(n[len(name) + 1:] for n in names
-                             if n.startswith(name + "-") and n[len(name) + 1:] not in have_parts)
-        out.append({"name": name, "description": DESCRIPTIONS.get(name, ""), "parts": have_parts})
+        pname = parent.display_name
+        # 子孙标签的部位名：去掉「父名-」前缀（舔-前左爪 → 前左爪）
+        desc_ids = label_tree.descendants(active, {parent.id}) - {parent.id}
+        parts: list[str] = []
+        for l in sorted((l for l in active if l.id in desc_ids), key=lambda l: (l.sort_order, l.id)):
+            p = l.display_name[len(pname) + 1:] if l.display_name.startswith(pname + "-") else l.display_name
+            if p and p not in parts:
+                parts.append(p)
+        parts += sorted(n[len(pname) + 1:] for n in names
+                        if n.startswith(pname + "-") and n[len(pname) + 1:] not in parts)
+        out.append({"name": pname, "description": DESCRIPTIONS.get(code, ""), "parts": parts})
     return out
 
 
@@ -257,7 +268,7 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
     specs = label_specs(labels, params.labels)
     progress.labels = [s["name"] for s in specs]
     if not specs:
-        raise RuntimeError("项目里没有可找的类别（舔身体/啃身体/抓挠/蹭身体），先套用「抓/舔/啃/蹭」模板")
+        raise RuntimeError("项目里没有可找的类别（舔/啃/抓挠/蹭），先套用「抓/舔/啃/蹭」模板")
     label_names = {l.display_name for l in labels if l.is_active}
 
     llm = None

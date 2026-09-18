@@ -22,22 +22,36 @@ from app.services import vision_seek_service as vs
 
 
 class _L:
-    def __init__(self, name, active=True):
+    _n = 0
+
+    def __init__(self, name, active=True, code=None, parent=None):
+        _L._n += 1
+        self.id = _L._n
+        self.code = code or name
         self.display_name = name
         self.is_active = active
+        self.parent_id = parent.id if parent else None
+        self.sort_order = self.id
 
 
 def test_label_specs_只送项目里有的_部位取真有的():
-    labels = [_L("抓挠"), _L("舔身体"), _L("舔身体-前肢爪"), _L("舔身体-躯干侧腹"), _L("舔身体-前左爪"),
+    # 老项目：父叫「舔身体」、部位靠名字前缀，没挂父子关系
+    lick = _L("舔身体")
+    labels = [_L("抓挠"), lick, _L("舔身体-前肢爪"), _L("舔身体-躯干侧腹"), _L("舔身体-前左爪"),
               _L("蹭身体", active=False), _L("活动")]
     specs = vs.label_specs(labels)
     assert [s["name"] for s in specs] == ["舔身体", "抓挠"]              # 蹭停用了、活动不在四类里
-    lick = specs[0]
-    # 模板里的按模板顺序，老模板留下的旧名「前肢爪」也送
-    assert lick["parts"] == ["前左爪", "躯干侧腹", "前肢爪"] and lick["description"]
+    assert specs[0]["parts"] == ["前左爪", "前肢爪", "躯干侧腹"] and specs[0]["description"]
     assert specs[1]["parts"] == []                                       # 抓挠没加部位子标签
     assert [s["name"] for s in vs.label_specs(labels, ["抓挠"])] == ["抓挠"]
     assert vs.label_specs(labels, ["蹭身体"]) == []
+    # 新项目：父叫「舔」、层级挂好；部位按树取（去掉「舔-」前缀），孙辈也送
+    lick = _L("舔", code="lick_body")
+    fore = _L("舔-前爪", code="lick_body_fore", parent=lick)
+    labels = [lick, fore, _L("舔-前左爪", code="lick_body_fore_l", parent=fore), _L("舔-躯干侧腹", parent=lick)]
+    specs = vs.label_specs(labels)
+    assert [s["name"] for s in specs] == ["舔"]
+    assert specs[0]["parts"] == ["前爪", "前左爪", "躯干侧腹"]
 
 
 def test_segments_to_candidates_秒转毫秒_部位落到子标签():

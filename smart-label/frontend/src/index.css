@@ -1,0 +1,11 @@
+/* 整页只留内容区那一根滚动条。浏览器给 body 默认 8px 外边距，整体布局又是 100vh，
+   合起来比视口高 16px，于是最外层多出一根只能滚 16px 的滚动条，跟内容区自己那根
+   并排两根。把外边距去掉、body 不滚，滚动全交给 Content。 */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}

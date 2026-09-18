@@ -36,6 +36,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelIt
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.dog import Dog
 from app.models.label import LabelDefinition
+from app.services import label_tree
 from app.models.sample import Sample
 from app.models.skin import SkinRecord
 from app.models.skin_daily import SkinDailyStat
@@ -202,7 +203,8 @@ async def daily_tracking(
             .order_by(Sample.sample_code)
         )
     ).all()
-    scratch_label_ids = set(
+    # 「抓挠」加上它的全部子标签（抓挠-头颈耳……）：标了细的也算抓挠
+    scratch_label_ids = await label_tree.expand_ids(db, set(
         (
             await db.execute(
                 select(LabelDefinition.id).where(
@@ -210,7 +212,7 @@ async def daily_tracking(
                 )
             )
         ).scalars().all()
-    )
+    ))
     # 每个任务的人工复看结果：AI 标的抓挠里，确认了几段、判成待定几段（三种原因
     # 分开数）、还有几段本来是 AI 标的抓挠、被人改成别的类别（比如其实是甩身体）。
     # 光看「9 段」不知道人看过没有、看完是什么结论，这几个数就是给这个的。

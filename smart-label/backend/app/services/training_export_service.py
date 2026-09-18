@@ -133,9 +133,22 @@ async def export_dataset(
             "这个范围里没有任务" if only_reviewed else "这个范围里没有审核通过的任务"
         )
 
-    label_names = dict(
-        (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name))).all()
-    )
+    label_rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
+    label_names = {i: n for i, n, _p in label_rows}
+    # 层级：一段标了「舔-前左爪」也算「舔-前爪」「舔」，导出时带整条链，训练用哪层自己挑
+    parent_of = {i: p for i, _n, p in label_rows}
+
+    def chain(label_id: int) -> list[int]:
+        out: list[int] = []
+        cur: int | None = label_id
+        while cur is not None and cur not in out and cur in label_names:
+            out.append(cur)
+            cur = parent_of.get(cur)
+        return out[::-1]
+
+    def related(a: int, b: int) -> bool:
+        """一个是另一个的祖先（父子重叠不算矛盾：细的那段本来就在粗的里面）。"""
+        return a in chain(b) or b in chain(a)
     task_ids = [t.id for t, _ in rows]
     items_by_task: dict[int, list[tuple[int, int, int]]] = {}
     holes_by_task: dict[int, list[tuple[int, int]]] = {}
@@ -260,7 +273,7 @@ async def export_dataset(
             for l2, a2, b2 in ordered[i + 1 :]:
                 if a2 >= b1:
                     break
-                if l1 == l2:
+                if l1 == l2 or related(l1, l2):
                     continue
                 lo, hi = a2, min(b1, b2)
                 conflict_spans.append((lo, hi))
@@ -286,14 +299,19 @@ async def export_dataset(
             if e_ms <= s_ms:
                 continue
             name_ = label_names.get(label_id, str(label_id))
+            # 粗标签的段里，被它子孙标签盖住的部分挖掉：那部分由细的那段导出，
+            # 细的那段自己带着整条链（含这个粗标签），不挖的话同一段时间导两遍
+            finer = [(a, b) for l, a, b in ordered if l != label_id and label_id in chain(l) and a < e_ms and b > s_ms]
+            own_holes = _merge(holes + finer) if finer else holes
             # 跟「待定」重叠的部分挖掉，剩下的碎片各导一条
-            for a_ms, b_ms in _subtract(s_ms, e_ms, holes):
+            for a_ms, b_ms in _subtract(s_ms, e_ms, own_holes):
                 result.append({
                     "from_name": "label", "to_name": "ts", "type": "timeserieslabels",
                     "value": {
                         "start": _fmt(csv_start + timedelta(milliseconds=a_ms)),
                         "end": _fmt(csv_start + timedelta(milliseconds=b_ms)),
-                        "timeserieslabels": [name_],
+                        # 整条链：[舔, 舔-前爪, 舔-前左爪]。没有层级的就一个
+                        "timeserieslabels": [label_names.get(i, str(i)) for i in chain(label_id)],
                         # 相对 CSV 起点的毫秒：核对时「去修」要拿它把工作台开到
                         # 这一刻。训练那边只读上面三个 key，多带两个不影响
                         "start_ms": a_ms,

@@ -4,6 +4,7 @@ import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip,
 import { DownOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
+import { flatten } from "@/utils/labelTree";
 
 /**
  * 疑似抓挠候选面板：正式片段（稳定版）为了准会滤掉一部分真抓挠，这里是低门槛
@@ -40,7 +41,7 @@ interface Props {
   /** 确认/排除之后刷新列表；确认时还要把新片段拉进草稿，所以一并重载草稿 */
   onDecided: (c: AiCandidate, decision: AiCandidate["status"]) => void;
   /** 项目里的标签，给「改成别的类别」用（带颜色，跟已标注片段那边的选择器一致） */
-  labels?: { id: number; display_name: string; color?: string | null }[];
+  labels?: { id: number; display_name: string; color?: string | null; parent_id?: number | null; sort_order?: number }[];
   /** 「抓挠」在这个项目里的标签 id，下拉里要把它排掉（那是「确认是抓挠」干的事） */
   scratchLabelIds?: number[];
   /** 撤回已经做过的判断，回到「待确认」。确认过的还要把带上去的那条片段一起收回 */
@@ -355,12 +356,16 @@ export default function CandidatePanel({
                       <Dropdown
                         menu={{
                           // 跟「已标注片段」那边的标签选择器一样带颜色，扫一眼就能对上
-                          items: otherLabels.map((l) => ({
+                          // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨着，扫一眼就能挑到最细的
+                          items: flatten(otherLabels.map((l) => ({ ...l, parent_id: l.parent_id ?? null }))).map(({ label: l, depth }) => ({
                             key: String(l.id),
                             label: (
-                              <Tag color={l.color || undefined} style={{ marginRight: 0 }}>
-                                {l.display_name}
-                              </Tag>
+                              <span style={{ paddingLeft: depth * 12 }}>
+                                {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
+                                <Tag color={l.color || undefined} style={{ marginRight: 0 }}>
+                                  {l.display_name}
+                                </Tag>
+                              </span>
                             ),
                           })),
                           onClick: ({ key }) => {

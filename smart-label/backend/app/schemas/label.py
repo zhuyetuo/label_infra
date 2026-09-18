@@ -25,6 +25,8 @@ class LabelCreate(BaseModel):
     display_name: str
     color: str | None = None
     sort_order: int = 0
+    # 上级标签（同项目）。层级标签：看得清标最细的，看不清标上级
+    parent_id: int | None = None
 
 
 class LabelUpdate(BaseModel):
@@ -32,3 +34,4 @@ class LabelUpdate(BaseModel):
     color: str | None = None
     sort_order: int | None = None
     is_active: bool | None = None
+    parent_id: int | None = None
