@@ -118,6 +118,8 @@ export interface LocalModel {
     download_log: string[];
     download_error: string | null;
   };
+  /** 最近一次「测试」的结果（视觉服务进程内存，重启归零） */
+  last_test?: { at: number; ok: boolean; latency_ms: number; detail: string | null; error: string | null } | null;
   /** 视觉服务进程内存里的调用计数（重启归零） */
   meter: { calls: number; frames: number; total_ms: number; max_ms: number; errors: number; last_at: number | null; avg_ms: number; avg_ms_per_frame: number };
 }
