@@ -157,7 +157,8 @@ export default function LocalModels() {
                 ) : null}
                 {m.vllm && (
                   <div style={{ fontSize: 12, color: "#888" }}>
-                    {m.vllm.running ? `进程 ${m.vllm.pid} · 端口 ${m.vllm.port}${m.vllm.uptime_s != null ? ` · 已跑 ${Math.round(m.vllm.uptime_s / 60)} 分` : ""}` : `端口 ${m.vllm.port}`}
+                    {m.vllm.backend === "docker" ? `docker ${m.vllm.image ?? ""} · ` : ""}
+                    {m.vllm.running ? `${m.vllm.pid != null ? `进程 ${m.vllm.pid} · ` : ""}端口 ${m.vllm.port}${m.vllm.uptime_s != null ? ` · 已跑 ${Math.round(m.vllm.uptime_s / 60)} 分` : ""}` : `端口 ${m.vllm.port}`}
                     {(m.vllm.log_tail.length > 0 || m.vllm.exited) && (
                       <Button size="small" type="link" style={{ padding: "0 4px" }} loading={logLoading} onClick={openLog}>
                         日志
@@ -189,8 +190,8 @@ export default function LocalModels() {
                     </Popconfirm>
                   ) : (
                     <Tooltip title="拉起 vllm 进程：权重不在本地会先下（几 GB），下好再点一次；模型加载要一两分钟，状态变「已加载」才能用">
-                      <Button size="small" type="link" loading={busy === `${m.key}:load`} disabled={!!busy || m.vllm.downloading} onClick={() => act(m, "load")}>
-                        {m.vllm.downloading ? "下载中…" : "启动"}
+                      <Button size="small" type="link" loading={busy === `${m.key}:load`} disabled={!!busy || m.vllm.downloading || !!m.vllm.pulling} onClick={() => act(m, "load")}>
+                        {m.vllm.downloading ? "下载中…" : m.vllm.pulling ? "拉镜像中…" : "启动"}
                       </Button>
                     </Tooltip>
                   )
