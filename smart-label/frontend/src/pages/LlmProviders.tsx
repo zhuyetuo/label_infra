@@ -8,6 +8,7 @@ import {
   type LlmModel,
   type LlmProvider,
 } from "@/api/llmProviders";
+import LlmCallStats from "@/components/LlmCallStats";
 
 interface EditModel extends LlmModel {
   key: number;
@@ -249,12 +250,14 @@ export default function LlmProviders() {
               <Alert
                 type="info"
                 showIcon
-                message="本地服务：在 GPU 机器上 vllm serve <模型名> --port 8386 起一个 OpenAI 兼容口（8000 太常用，别用），这里地址填 http://<那台机器>:8386/v1，模型名跟 vllm 起的一致。"
+                message="本地服务：在算法机（GPU）上 vllm serve <模型名> --port 8386 起一个 OpenAI 兼容口（8000 太常用，别用）。地址默认按视觉服务所在的算法机局域网地址算出来（http://192.168.x.x:8386/v1），换机器就在这里改；模型名跟 vllm 起的一致。"
               />
             )}
           </Space>
         )}
       </Modal>
+
+      <LlmCallStats />
     </div>
   );
 }

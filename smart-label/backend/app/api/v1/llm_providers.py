@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.models.audit_log import AuditLog
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services import llm_call_service
 from app.services import llm_provider_service as svc
 from app.services import vision_sam_client
 
@@ -97,6 +98,22 @@ async def test_provider(provider: str, body: TestIn, db: AsyncSession = Depends(
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
     try:
-        return ok(await vision_sam_client.llm_test(llm))
+        r = await vision_sam_client.llm_test(llm)
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    # 测试也算一次调用，记进统计（几乎不花 token，但耗时有参考价值）
+    u = r.get("usage") or {}
+    llm_call_service.record_calls(db, llm["provider"], llm["model"], [{
+        "input": u.get("input"), "output": u.get("output"), "latency_ms": r.get("latency_ms"),
+        "ok": bool(r.get("ok")), "error": r.get("error"),
+        "est_usd": (int(u.get("input") or 0) / 1e6 * float(llm.get("price_in") or 0)
+                    + int(u.get("output") or 0) / 1e6 * float(llm.get("price_out") or 0)),
+    }], purpose="test")
+    await db.commit()
+    return ok(r)
+
+
+@router.get("/stats")
+async def call_stats(days: int = 30, db: AsyncSession = Depends(get_db)):
+    """调用统计：次数、token（总 / 单次）、花费、耗时（均值 / p50 / p90 / 最大），按家/模型、按天、最近几次。"""
+    return ok(await llm_call_service.stats(db, days=max(1, min(365, days))))
