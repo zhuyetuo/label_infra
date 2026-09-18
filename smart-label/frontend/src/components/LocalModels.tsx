@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Alert, Button, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Modal, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { actLocalModel, listLocalModels, type LocalModel } from "@/api/llmProviders";
+import { actLocalModel, getVllmLog, listLocalModels, type LocalModel } from "@/api/llmProviders";
 
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 
@@ -12,6 +12,17 @@ export default function LocalModels() {
   const { data, isLoading } = useQuery({ queryKey: ["local-models"], queryFn: listLocalModels, refetchInterval: 10_000 });
   const [busy, setBusy] = useState<string | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ["local-models"] });
+  // vLLM 的整份日志：引擎那边的报错在 API 进程堆栈之前，30 行尾巴看不到
+  const [log, setLog] = useState<{ lines: string[]; errors: string[] } | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const openLog = async () => {
+    setLogLoading(true);
+    try {
+      setLog(await getVllmLog(400));
+    } finally {
+      setLogLoading(false);
+    }
+  };
 
   const act = async (m: LocalModel, action: "load" | "unload" | "test") => {
     setBusy(`${m.key}:${action}`);
@@ -140,10 +151,17 @@ export default function LocalModels() {
                 {m.vllm && (
                   <div style={{ fontSize: 12, color: "#888" }}>
                     {m.vllm.running ? `进程 ${m.vllm.pid} · 端口 ${m.vllm.port}${m.vllm.uptime_s != null ? ` · 已跑 ${Math.round(m.vllm.uptime_s / 60)} 分` : ""}` : `端口 ${m.vllm.port}`}
-                    {m.vllm.log_tail.length > 0 && (
-                      <Tooltip title={<pre style={{ margin: 0, maxWidth: 700, whiteSpace: "pre-wrap", fontSize: 11 }}>{m.vllm.log_tail.join("\n")}</pre>}>
-                        <a style={{ marginLeft: 8 }}>日志末尾</a>
-                      </Tooltip>
+                    {(m.vllm.log_tail.length > 0 || m.vllm.exited) && (
+                      <Button size="small" type="link" style={{ padding: "0 4px" }} loading={logLoading} onClick={openLog}>
+                        日志
+                      </Button>
+                    )}
+                    {m.vllm.exited && (m.vllm.log_errors?.length ?? 0) > 0 && (
+                      <div style={{ color: "#ff4d4f", marginTop: 2 }}>
+                        {m.vllm.log_errors!.slice(-3).map((l, i) => (
+                          <div key={i} style={{ wordBreak: "break-all" }}>{l}</div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}
@@ -190,6 +208,30 @@ export default function LocalModels() {
           },
         ]}
       />
+      <Modal
+        title="vLLM 日志（这次启动起）"
+        open={log != null}
+        onCancel={() => setLog(null)}
+        footer={null}
+        width={960}
+      >
+        {log && (
+          <div>
+            {log.errors.length > 0 && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="挑出来的报错行"
+                description={<pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>{log.errors.join("\n")}</pre>}
+              />
+            )}
+            <pre style={{ maxHeight: 480, overflow: "auto", background: "#111", color: "#ddd", padding: 8, fontSize: 11, whiteSpace: "pre-wrap" }}>
+              {log.lines.join("\n")}
+            </pre>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

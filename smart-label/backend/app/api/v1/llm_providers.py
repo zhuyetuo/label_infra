@@ -145,6 +145,15 @@ async def local_model_act(key: str, body: LocalModelActionIn, db: AsyncSession =
     return ok(r)
 
 
+@router.get("/local-models/vllm/log")
+async def local_vllm_log(n: int = 300):
+    """vLLM 这次启动的日志（最后 n 行）和挑出来的报错行。"""
+    try:
+        return ok(await vision_sam_client.vllm_log(max(20, min(3000, n))))
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+
+
 @router.post("/local-models/meter/reset")
 async def local_models_meter_reset():
     try:
