@@ -297,3 +297,17 @@ async def models_act(key: str, action: str) -> dict:
 
 async def models_meter_reset() -> dict:
     return await _post("/api/v1/models/meter/reset", {}, 10)
+
+
+async def vllm_log(n: int = 300) -> dict:
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/models/vllm/log"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, params={"n": n})
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.json()

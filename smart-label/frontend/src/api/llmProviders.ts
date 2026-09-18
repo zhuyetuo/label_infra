@@ -117,6 +117,11 @@ export interface LocalModel {
     log_tail: string[];
     download_log: string[];
     download_error: string | null;
+    /** 起过但退出了 */
+    exited?: boolean;
+    exit_code?: number | null;
+    /** 从这次启动的日志里挑出来的报错行 */
+    log_errors?: string[];
   };
   /** 最近一次「测试」的结果（视觉服务进程内存，重启归零） */
   last_test?: { at: number; ok: boolean; latency_ms: number; detail: string | null; error: string | null } | null;
@@ -142,3 +147,7 @@ export const actLocalModel = (key: string, action: "load" | "unload" | "test") =
   );
 
 export const resetLocalModelMeter = () => request.post<never, { ok: boolean }>("/llm-providers/local-models/meter/reset");
+
+/** vLLM 这次启动的日志（最后 n 行）和挑出来的报错行 */
+export const getVllmLog = (n = 300) =>
+  request.get<never, { lines: string[]; errors: string[] }>("/llm-providers/local-models/vllm/log", { params: { n } });
