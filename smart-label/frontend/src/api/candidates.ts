@@ -59,7 +59,7 @@ export const findSimilarCandidates = (body: {
   cam?: "cam1" | "cam2" | "cam3";
   t_s?: number;
   text?: string;
-  scope?: "project" | "task";
+  scope?: "project" | "task" | "all";
   top_k?: number;
   min_score?: number;
   /** 相邻命中隔多久以内合成一段（秒）；小了一次舔会拆成十几条 */
@@ -84,6 +84,7 @@ export const findSimilarCandidates = (body: {
       created_label: boolean;
       per_task: {
         task_id: number;
+        project_id: number;
         sample_code: string | null;
         candidates: number;
         segments: number;
@@ -111,6 +112,7 @@ export interface SimilarHit {
   /** 姿态那一路单独的分（用上姿态时才有） */
   pose_score?: number | null;
   task_id: number | null;
+  project_id: number | null;
   sample_code: string | null;
   multi_dog: boolean;
 }

@@ -290,7 +290,7 @@ class SimilarIn(BaseModel):
     cam: str = "cam1"
     t_s: float | None = None
     text: str | None = None
-    scope: str = "project"     # project / task
+    scope: str = "project"     # project / task / all（所有项目）
     top_k: int = 60
     min_score: float = 0.0
     # 相邻命中隔多久以内算同一段（秒）。小了一次舔拆成十几条，大了两次不同的舔并成一条
@@ -315,8 +315,8 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
     task = await _visible_task(db, body.task_id, user)
     if body.cam not in ("cam1", "cam2", "cam3"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
-    if body.scope not in ("project", "task"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope 只能是 project / task")
+    if body.scope not in ("project", "task", "all"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope 只能是 project / task / all")
     if not (1 <= body.top_k <= 2000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "top_k 要在 1~2000")
     label = (await db.execute(select(LabelDefinition.id).where(
@@ -403,12 +403,12 @@ async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: boo
     task = await db.get(Task, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
-    allowed = {p for _t, _s, p in await vindex.project_videos(db, task.project_id, "all")}
-    sample = await db.get(Sample, task.sample_id)
-    if sample is not None:
-        allowed.update(p for p in (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path) if p)
-    if path not in allowed:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不在该项目里")
+    # 找相似可以跨项目：path 是库里任何一份样本登记的视频就行（不能是任意文件路径）
+    known = (await db.execute(select(Sample.id).where(
+        (Sample.video_cam1_path == path) | (Sample.video_cam2_path == path) | (Sample.video_cam3_path == path)
+    ).limit(1))).scalar_one_or_none()
+    if known is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不是库里登记的样本视频")
     try:
         data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop)
     except vision_sam_client.SamUnavailable as e:

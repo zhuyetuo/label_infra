@@ -298,8 +298,33 @@ def test_找相似_只看不写_命中带任务和样本_缩略图要token(db, r
     resp = run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 70.0, tok, crop=False, db=db))
     assert resp.media_type == "image/jpeg" and resp.body.endswith(b"s2_cam1.mp4f")
     with pytest.raises(HTTPException) as e:
-        run(api.similar_thumb(t1.id, "d/other.mp4", 1.0, tok, db=db))
+        run(api.similar_thumb(t1.id, "d/other.mp4", 1.0, tok, db=db))      # 不是库里登记的视频
     assert e.value.status_code == 403
     with pytest.raises(HTTPException) as e:
         run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 1.0, "bad.token", db=db))
     assert e.value.status_code == 401
+
+
+def test_找相似_所有项目(db, run):
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    p2 = Project(name="p2", created_by=u.id)
+    db.add(p2)
+    run(db.flush())
+    s9 = Sample(sample_code="s9", video_cam1_path="d/s9_cam1.mp4", imu_csv_path="d/s9.csv", created_by=u.id)
+    db.add(s9)
+    run(db.flush())
+    t9 = Task(project_id=p2.id, sample_id=s9.id, task_type=TaskType.ai_assisted, status=TaskStatus.PENDING_ASSIGN, created_by=u.id)
+    db.add(t9)
+    run(db.commit())
+    result = {"hits": [{"path": "d/s9_cam1.mp4", "t": 5.0, "score": 0.7}], "searched": 1, "missing": ["d/s1_cam1.mp4"],
+              "segments": [{"path": "d/s9_cam1.mp4", "start_s": 4, "end_s": 6, "score": 0.7, "n": 1}]}
+    fn = _search(result)
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="舔", t_s=1.0, scope="all"), search_fn=fn))
+    assert "d/s9_cam1.mp4" in fn.calls[0]["paths"] and "d/s1_cam1.mp4" in fn.calls[0]["paths"]
+    assert r["hit_list"][0]["task_id"] == t9.id and r["hit_list"][0]["project_id"] == p2.id
+    assert [c.label_name for c in _cands(db, run, t9.id)] == ["舔"]
+    assert next(pt for pt in r["per_task"] if pt["task_id"] == t9.id)["project_id"] == p2.id
+    # 只搜本项目时别的项目不在
+    fn2 = _search(result)
+    run(vi.find_similar(db, t1, vi.SimilarParams(label_name="舔", t_s=1.0, scope="project"), search_fn=fn2))
+    assert "d/s9_cam1.mp4" not in fn2.calls[0]["paths"]
