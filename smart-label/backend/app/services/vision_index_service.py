@@ -212,6 +212,10 @@ class SimilarParams:
     # 相邻命中隔多久以内合成一段。舔一次往往持续几十秒、命中却断断续续，3 秒会拆成十几条
     # 看着像重复；默认 15 秒，一次舔合成一条
     gap_s: float = 15.0
+    # 减掉所有帧的平均向量再比：同狗同房同地板的共同背景把余弦顶到 0.95+，动作差别被淹没
+    center: bool = True
+    # 只搜不写：先把命中的画面摆出来看，看着对再写候选
+    dry_run: bool = False
 
 
 def overlaps(a0: int, a1: int, b0: int, b1: int) -> bool:
@@ -271,7 +275,23 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
 
     ref = {"path": own_path, "t": params.t_s} if params.t_s is not None else None
     r = await search_fn(paths, text=params.text, ref=ref, top_k=params.top_k,
-                        min_score=params.min_score, gap_s=params.gap_s)
+                        min_score=params.min_score, gap_s=params.gap_s, center=params.center)
+    # 每个命中对应哪个任务（同一路视频可能有几个任务：整段的 + 短任务），给"先看命中"画图和跳转
+    hits_out: list[dict] = []
+    for h in r.get("hits", []):
+        if not h.get("path"):
+            continue
+        tasks_here = by_path.get(h["path"]) or []
+        t_ms = int(h["t"] * 1000)
+        # 短任务（有区间）落在里面的优先，其次整段的任务
+        owner = next((t for t in tasks_here if t.segment_start_ms is not None and t.segment_end_ms is not None
+                      and t.segment_start_ms <= t_ms < t.segment_end_ms), None) \
+            or next((t for t in tasks_here if t.segment_start_ms is None or t.segment_end_ms is None), None) \
+            or (tasks_here[0] if tasks_here else None)
+        hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"],
+                         "task_id": owner.id if owner else None,
+                         "sample_code": _code_of.get(owner.id) if owner else None,
+                         "multi_dog": bool(_multi_of.get(owner.id)) if owner else False})
     written = 0
     per_task: list[dict] = []
     for path, tasks in by_path.items():
@@ -285,16 +305,20 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                                                       t.segment_start_ms, t.segment_end_ms)]
             else:
                 segs_t = segs
-            n = await add_similar_candidates(db, t, params.label_name, segs_t)
+            n = 0 if params.dry_run else await add_similar_candidates(db, t, params.label_name, segs_t)
             written += n
             per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t),
                              "sample_code": _code_of.get(t.id), "multi_dog": bool(_multi_of.get(t.id)),
                              # 前几段的时间和分数：人要知道"落到哪了"，不然找完了不知道去哪看
                              "items": [{"start_s": x["start_s"], "end_s": x["end_s"], "score": x.get("score")}
                                        for x in sorted(segs_t, key=lambda x: -(x.get("score") or 0))[:10]]})
-    await db.commit()
+    if not params.dry_run:
+        await db.commit()
     # 多狗同场（影棚 / 公共区）的命中要提醒：画面里那只不一定是这条 IMU 的狗
     multi = sum(pt["candidates"] for pt in per_task if _multi_of.get(pt["task_id"]))
     return {"written": written, "hits": len(r.get("hits", [])), "segments": len(r.get("segments", [])),
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
-            "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi}
+            "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
+            "centered": bool(r.get("centered")), "dry_run": params.dry_run, "hit_list": hits_out,
+            # 样例自己那一路的路径：前端拿它请求样例帧的缩略图，跟命中并排比
+            "ref_path": own_path}

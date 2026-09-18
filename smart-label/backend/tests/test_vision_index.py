@@ -266,3 +266,39 @@ def test_清掉画面相似候选_只删没判过的(db, run):
     left = _cands(db, run, t1.id)
     assert sorted((c.reason, c.status.value) for c in left) == [("grooming", "pending"), ("similar", "confirmed")]
     assert run(api.clear_similar(t1.id, db=db, user=u))["data"]["deleted"] == 0
+
+
+def test_找相似_只看不写_命中带任务和样本_缩略图要token(db, run, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.v1 import candidates as api
+    from app.services import vision_sam_client as vc
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    result = {"hits": [{"path": "d/s2_cam1.mp4", "t": 70.0, "score": 0.5}, {"path": "d/s1_cam1.mp4", "t": 5.0, "score": 0.4},
+                       {"path": "d/s2_cam1.mp4", "t": 100.0, "score": 0.3}],
+              "searched": 2, "missing": [], "centered": True,
+              "segments": [{"path": "d/s2_cam1.mp4", "start_s": 69, "end_s": 71, "score": 0.5, "n": 1}]}
+    fn = _search(result)
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="随便什么", t_s=42.0, dry_run=True, center=False), search_fn=fn))
+    assert fn.calls[0]["center"] is False
+    assert r["dry_run"] is True and r["written"] == 0 and r["centered"] is True and r["ref_path"] == "d/s1_cam1.mp4"
+    assert _cands(db, run, t2.id) == [] and _cands(db, run, t1.id) == []          # 一条都没写
+    hl = r["hit_list"]
+    # 70 秒和 100 秒都落在短任务 t3（60-120）里：短任务优先于整段的 t2
+    assert [(h["task_id"], h["sample_code"]) for h in hl] == [(t3.id, "s2"), (t1.id, "s1"), (t3.id, "s2")]
+    # 缩略图：要 token，path 得在项目里
+    tok = run(api.similar_thumb_token(t1.id, db=db, user=u))["data"]["token"]
+
+    async def thumb(path, t, crop=True):
+        return b"\xff\xd8" + path.encode() + (b"c" if crop else b"f")
+
+    monkeypatch.setattr(vc, "embed_thumb", thumb)
+    resp = run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 70.0, tok, crop=False, db=db))
+    assert resp.media_type == "image/jpeg" and resp.body.endswith(b"s2_cam1.mp4f")
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_thumb(t1.id, "d/other.mp4", 1.0, tok, db=db))
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 1.0, "bad.token", db=db))
+    assert e.value.status_code == 401

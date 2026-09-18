@@ -22,7 +22,8 @@ import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
-import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
+import SimilarHitsGrid from "@/components/SimilarHitsGrid";
+import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -226,6 +227,32 @@ export default function AnnotationWorkspace({
   const [similarRunning, setSimilarRunning] = useState(false);
   // 找完之后的结果：落到了哪些任务、几点几分——不然人不知道去哪看
   const [similarResult, setSimilarResult] = useState<Awaited<ReturnType<typeof findSimilarCandidates>> | null>(null);
+  // 去共同背景：同狗同房同地板把余弦顶到 0.95+，动作差别被淹没；减掉均值再比。默认开
+  const [similarCenter, setSimilarCenter] = useState(true);
+  // 「先看命中」：只搜不写，把命中的画面摆出来看
+  const [similarPeek, setSimilarPeek] = useState<{ hits: SimilarHit[]; refPath: string | null; refT: number | null; centered: boolean } | null>(null);
+  const [similarPeeking, setSimilarPeeking] = useState(false);
+  const peekSimilar = async () => {
+    if (taskId == null) return;
+    setSimilarPeeking(true);
+    try {
+      const r = await findSimilarCandidates({
+        task_id: taskId,
+        label_name: similarLabel || "预览",
+        t_s: similarUseText ? undefined : similarAtSec,
+        text: similarUseText ? similarText.trim() : undefined,
+        scope: similarScope,
+        top_k: similarTopK,
+        gap_s: similarGap,
+        center: similarCenter,
+        dry_run: true,
+      });
+      setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered });
+      if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
+    } finally {
+      setSimilarPeeking(false);
+    }
+  };
   const runSimilar = async () => {
     if (taskId == null || !similarLabel) return;
     setSimilarRunning(true);
@@ -239,6 +266,7 @@ export default function AnnotationWorkspace({
         top_k: similarTopK,
         gap_s: similarGap,
         create_label: true,
+        center: similarCenter,
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
       if (r.multi_dog_candidates > 0) {
@@ -1038,11 +1066,22 @@ export default function AnnotationWorkspace({
       title="找相似的画面 → 候选"
       open={similarOpen}
       onCancel={() => setSimilarOpen(false)}
-      onOk={runSimilar}
-      okText="找"
-      confirmLoading={similarRunning}
-      okButtonProps={{ disabled: !similarLabel || (similarUseText && !similarText.trim()) }}
+      width={similarPeek ? 1000 : 640}
       destroyOnClose
+      afterClose={() => setSimilarPeek(null)}
+      footer={
+        <Space>
+          <Button onClick={() => setSimilarOpen(false)}>取消</Button>
+          <Tooltip title="只搜不写：把命中的画面（狗框那一块）跟样例并排摆出来，看着对再写候选；不对就换一帧 / 调参数再看">
+            <Button loading={similarPeeking} disabled={similarUseText && !similarText.trim()} onClick={peekSimilar}>
+              先看命中
+            </Button>
+          </Tooltip>
+          <Button type="primary" loading={similarRunning} disabled={!similarLabel || (similarUseText && !similarText.trim())} onClick={runSimilar}>
+            {similarPeek ? "写入候选" : "找"}
+          </Button>
+        </Space>
+      }
     >
       <Space direction="vertical" style={{ width: "100%" }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -1129,7 +1168,30 @@ export default function AnnotationWorkspace({
             隔
             <InputNumber size="small" min={0} max={120} value={similarGap} onChange={(v) => setSimilarGap(v ?? 15)} style={{ width: 70 }} /> 秒以内算同一段
           </span>
+          <Tooltip title="同一只狗、同一间房、同一块地板，每一帧的向量里都带着这坨共同背景，原始相似度全在 0.95 以上分不开。减掉所有帧的平均向量再比，剩下的才是姿态和部位的差别。不勾就按原始相似度">
+            <Checkbox checked={similarCenter} onChange={(e) => setSimilarCenter(e.target.checked)}>
+              去共同背景
+            </Checkbox>
+          </Tooltip>
         </Space>
+        {similarPeek && taskId != null && (
+          <SimilarHitsGrid
+            taskId={taskId}
+            refPath={similarPeek.refPath}
+            refT={similarPeek.refT}
+            hits={similarPeek.hits}
+            centered={similarPeek.centered}
+            onJump={(h) => {
+              if (h.task_id === taskId) {
+                const ms = Math.round(h.t * 1000);
+                setLoop({ startMs: Math.max(0, ms - 2000), endMs: ms + 4000 });
+                bus.seek(Math.max(0, h.t - 2));
+              } else if (h.task_id != null) {
+                window.open(`/tasks?task=${h.task_id}&seek=${Math.round(h.t * 1000)}`, "_blank");
+              }
+            }}
+          />
+        )}
       </Space>
     </Modal>
     <Modal
