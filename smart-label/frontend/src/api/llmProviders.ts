@@ -102,6 +102,22 @@ export interface LocalModel {
   warm?: boolean;
   loading?: boolean;
   progress?: { pct: number; done_mb: number; total_mb: number; eta_s: number | null } | null;
+  /** vLLM 那一行才有：进程 / 端口 / 权重 / 日志 */
+  vllm?: {
+    installed: boolean;
+    model: string;
+    weights_ready: boolean;
+    downloading: boolean;
+    running: boolean;
+    pid: number | null;
+    port: number;
+    port_open: boolean;
+    ready: boolean;
+    uptime_s: number | null;
+    log_tail: string[];
+    download_log: string[];
+    download_error: string | null;
+  };
   /** 视觉服务进程内存里的调用计数（重启归零） */
   meter: { calls: number; frames: number; total_ms: number; max_ms: number; errors: number; last_at: number | null; avg_ms: number; avg_ms_per_frame: number };
 }
