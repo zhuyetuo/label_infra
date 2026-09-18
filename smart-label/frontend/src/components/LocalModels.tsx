@@ -83,7 +83,7 @@ export default function LocalModels() {
               m.available ? (
                 <Tag color="green">{m.warm === false ? "已加载（未预热）" : "已加载"}</Tag>
               ) : m.loading ? (
-                <Tag color="blue">{m.progress ? `下载中${m.progress.pct != null ? ` ${m.progress.pct}%` : ""}` : "加载中"}</Tag>
+                <Tag color="blue">{m.progress ? `下载中${m.progress.pct != null ? ` ${m.progress.pct}%` : ""}` : m.startup ? `加载中 ${m.startup.pct}%` : "加载中"}</Tag>
               ) : m.error ? (
                 <Tooltip title={m.error}>
                   <Tag color="red">不可用</Tag>
@@ -143,6 +143,13 @@ export default function LocalModels() {
                       {(m.progress.done_mb / 1000).toFixed(2)}{m.progress.total_mb ? ` / ${(m.progress.total_mb / 1000).toFixed(2)}` : ""} GB
                       {" · "}{m.progress.speed_mbps ?? 0} MB/s
                       {m.progress.eta_s != null ? ` · 预计还要 ${Math.floor(m.progress.eta_s / 60)} 分 ${m.progress.eta_s % 60} 秒` : ""}
+                    </Typography.Text>
+                  </div>
+                ) : m.startup && m.vllm?.running && !m.available ? (
+                  <div style={{ minWidth: 260 }}>
+                    <Progress percent={m.startup.pct} size="small" status="active" />
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      加载中：{m.startup.stage} · 已用 {Math.floor(m.startup.elapsed_s / 60)} 分 {m.startup.elapsed_s % 60} 秒（7B 一般一两分钟）
                     </Typography.Text>
                   </div>
                 ) : m.error && !m.available ? (

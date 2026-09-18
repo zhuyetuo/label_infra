@@ -123,6 +123,8 @@ export interface LocalModel {
     /** 从这次启动的日志里挑出来的报错行 */
     log_errors?: string[];
   };
+  /** vLLM 那一行才有：进程起来后模型加载的进度（从日志里程碑估） */
+  startup?: { pct: number; stage: string; elapsed_s: number } | null;
   /** 最近一次「测试」的结果（视觉服务进程内存，重启归零） */
   last_test?: { at: number; ok: boolean; latency_ms: number; detail: string | null; error: string | null } | null;
   /** 视觉服务进程内存里的调用计数（重启归零） */
