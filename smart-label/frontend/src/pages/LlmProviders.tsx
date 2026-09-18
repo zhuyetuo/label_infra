@@ -13,7 +13,7 @@ interface EditModel extends LlmModel {
   key: number;
 }
 
-// 「大模型 API」：五家各一行。key 在这里填，视觉服务那边不存 key，每次找片段时平台带过去。
+// 「大模型 API」：六家各一行。key 在这里填，视觉服务那边不存 key，每次找片段时平台带过去。
 // key 只写不读：填过之后这里只显示末四位，没有任何地方能把整串拿回来。
 export default function LlmProviders() {
   const qc = useQueryClient();

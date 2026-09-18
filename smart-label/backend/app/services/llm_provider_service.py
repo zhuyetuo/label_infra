@@ -1,5 +1,5 @@
 """
-大模型 API 配置：四家各一行，网页上配 key、模型列表、默认模型。
+大模型 API 配置：几家各一行，网页上配 key、模型列表、默认模型。
 
 给「画面找片段」用：跑之前按 (provider, model) 取出这一行，连 key 一起带给视觉服务。
 """
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.llm_provider import LlmProvider
 
-# 固定四家，顺序就是页面上的顺序。models 是初始建议，网页上随便改
+# 固定几家，顺序就是页面上的顺序。models 是初始建议，网页上随便改
 PROVIDERS: list[dict] = [
     {"provider": "anthropic", "display_name": "Anthropic Claude", "base_url": None,
      "models": [{"name": "claude-opus-5", "price_in": 5.0, "price_out": 25.0},
@@ -31,6 +31,11 @@ PROVIDERS: list[dict] = [
      "models": [{"name": "gemini-2.5-pro", "price_in": 0.0, "price_out": 0.0},
                 {"name": "gemini-2.5-flash", "price_in": 0.0, "price_out": 0.0}],
      "default_model": "gemini-2.5-flash"},
+    # 智谱 GLM：OpenAI 同一套协议。视觉模型 glm-4.5v（新）/ glm-4v-plus；价格以后台为准
+    {"provider": "zhipu", "display_name": "智谱 GLM", "base_url": "https://open.bigmodel.cn/api/paas/v4",
+     "models": [{"name": "glm-4.5v", "price_in": 0.0, "price_out": 0.0},
+                {"name": "glm-4v-plus", "price_in": 0.0, "price_out": 0.0}],
+     "default_model": "glm-4.5v"},
     # 本地起的服务：vLLM / SGLang / Ollama 都能开 OpenAI 兼容口。key 可不填。
     # 5090 32G 单卡：Qwen2.5-VL-7B 的 AWQ 量化版跑得动，先从这个试
     # 端口用 8386（挨着 vision_service 的 8385）：8000 太常用，机器上多半被别的东西占着
@@ -90,7 +95,7 @@ def to_out(row: LlmProvider) -> dict:
 
 
 async def ensure_rows(db: AsyncSession) -> list[LlmProvider]:
-    """四家没有的补上（不带 key）。返回按固定顺序的四行。"""
+    """没有的补上（不带 key）。返回按固定顺序的几行。"""
     rows = {r.provider: r for r in (await db.execute(select(LlmProvider))).scalars().all()}
     created = False
     # 老默认地址（8000）没人改过的话换成新默认；人改过的不动
