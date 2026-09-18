@@ -1,0 +1,80 @@
+/* 找相似的样例帧预览：整帧 + 狗框（实线、会呼吸）+ 裁剪区（虚线） */
+.sfp__frame {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+  min-height: 120px;
+}
+.sfp__img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.sfp__empty {
+  color: #999;
+  font-size: 12px;
+  padding: 48px 12px;
+  text-align: center;
+}
+
+/* 狗框：绿色实线，边框从画面外收进来、再轻轻呼吸——一眼看到"框在哪"。
+   只动 box-shadow 和透明度，不动尺寸，位置永远准 */
+.sfp__box {
+  position: absolute;
+  border: 2px solid #52c41a;
+  border-radius: 2px;
+  box-sizing: border-box;
+  animation: sfp-lock 0.5s ease-out, sfp-breathe 1.6s ease-in-out 0.5s infinite;
+  pointer-events: none;
+}
+.sfp__conf {
+  position: absolute;
+  left: -2px;
+  top: -20px;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 5px;
+  color: #fff;
+  background: #52c41a;
+  border-radius: 2px 2px 0 0;
+  pointer-events: auto;
+}
+
+/* 裁剪区：白色虚线，比狗框大一圈 */
+.sfp__crop {
+  position: absolute;
+  border: 1.5px dashed rgba(255, 255, 255, 0.85);
+  box-sizing: border-box;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.sfp__caption {
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+@keyframes sfp-lock {
+  from {
+    box-shadow: 0 0 0 24px rgba(82, 196, 26, 0);
+    opacity: 0;
+  }
+  to {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.6);
+    opacity: 1;
+  }
+}
+@keyframes sfp-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(82, 196, 26, 0);
+  }
+}

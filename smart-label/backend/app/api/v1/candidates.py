@@ -19,6 +19,7 @@ from app.db.session import get_db
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource, RecordSourceType
 from app.models.label import LabelDefinition
+from app.models.sample import Sample
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
@@ -321,5 +322,32 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
         return ok(r)
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+
+
+class SimilarPreviewIn(BaseModel):
+    task_id: int
+    cam: str = "cam1"
+    t_s: float
+
+
+@router.post("/similar/preview")
+async def similar_preview(body: SimilarPreviewIn, db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """找相似之前看一眼样例：这一帧框到了哪几只狗、拿哪一块去搜。
+
+    以图搜图是"先框狗、再拿框里那块算向量"，框错了（没框到、框到别的东西）搜出来
+    全是错的；这里把框画给人看，不对就换一帧。
+    """
+    task = await _visible_task(db, body.task_id, user)
+    if body.cam not in ("cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    sample = await db.get(Sample, task.sample_id)
+    path = vindex.video_path_of(sample, body.cam) if sample else None
+    if not path:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"这个任务的样本没有 {body.cam} 视频")
+    try:
+        return ok(await vision_sam_client.embed_preview(path, max(0.0, body.t_s)))
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e

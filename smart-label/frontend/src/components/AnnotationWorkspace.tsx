@@ -21,6 +21,7 @@ import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiL
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
+import SimilarFramePreview from "@/components/SimilarFramePreview";
 import { findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
@@ -1044,9 +1045,27 @@ export default function AnnotationWorkspace({
         {similarUseText ? (
           <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" />
         ) : (
-          <Typography.Text>
-            样例：当前视角1 第 <b>{similarAtSec}</b> 秒那一帧（先把视频停在最像的那一帧再点）
-          </Typography.Text>
+          <div>
+            <Space size={6} style={{ marginBottom: 6 }} wrap>
+              <Typography.Text>样例：视角1 第</Typography.Text>
+              <InputNumber
+                size="small"
+                min={0}
+                step={0.5}
+                value={similarAtSec}
+                onChange={(v) => setSimilarAtSec(Math.max(0, Math.round((v ?? 0) * 10) / 10))}
+                style={{ width: 90 }}
+              />
+              <Typography.Text>秒那一帧</Typography.Text>
+              <Button size="small" onClick={() => setSimilarAtSec(Math.round(curSecRef.current * 10) / 10)}>
+                用视频当前时刻
+              </Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                先在视频里停到最像的那一帧再点「找相似」；下面是这一帧框到的狗
+              </Typography.Text>
+            </Space>
+            {taskId != null && <SimilarFramePreview taskId={taskId} tSec={similarAtSec} />}
+          </div>
         )}
         <Space wrap>
           <span>
