@@ -27,7 +27,7 @@ OLD_TEMPLATE_NAMES = ("舔/啃（IMU 候选）",)
 TEMPLATE_DESC = (
     "抓 / 舔 / 啃 / 蹭 四个大类，按部位分层（舔 → 前爪 → 前左爪）。看得清标最细的，"
     "看不清停在上级；标了细的自动算进上级。「舔」是疑似舔/啃候选默认落的类别；"
-    "「抓挠」本身项目里已有所以不带，只带部位。同一组一个色系，组内深浅不同。"
+    "项目里已有同名标签（比如「抓挠」）的直接复用，部位挂到它下面。同一组一个色系，组内深浅不同。"
 )
 
 # 每组：(父 code, 父名, 父颜色, 父标签要不要进模板, [部位...])
@@ -36,9 +36,8 @@ TEMPLATE_DESC = (
 # 层级：舔 → 前爪 → 前左爪 / 前右爪。看得清标最细的，看不清停在上一级；标了细的
 # 自动算进上级（统计、导出都按树算，见 label_tree.py）。
 #
-# 「抓挠」父标签**不进模板**：每个项目早就有「抓挠」了（AI 预标注/统计都靠它），
-# 模板再带一个同名的进去，套用时按 code 查重发现不一样就会多出第二个「抓挠」，
-# 统计就乱了。模板里只带「抓挠-部位」子项，套用时挂到项目里已有的「抓挠」下面。
+# 「抓挠」父标签也进模板：项目里早就有「抓挠」的（code 多半不一样），套用时按
+# 显示名认出来直接复用、部位挂到它下面，不会多出第二个「抓挠」（见 apply_template）。
 #
 # 颜色：一组一个色系（舔=橙 啃=红 抓=绿 蹭=紫），父标签是本色，部位是同一色相
 # 深浅不同，一眼能看出是哪组、组内也分得开。
@@ -60,7 +59,7 @@ GROUPS: list[tuple[str, str, str, bool, list]] = [
         ("hind", "后爪", "#A73125", [("hind_l", "后左爪", "#B33528"), ("hind_r", "后右爪", "#D03E2F")]),
         ("trunk", "躯干侧腹", "#D24637"), ("groin", "生殖区肛周", "#E9A29B"),
     ]),
-    ("scratch", "抓挠", "#27AE60", False, [
+    ("scratch", "抓挠", "#27AE60", True, [
         ("head", "头颈耳", "#1A7540"), ("trunk", "躯干侧腹", "#25A75C"),
         ("belly", "胸腹", "#37D279"), ("hind", "后肢臀尾", "#9BE9BC"),
     ]),
@@ -132,7 +131,7 @@ def wanted_rows(with_parts: bool = True) -> list[Row]:
 
 
 def template_rows() -> list[Row]:
-    """进模板的那些（去掉「抓挠」父标签本身）。"""
+    """进模板的那些（现在四个大类都进）。"""
     return [r for r in wanted_rows() if r.in_template]
 
 
@@ -202,6 +201,33 @@ async def _fill_parent_codes(db, tpl_id: int) -> int:
         if it.parent_code is None and r is not None and r.parent_code:
             it.parent_code = r.parent_code
             n += 1
+    return n
+
+
+# 上一版模板故意不带这些组的父标签（怕跟项目里的重复）
+_HISTORICALLY_NO_PARENT = ("scratch",)
+
+
+async def _add_group_parents(db, tpl_id: int) -> int:
+    """老模板没带「抓挠」父标签本身（那时怕跟项目里的重复）。现在套用时按名字复用，
+    父标签可以进模板了：组里有部位、父不在（按 code 和名字都没有）的补上。"""
+    items = (await db.execute(
+        select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
+    )).scalars().all()
+    codes = {it.code for it in items}
+    names = {it.display_name for it in items}
+    want = {r.code: r for r in template_rows()}
+    n = 0
+    for code, name, _color, in_tpl, _parts in GROUPS:
+        # 只补历史上故意不带的那个（抓挠）：别的组父不在是管理员自己删的，不动
+        if code not in _HISTORICALLY_NO_PARENT or not in_tpl or code in codes or names & set(alias_names(name)):
+            continue
+        if not any(c.startswith(code + "_") for c in codes):
+            continue        # 整组都不在：那是管理员删掉的，不补
+        r = want[code]
+        db.add(LabelTemplateItem(template_id=tpl_id, code=r.code, display_name=r.display_name,
+                                 color=r.color, sort_order=r.sort_order, parent_code=None))
+        n += 1
     return n
 
 
@@ -280,7 +306,7 @@ async def ensure_grooming_template(db) -> str:
         changed = True
     await db.flush()
     # 几步升级按先后：先改父名（后面的步骤按新名认），再拆爪子，最后补上级
-    for step in (_recolor_from_old_scheme, _rename_parents, _split_paws, _fill_parent_codes):
+    for step in (_recolor_from_old_scheme, _rename_parents, _split_paws, _add_group_parents, _fill_parent_codes):
         if await step(db, tpl.id):
             changed = True
             await db.flush()

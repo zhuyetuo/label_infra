@@ -1,6 +1,6 @@
 import type React from "react";
 import { useState } from "react";
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   applyLabelTemplate,
@@ -13,6 +13,7 @@ import {
 } from "@/api/labelTemplates";
 import { listProjects } from "@/api/projects";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
+import TemplateTreeEditor from "@/components/TemplateTreeEditor";
 
 interface EditItem extends Omit<LabelTemplateItem, "id"> {
   key: number;
@@ -32,6 +33,8 @@ export default function LabelTemplates() {
   const [description, setDescription] = useState("");
   const [items, setItems] = useState<EditItem[]>([]);
   const [saving, setSaving] = useState(false);
+  // 树状图（像 xmind，拖着调父子和顺序）/ 表格。有父子关系的默认树状图
+  const [view, setView] = useState<"tree" | "table">("tree");
 
   const [applyTarget, setApplyTarget] = useState<LabelTemplate | null>(null);
   const [applyProjectId, setApplyProjectId] = useState<number | null>(null);
@@ -46,6 +49,7 @@ export default function LabelTemplates() {
     setName("");
     setDescription("");
     setItems([]);
+    setView("tree");
     setOpen(true);
   };
 
@@ -63,6 +67,7 @@ export default function LabelTemplates() {
         parent_code: i.parent_code ?? null,
       }))
     );
+    setView(t.items.some((i) => i.parent_code) ? "tree" : "table");
     setOpen(true);
   };
 
@@ -93,11 +98,28 @@ export default function LabelTemplates() {
       message.warning("每条标签的 code 和显示名都要填");
       return;
     }
-    const payload = items.map(({ code, display_name, color, sort_order, parent_code }) => ({
+    // 排序按画面上的顺序（树从上到下深度优先）重排：拖过之后 sort_order 才跟看到的一致
+    const codes = new Set(items.map((i) => i.code.trim()));
+    const ordered: EditItem[] = [];
+    const visit = (parent: string | null) => {
+      for (const i of items) {
+        const p = i.parent_code?.trim() || null;
+        const eff = p && codes.has(p) ? p : p ? `ghost:${p}` : null;
+        if (eff === parent) {
+          ordered.push(i);
+          visit(i.code.trim());
+        }
+      }
+    };
+    const ghosts = [...new Set(items.map((i) => i.parent_code?.trim()).filter((p): p is string => !!p && !codes.has(p)))];
+    for (const g of ghosts) visit(`ghost:${g}`);
+    visit(null);
+    for (const i of items) if (!ordered.includes(i)) ordered.push(i);   // 断链的兜底
+    const payload = ordered.map(({ code, display_name, color, parent_code }, idx) => ({
       code: code.trim(),
       display_name: display_name.trim(),
       color,
-      sort_order,
+      sort_order: idx + 1,
       parent_code: parent_code?.trim() || null,
     }));
     setSaving(true);
@@ -213,13 +235,28 @@ export default function LabelTemplates() {
             onChange={(e) => setDescription(e.target.value)}
           />
           <Space>
-            <Button size="small" onClick={addRow}>
-              添加一条标签
-            </Button>
+            <Segmented
+              size="small"
+              value={view}
+              onChange={(v) => setView(v as "tree" | "table")}
+              options={[{ label: "树状图", value: "tree" }, { label: "表格", value: "table" }]}
+            />
+            {view === "table" && (
+              <Button size="small" onClick={addRow}>
+                添加一条标签
+              </Button>
+            )}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               共 {items.length} 条
+              {view === "tree" ? "。点节点改名改色；拖到别的节点上变成它的子类，拖到上沿 / 下沿排到它前后，拖到最下面的虚线区变成大类" : ""}
             </Typography.Text>
           </Space>
+          {view === "tree" && (
+            <div style={{ maxHeight: 460, overflow: "auto", padding: "4px 8px", border: "1px solid #f0f0f0", borderRadius: 6 }}>
+              <TemplateTreeEditor items={items} onChange={setItems} />
+            </div>
+          )}
+          {view === "table" && (
           <Table
             size="small"
             rowKey="key"
@@ -301,6 +338,7 @@ export default function LabelTemplates() {
               },
             ]}
           />
+          )}
         </Space>
       </Modal>
 
