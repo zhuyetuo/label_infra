@@ -71,6 +71,9 @@ export interface ChartSegment {
   end_time_ms: number;
   color: string;
   label: string;
+  /** 分了互斥轨的项目：色块按轨分成几条横带（lane 第几条 / lanes 共几条），同一时刻卧 + 静止 + 舔三条各占一带、不互相盖住。不给就整高 */
+  lane?: number;
+  lanes?: number;
 }
 
 /**
@@ -442,7 +445,7 @@ function segmentBandPlugin(
         const h = u.bbox.height;
         const fills = new Map<string, Path2D>();
         const edges = new Map<string, Path2D>();
-        const labels: { x: number; text: string; color: string }[] = [];
+        const labels: { x: number; y: number; text: string; color: string }[] = [];
         let highlighted: { x0: number; x1: number; seg: ChartSegment } | null = null;
 
         // x 轴是线性时间轴，自己按比例算像素比每段调两次 valToPos 便宜
@@ -464,24 +467,28 @@ function segmentBandPlugin(
             continue;
           }
           const w = Math.max(1, x1 - x0);
+          // 分轨的段各占一条横带；没分轨的整高
+          const lanes = seg.lanes && seg.lanes > 1 ? seg.lanes : 1;
+          const sh = h / lanes;
+          const st = top + (seg.lane ?? 0) * sh;
           let fp = fills.get(seg.color);
           if (!fp) {
             fp = new Path2D();
             fills.set(seg.color, fp);
           }
-          fp.rect(x0, top, w, h);
+          fp.rect(x0, st, w, sh);
           if (w >= 3) {
             let ep = edges.get(seg.color);
             if (!ep) {
               ep = new Path2D();
               edges.set(seg.color, ep);
             }
-            ep.moveTo(x0, top);
-            ep.lineTo(x0, top + h);
-            ep.moveTo(x1, top);
-            ep.lineTo(x1, top + h);
+            ep.moveTo(x0, st);
+            ep.lineTo(x0, st + sh);
+            ep.moveTo(x1, st);
+            ep.lineTo(x1, st + sh);
           }
-          if (showLabel && w > 24 && seg.label) labels.push({ x: x0 + 3, text: seg.label, color: seg.color });
+          if (showLabel && w > 24 && seg.label) labels.push({ x: x0 + 3, y: st + 2, text: seg.label, color: seg.color });
         }
 
         ctx.globalAlpha = 0.22;
@@ -500,28 +507,31 @@ function segmentBandPlugin(
           ctx.textBaseline = "top";
           for (const l of labels) {
             ctx.fillStyle = l.color;
-            ctx.fillText(l.text, l.x, top + 2);
+            ctx.fillText(l.text, l.x, l.y);
           }
         }
 
         if (highlighted) {
           const { x0, x1, seg } = highlighted;
+          const lanes = seg.lanes && seg.lanes > 1 ? seg.lanes : 1;
+          const sh = h / lanes;
+          const st = top + (seg.lane ?? 0) * sh;
           ctx.fillStyle = seg.color;
           ctx.globalAlpha = 0.4;
-          ctx.fillRect(x0, top, Math.max(1, x1 - x0), h);
+          ctx.fillRect(x0, st, Math.max(1, x1 - x0), sh);
           ctx.globalAlpha = 1;
           ctx.strokeStyle = seg.color;
           ctx.lineWidth = 2.5;
           ctx.beginPath();
-          ctx.moveTo(x0, top);
-          ctx.lineTo(x0, top + h);
-          ctx.moveTo(x1, top);
-          ctx.lineTo(x1, top + h);
+          ctx.moveTo(x0, st);
+          ctx.lineTo(x0, st + sh);
+          ctx.moveTo(x1, st);
+          ctx.lineTo(x1, st + sh);
           ctx.stroke();
           if (showLabel) {
             ctx.font = "11px sans-serif";
             ctx.textBaseline = "top";
-            if (x1 - x0 > 24) ctx.fillText(seg.label, x0 + 3, top + 2);
+            if (x1 - x0 > 24) ctx.fillText(seg.label, x0 + 3, st + 2);
             // 双击高亮的这一段，在左右边缘各标一个精确到毫秒的时间，方便核对起止对不对
             const startLabel = formatTimestamp(startEpoch + seg.start_time_ms / 1000);
             const endLabel = formatTimestamp(startEpoch + seg.end_time_ms / 1000);

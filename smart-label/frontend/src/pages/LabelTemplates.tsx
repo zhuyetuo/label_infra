@@ -14,6 +14,7 @@ import {
 import { listProjects } from "@/api/projects";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
 import TemplateTreeEditor from "@/components/TemplateTreeEditor";
+import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 
 interface EditItem extends Omit<LabelTemplateItem, "id"> {
   key: number;
@@ -65,6 +66,7 @@ export default function LabelTemplates() {
         color: i.color ?? PRESET_COLORS[idx % PRESET_COLORS.length],
         sort_order: i.sort_order,
         parent_code: i.parent_code ?? null,
+        track: i.track ?? null,
       }))
     );
     setView(t.items.some((i) => i.parent_code) ? "tree" : "table");
@@ -81,6 +83,7 @@ export default function LabelTemplates() {
         color: PRESET_COLORS[prev.length % PRESET_COLORS.length],
         sort_order: prev.length + 1,
         parent_code: null,
+        track: null,
       },
       ...prev,
     ]);
@@ -115,12 +118,14 @@ export default function LabelTemplates() {
     for (const g of ghosts) visit(`ghost:${g}`);
     visit(null);
     for (const i of items) if (!ordered.includes(i)) ordered.push(i);   // 断链的兜底
-    const payload = ordered.map(({ code, display_name, color, parent_code }, idx) => ({
+    const payload = ordered.map(({ code, display_name, color, parent_code, track }, idx) => ({
       code: code.trim(),
       display_name: display_name.trim(),
       color,
       sort_order: idx + 1,
       parent_code: parent_code?.trim() || null,
+      // 轨只在大类上设，子类沿用上级；有上级的这里不带
+      track: parent_code?.trim() ? null : track || null,
     }));
     setSaving(true);
     try {
@@ -323,6 +328,28 @@ export default function LabelTemplates() {
                 ),
               },
               {
+                title: (
+                  <Tooltip title="互斥轨：同一轨的标签时间上互斥，不同轨的可以同时标（卧着 + 静止 + 舔前爪）。只在大类上设，子类沿用上级。不选 = 没分轨，所有没分轨的标签互相互斥（老项目的行为）">
+                    互斥轨
+                  </Tooltip>
+                ),
+                width: 110,
+                render: (_, r: EditItem) =>
+                  r.parent_code?.trim() ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>沿用上级</Typography.Text>
+                  ) : (
+                    <Select
+                      size="small"
+                      style={{ width: "100%" }}
+                      allowClear
+                      placeholder="无"
+                      value={r.track || undefined}
+                      onChange={(v) => patchRow(r.key, { track: v ?? null })}
+                      options={TRACKS.map((t) => ({ value: t.key, label: t.name }))}
+                    />
+                  ),
+              },
+              {
                 title: "",
                 width: 60,
                 render: (_, r: EditItem) => (
@@ -381,6 +408,7 @@ function TemplateItemsView({ items }: { items: LabelTemplateItem[] }) {
         {items.map((i) => (
           <Tag key={i.code} color={i.color ?? undefined}>
             {i.display_name}
+            {i.track && TRACK_NAME[i.track] ? <span style={{ opacity: 0.75 }}> · {TRACK_NAME[i.track]}轨</span> : null}
           </Tag>
         ))}
       </Space>
@@ -426,6 +454,7 @@ function TemplateItemsView({ items }: { items: LabelTemplateItem[] }) {
             {r.item ? (
               <Tag color={r.item.color ?? undefined} style={{ fontWeight: 600 }}>
                 {r.item.display_name}
+                {r.item.track && TRACK_NAME[r.item.track] ? <span style={{ opacity: 0.75, fontWeight: 400 }}> · {TRACK_NAME[r.item.track]}轨</span> : null}
               </Tag>
             ) : (
               <Tooltip title={`上级「${name}」不在模板里，套用时挂到项目里已有的「${name}」下（没有会建出来）`}>

@@ -29,6 +29,9 @@ class LabelDefinition(Base):
         BigInteger, ForeignKey("label_template_items.id", ondelete="SET NULL"), nullable=True
     )
     parent_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("label_definitions.id"), nullable=True)
+    # 互斥轨（见 label_tracks.py）：同轨的标签时间上互斥，跨轨可以重叠（卧着 + 静止 + 舔前爪）。
+    # 空 = 没分轨，所有没分轨的标签互相互斥（老项目的行为不变）。子标签没填的沿用上级的
+    track: Mapped[str | None] = mapped_column(String(20), nullable=True)
     sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

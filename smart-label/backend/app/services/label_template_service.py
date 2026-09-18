@@ -46,6 +46,7 @@ async def apply_to_project(db: AsyncSession, items: list[LabelTemplateItem], pro
     by_name = {l.display_name: l for l in project_labels}
 
     created = 0
+    linked = 0
     skipped: list[str] = []
     id_of: dict[str, int] = {code: l.id for code, l in existing.items()}
     ordered = parents_first(items)
@@ -55,10 +56,14 @@ async def apply_to_project(db: AsyncSession, items: list[LabelTemplateItem], pro
             skipped.append(item.code)
             existing[item.code] = hit
             id_of[item.code] = hit.id
+            # 项目里已有的没分轨、模板这条有：补上（分轨是新加的，老项目的标签都没有）
+            if hit.track is None and item.track:
+                hit.track = item.track
+                linked += 1
             continue
         label = LabelDefinition(
             project_id=project_id, code=item.code, display_name=item.display_name, color=item.color,
-            sort_order=item.sort_order, template_item_id=item.id, created_by=created_by,
+            sort_order=item.sort_order, template_item_id=item.id, created_by=created_by, track=item.track,
         )
         db.add(label)
         await db.flush()
@@ -66,7 +71,6 @@ async def apply_to_project(db: AsyncSession, items: list[LabelTemplateItem], pro
         existing[item.code] = label
         by_name[item.display_name] = label
         created += 1
-    linked = 0
     pool = list(existing.values())
     for item in ordered:
         if not item.parent_code:
@@ -74,7 +78,9 @@ async def apply_to_project(db: AsyncSession, items: list[LabelTemplateItem], pro
         label = existing.get(item.code)
         if label is None:
             continue
-        parent = await label_tree.resolve_parent(db, project_id, item.parent_code, pool, created_by)
+        # 上级先按"这次套用时模板 code → 项目标签"的对应找（「抓挠」按名字复用了项目里的 scratch，
+        # 它的子项要挂到 scratch 下，不是再找一个叫 CARE_SCRATCH 的），找不到再按 code / 名字 / 内置定义找
+        parent = existing.get(item.parent_code) or await label_tree.resolve_parent(db, project_id, item.parent_code, pool, created_by)
         if parent is None or parent.id == label.id:
             continue
         if parent.code not in existing:

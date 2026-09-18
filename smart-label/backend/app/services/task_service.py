@@ -18,6 +18,8 @@ from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog
 from app.models.user import User
 from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
+from app.models.label import LabelDefinition
+from app.services import label_tracks
 from app.services.annotation_validation import find_first_overlap
 
 
@@ -320,11 +322,17 @@ async def submit_task(db: AsyncSession, task_id: int, user: User) -> Task:
     as_schema = [
         LabelItemIn(label_id=i.label_id, start_time_ms=i.start_time_ms, end_time_ms=i.end_time_ms) for i in items
     ]
-    overlap = find_first_overlap(as_schema)
+    # 父子（舔 / 舔-前左爪）和不同互斥轨（卧 + 舔）压在一起不算矛盾，只拦同轨不同类的
+    project_labels = (await db.execute(
+        select(LabelDefinition).where(LabelDefinition.project_id == task.project_id)
+    )).scalars().all()
+    overlap = find_first_overlap(as_schema, label_tracks.conflict_checker(project_labels))
     if overlap is not None:
+        names = {l.id: l.display_name for l in project_labels}
+        a, b = overlap
         raise TaskConflictError(
-            f"存在时间重叠的标签（{overlap[0].start_time_ms}-{overlap[0].end_time_ms}ms 与 "
-            f"{overlap[1].start_time_ms}-{overlap[1].end_time_ms}ms），请修正后再提交"
+            f"存在时间重叠的标签（「{names.get(a.label_id, a.label_id)}」{a.start_time_ms}-{a.end_time_ms}ms 与 "
+            f"「{names.get(b.label_id, b.label_id)}」{b.start_time_ms}-{b.end_time_ms}ms），请修正后再提交"
         )
 
     record.submitted_at = datetime.now(UTC)

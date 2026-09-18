@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
 import {
   Button,
@@ -35,7 +35,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
-import { chainOf, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName } from "@/utils/labelTree";
+import { TRACKS, TRACK_NAME, chainOf, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -406,7 +406,14 @@ export default function AnnotationWorkspace({
   // 层级标签：第一行只摆大类（没有上级的），选了哪个大类下面才展开它的子类，再下一层同理
   const labelChildren = useMemo(() => childrenMap(labels), [labels]);
   const labelRows = useMemo(() => {
-    const rows: { parent: LabelDefinition | null; items: LabelDefinition[] }[] = [{ parent: null, items: labelChildren.get(null) ?? [] }];
+    // 第一行的大类按互斥轨分组排（行为 / 运动 / 姿态 / 设备），组间画个灰字分隔；没分轨的项目原样
+    const roots = [...(labelChildren.get(null) ?? [])];
+    const rank = (l: LabelDefinition) => {
+      const i = TRACKS.findIndex((t) => t.key === trackOf(labelById, l.id));
+      return i < 0 ? TRACKS.length : i;
+    };
+    roots.sort((a, b) => rank(a) - rank(b) || a.sort_order - b.sort_order || a.id - b.id);
+    const rows: { parent: LabelDefinition | null; items: LabelDefinition[] }[] = [{ parent: null, items: roots }];
     if (labelId != null) {
       for (const node of chainOf(labelById, labelId)) {
         const kids = labelChildren.get(node.id) ?? [];
@@ -420,15 +427,26 @@ export default function AnnotationWorkspace({
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
   const nameOf = (id: number) => labelById.get(id)?.display_name ?? `#${id}`;
 
+  // 分了互斥轨的项目：波形上的色块按轨分成几条横带（行为 / 运动 / 姿态 / 设备），
+  // 同一时刻「卧 + 静止 + 舔」三条各占一带，不互相盖住。没分轨的项目照旧整高一条
+  const usedTracks = useMemo(() => {
+    const set = new Set(labels.map((l) => trackOf(labelById, l.id)).filter(Boolean));
+    return TRACKS.map((t) => t.key).filter((k) => set.has(k));
+  }, [labels, labelById]);
   const segments: ChartSegment[] = useMemo(
     () =>
-      items.map((i) => ({
-        start_time_ms: i.start_time_ms,
-        end_time_ms: i.end_time_ms,
-        color: colorOf(i.label_id),
-        label: nameOf(i.label_id),
-      })),
-    [items, labels]
+      items.map((i) => {
+        const t = trackOf(labelById, i.label_id);
+        const lane = usedTracks.indexOf(t);
+        return {
+          start_time_ms: i.start_time_ms,
+          end_time_ms: i.end_time_ms,
+          color: colorOf(i.label_id),
+          label: nameOf(i.label_id),
+          ...(usedTracks.length > 1 && lane >= 0 ? { lane, lanes: usedTracks.length } : {}),
+        };
+      }),
+    [items, labels, usedTracks]
   );
 
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
@@ -1482,9 +1500,20 @@ export default function AnnotationWorkspace({
                     const onPath = !selected && selectedChain.has(l.id);
                     const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
                     const kids = (labelChildren.get(l.id) ?? []).length;
+                    // 第一行：换到另一条互斥轨时插一个灰字组头（同轨互斥、跨轨可以同时标）
+                    const t = row.parent ? "" : trackOf(labelById, l.id);
+                    const prevT = row.parent || i === 0 ? null : trackOf(labelById, row.items[i - 1].id);
+                    const head = !row.parent && usedTracks.length > 1 && t && t !== prevT ? (
+                      <Tooltip key={`t:${t}`} title={`${TRACKS.find((x) => x.key === t)?.hint ?? ""}。同一轨的标签时间上互斥；不同轨的可以同时标（卧着 + 静止 + 舔前爪）`}>
+                        <span style={{ color: "#999", fontSize: 12, marginLeft: i ? 10 : 0, borderLeft: i ? "1px solid #ddd" : undefined, paddingLeft: i ? 8 : 0 }}>
+                          {TRACK_NAME[t]} ·
+                        </span>
+                      </Tooltip>
+                    ) : null;
                     return (
+                      <Fragment key={l.id}>
+                      {head}
                       <Button
-                        key={l.id}
                         size="small"
                         onClick={() => setLabelId(selected ? null : l.id)}
                         style={{
@@ -1501,6 +1530,7 @@ export default function AnnotationWorkspace({
                           <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{ROW_KEYS[r][i]}</span>
                         )}
                       </Button>
+                      </Fragment>
                     );
                   })}
                 </span>

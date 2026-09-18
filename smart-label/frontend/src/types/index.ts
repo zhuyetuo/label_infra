@@ -18,6 +18,8 @@ export interface LabelDefinition {
   /** 非空 = 颜色还跟着某个标签模板走；手动改过颜色之后会变成 null，改模板颜色就不再影响它了 */
   template_item_id: number | null;
   parent_id: number | null;
+  /** 互斥轨：behavior / motion / posture / device；null = 没分轨（子标签沿用上级）。同轨互斥、跨轨可重叠 */
+  track?: string | null;
   sort_order: number;
   is_active: boolean;
 }

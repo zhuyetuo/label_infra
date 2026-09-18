@@ -9,7 +9,7 @@ from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.services import label_tree
+from app.services import label_tracks, label_tree
 from app.services.task_scope import visible_project_ids
 from app.schemas.label import LabelCreate, LabelOut, LabelUpdate
 
@@ -63,7 +63,7 @@ async def create_label(
         await label_tree.validate_parent(db, body.project_id, None, body.parent_id)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-    label = LabelDefinition(**body.model_dump(), created_by=admin.id)
+    label = LabelDefinition(**{**body.model_dump(), "track": label_tracks.normalize(body.track)}, created_by=admin.id)
     db.add(label)
     await db.commit()
     await db.refresh(label)
@@ -107,6 +107,8 @@ async def update_label(label_id: int, body: LabelUpdate, db: AsyncSession = Depe
     if label is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
     updates = body.model_dump(exclude_unset=True)
+    if "track" in updates:
+        updates["track"] = label_tracks.normalize(updates["track"])
     if "parent_id" in updates:
         try:
             await label_tree.validate_parent(db, label.project_id, label.id, updates["parent_id"])

@@ -66,6 +66,10 @@ class DatasetExportIn(BaseModel):
     include_submitted: bool = False
     # approved = 整份审完的任务才算；reviewed = 不看任务状态，只取人碰过的片段
     scope: str = "approved"
+    # 分了互斥轨的项目：按优先级折叠成"一个时刻一个标签"（默认 行为 > 运动 > 姿态）。
+    # 不折叠就各轨原样导，给分轨训练用。没分轨的项目两种一样
+    flatten: bool = True
+    track_priority: list[str] | None = None
 
 
 @router.get("/datasets")
@@ -85,7 +89,7 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
             db, body.name, body.date_from, body.date_to,
             (body.project_ids or ([body.project_id] if body.project_id is not None else None)),
             body.include_submitted,
-            scope=body.scope,
+            scope=body.scope, flatten=body.flatten, track_priority=body.track_priority,
         )
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

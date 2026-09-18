@@ -21,6 +21,7 @@ from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import label_template_service as tsvc
+from app.services import label_tracks
 from app.schemas.label_template import (
     ApplyTemplateResult,
     LabelTemplateCreate,
@@ -92,6 +93,7 @@ async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTe
     # 挂到项目自己的「抓挠」下），套用时按项目里的标签找。不能是自己、不能绕成圈
     codes = {i.code: i for i in items}
     for item in items:
+        item.track = label_tracks.normalize(item.track)
         if not item.parent_code:
             item.parent_code = None
             continue
@@ -121,6 +123,11 @@ async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTe
         row.color = item.color
         row.sort_order = item.sort_order
         row.parent_code = item.parent_code
+        # 改轨也同步给还跟着它的项目标签：轨是"这套标签怎么互斥"的一部分，跟父子一样归模板管
+        if row.track != item.track:
+            await db.execute(update(LabelDefinition).where(LabelDefinition.template_item_id == row.id)
+                             .values(track=item.track))
+        row.track = item.track
 
     # 剩下没被本次提交的 code 覆盖到的旧条目，是真的从模板里删掉了
     for row in existing.values():
@@ -193,6 +200,7 @@ async def save_project_labels_as_template(
             sort_order=label.sort_order,
             # 父子关系一起存进模板（上级停用了就不带，模板里没有那条）
             parent_code=code_of.get(label.parent_id) if label.parent_id is not None else None,
+            track=label.track,
         )
         db.add(tpl_item)
         await db.flush()

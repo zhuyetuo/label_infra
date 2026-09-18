@@ -10,6 +10,8 @@ class LabelTemplateItemIn(BaseModel):
     sort_order: int = 0
     # 上级标签的 code（同一模板里的另一条）。层级标签：舔身体 → 前爪 → 前左爪
     parent_code: str | None = None
+    # 互斥轨（posture / motion / behavior / device），空 = 没分轨
+    track: str | None = None
 
 
 class LabelTemplateItemOut(LabelTemplateItemIn):
