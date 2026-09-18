@@ -19,6 +19,11 @@ interface Props {
 export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered, onJump }: Props) {
   const [token, setToken] = useState<string | null>(null);
   const [mode, setMode] = useState<"crop" | "full">("crop");
+  // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
+  const [scope, setScope] = useState<"all" | "own" | "other">("all");
+  const own = hits.filter((h) => h.task_id === taskId);
+  const other = hits.filter((h) => h.task_id !== taskId);
+  const shown = scope === "own" ? own : scope === "other" ? other : hits;
   useEffect(() => {
     let alive = true;
     similarThumbToken(taskId).then((r) => alive && setToken(r.token)).catch(() => alive && setToken(null));
@@ -34,6 +39,8 @@ export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered,
     <div>
       <Space size={8} style={{ marginBottom: 6 }} wrap>
         <Typography.Text strong>命中 {hits.length} 帧</Typography.Text>
+        <Segmented size="small" value={scope} onChange={(v) => setScope(v as "all" | "own" | "other")}
+                   options={[{ label: `全部 ${hits.length}`, value: "all" }, { label: `本任务 ${own.length}`, value: "own" }, { label: `其他任务 ${other.length}`, value: "other" }]} />
         <Segmented size="small" value={mode} onChange={(v) => setMode(v as "crop" | "full")}
                    options={[{ label: "狗框那一块", value: "crop" }, { label: "整帧", value: "full" }]} />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -54,7 +61,7 @@ export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered,
               </div>
             </div>
           )}
-          {hits.map((h, i) => (
+          {shown.map((h) => (
             <div
               key={`${h.path}@${h.t}`}
               onClick={() => onJump(h)}
@@ -63,7 +70,7 @@ export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered,
             >
               <img src={url(h.path, h.t)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4 }} />
               <div style={{ fontSize: 12, lineHeight: 1.4, marginTop: 2, display: "flex", justifyContent: "space-between", gap: 4 }}>
-                <span style={{ color: "#999" }}>#{i + 1}</span>
+                <span style={{ color: "#999" }}>#{hits.indexOf(h) + 1}</span>
                 <span style={{ color: scoreColor(h.score), fontWeight: 600 }}>{h.score.toFixed(3)}</span>
               </div>
               <div style={{ fontSize: 11, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

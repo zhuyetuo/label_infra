@@ -991,6 +991,7 @@ export default function AnnotationWorkspace({
                 setSimilarOpen(true);
               }
         }
+        onTogglePlay={() => bus.play("toggle")}
         onClearSimilar={
           readOnly || taskId == null
             ? undefined

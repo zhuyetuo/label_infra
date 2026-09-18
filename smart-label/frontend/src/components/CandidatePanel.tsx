@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, Dropdown, Empty, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from "antd";
-import { DeleteOutlined, DownOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
+import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 import { flatten } from "@/utils/labelTree";
@@ -38,6 +38,8 @@ interface Props {
   onSeek: (ms: number) => void;
   onLoop?: (range: { startMs: number; endMs: number } | null) => void;
   loopRange?: { startMs: number; endMs: number } | null;
+  /** 暂停 / 继续播放（不动循环区间：暂停只是停在这一帧去看、去检索，回来还知道是哪一段） */
+  onTogglePlay?: () => void;
   /** 确认/排除之后刷新列表；确认时还要把新片段拉进草稿，所以一并重载草稿 */
   onDecided: (c: AiCandidate, decision: AiCandidate["status"]) => void;
   /** 项目里的标签，给「改成别的类别」用（带颜色，跟已标注片段那边的选择器一致） */
@@ -83,6 +85,7 @@ export default function CandidatePanel({
   onSeek,
   onLoop,
   loopRange,
+  onTogglePlay,
   onDecided,
   labels = [],
   scratchLabelIds = [],
@@ -298,7 +301,8 @@ export default function CandidatePanel({
         size="small"
         rowKey="id"
         dataSource={rows}
-        rowClassName={(c: AiCandidate) => (isFocus(c) ? "cand-focus-row" : "")}
+        // 正在循环的那一行高亮：暂停去干别的回来，一眼看到是哪一段
+        rowClassName={(c: AiCandidate) => [isFocus(c) ? "cand-focus-row" : "", isLooping(c) ? "cand-loop-row" : ""].filter(Boolean).join(" ")}
         onRow={(c: AiCandidate) => (isFocus(c) ? { style: { background: "#e6f4ff" } } : {})}
         pagination={false}
         // 只留横向滚动：给了 y 之后表格自己会出一条纵向滚动条，跟外面那条
@@ -393,9 +397,20 @@ export default function CandidatePanel({
                 </Button>
                 {onLoop &&
                   (isLooping(c) ? (
-                    <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
-                      停止播放
-                    </Button>
+                    <>
+                      {onTogglePlay && (
+                        <Tooltip title="暂停 / 继续，循环还在这一段上（空格键也行）。想细看用哪一帧去检索：暂停后 ← → 逐帧">
+                          <Button size="small" type="link" icon={<PauseCircleOutlined />} onClick={onTogglePlay}>
+                            暂停/继续
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Tooltip title="取消这一段的循环并停下">
+                        <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
+                          停止循环
+                        </Button>
+                      </Tooltip>
+                    </>
                   ) : (
                     <Button
                       size="small"
