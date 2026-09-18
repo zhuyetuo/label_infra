@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Popconfirm, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { actLocalModel, listLocalModels, type LocalModel } from "@/api/llmProviders";
 
@@ -120,7 +120,23 @@ export default function LocalModels() {
             title: "错误 / 说明",
             render: (_, m: LocalModel) => (
               <div>
-                {m.error && !m.available ? <Typography.Text type={m.loading ? "secondary" : "danger"} style={{ fontSize: 12 }}>{m.error}</Typography.Text> : null}
+                {m.progress && m.vllm?.downloading ? (
+                  <div style={{ minWidth: 260 }}>
+                    <Progress
+                      percent={m.progress.pct ?? 0}
+                      size="small"
+                      status="active"
+                      format={() => (m.progress?.pct != null ? `${m.progress.pct}%` : `${(m.progress?.done_mb ?? 0) / 1000 | 0} GB`)}
+                    />
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {(m.progress.done_mb / 1000).toFixed(2)}{m.progress.total_mb ? ` / ${(m.progress.total_mb / 1000).toFixed(2)}` : ""} GB
+                      {" · "}{m.progress.speed_mbps ?? 0} MB/s
+                      {m.progress.eta_s != null ? ` · 预计还要 ${Math.floor(m.progress.eta_s / 60)} 分 ${m.progress.eta_s % 60} 秒` : ""}
+                    </Typography.Text>
+                  </div>
+                ) : m.error && !m.available ? (
+                  <Typography.Text type={m.loading ? "secondary" : "danger"} style={{ fontSize: 12 }}>{m.error}</Typography.Text>
+                ) : null}
                 {m.vllm && (
                   <div style={{ fontSize: 12, color: "#888" }}>
                     {m.vllm.running ? `进程 ${m.vllm.pid} · 端口 ${m.vllm.port}${m.vllm.uptime_s != null ? ` · 已跑 ${Math.round(m.vllm.uptime_s / 60)} 分` : ""}` : `端口 ${m.vllm.port}`}
