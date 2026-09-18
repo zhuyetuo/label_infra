@@ -1656,6 +1656,7 @@ export default function Projects() {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               流程：本地先筛「画面里有狗且在动」的几秒窗（不花钱）→ 裁出狗那一块、抽几帧问大模型（走 API，按段计费）
               → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限；先用「预览」看会送多少段。
+              <b>先「建画面索引」再来</b>：建过索引的视频这里不用再解码检测，预览秒出；没建的每路要一两分钟。
             </Typography.Text>
             {seekProgress[seekTarget.id]?.service?.available === false && (
               <Alert
