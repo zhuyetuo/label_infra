@@ -37,17 +37,17 @@ def test_created_once_with_all_items(db, run):
     assert tpl is not None and tpl.created_by == admin.id and tpl.description
     items = _items(db, run, tpl.id)
     names = [i.display_name for i in items]
-    assert names[0] == "舔身体" and names[5] == "啃身体"   # 父在前，四个部位跟在后面
+    assert names[0] == "舔身体" and names[9] == "啃身体"   # 父在前，部位跟在后面
     assert {(i.code, i.display_name, i.color, i.sort_order) for i in items} == \
         {(r.code, r.display_name, r.color, r.sort_order) for r in template_rows()}
-    assert len(items) == 19
+    assert len(items) == 27
     # 「抓挠」本身不进模板（项目里已有，带进去会变成两个），只带部位
     assert "抓挠" not in names and "抓挠-头颈耳" in names and "蹭身体" in names
     assert "scratch" not in {i.code for i in items}
 
     assert run(ensure_grooming_template(db)) == "exists"
     assert run(db.execute(select(LabelTemplate))).scalars().all().__len__() == 1
-    assert len(_items(db, run, tpl.id)) == 19
+    assert len(_items(db, run, tpl.id)) == 27
 
 
 def test_admin_edits_survive_restart(db, run):
@@ -78,11 +78,11 @@ def test_missing_whole_group_is_topped_up_on_restart(db, run):
     lick = next(i for i in _items(db, run, tpl.id) if i.code == "lick_body")
     lick.display_name = "舔"
     run(db.commit())
-    assert len(_items(db, run, tpl.id)) == 10
+    assert len(_items(db, run, tpl.id)) == 18
 
     assert run(ensure_grooming_template(db)) == "updated"
     items = _items(db, run, tpl.id)
-    assert len(items) == 19
+    assert len(items) == 27
     assert next(i for i in items if i.code == "lick_body").display_name == "舔"
     assert run(ensure_grooming_template(db)) == "exists"
 
@@ -157,7 +157,7 @@ def test_lifespan_really_seeds_the_template(db, run, monkeypatch):
 
     run(boot())
     assert _tpl(db, run) is not None
-    assert len(_items(db, run, _tpl(db, run).id)) == 19
+    assert len(_items(db, run, _tpl(db, run).id)) == 27
 
 
 def _hue(hex_):
@@ -215,9 +215,9 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
     p = Project(name="p", created_by=admin.id)
     db.add(p)
     run(db.flush())
-    follow = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔身体-前肢爪",
+    follow = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔身体-前爪",
                              color="#FF8C42", template_item_id=items["lick_body_fore"].id, created_by=admin.id)
-    detached = LabelDefinition(project_id=p.id, code="lick_body_hind", display_name="舔身体-后肢臀尾",
+    detached = LabelDefinition(project_id=p.id, code="lick_body_hind", display_name="舔身体-后爪",
                                color="#FF8C42", template_item_id=None, created_by=admin.id)
     db.add(follow)
     db.add(detached)
@@ -236,3 +236,50 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
     assert detached.color == "#FF8C42"
 
     assert run(ensure_grooming_template(db)) == "exists"
+
+
+def test_old_paw_parts_are_renamed_and_split_once(db, run):
+    """上一版舔/啃只有「前肢爪」「后肢臀尾」：重启后改名成「前爪」「后爪」并补左右四条；
+    升级过之后管理员删掉左右爪也不会再补回来；项目标签的名字不动（跟模板页改名一致）。"""
+    admin = _admin(db, run)
+    tpl = LabelTemplate(name=TEMPLATE_NAME, created_by=admin.id)
+    db.add(tpl)
+    run(db.flush())
+    old = {"fore": "前肢爪", "hind": "后肢臀尾"}
+    for r in template_rows():
+        if r.code.endswith(("_fore_l", "_fore_r", "_hind_l", "_hind_r")):
+            continue
+        name = r.display_name
+        for p, oname in old.items():
+            if r.code in (f"lick_body_{p}", f"chew_body_{p}"):
+                name = f"{r.display_name.split('-')[0]}-{oname}"
+        db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=name, color=r.color, sort_order=r.sort_order))
+    run(db.flush())
+    items = {i.code: i for i in _items(db, run, tpl.id)}
+    items["chew_body_hind"].display_name = "啃身体-后腿"     # 管理员自己改过名的不动
+    p = Project(name="p", created_by=admin.id)
+    db.add(p)
+    run(db.flush())
+    lab = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔身体-前肢爪",
+                          color="#8F3800", template_item_id=items["lick_body_fore"].id, created_by=admin.id)
+    db.add(lab)
+    run(db.commit())
+    assert len(items) == 19
+
+    assert run(ensure_grooming_template(db)) == "updated"
+    got = {i.code: i.display_name for i in _items(db, run, tpl.id)}
+    assert got["lick_body_fore"] == "舔身体-前爪" and got["lick_body_hind"] == "舔身体-后爪"
+    assert got["chew_body_fore"] == "啃身体-前爪" and got["chew_body_hind"] == "啃身体-后腿"
+    assert got["lick_body_fore_l"] == "舔身体-前左爪" and got["chew_body_hind_r"] == "啃身体-后右爪"
+    assert len(got) == 27
+    run(db.refresh(lab))
+    assert lab.display_name == "舔身体-前肢爪"
+    assert run(ensure_grooming_template(db)) == "exists"
+
+    # 升级过了：删掉左右爪不会被补回来
+    for i in _items(db, run, tpl.id):
+        if i.code.endswith(("_l", "_r")):
+            db._s.delete(i)
+    run(db.commit())
+    assert run(ensure_grooming_template(db)) == "exists"
+    assert len(_items(db, run, tpl.id)) == 19

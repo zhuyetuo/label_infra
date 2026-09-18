@@ -28,12 +28,13 @@ class _L:
 
 
 def test_label_specs_只送项目里有的_部位取真有的():
-    labels = [_L("抓挠"), _L("舔身体"), _L("舔身体-前肢爪"), _L("舔身体-躯干侧腹"), _L("蹭身体", active=False),
-              _L("活动")]
+    labels = [_L("抓挠"), _L("舔身体"), _L("舔身体-前肢爪"), _L("舔身体-躯干侧腹"), _L("舔身体-前左爪"),
+              _L("蹭身体", active=False), _L("活动")]
     specs = vs.label_specs(labels)
     assert [s["name"] for s in specs] == ["舔身体", "抓挠"]              # 蹭停用了、活动不在四类里
     lick = specs[0]
-    assert lick["parts"] == ["前肢爪", "躯干侧腹"] and lick["description"]
+    # 模板里的按模板顺序，老模板留下的旧名「前肢爪」也送
+    assert lick["parts"] == ["前左爪", "躯干侧腹", "前肢爪"] and lick["description"]
     assert specs[1]["parts"] == []                                       # 抓挠没加部位子标签
     assert [s["name"] for s in vs.label_specs(labels, ["抓挠"])] == ["抓挠"]
     assert vs.label_specs(labels, ["蹭身体"]) == []
