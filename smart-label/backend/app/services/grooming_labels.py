@@ -194,12 +194,12 @@ async def _fill_parent_codes(db, tpl_id: int) -> int:
     items = (await db.execute(
         select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
     )).scalars().all()
+    # 上级不一定在模板里：「抓挠-部位」的上级是项目自己的「抓挠」，套用时按项目找
     want = {r.code: r for r in template_rows()}
-    codes = {it.code for it in items}
     n = 0
     for it in items:
         r = want.get(it.code)
-        if it.parent_code is None and r is not None and r.parent_code and r.parent_code in codes:
+        if it.parent_code is None and r is not None and r.parent_code:
             it.parent_code = r.parent_code
             n += 1
     return n
