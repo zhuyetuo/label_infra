@@ -414,6 +414,8 @@ export default function CandidatePanel({
                     {otherLabels.length > 0 && (
                       <Dropdown
                         menu={{
+                          // 标签多了（四个大类各带部位）一屏放不下：限高，里面滚
+                          style: { maxHeight: 380, overflowY: "auto" },
                           // 跟「已标注片段」那边的标签选择器一样带颜色，扫一眼就能对上
                           // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨着，扫一眼就能挑到最细的
                           items: flatten(otherLabels.map((l) => ({ ...l, parent_id: l.parent_id ?? null }))).map(({ label: l, depth }) => ({
