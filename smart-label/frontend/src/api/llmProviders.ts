@@ -89,3 +89,38 @@ export interface LlmCallStats {
 /** 调用统计：次数、token（总 / 单次）、花费、耗时，按家/模型、按天、最近几次 */
 export const getLlmCallStats = (days: number) =>
   request.get<never, LlmCallStats>("/llm-providers/stats", { params: { days } });
+
+/** 算法机上的一个本地模型（狗检测 / SAM / 画面向量 / 姿态） */
+export interface LocalModel {
+  key: string;
+  name: string;
+  purpose: string;
+  available: boolean;
+  error: string | null;
+  device: string | null;
+  weights: string | null;
+  warm?: boolean;
+  loading?: boolean;
+  progress?: { pct: number; done_mb: number; total_mb: number; eta_s: number | null } | null;
+  /** 视觉服务进程内存里的调用计数（重启归零） */
+  meter: { calls: number; frames: number; total_ms: number; max_ms: number; errors: number; last_at: number | null; avg_ms: number; avg_ms_per_frame: number };
+}
+
+export interface LocalModelsOverview {
+  available: boolean;
+  error: string | null;
+  uptime_s?: number;
+  gpu?: { cuda_available: boolean | null; gpu: string | null; torch: string | null; why: string | null } | null;
+  models: LocalModel[];
+}
+
+export const listLocalModels = () => request.get<never, LocalModelsOverview>("/llm-providers/local-models");
+
+export const actLocalModel = (key: string, action: "load" | "unload" | "test") =>
+  request.post<never, { ok: boolean; error: string | null; latency_ms?: number; detail?: string | null; status: Partial<LocalModel> }>(
+    `/llm-providers/local-models/${key}`,
+    { action },
+    { timeout: 320000 }
+  );
+
+export const resetLocalModelMeter = () => request.post<never, { ok: boolean }>("/llm-providers/local-models/meter/reset");

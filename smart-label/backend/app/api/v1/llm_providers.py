@@ -117,3 +117,37 @@ async def test_provider(provider: str, body: TestIn, db: AsyncSession = Depends(
 async def call_stats(days: int = 30, db: AsyncSession = Depends(get_db)):
     """调用统计：次数、token（总 / 单次）、花费、耗时（均值 / p50 / p90 / 最大），按家/模型、按天、最近几次。"""
     return ok(await llm_call_service.stats(db, days=max(1, min(365, days))))
+
+
+# ── 本地模型（算法机上的狗检测 / SAM / 画面向量 / 姿态）────────────────
+
+@router.get("/local-models")
+async def local_models():
+    """本地模型一张表：在不在、跑在哪、权重、错误、调用计数（视觉服务进程内存里，重启归零）。"""
+    return ok(await vision_sam_client.models_overview())
+
+
+class LocalModelActionIn(BaseModel):
+    action: str = Field(..., pattern="^(load|unload|test)$")
+
+
+@router.post("/local-models/{key}")
+async def local_model_act(key: str, body: LocalModelActionIn, db: AsyncSession = Depends(get_db),
+                          admin: User = Depends(get_current_user)):
+    """加载（含预热）/ 卸载（释放显存）/ 测试（跑一次最小推理）。"""
+    try:
+        r = await vision_sam_client.models_act(key, body.action)
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    db.add(AuditLog(user_id=admin.id, action=f"local_model.{body.action}", target_type="local_model", target_id=None,
+                    detail=f"{key}: ok={r.get('ok')} {r.get('error') or ''}"[:500]))
+    await db.commit()
+    return ok(r)
+
+
+@router.post("/local-models/meter/reset")
+async def local_models_meter_reset():
+    try:
+        return ok(await vision_sam_client.models_meter_reset())
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e

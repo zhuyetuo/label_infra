@@ -272,3 +272,28 @@ async def embed_thumb(video_rel_path: str, t_s: float, crop: bool = True) -> byt
     if resp.status_code != 200:
         raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
     return resp.content
+
+
+# ── 本地模型集中管理（「模型服务」页）────────────────────────────────
+async def models_overview() -> dict:
+    """算法机上的本地模型一张表。视觉服务没配 / 连不上时不抛，返回 available=False 让页面说明。"""
+    if not enabled():
+        return {"available": False, "error": _off_reason(), "models": []}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/models"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}", "models": []}
+        return {"available": True, "error": None, **resp.json()}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}", "models": []}
+
+
+async def models_act(key: str, action: str) -> dict:
+    """加载 / 卸载 / 测试某个本地模型。加载可能要十几秒（权重搬上卡 + 预热）。"""
+    return await _post(f"/api/v1/models/{key}", {"action": action}, 300)
+
+
+async def models_meter_reset() -> dict:
+    return await _post("/api/v1/models/meter/reset", {}, 10)
