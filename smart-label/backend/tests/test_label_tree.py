@@ -251,3 +251,20 @@ def test_模板改名同步到跟着的项目标签_手动改过的断开_加条
     assert run(db.get(LabelDefinition, ls["fore"].id)).template_item_id is None
     assert "fore_l" in ls and ls["fore_l"].parent_id == ls["fore"].id   # 新条目自动补到项目并挂好
     assert ls["fore_l"].display_name == "舔-前左爪"
+
+
+def test_删项目_有父子的标签也能整批删掉(db, run):
+    """MySQL 上父子自引用外键会让整批 DELETE 报错（父先于子被删）；先清 parent_id 再删。
+    sqlite 不查外键，这里只验：删完标签一条不剩、父子关系先被清掉的那条 UPDATE 不炸。"""
+    from app.api.v1 import projects as papi
+
+    admin = _admin(db, run)
+    p = _project(db, run, admin)
+    lick = LabelDefinition(project_id=p.id, code="lick", display_name="舔", created_by=admin.id)
+    db.add(lick)
+    run(db.flush())
+    db.add(LabelDefinition(project_id=p.id, code="fore", display_name="舔-前爪", parent_id=lick.id, created_by=admin.id))
+    run(db.commit())
+    run(papi.delete_project(p.id, db=db))
+    assert _labels(db, run, p.id) == {}
+    assert run(db.get(Project, p.id)) is None

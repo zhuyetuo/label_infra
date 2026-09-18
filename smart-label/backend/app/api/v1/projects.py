@@ -291,6 +291,9 @@ async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     if task_ids:
         await purge_task_children(db, task_ids)
         await db.execute(delete(Task).where(Task.project_id == project_id))
+    # 标签有父子自引用外键（parent_id）：整批 DELETE 时父可能先于子被删，MySQL 直接报
+    # 外键错。先把这个项目里的 parent_id 全清空，再删
+    await db.execute(update(LabelDefinition).where(LabelDefinition.project_id == project_id).values(parent_id=None))
     label_count = (
         await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == project_id))
     ).rowcount or 0
