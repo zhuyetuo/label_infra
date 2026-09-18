@@ -191,3 +191,29 @@ def test_调用统计_落表和汇总(db, run, admin, monkeypatch):
     assert len(st["by_day"]) == 1 and st["by_day"][0]["calls"] == 4
     assert st["recent"][0]["error"] == "timeout" and st["recent"][0]["task_id"] == 42
     assert any(r["purpose"] == "test" and r["latency_ms"] == 120 for r in st["recent"])
+
+
+def test_本地模型_列表和操作走视觉服务(db, run, admin, monkeypatch):
+    from app.services import vision_sam_client as vc
+
+    async def ov():
+        return {"available": True, "error": None, "uptime_s": 5, "gpu": None,
+                "models": [{"key": "dog", "name": "狗检测", "available": True, "meter": {"calls": 3}}]}
+
+    async def act(key, action):
+        return {"ok": True, "error": None, "latency_ms": 12, "detail": "x", "k": key, "a": action}
+
+    monkeypatch.setattr(vc, "models_overview", ov)
+    monkeypatch.setattr(vc, "models_act", act)
+    r = run(api.local_models())["data"]
+    assert r["available"] is True and r["models"][0]["key"] == "dog"
+    r = run(api.local_model_act("dog", api.LocalModelActionIn(action="test"), db=db, admin=admin))["data"]
+    assert r["ok"] is True and r["a"] == "test"
+
+    async def down(key, action):
+        raise vc.SamUnavailable("连不上视觉服务")
+
+    monkeypatch.setattr(vc, "models_act", down)
+    with pytest.raises(HTTPException) as e:
+        run(api.local_model_act("dog", api.LocalModelActionIn(action="load"), db=db, admin=admin))
+    assert e.value.status_code == 503

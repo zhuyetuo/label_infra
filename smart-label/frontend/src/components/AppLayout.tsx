@@ -17,7 +17,7 @@ const ALL_ITEMS = [
   { key: "/vision", label: "视觉标注", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/training", label: "模型训练", roles: ["super_admin", "admin"] },
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
-  { key: "/llm-providers", label: "大模型 API", roles: ["super_admin", "admin"] },
+  { key: "/llm-providers", label: "模型服务", roles: ["super_admin", "admin"] },
   { key: "/users", label: "账号管理", roles: ["super_admin", "admin"] },
 ];
 

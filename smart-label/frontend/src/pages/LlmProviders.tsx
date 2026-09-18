@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Tabs } from "antd";
+import LocalModels from "@/components/LocalModels";
 import { Alert, Button, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,7 +18,24 @@ interface EditModel extends LlmModel {
 
 // 「大模型 API」：六家各一行。key 在这里填，视觉服务那边不存 key，每次找片段时平台带过去。
 // key 只写不读：填过之后这里只显示末四位，没有任何地方能把整串拿回来。
+// 「模型服务」：算法机上的本地模型（加载 / 卸载 / 测试）、大模型 API（key / 模型 / 测试）、
+// 调用统计各一个标签页，别混在一起。
 export default function LlmProviders() {
+  const [tab, setTab] = useState("local");
+  return (
+    <Tabs
+      activeKey={tab}
+      onChange={setTab}
+      items={[
+        { key: "local", label: "本地模型", children: <LocalModels /> },
+        { key: "api", label: "大模型 API", children: <LlmApiPanel /> },
+        { key: "stats", label: "调用统计", children: <LlmCallStats /> },
+      ]}
+    />
+  );
+}
+
+function LlmApiPanel() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["llm-providers"], queryFn: listLlmProviders });
   const refresh = () => qc.invalidateQueries({ queryKey: ["llm-providers"] });
@@ -256,8 +275,6 @@ export default function LlmProviders() {
           </Space>
         )}
       </Modal>
-
-      <LlmCallStats />
     </div>
   );
 }

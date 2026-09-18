@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Card, Col, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { getLlmCallStats, type LlmCallRow, type LlmCallSummary } from "@/api/llmProviders";
+import { getLlmCallStats, listLocalModels, resetLocalModelMeter, type LlmCallRow, type LlmCallSummary } from "@/api/llmProviders";
+import { Button, Popconfirm, message } from "antd";
 
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
 const fmtN = (n: number) => n.toLocaleString("zh-CN");
@@ -16,6 +17,8 @@ export default function LlmCallStats() {
     refetchInterval: 30_000,
   });
   const t = data?.total;
+  // 本地模型的调用（视觉服务进程内存里的计数，重启归零）
+  const local = useQuery({ queryKey: ["local-models"], queryFn: listLocalModels, refetchInterval: 30_000 });
 
   const summaryCols = [
     { title: "调用次数", dataIndex: "calls", width: 90, sorter: (a: LlmCallSummary, b: LlmCallSummary) => a.calls - b.calls },
@@ -66,10 +69,43 @@ export default function LlmCallStats() {
   ];
 
   return (
-    <div style={{ marginTop: 24 }}>
+    <div>
       <Space style={{ marginBottom: 8 }} wrap>
         <Typography.Title level={5} style={{ margin: 0 }}>
-          调用统计
+          本地模型调用
+        </Typography.Title>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          算法机上狗检测 / SAM / 画面向量 / 姿态的推理次数和耗时。计数在视觉服务进程里，服务重启归零
+          {local.data?.uptime_s != null ? `（已运行 ${Math.round(local.data.uptime_s / 60)} 分钟）` : ""}。
+        </Typography.Text>
+        <Popconfirm title="把本地模型的计数清零？" onConfirm={async () => { await resetLocalModelMeter(); message.success("已清零"); local.refetch(); }}>
+          <Button size="small">清零</Button>
+        </Popconfirm>
+      </Space>
+      <Table
+        size="small"
+        rowKey="key"
+        loading={local.isLoading}
+        dataSource={local.data?.models ?? []}
+        pagination={false}
+        style={{ marginBottom: 24 }}
+        columns={[
+          { title: "模型", dataIndex: "name", width: 240 },
+          { title: "调用次数", width: 100, render: (_, m) => fmtN(m.meter.calls) },
+          { title: <Tooltip title="处理过的图片数：批量检测一次几十张，所以帧数远大于次数">帧数</Tooltip>, width: 100, render: (_, m) => fmtN(m.meter.frames) },
+          { title: "失败", width: 70, render: (_, m) => (m.meter.errors ? <span style={{ color: "#ff4d4f" }}>{m.meter.errors}</span> : 0) },
+          { title: "单次平均耗时", width: 120, render: (_, m) => (m.meter.calls ? fmtMs(m.meter.avg_ms) : "—") },
+          { title: "每帧平均耗时", width: 120, render: (_, m) => (m.meter.frames ? `${m.meter.avg_ms_per_frame} ms` : "—") },
+          { title: "最慢一次", width: 100, render: (_, m) => (m.meter.calls ? fmtMs(m.meter.max_ms) : "—") },
+          { title: "累计耗时", width: 100, render: (_, m) => (m.meter.total_ms >= 60000 ? `${(m.meter.total_ms / 60000).toFixed(1)} 分` : `${(m.meter.total_ms / 1000).toFixed(1)} 秒`) },
+          { title: "最近一次", render: (_, m) => (m.meter.last_at ? new Date(m.meter.last_at * 1000).toLocaleString("zh-CN") : "—") },
+          { title: "状态", width: 90, render: (_, m) => (m.available ? <Tag color="green">已加载</Tag> : <Tag>未加载</Tag>) },
+        ]}
+      />
+
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          大模型 API 调用
         </Typography.Title>
         <Segmented
           size="small"
