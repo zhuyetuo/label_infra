@@ -256,8 +256,10 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
         rows = await project_videos(db, task.project_id, "all")
     by_path: dict[str, list[Task]] = {}
     _multi_of: dict[int, bool] = {}
+    _code_of: dict[int, str | None] = {}
     for t, s_, path in rows:
         by_path.setdefault(path, []).append(t)
+        _code_of[t.id] = s_.sample_code if s_ else None
         if s_ is not None:
             kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
             _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
@@ -283,7 +285,11 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                 segs_t = segs
             n = await add_similar_candidates(db, t, params.label_name, segs_t)
             written += n
-            per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t)})
+            per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t),
+                             "sample_code": _code_of.get(t.id), "multi_dog": bool(_multi_of.get(t.id)),
+                             # 前几段的时间和分数：人要知道"落到哪了"，不然找完了不知道去哪看
+                             "items": [{"start_s": x["start_s"], "end_s": x["end_s"], "score": x.get("score")}
+                                       for x in sorted(segs_t, key=lambda x: -(x.get("score") or 0))[:10]]})
     await db.commit()
     # 多狗同场（影棚 / 公共区）的命中要提醒：画面里那只不一定是这条 IMU 的狗
     multi = sum(pt["candidates"] for pt in per_task if _multi_of.get(pt["task_id"]))

@@ -205,3 +205,14 @@ def test_认不出场地的老数据照常全用(db, run):
     db.add(s)
     run(db.commit())
     assert vi.usable_cams(s) == ["cam1", "cam2"] and vi.is_multi_dog(s, "cam1") is False
+
+
+def test_找相似结果带样本和时间_便于找到落在哪(db, run):
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    fn = _search({"hits": [{}] * 2, "searched": 2, "missing": [],
+                  "segments": [{"path": "d/s1_cam1.mp4", "start_s": 200, "end_s": 203, "score": 0.7, "n": 1},
+                               {"path": "d/s1_cam1.mp4", "start_s": 10, "end_s": 13, "score": 0.9, "n": 1}]})
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="舔身体-后肢臀尾", t_s=42.0), search_fn=fn))
+    pt = next(x for x in r["per_task"] if x["task_id"] == t1.id)
+    assert pt["sample_code"] == "s1" and pt["candidates"] == 2 and pt["multi_dog"] is False
+    assert [i["start_s"] for i in pt["items"]] == [10, 200]          # 分数高的在前

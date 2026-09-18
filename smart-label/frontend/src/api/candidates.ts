@@ -58,6 +58,8 @@ export const findSimilarCandidates = (body: {
   scope?: "project" | "task";
   top_k?: number;
   min_score?: number;
+  /** 标签项目里没有时顺手新建（管理员） */
+  create_label?: boolean;
 }) =>
   request.post<
     never,
@@ -67,7 +69,15 @@ export const findSimilarCandidates = (body: {
       segments: number;
       searched: number;
       missing: number;
-      per_task: { task_id: number; candidates: number }[];
+      created_label: boolean;
+      per_task: {
+        task_id: number;
+        sample_code: string | null;
+        candidates: number;
+        segments: number;
+        multi_dog: boolean;
+        items: { start_s: number; end_s: number; score: number | null }[];
+      }[];
       /** 落在多狗同场（影棚）任务上的候选数：画面里那只不一定是这条 IMU 的狗，确认时要看清 */
       multi_dog_candidates: number;
     }
