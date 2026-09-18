@@ -35,6 +35,10 @@ export const listCandidates = (taskId: number) =>
 export const repairCandidateItems = (taskId: number) =>
   request.post<never, { repaired: number }>("/candidates/repair-items", null, { params: { task_id: taskId } });
 
+/** 把这个任务里还没判过的「画面相似」候选全删掉（已确认 / 排除 / 待定的不动） */
+export const clearSimilarCandidates = (taskId: number) =>
+  request.delete<never, { deleted: number }>("/candidates/similar", { params: { task_id: taskId } });
+
 export const decideCandidate = (
   id: number,
   decision: AiCandidate["status"],

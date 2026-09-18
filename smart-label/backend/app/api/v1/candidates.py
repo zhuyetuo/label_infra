@@ -69,6 +69,24 @@ async def list_candidates(
     return ok([_out(c) for c in rows])
 
 
+@router.delete("/similar")
+async def clear_similar(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """把这个任务当前轮里**还没判过的**「画面相似」候选全删掉。
+
+    找相似常常只是试一下参数，找错了一堆没必要一条条排除；已经确认 / 排除 / 待定的
+    是人的判断，不动。返回删了几条。
+    """
+    task = await _visible_task(db, task_id, user)
+    rows = (await db.execute(
+        select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no,
+                                  AiCandidate.reason == "similar", AiCandidate.status == CandidateStatus.pending)
+    )).scalars().all()
+    for r in rows:
+        await db.delete(r)
+    await db.commit()
+    return ok({"deleted": len(rows)})
+
+
 class DecideIn(BaseModel):
     decision: str  # confirmed / rejected / uncertain / pending
     label_id: int | None = None  # 确认时写进草稿用哪个标签，留空按 label_name 找

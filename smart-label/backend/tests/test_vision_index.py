@@ -249,3 +249,20 @@ def test_找相似预览接口_把样例帧的狗框交给前端_没视频报人
     with pytest.raises(HTTPException) as e:
         run(api.similar_preview(api.SimilarPreviewIn(task_id=t1.id, t_s=1), db=db, user=u))
     assert e.value.status_code == 503
+
+
+def test_清掉画面相似候选_只删没判过的(db, run):
+    from app.api.v1 import candidates as api
+    from app.models.ai_candidate import CandidateStatus
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    for st, reason in ((CandidateStatus.pending, "similar"), (CandidateStatus.pending, "similar"),
+                       (CandidateStatus.confirmed, "similar"), (CandidateStatus.pending, "grooming")):
+        db.add(AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔", start_time_ms=0, end_time_ms=1000,
+                           reason=reason, status=st))
+    run(db.commit())
+    r = run(api.clear_similar(t1.id, db=db, user=u))["data"]
+    assert r["deleted"] == 2
+    left = _cands(db, run, t1.id)
+    assert sorted((c.reason, c.status.value) for c in left) == [("grooming", "pending"), ("similar", "confirmed")]
+    assert run(api.clear_similar(t1.id, db=db, user=u))["data"]["deleted"] == 0
