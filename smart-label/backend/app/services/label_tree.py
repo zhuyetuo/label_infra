@@ -95,9 +95,47 @@ async def validate_parent(db: AsyncSession, project_id: int, label_id: int | Non
         raise ValueError(f"层级最多 {MAX_DEPTH} 层")
 
 
+def _group_spec(parent_code: str) -> tuple[str, str, int] | None:
+    """内置分组里这个 code 的父标签长什么样：(显示名, 颜色, 排序)。不是内置的返回 None。"""
+    from app.services.grooming_labels import GROUPS, SORT_BASE, SORT_STRIDE
+
+    for i, (code, name, color, _tpl, _parts) in enumerate(GROUPS):
+        if code == parent_code:
+            return name, color, SORT_BASE + i * SORT_STRIDE
+    return None
+
+
+async def resolve_parent(db: AsyncSession, project_id: int, parent_code: str,
+                         labels: list[LabelDefinition], created_by: int) -> LabelDefinition | None:
+    """按 parent_code 在项目里找父标签：先按 code，再按名字（内置分组的名字新旧都认，
+    比如「抓挠」「舔身体」/「舔」），都没有而它是内置分组的父标签就建出来（模板故意
+    不带「抓挠」，指望项目里已有；项目里真没有的话部位就挂不上，全成了大类）。
+    建出来的会 add 进 session 并 flush，同时追加到 labels 里。"""
+    from app.services.grooming_labels import alias_names
+
+    hit = next((l for l in labels if l.code == parent_code), None)
+    if hit is not None:
+        return hit
+    spec = _group_spec(parent_code)
+    if spec is None:
+        return None
+    name, color, sort = spec
+    names = set(alias_names(name))
+    hit = next((l for l in labels if l.display_name in names), None)
+    if hit is not None:
+        return hit
+    l = LabelDefinition(project_id=project_id, code=parent_code, display_name=name, color=color,
+                        sort_order=sort, created_by=created_by)
+    db.add(l)
+    await db.flush()
+    labels.append(l)
+    return l
+
+
 async def link_from_templates(db: AsyncSession, project_id: int | None = None) -> int:
-    """老项目升级：还没有上级、但来自模板条目且条目有 parent_code 的标签，按同项目里
-    code 等于 parent_code 的那条挂上。返回挂了几条。反复跑没副作用。"""
+    """老项目升级：还没有上级、但来自模板条目且条目有 parent_code 的标签，挂到同项目里
+    对应的父标签上（找不到的内置父标签会建出来，见 resolve_parent）。返回挂了几条。
+    反复跑没副作用。"""
     q = (select(LabelDefinition, LabelTemplateItem.parent_code)
          .join(LabelTemplateItem, LabelTemplateItem.id == LabelDefinition.template_item_id)
          .where(LabelDefinition.parent_id.is_(None), LabelTemplateItem.parent_code.is_not(None)))
@@ -108,11 +146,13 @@ async def link_from_templates(db: AsyncSession, project_id: int | None = None) -
         return 0
     pids = {l.project_id for l, _ in rows}
     all_labels = (await db.execute(select(LabelDefinition).where(LabelDefinition.project_id.in_(pids)))).scalars().all()
-    by_pc = {(l.project_id, l.code): l.id for l in all_labels}
+    by_project: dict[int, list[LabelDefinition]] = {}
+    for l in all_labels:
+        by_project.setdefault(l.project_id, []).append(l)
     n = 0
     for l, pcode in rows:
-        pid = by_pc.get((l.project_id, pcode))
-        if pid is not None and pid != l.id:
-            l.parent_id = pid
+        parent = await resolve_parent(db, l.project_id, pcode, by_project.setdefault(l.project_id, []), l.created_by)
+        if parent is not None and parent.id != l.id:
+            l.parent_id = parent.id
             n += 1
     return n
