@@ -12,7 +12,7 @@ import LabelTemplates from "@/pages/LabelTemplates";
 import ProjectPicker from "@/components/ProjectPicker";
 import { useProjectStore } from "@/stores/projectStore";
 import type { LabelDefinition } from "@/types";
-import { byId, descendantIds, flatten, shortName } from "@/utils/labelTree";
+import { TRACKS, TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
 
 // 标签模板本来是单独一个导航项，并进这里做成第二个 Tab——它跟"标签"本来就是
 // 同一件事（给标注用的标签），不用单独占一条侧边栏。
@@ -33,6 +33,7 @@ interface FormValues {
   color?: string;
   sort_order?: number;
   parent_id?: number | null;
+  track?: string | null;
 }
 
 function LabelDefinitionsPanel() {
@@ -109,6 +110,7 @@ function LabelDefinitionsPanel() {
       color: nextColor,
       sort_order: (data?.length ?? 0) + 1,
       parent_id: null,
+      track: null,
     });
     setOpen(true);
   };
@@ -121,6 +123,7 @@ function LabelDefinitionsPanel() {
       color: label.color ?? PRESET_COLORS[0],
       sort_order: label.sort_order,
       parent_id: label.parent_id,
+      track: label.track ?? null,
     });
     setOpen(true);
   };
@@ -132,6 +135,7 @@ function LabelDefinitionsPanel() {
         color: values.color,
         sort_order: values.sort_order,
         parent_id: values.parent_id ?? null,
+        track: values.track || null,
       });
       message.success("已保存");
     } else {
@@ -139,7 +143,7 @@ function LabelDefinitionsPanel() {
         message.warning("请先选择项目");
         return;
       }
-      await createLabel({ ...values, parent_id: values.parent_id ?? null, project_id: projectId });
+      await createLabel({ ...values, parent_id: values.parent_id ?? null, track: values.track || null, project_id: projectId });
       message.success("创建成功");
     }
     setOpen(false);
@@ -212,6 +216,23 @@ function LabelDefinitionsPanel() {
               ) : (
                 <Typography.Text type="secondary">—</Typography.Text>
               ),
+          },
+          {
+            title: (
+              <Tooltip title="互斥轨：同一轨的标签时间上互斥，不同轨的可以同时标（卧着 + 静止 + 舔前爪）。子标签沿用上级的轨。没分轨的标签互相互斥（老项目的行为）">
+                互斥轨
+              </Tooltip>
+            ),
+            width: 90,
+            render: (_, l: LabelDefinition) => {
+              const t = trackOf(labelMap, l.id);
+              if (!t) return <Typography.Text type="secondary">—</Typography.Text>;
+              return (
+                <Typography.Text type={l.track ? undefined : "secondary"} style={{ fontSize: 12 }}>
+                  {TRACK_NAME[t]}{l.track ? "" : "（沿用上级）"}
+                </Typography.Text>
+              );
+            },
           },
           {
             title: "颜色",
@@ -344,6 +365,13 @@ function LabelDefinitionsPanel() {
             extra="层级标签：工作台第一行只显示没有上级的大类，选了大类才展开它的子类。看得清标最细的，看不清停在上级；标了细的自动算进上级"
           >
             <Select allowClear showSearch optionFilterProp="label" placeholder="没有上级" options={parentOptions} />
+          </Form.Item>
+          <Form.Item
+            name="track"
+            label="互斥轨（可不填）"
+            extra="同一轨的标签时间上互斥，不同轨的可以同时标：狗可以卧着（姿态轨）、静止（运动轨）、同时舔前爪（行为轨）。有上级的标签沿用上级的轨，这里不用填。不填 = 没分轨，所有没分轨的标签互相互斥"
+          >
+            <Select allowClear placeholder="没分轨" options={TRACKS.map((t) => ({ value: t.key, label: `${t.name}轨 · ${t.hint}` }))} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block>
             {editing ? "保存" : "创建"}

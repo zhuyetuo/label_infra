@@ -8,6 +8,8 @@ export interface LabelTemplateItem {
   sort_order: number;
   /** 上级标签的 code（层级：舔 → 前爪 → 前左爪）。可以是模板里另一条，也可以是项目里已有的 code */
   parent_code?: string | null;
+  /** 互斥轨（behavior / motion / posture / device），空 = 没分轨。同轨互斥、跨轨可以同时标 */
+  track?: string | null;
 }
 
 export interface LabelTemplate {

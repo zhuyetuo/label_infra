@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Button, Input, Popconfirm, Popover, Space, Tooltip, Typography } from "antd";
+import { Button, Input, Popconfirm, Popover, Select, Space, Tooltip, Typography } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import ColorSwatchPicker, { PRESET_COLORS } from "@/components/ColorSwatchPicker";
+import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import "./TemplateTreeEditor.css";
 
 export interface TreeItem {
@@ -11,6 +12,8 @@ export interface TreeItem {
   color?: string | null;
   sort_order: number;
   parent_code?: string | null;
+  /** 互斥轨，只在大类上设（子类沿用上级） */
+  track?: string | null;
 }
 
 interface Props {
@@ -106,6 +109,7 @@ export default function TemplateTreeEditor({ items, onChange }: Props) {
       color: parent?.color ?? PRESET_COLORS[items.length % PRESET_COLORS.length],
       sort_order: items.length + 1,
       parent_code: parentCode,
+      track: null,
     };
     // 紧跟在这个父的最后一个子类后面
     const kids = items.filter((i) => (i.parent_code?.trim() || null) === parentCode);
@@ -148,6 +152,19 @@ export default function TemplateTreeEditor({ items, onChange }: Props) {
         }} />
         <Input size="small" addonBefore="显示名" value={it.display_name} placeholder="如 舔-前爪" onChange={(e) => patch(it.key, { display_name: e.target.value })} />
         <ColorSwatchPicker value={it.color ?? undefined} onChange={(c) => patch(it.key, { color: c })} />
+        {depth === 0 && (
+          <Tooltip title="互斥轨：同一轨的标签时间上互斥，不同轨的可以同时标（卧着 + 静止 + 舔前爪）。子类沿用大类的轨。不选 = 没分轨，所有没分轨的标签互相互斥（老项目的行为）">
+            <Select
+              size="small"
+              style={{ width: "100%" }}
+              allowClear
+              placeholder="互斥轨（不选 = 没分轨）"
+              value={it.track || undefined}
+              onChange={(v) => patch(it.key, { track: v ?? null })}
+              options={TRACKS.map((t) => ({ value: t.key, label: `${t.name}轨 · ${t.hint}` }))}
+            />
+          </Tooltip>
+        )}
         <Space>
           <Button size="small" icon={<PlusOutlined />} disabled={!it.code.trim()} onClick={() => addChild(it.code.trim())}>
             加子项
@@ -175,7 +192,7 @@ export default function TemplateTreeEditor({ items, onChange }: Props) {
             title="点一下改 code / 名字 / 颜色；拖到别的节点上变成它的子类，拖到上沿 / 下沿排到它前后"
           >
             <span className="tt-node__name">{it.display_name || <i style={{ opacity: 0.7 }}>（没名字）</i>}</span>
-            <span className="tt-node__code">{it.code || "（没 code）"}</span>
+            <span className="tt-node__code">{it.code || "（没 code）"}{depth === 0 && it.track && TRACK_NAME[it.track] ? ` · ${TRACK_NAME[it.track]}轨` : ""}</span>
           </div>
         </Popover>
         {(kids.length > 0 || it.code.trim()) && (

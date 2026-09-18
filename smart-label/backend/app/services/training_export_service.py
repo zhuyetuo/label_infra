@@ -52,6 +52,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelIt
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
+from app.services import label_tracks
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
 from app.services.skin_link_service import _read_ai_json
 
@@ -108,11 +109,24 @@ async def export_dataset(
     db: AsyncSession, name: str, date_from: date | None = None, date_to: date | None = None,
     project_ids: list[int] | None = None,
     include_submitted: bool = False, scope: str = "approved",
+    flatten: bool = True, track_priority: list[str] | None = None,
 ) -> dict:
+    """flatten：分了互斥轨的项目（姿态 / 运动 / 行为可以同时标）导出时按 track_priority
+    折叠成"一个时刻一个标签"——高优先级轨盖住的时间从低优先级轨的段里挖掉，模型侧照旧是
+    单标签分类。每段另带 tracks={轨: 同时在标什么}，以后训分轨模型不用重标。
+    设备轨（颈圈松动）不参与折叠，单独放在 annotations[0].aux.device 里。
+    flatten=False 就各轨原样导（同一时刻多条），给分轨训练用。没分轨的项目两种一样。"""
     if not _NAME_RE.match(name):
         raise TrainingExportError("数据集名只能用字母/数字/下划线/横线，1–64 位")
     if scope not in ("approved", "reviewed"):
         raise TrainingExportError("scope 只能是 approved 或 reviewed")
+    priority = [t for t in (track_priority or label_tracks.DEFAULT_PRIORITY) if t in label_tracks.TRACK_NAMES and t != "device"]
+    for t in label_tracks.DEFAULT_PRIORITY:
+        if t not in priority:
+            priority.append(t)          # 没点到的轨排在后面，别丢
+    # 没分轨的标签（老项目）排最后：跟分了轨的混在一个项目里时让分了轨的赢
+    rank_of = {t: i for i, t in enumerate(priority)}
+    rank_of[""] = len(priority)
     only_reviewed = scope == "reviewed"
     q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
     # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
@@ -133,10 +147,15 @@ async def export_dataset(
             "这个范围里没有任务" if only_reviewed else "这个范围里没有审核通过的任务"
         )
 
-    label_rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
-    label_names = {i: n for i, n, _p in label_rows}
+    label_rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id,
+                                          LabelDefinition.track))).all()
+    label_names = {i: n for i, n, _p, _t in label_rows}
     # 层级：一段标了「舔-前左爪」也算「舔-前爪」「舔」，导出时带整条链，训练用哪层自己挑
-    parent_of = {i: p for i, _n, p in label_rows}
+    parent_of = {i: p for i, _n, p, _t in label_rows}
+    own_track = {i: t for i, _n, _p, t in label_rows}
+
+    def track(label_id: int) -> str:
+        return label_tracks.track_of(parent_of, own_track, label_id)
 
     def chain(label_id: int) -> list[int]:
         out: list[int] = []
@@ -216,6 +235,10 @@ async def export_dataset(
     n_conflicts = 0
     n_conflict_ms = 0
     conflicts: list[dict] = []
+    # 折叠：低优先级轨被高优先级轨盖掉了多少毫秒；各轨各导了多少段
+    n_flattened_ms = 0
+    track_counter: Counter[str] = Counter()
+    n_device = 0
 
     ls_tasks: list[dict] = []
     # 实际进了这份数据集的采集日，用来回显"范围"。
@@ -262,10 +285,15 @@ async def export_dataset(
             n_merged_overlaps += len(spans) - len(merged)
             merged_items.extend((label_id, a_ms, b_ms) for a_ms, b_ms in merged)
 
+        # 设备轨（颈圈松动）跟什么都能同时发生，也不该进 22 类里：拿出来单独导
+        device_items = sorted((x for x in merged_items if track(x[0]) == "device"), key=lambda x: x[1])
+        merged_items = [x for x in merged_items if track(x[0]) != "device"]
+
         # 不同类别压在一起是矛盾标注（同一段时间既是活动又是抓挠）。两条都导出的话，
         # 同一批数据行会以两个类别各进一次，模型学到的是纯噪声——比不要这段更糟。
         # 不能替人决定谁对，所以按跟「待定」一样的办法：把重叠那一小段从两边都挖掉，
         # 各自剩下的部分照常用。宁可少一点数据，也不喂矛盾的。
+        # 不同互斥轨的（卧 + 舔）不是矛盾，是同时发生的两件事，下面按优先级折叠
         ordered = sorted(merged_items, key=lambda x: x[1])
         conflict_spans: list[tuple[int, int]] = []
         for i in range(len(ordered) - 1):
@@ -273,7 +301,7 @@ async def export_dataset(
             for l2, a2, b2 in ordered[i + 1 :]:
                 if a2 >= b1:
                     break
-                if l1 == l2 or related(l1, l2):
+                if l1 == l2 or related(l1, l2) or track(l1) != track(l2):
                     continue
                 lo, hi = a2, min(b1, b2)
                 conflict_spans.append((lo, hi))
@@ -295,35 +323,87 @@ async def export_dataset(
             n_conflict_ms += sum(b - a for a, b in merged_conflicts)
             holes = _merge(holes + merged_conflicts)
 
+        # 折叠用：每一轨里"最细"的段（叶子层）按时间排好，给别的轨的段查"这时候同时在标什么"，
+        # 以及给低优先级轨挖洞（高优先级轨盖住的时间不归它）
+        by_track: dict[str, list[tuple[int, int, int]]] = {}
+        for l, a, b in ordered:
+            by_track.setdefault(track(l), []).append((l, a, b))
+
+        def context(a_ms: int, b_ms: int, skip: str) -> dict[str, str]:
+            """[a, b) 这段时间里别的轨各在标什么：取重叠最多的那条、最细那层的名字。"""
+            out: dict[str, str] = {}
+            for t, segs in by_track.items():
+                if t == skip or not t:
+                    continue
+                best, best_ov = None, 0
+                for l, x, y in segs:
+                    ov = min(b_ms, y) - max(a_ms, x)
+                    if ov <= 0:
+                        continue
+                    # 同一轨里父子都在（舔 / 舔-前左爪）：细的那条更准
+                    if ov > best_ov or (ov == best_ov and best is not None and best in chain(l)):
+                        best, best_ov = l, ov
+                if best is not None:
+                    out[t] = label_names.get(best, str(best))
+            return out
+
+        def segment(label_id: int, a_ms: int, b_ms: int, extra: dict) -> dict:
+            return {
+                "from_name": "label", "to_name": "ts", "type": "timeserieslabels",
+                "value": {
+                    "start": _fmt(csv_start + timedelta(milliseconds=a_ms)),
+                    "end": _fmt(csv_start + timedelta(milliseconds=b_ms)),
+                    # 整条链：[舔, 舔-前爪, 舔-前左爪]。没有层级的就一个
+                    "timeserieslabels": [label_names.get(i, str(i)) for i in chain(label_id)],
+                    # 相对 CSV 起点的毫秒：核对时「去修」要拿它把工作台开到
+                    # 这一刻。训练那边只读上面三个 key，多带几个不影响
+                    "start_ms": a_ms,
+                    "end_ms": b_ms,
+                    **extra,
+                },
+            }
+
         for label_id, s_ms, e_ms in ordered:
             if e_ms <= s_ms:
                 continue
             name_ = label_names.get(label_id, str(label_id))
+            t = track(label_id)
             # 粗标签的段里，被它子孙标签盖住的部分挖掉：那部分由细的那段导出，
             # 细的那段自己带着整条链（含这个粗标签），不挖的话同一段时间导两遍
             finer = [(a, b) for l, a, b in ordered if l != label_id and label_id in chain(l) and a < e_ms and b > s_ms]
-            own_holes = _merge(holes + finer) if finer else holes
+            # 折叠：优先级更高的轨盖住的时间也挖掉（卧着舔前爪 → 那几秒归「舔」，「卧」让开）
+            above: list[tuple[int, int]] = []
+            if flatten:
+                for t2, segs in by_track.items():
+                    if rank_of.get(t2, len(priority)) < rank_of.get(t, len(priority)):
+                        above.extend((a, b) for _l, a, b in segs if a < e_ms and b > s_ms)
+            own_holes = _merge(holes + finer + above) if (finer or above) else holes
+            kept_ms = 0
             # 跟「待定」重叠的部分挖掉，剩下的碎片各导一条
             for a_ms, b_ms in _subtract(s_ms, e_ms, own_holes):
-                result.append({
-                    "from_name": "label", "to_name": "ts", "type": "timeserieslabels",
-                    "value": {
-                        "start": _fmt(csv_start + timedelta(milliseconds=a_ms)),
-                        "end": _fmt(csv_start + timedelta(milliseconds=b_ms)),
-                        # 整条链：[舔, 舔-前爪, 舔-前左爪]。没有层级的就一个
-                        "timeserieslabels": [label_names.get(i, str(i)) for i in chain(label_id)],
-                        # 相对 CSV 起点的毫秒：核对时「去修」要拿它把工作台开到
-                        # 这一刻。训练那边只读上面三个 key，多带两个不影响
-                        "start_ms": a_ms,
-                        "end_ms": b_ms,
-                    },
-                })
+                extra: dict = {}
+                if t:
+                    extra["track"] = t
+                ctx = context(a_ms, b_ms, t)
+                if ctx:
+                    extra["tracks"] = ctx
+                result.append(segment(label_id, a_ms, b_ms, extra))
+                kept_ms += b_ms - a_ms
                 label_counter[name_] += 1
+                track_counter[t or "-"] += 1
                 # 段数不等于份量：一段睡觉 30 分钟和一段抓挠 2 秒都算"1 段"。
                 # 判断类别均不均衡要看时长，看段数会得出完全相反的结论。
                 label_sec[name_] += (b_ms - a_ms) / 1000
                 total_sec += (b_ms - a_ms) / 1000
+            if above:
+                covered = sum(b - a for a, b in _subtract(s_ms, e_ms, _merge(holes + finer))) - kept_ms
+                n_flattened_ms += max(0, covered)
         n_segments += len(result)
+        aux: dict = {}
+        if device_items:
+            aux["device"] = [segment(l, a, b, {"track": "device"}) for l, s_, e_ in device_items
+                             for a, b in _subtract(s_, e_, holes)]
+            n_device += len(aux["device"])
         # 带上这份 CSV 自己的采样率，别让下游按一个全局假设去重采样。
         # 这批数据是混的：8-11 之前采集端就已经降到 16Hz 存了，8-11 起才是 50Hz
         # 原始流。全按 50Hz 处理的话，本来就是 16Hz 的那批会被再降一次到 ~5Hz——
@@ -344,7 +424,8 @@ async def export_dataset(
                 "sample_code": sample.sample_code,
                 "sample_rate_hz": sample.imu_sample_rate_hz,
             },
-            "annotations": [{"id": task.id, "result": result}],
+            # aux 是训练那边不读的附加信息（设备轨的段）；没有就不带，老格式原样
+            "annotations": [{"id": task.id, "result": result, **({"aux": aux} if aux else {})}],
         })
     if not ls_tasks:
         raise TrainingExportError("没有可导出的任务；" + "；".join(warnings[:3]))
@@ -381,6 +462,13 @@ async def export_dataset(
         },
         "include_submitted": include_submitted,
         "scope": scope,
+        # 互斥轨的折叠：按哪个优先级把"同时发生的几件事"折成一个标签、折掉了多少秒；
+        # 各轨各导了几段（"-" 是没分轨的）；设备轨单独导了几段
+        "flatten": flatten,
+        "track_priority": priority,
+        "flattened_sec": round(n_flattened_ms / 1000, 1),
+        "tracks": dict(track_counter),
+        "n_device_segments": n_device,
         # 按片段取时跳过了多少条"没人看过的 AI 片段"，导出后能对上账
         "n_untouched_skipped": n_skipped_untouched,
         # 同类别压在一起并掉了几段（「疑似抓挠」补上来的常跟已有 AI 段覆盖同一次动作）

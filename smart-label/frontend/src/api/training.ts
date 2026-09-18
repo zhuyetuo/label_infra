@@ -31,6 +31,15 @@ export interface TrainDataset {
     end_ms: number;
     seconds: number;
   }[];
+  /** 互斥轨的折叠（老数据集没有这几个字段） */
+  flatten?: boolean;
+  track_priority?: string[];
+  /** 低优先级轨被高优先级轨盖掉的秒数（卧着舔前爪：那几秒归「舔」，「卧」让出） */
+  flattened_sec?: number;
+  /** 各轨各导了几段（"-" 是没分轨的） */
+  tracks?: Record<string, number>;
+  /** 设备轨（颈圈松动）单独导了几段，不进 22 类 */
+  n_device_segments?: number;
   n_tasks: number;
   n_segments: number;
   total_hours: number;
@@ -65,6 +74,10 @@ export const exportDataset = (body: {
   project_ids?: number[];
   include_submitted?: boolean;
   scope?: "approved" | "reviewed";
+  /** 分了互斥轨的项目：按优先级折叠成一个时刻一个标签（默认 true）；false = 各轨原样导，给分轨训练用 */
+  flatten?: boolean;
+  /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */
+  track_priority?: string[];
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
 
 /** 导出文件里的片段（用来核对这份数据集到底装了什么） */

@@ -14,6 +14,8 @@ class LabelOut(BaseModel):
     # 是不是还跟着模板走颜色：套用模板时建立，项目自己改过颜色之后会断开
     template_item_id: int | None
     parent_id: int | None
+    # 互斥轨：posture / motion / behavior / device；空 = 没分轨。子标签没填的沿用上级
+    track: str | None = None
     sort_order: int
     is_active: bool
     created_at: datetime
@@ -27,6 +29,7 @@ class LabelCreate(BaseModel):
     sort_order: int = 0
     # 上级标签（同项目）。层级标签：看得清标最细的，看不清标上级
     parent_id: int | None = None
+    track: str | None = None
 
 
 class LabelUpdate(BaseModel):
@@ -35,3 +38,4 @@ class LabelUpdate(BaseModel):
     sort_order: int | None = None
     is_active: bool | None = None
     parent_id: int | None = None
+    track: str | None = None

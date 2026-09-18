@@ -16,6 +16,7 @@ export const createLabel = (body: {
   color?: string;
   sort_order?: number;
   parent_id?: number | null;
+  track?: string | null;
 }) =>
   request.post<never, LabelDefinition>("/label-definitions", body);
 

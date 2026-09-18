@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { claimTask, getTask } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import ModelCompare from "@/components/ModelCompare";
 import type { LabelDefinition, Task } from "@/types";
 import {
@@ -106,6 +107,10 @@ export default function Training() {
   const [skipSyn, setSkipSyn] = useState(false);
   const [tag, setTag] = useState("");
   const [scope, setScope] = useState<"approved" | "reviewed">("approved");
+  // 互斥轨的折叠：默认按 行为 > 运动 > 姿态 折成一个时刻一个标签（RF 单标签）；
+  // 不折叠 = 各轨原样导，给分轨训练用。没分轨的项目两种一样
+  const [flatten, setFlatten] = useState(true);
+  const [trackPriority, setTrackPriority] = useState<string[]>(["behavior", "motion", "posture"]);
   const [submitting, setSubmitting] = useState(false);
   // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
   // 之前只是没地方看——尤其是 warnings，哪个任务因为什么被跳过全写在里面
@@ -179,6 +184,8 @@ export default function Training() {
         if (Array.isArray(v.projectIds)) setProjectIds(v.projectIds);
         if (v.scope === "approved" || v.scope === "reviewed") setScope(v.scope);
         if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
+        if (typeof v.flatten === "boolean") setFlatten(v.flatten);
+        if (Array.isArray(v.trackPriority) && v.trackPriority.length) setTrackPriority(v.trackPriority);
         return;
       }
     } catch {
@@ -202,6 +209,8 @@ export default function Training() {
         project_ids: projectIds,
         include_submitted: includeSubmitted,
         scope,
+        flatten,
+        track_priority: trackPriority,
       });
       message.success(
         `已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时` +
@@ -210,7 +219,7 @@ export default function Training() {
       try {
         localStorage.setItem(
           EXPORT_FORM_KEY,
-          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted })
+          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority })
         );
       } catch {
         // 存不下（隐私模式/满了）不影响导出本身
@@ -563,6 +572,32 @@ export default function Training() {
               把「待审核」的任务也算进去（还没人复核，质量没保证）
             </Checkbox>
           )}
+          {/* 分了互斥轨的项目（姿态 / 运动 / 行为可以同时标）：模型是单标签的，导出时得折成一个时刻一个标签 */}
+          <Space wrap size={8}>
+            <Tooltip title="分了互斥轨的项目里，卧 + 静止 + 舔前爪是同时标的三条。RF 这类模型一个窗口只要一个标签，所以按优先级折叠：高优先级轨盖住的时间从低优先级轨里挖掉（那几秒归「舔」，「卧」让开）。每段另带 tracks={轨: 同时在标什么}，以后训分轨模型不用重标。设备轨（颈圈松动）不参与折叠，单独放在 aux 里。没分轨的项目勾不勾一样">
+              <Checkbox checked={flatten} onChange={(e) => setFlatten(e.target.checked)}>
+                <span style={{ borderBottom: "1px dashed #bbb" }}>按互斥轨折叠成一个时刻一个标签</span>
+              </Checkbox>
+            </Tooltip>
+            {flatten && (
+              <Tooltip title="前面的赢。默认 行为 > 运动 > 姿态：具体行为最有信息量，姿态只在什么都没标时才出现">
+                <Select
+                  size="small"
+                  mode="multiple"
+                  style={{ minWidth: 260 }}
+                  value={trackPriority}
+                  onChange={(v) => setTrackPriority(v)}
+                  placeholder="折叠优先级"
+                  options={TRACKS.filter((t) => t.key !== "device").map((t) => ({ value: t.key, label: `${t.name}轨` }))}
+                />
+              </Tooltip>
+            )}
+            {!flatten && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                不折叠：各轨原样导，同一时刻会有几条，给分轨训练用；现有单标签训练读到的是重叠的窗口
+              </Typography.Text>
+            )}
+          </Space>
         </Space>
       </Modal>
 
@@ -614,6 +649,20 @@ export default function Training() {
                 </Descriptions.Item>
               )}
               <Descriptions.Item label="待定挖掉">{dsDetail.n_uncertain_excluded ?? 0} 段</Descriptions.Item>
+              {dsDetail.flatten != null && (
+                <Descriptions.Item label="互斥轨折叠">
+                  <Tooltip title="分了互斥轨的项目：高优先级轨盖住的时间从低优先级轨里挖掉（卧着舔前爪：那几秒归「舔」），折成一个时刻一个标签。各轨各导了几段见括号；设备轨（颈圈松动）单独放在 aux 里，不进类别">
+                    <span style={{ cursor: "help" }}>
+                      {dsDetail.flatten
+                        ? `${(dsDetail.track_priority ?? []).map((t) => TRACK_NAME[t] ?? t).join(" > ")}，让出 ${dsDetail.flattened_sec ?? 0} 秒`
+                        : "没折叠（各轨原样）"}
+                      {dsDetail.tracks && Object.keys(dsDetail.tracks).length > 0 &&
+                        `（${Object.entries(dsDetail.tracks).map(([k, n]) => `${TRACK_NAME[k] ?? "没分轨"} ${n} 段`).join("、")}）`}
+                      {dsDetail.n_device_segments ? `，设备轨 ${dsDetail.n_device_segments} 段` : ""}
+                    </span>
+                  </Tooltip>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="同类别重叠并掉">
                 <Tooltip title="「疑似抓挠」补上来的段常跟已有 AI 段覆盖同一次动作，只是起止差几百毫秒。不并的话重叠那部分会被导两遍，等于偷偷加权">
                   <span style={{ cursor: "help" }}>{dsDetail.n_merged_overlaps ?? 0} 段</span>

@@ -39,3 +39,5 @@ class LabelTemplateItem(Base):
     sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     # 上级条目的 code（同一模板内）。套用时按它把项目标签的 parent_id 挂上
     parent_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 互斥轨，套用时原样拷到项目标签上（见 label_tracks.py）
+    track: Mapped[str | None] = mapped_column(String(20), nullable=True)

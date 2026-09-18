@@ -22,6 +22,8 @@ async def _seed_builtin_templates():
     from app.db.session import SessionLocal
     from app.services import label_template_service as tsvc
     from app.services import label_tree
+    from app.services.behavior_labels import TEMPLATE_NAME as BEHAVIOR_TEMPLATE_NAME
+    from app.services.behavior_labels import ensure_behavior_template
     from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template
 
     try:
@@ -34,12 +36,20 @@ async def _seed_builtin_templates():
                 await db.commit()
                 logger.info("按模板给 %d 条项目标签补上了上级", linked)
             # 模板加了条目（左右爪、「抓挠」……）：套过它的项目自动补齐，不用每个项目再套一次
-            tid = await tsvc.builtin_template_id(db, TEMPLATE_NAME)
-            if tid is not None:
-                r = await tsvc.sync_projects(db, tid)
-                if r["created"] or r["linked"]:
-                    await db.commit()
-                    logger.info("内置模板同步到 %d 个项目：新增 %d 条、补上级 %d 条", r["projects"], r["created"], r["linked"])
+            # 第二张内置模板：22 类行为 + 解剖学部位 + 互斥轨
+            r2 = await ensure_behavior_template(db)
+            if r2 == "created":
+                logger.info("内置标签模板「%s」已建好", BEHAVIOR_TEMPLATE_NAME)
+            elif r2 == "updated":
+                logger.info("内置标签模板「%s」补上了新加的行为", BEHAVIOR_TEMPLATE_NAME)
+            for tname in (TEMPLATE_NAME, BEHAVIOR_TEMPLATE_NAME):
+                tid = await tsvc.builtin_template_id(db, tname)
+                if tid is not None:
+                    r = await tsvc.sync_projects(db, tid)
+                    if r["created"] or r["linked"]:
+                        await db.commit()
+                        logger.info("内置模板「%s」同步到 %d 个项目：新增 %d 条、补上级/轨 %d 条",
+                                    tname, r["projects"], r["created"], r["linked"])
         if result == "created":
             logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
         elif result == "updated":

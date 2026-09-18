@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
-import { descendantIds, flatten } from "@/utils/labelTree";
+import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -160,6 +160,8 @@ export default function SegmentPanel({
   controlsPortalTarget,
   focusMs,
 }: Props) {
+  const labelMap = useMemo(() => byId(labels), [labels]);
+  const usedTracks = useMemo(() => new Set(labels.map((l) => trackOf(labelMap, l.id)).filter(Boolean)), [labels, labelMap]);
   const isLooping = (startMs: number, endMs: number) =>
     loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
   // 每行的"循环"按钮：正在循环这一段时变成"停止"
@@ -608,6 +610,17 @@ export default function SegmentPanel({
             .join(" ")
         }
         columns={[
+          // 分了互斥轨的项目：一列灰字写这段在哪条轨（同轨互斥、跨轨可同时标），没分轨的项目不出这列
+          ...(usedTracks.size
+            ? [{
+                title: <Tooltip title="互斥轨：同一轨的片段时间上互斥，不同轨的可以同时存在（卧着 + 静止 + 舔前爪）">轨</Tooltip>,
+                width: 46,
+                render: (_: unknown, i: LabelItem) => {
+                  const t = trackOf(labelMap, i.label_id);
+                  return <span style={{ fontSize: 12, color: "#999" }}>{t ? TRACK_NAME[t] : "—"}</span>;
+                },
+              }]
+            : []),
           {
             title: "标签",
             width: 150,
