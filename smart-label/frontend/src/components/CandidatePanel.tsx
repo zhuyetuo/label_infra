@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, Dropdown, Empty, Popconfirm, Radio, Space, Table, Tag, Tooltip, message } from "antd";
-import { DownOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
-import { decideCandidate, type AiCandidate } from "@/api/candidates";
+import { Button, Dropdown, Empty, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from "antd";
+import { DeleteOutlined, DownOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
+import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 import { flatten } from "@/utils/labelTree";
 
@@ -64,6 +64,8 @@ interface Props {
   focusMs?: number | null;
   /** 打开时先筛哪一档（从找相似的链接进来默认只看「画面相似」） */
   initialFilter?: "pending" | "all" | "similar";
+  /** 清掉全部还没判过的「画面相似」候选；返回删了几条。给了才显示按钮 */
+  onClearSimilar?: () => Promise<number>;
 }
 
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
@@ -88,6 +90,7 @@ export default function CandidatePanel({
   onBeforeDecide,
   controlsPortalTarget,
   onFindSimilar,
+  onClearSimilar,
   focusMs,
   initialFilter,
 }: Props) {
@@ -96,6 +99,14 @@ export default function CandidatePanel({
     if (initialFilter) setFilter(initialFilter);
   }, [initialFilter]);
   const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
+  // 只看某一类：找相似 / 找片段常常一次落好几个类别，混在一起没法逐类核对
+  const [labelFilter, setLabelFilter] = useState<string[]>([]);
+  const labelCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of candidates) m.set(c.label_name, (m.get(c.label_name) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [candidates]);
+  const [clearing, setClearing] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
   // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
@@ -120,13 +131,14 @@ export default function CandidatePanel({
           ? c.reason === "similar" && (c.status === "pending" || justDecided.has(c.id))
           : c.status === "pending" || justDecided.has(c.id)
     );
+    if (labelFilter.length) list = list.filter((c) => labelFilter.includes(c.label_name));
     // 从找相似/链接跳进来的那条排最前，人一眼就知道"是这段"
     if (focusMs != null) {
       const hit = (c: AiCandidate) => Math.abs(c.start_time_ms - focusMs) < 1500;
       list = [...list.filter(hit), ...list.filter((c) => !hit(c))];
     }
     return list;
-  }, [candidates, filter, justDecided, focusMs]);
+  }, [candidates, filter, labelFilter, justDecided, focusMs]);
   const isFocus = (c: AiCandidate) => focusMs != null && Math.abs(c.start_time_ms - focusMs) < 1500;
 
 
@@ -195,12 +207,59 @@ export default function CandidatePanel({
           { label: `全部 ${candidates.length}`, value: "all" },
         ]}
       />
+      {labelCounts.length > 1 && (
+        <Tooltip title="只看某几类。找相似 / 找片段一次会落好几个类别，混在一起没法逐类核对">
+          <Select
+            size="small"
+            mode="multiple"
+            allowClear
+            maxTagCount="responsive"
+            placeholder="只看类别"
+            style={{ minWidth: 150, maxWidth: 320 }}
+            value={labelFilter}
+            onChange={setLabelFilter}
+            options={labelCounts.map(([name, n]) => ({
+              value: name,
+              label: (
+                <span>
+                  <Tag color={labels.find((l) => l.display_name === name)?.color || undefined} style={{ marginRight: 4 }}>{name}</Tag>
+                  <span style={{ color: "#999", fontSize: 12 }}>{n}</span>
+                </span>
+              ),
+            }))}
+          />
+        </Tooltip>
+      )}
       {onFindSimilar && (
         <Tooltip title="拿视频当前这一帧（比如正在舔尾巴）在整个项目里找长得像的几秒，写成候选。靠画面向量索引，不问大模型、不花钱">
           <Button size="small" icon={<SearchOutlined />} onClick={onFindSimilar}>
             找相似
           </Button>
         </Tooltip>
+      )}
+      {similarCount > 0 && onClearSimilar && (
+        <Popconfirm
+          title={`把 ${similarCount} 条还没判过的「画面相似」候选全删掉？`}
+          description="已经确认 / 排除 / 待定的不动。找相似只是试参数、找错一堆时用"
+          okText="清掉"
+          okButtonProps={{ danger: true }}
+          onConfirm={async () => {
+            setClearing(true);
+            try {
+              const n = await onClearSimilar();
+              message.success(`清掉了 ${n} 条画面相似候选`);
+              if (filter === "similar") setFilter("pending");
+            } finally {
+              setClearing(false);
+            }
+          }}
+        >
+          <Tooltip title="清掉全部还没判过的「画面相似」候选（找相似试错了一堆时用）；判过的不动">
+            <Button size="small" danger icon={<DeleteOutlined />} loading={clearing}>
+              清掉相似
+            </Button>
+          </Tooltip>
+        </Popconfirm>
       )}
       {justDecided.size > 0 && filter === "pending" && (
         <Tooltip title="刚处理过的这几条暂时留着不受筛选影响，方便核对；核对完可以收起来">

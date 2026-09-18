@@ -22,7 +22,7 @@ import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
-import { findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
+import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -961,6 +961,15 @@ export default function AnnotationWorkspace({
             : () => {
                 setSimilarAtSec(Math.round(curSecRef.current * 10) / 10);
                 setSimilarOpen(true);
+              }
+        }
+        onClearSimilar={
+          readOnly || taskId == null
+            ? undefined
+            : async () => {
+                const r = await clearSimilarCandidates(taskId);
+                setCandidates(await listCandidates(taskId));
+                return r.deleted;
               }
         }
         scratchLabelIds={focusIds.length ? focusIds : scratchIds}
