@@ -122,6 +122,11 @@ export interface LocalModel {
     exit_code?: number | null;
     /** 从这次启动的日志里挑出来的报错行 */
     log_errors?: string[];
+    /** docker（默认，官方镜像）/ process（pip 装的 vllm） */
+    backend?: "docker" | "process";
+    image?: string | null;
+    pulling?: boolean;
+    pull_log?: string[];
   };
   /** vLLM 那一行才有：进程起来后模型加载的进度（从日志里程碑估） */
   startup?: { pct: number; stage: string; elapsed_s: number } | null;
