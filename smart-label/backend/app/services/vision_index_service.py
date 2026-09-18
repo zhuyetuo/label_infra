@@ -209,7 +209,9 @@ class SimilarParams:
     scope: str = "project"          # project = 整个项目；task = 只在当前任务里
     top_k: int = 60
     min_score: float = 0.0
-    gap_s: float = 3.0
+    # 相邻命中隔多久以内合成一段。舔一次往往持续几十秒、命中却断断续续，3 秒会拆成十几条
+    # 看着像重复；默认 15 秒，一次舔合成一条
+    gap_s: float = 15.0
 
 
 def overlaps(a0: int, a1: int, b0: int, b1: int) -> bool:

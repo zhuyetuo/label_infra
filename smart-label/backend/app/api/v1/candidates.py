@@ -273,6 +273,8 @@ class SimilarIn(BaseModel):
     scope: str = "project"     # project / task
     top_k: int = 60
     min_score: float = 0.0
+    # 相邻命中隔多久以内算同一段（秒）。小了一次舔拆成十几条，大了两次不同的舔并成一条
+    gap_s: float = 15.0
     # 标签项目里还没有：管理员可以顺手建（找相似的时候常常就是在攒一个新类别）
     create_label: bool = False
 
@@ -311,7 +313,8 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
         await db.commit()
         created_label = True
     params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
-                                  scope=body.scope, top_k=body.top_k, min_score=body.min_score)
+                                  scope=body.scope, top_k=body.top_k, min_score=body.min_score,
+                                  gap_s=max(0.0, min(120.0, body.gap_s)))
     try:
         r = await vindex.find_similar(db, task, params)
         r["created_label"] = created_label
