@@ -256,22 +256,26 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
     if not items:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个模板里还没有标签")
 
-    existing = {
-        l.code: l
-        for l in (
-            await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
-        ).scalars().all()
-    }
+    project_labels = (
+        await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
+    ).scalars().all()
+    existing = {l.code: l for l in project_labels}
+    # 同名的也算已有：项目里早就有「抓挠」（code 多半跟模板不一样），模板再带一个进来
+    # 不能变成第二个「抓挠」——直接复用，部位挂到它下面
+    by_name = {l.display_name: l for l in project_labels}
 
     # 先建标签（父在前，子要用父的 id），再挂上级：上级可能是这次新建的，也可能是
-    # 项目里本来就有的（「抓挠-头颈耳」挂到项目已有的「抓挠」下）
+    # 项目里本来就有的
     created = 0
     skipped: list[str] = []
     id_of: dict[str, int] = {code: l.id for code, l in existing.items()}
     ordered = _parents_first(items)
     for item in ordered:
-        if item.code in existing:
+        hit = existing.get(item.code) or by_name.get(item.display_name)
+        if hit is not None:
             skipped.append(item.code)
+            existing[item.code] = hit
+            id_of[item.code] = hit.id
             continue
         label = LabelDefinition(
             project_id=project_id,
@@ -286,6 +290,7 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
         await db.flush()
         id_of[item.code] = label.id
         existing[item.code] = label
+        by_name[item.display_name] = label
         created += 1
     linked = 0
     pool = list(existing.values())

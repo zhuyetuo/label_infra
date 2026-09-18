@@ -42,14 +42,14 @@ def test_created_once_with_all_items(db, run):
         {(r.code, r.display_name, r.color, r.sort_order, r.parent_code) for r in template_rows()}
     assert next(i for i in items if i.code == "lick_body_fore_l").parent_code == "lick_body_fore"
     assert next(i for i in items if i.code == "scratch_head").parent_code == "scratch"   # 挂到项目已有的「抓挠」
-    assert len(items) == 27
-    # 「抓挠」本身不进模板（项目里已有，带进去会变成两个），只带部位
-    assert "抓挠" not in names and "抓挠-头颈耳" in names and "蹭" in names
-    assert "scratch" not in {i.code for i in items}
+    assert len(items) == 28
+    # 「抓挠」现在也进模板：套用时项目里同名的直接复用，不会变成两个
+    assert "抓挠" in names and "抓挠-头颈耳" in names and "蹭" in names
+    assert "scratch" in {i.code for i in items}
 
     assert run(ensure_grooming_template(db)) == "exists"
     assert run(db.execute(select(LabelTemplate))).scalars().all().__len__() == 1
-    assert len(_items(db, run, tpl.id)) == 27
+    assert len(_items(db, run, tpl.id)) == 28
 
 
 def test_admin_edits_survive_restart(db, run):
@@ -58,7 +58,7 @@ def test_admin_edits_survive_restart(db, run):
     tpl = _tpl(db, run)
     items = _items(db, run, tpl.id)
     # 每组只留一条，改一个颜色
-    keep = {"lick_body", "chew_body_fore", "scratch_head", "rub_body"}
+    keep = {"lick_body", "chew_body_fore", "scratch", "rub_body"}
     for i in items:
         if i.code not in keep:
             db._s.delete(i)
@@ -84,7 +84,7 @@ def test_missing_whole_group_is_topped_up_on_restart(db, run):
 
     assert run(ensure_grooming_template(db)) == "updated"
     items = _items(db, run, tpl.id)
-    assert len(items) == 27
+    assert len(items) == 28
     assert next(i for i in items if i.code == "lick_body").display_name == "舔"
     assert run(ensure_grooming_template(db)) == "exists"
 
@@ -159,7 +159,7 @@ def test_lifespan_really_seeds_the_template(db, run, monkeypatch):
 
     run(boot())
     assert _tpl(db, run) is not None
-    assert len(_items(db, run, _tpl(db, run).id)) == 27
+    assert len(_items(db, run, _tpl(db, run).id)) == 28
 
 
 def _hue(hex_):
@@ -273,7 +273,7 @@ def test_old_paw_parts_are_renamed_and_split_once(db, run):
                           color="#8F3800", template_item_id=items["lick_body_fore"].id, created_by=admin.id)
     db.add(lab)
     run(db.commit())
-    assert len(items) == 19
+    assert len(items) == 20
 
     assert run(ensure_grooming_template(db)) == "updated"
     got = {i.code: i for i in _items(db, run, tpl.id)}
@@ -282,7 +282,7 @@ def test_old_paw_parts_are_renamed_and_split_once(db, run):
     assert names["lick_body_fore"] == "舔-前爪" and names["lick_body_hind"] == "舔-后爪"
     assert names["chew_body_fore"] == "啃-前爪" and names["chew_body_hind"] == "啃-后腿"   # 自己改过的部位名保留，父前缀跟着改
     assert names["lick_body_fore_l"] == "舔-前左爪" and names["chew_body_hind_r"] == "啃-后右爪"
-    assert len(got) == 27
+    assert len(got) == 28
     assert got["lick_body_fore_l"].parent_code == "lick_body_fore" and got["lick_body_fore"].parent_code == "lick_body"
     assert got["lick_body"].parent_code is None
     run(db.refresh(lab))
@@ -295,4 +295,22 @@ def test_old_paw_parts_are_renamed_and_split_once(db, run):
             db._s.delete(i)
     run(db.commit())
     assert run(ensure_grooming_template(db)) == "exists"
-    assert len(_items(db, run, tpl.id)) == 19
+    assert len(_items(db, run, tpl.id)) == 20
+
+
+def test_老模板没带抓挠父标签_重启补上_整组删掉的不补(db, run):
+    admin = _admin(db, run)
+    tpl = LabelTemplate(name=TEMPLATE_NAME, created_by=admin.id)
+    db.add(tpl)
+    run(db.flush())
+    for r in template_rows():
+        if r.code == "scratch" or r.code.startswith("rub_body"):
+            continue
+        db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=r.display_name, color=r.color,
+                                 sort_order=r.sort_order, parent_code=r.parent_code))
+    run(db.commit())
+    assert run(ensure_grooming_template(db)) == "updated"
+    codes = {i.code for i in _items(db, run, tpl.id)}
+    assert "scratch" in codes                         # 有部位没父 → 补父
+    assert "rub_body" in codes and "rub_body_face" in codes   # 整组不在 → 按"整组补"那条路补回来
+    assert run(ensure_grooming_template(db)) == "exists"
