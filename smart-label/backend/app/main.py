@@ -20,6 +20,7 @@ async def _seed_builtin_templates():
     库还没起来 / 还没建管理员时不能让 API 起不来——记一条日志，下次重启再试。
     """
     from app.db.session import SessionLocal
+    from app.services import label_template_service as tsvc
     from app.services import label_tree
     from app.services.grooming_labels import TEMPLATE_NAME, ensure_grooming_template
 
@@ -32,6 +33,13 @@ async def _seed_builtin_templates():
             if linked:
                 await db.commit()
                 logger.info("按模板给 %d 条项目标签补上了上级", linked)
+            # 模板加了条目（左右爪、「抓挠」……）：套过它的项目自动补齐，不用每个项目再套一次
+            tid = await tsvc.builtin_template_id(db, TEMPLATE_NAME)
+            if tid is not None:
+                r = await tsvc.sync_projects(db, tid)
+                if r["created"] or r["linked"]:
+                    await db.commit()
+                    logger.info("内置模板同步到 %d 个项目：新增 %d 条、补上级 %d 条", r["projects"], r["created"], r["linked"])
         if result == "created":
             logger.info("内置标签模板「%s」已建好", TEMPLATE_NAME)
         elif result == "updated":

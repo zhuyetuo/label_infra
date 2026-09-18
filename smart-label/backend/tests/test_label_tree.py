@@ -231,3 +231,23 @@ def test_内置模板的抓挠部位也有parent_code(db, run):
     assert run(ensure_grooming_template(db)) == "updated"
     items = {i.code: i for i in run(db.execute(select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl.id))).scalars().all()}
     assert items["scratch_head"].parent_code == "scratch" and items["lick_body_fore_l"].parent_code == "lick_body_fore"
+
+
+def test_模板改名同步到跟着的项目标签_手动改过的断开_加条目自动补到项目(db, run):
+    admin = _admin(db, run)
+    p = _project(db, run, admin)
+    body = LabelTemplateCreate(name="t", items=_items("t", ("lick", "舔身体", None), ("fore", "舔身体-前肢爪", "lick")))
+    out = run(tpl_api.create_template(body, db=db, admin=admin))["data"]
+    run(tpl_api.apply_template(out["id"], p.id, db=db, admin=admin))
+    ls = _labels(db, run, p.id)
+    # 项目里手动把 fore 改了名 → 断开跟随
+    run(label_api.update_label(ls["fore"].id, LabelUpdate(display_name="我的前爪"), db=db))
+    # 模板改名 + 加一条子项
+    run(tpl_api.update_template(out["id"], LabelTemplateUpdate(items=_items(
+        "t", ("lick", "舔", None), ("fore", "舔-前爪", "lick"), ("fore_l", "舔-前左爪", "fore"))), db=db))
+    ls = _labels(db, run, p.id)
+    assert ls["lick"].display_name == "舔"                 # 跟着模板改了
+    assert ls["fore"].display_name == "我的前爪"           # 手动改过的不动
+    assert run(db.get(LabelDefinition, ls["fore"].id)).template_item_id is None
+    assert "fore_l" in ls and ls["fore_l"].parent_id == ls["fore"].id   # 新条目自动补到项目并挂好
+    assert ls["fore_l"].display_name == "舔-前左爪"

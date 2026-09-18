@@ -112,9 +112,12 @@ async def update_label(label_id: int, body: LabelUpdate, db: AsyncSession = Depe
             await label_tree.validate_parent(db, label.project_id, label.id, updates["parent_id"])
         except ValueError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-    # 手动改过颜色就断开跟模板的关联：改模板颜色以后不会再影响这条，这是
-    # 用户自己接管这个颜色的信号，不能等模板一改又给覆盖回去
-    if "color" in updates and label.template_item_id is not None:
+    # 手动改过颜色 / 名字就断开跟模板的关联：改模板以后不会再影响这条，这是
+    # 用户自己接管的信号，不能等模板一改又给覆盖回去
+    if label.template_item_id is not None and (
+        ("color" in updates and updates["color"] != label.color)
+        or ("display_name" in updates and updates["display_name"] != label.display_name)
+    ):
         label.template_item_id = None
     for field, value in updates.items():
         setattr(label, field, value)

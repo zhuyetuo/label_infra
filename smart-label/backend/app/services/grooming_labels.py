@@ -171,20 +171,26 @@ async def _recolor_from_old_scheme(db, tpl_id: int) -> int:
 
 async def _rename_parents(db, tpl_id: int) -> int:
     """上一版父标签叫「舔身体 / 啃身体 / 蹭身体」，现在大类就叫「舔 / 啃 / 蹭」。
-    只改还叫旧名的模板条目（连带「舔身体-xxx」的前缀）；项目标签不动（新旧名都认）。"""
+    只改还叫旧名的模板条目（连带「舔身体-xxx」的前缀），还跟着模板的项目标签一起改；
+    手动改过名的项目标签已经断开跟随，不动（新旧名都认）。"""
     items = (await db.execute(
         select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
     )).scalars().all()
     new_of = {g[0]: g[1] for g in GROUPS}
     n = 0
     for it in items:
+        new_name = None
         for gcode, old in OLD_PARENT_NAMES.items():
             if it.code == gcode and it.display_name == old:
-                it.display_name = new_of[gcode]
-                n += 1
+                new_name = new_of[gcode]
             elif it.code.startswith(gcode + "_") and it.display_name.startswith(old + "-"):
-                it.display_name = new_of[gcode] + it.display_name[len(old):]
-                n += 1
+                new_name = new_of[gcode] + it.display_name[len(old):]
+        if new_name:
+            it.display_name = new_name
+            # 还跟着模板的项目标签一起改名（跟标签模板页改名的行为一致）
+            await db.execute(update(LabelDefinition).where(LabelDefinition.template_item_id == it.id)
+                             .values(display_name=new_name))
+            n += 1
     return n
 
 
@@ -233,8 +239,7 @@ async def _add_group_parents(db, tpl_id: int) -> int:
 
 async def _split_paws(db, tpl_id: int) -> int:
     """舔/啃：「前肢爪」→「前爪」+ 前左/前右，「后肢臀尾」→「后爪」+ 后左/后右。
-    只动还叫旧名的；模板条目改名不下发到项目标签（跟标签模板页改名的行为一致）。
-    返回改/加了几条。"""
+    只动还叫旧名的；改名同步给还跟着模板的项目标签。返回改/加了几条。"""
     items = {it.code: it for it in (await db.execute(
         select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
     )).scalars().all()}
@@ -246,7 +251,10 @@ async def _split_paws(db, tpl_id: int) -> int:
         if not stale:
             continue
         for p in stale:
-            items[f"{group}_{p}"].display_name = want[f"{group}_{p}"].display_name
+            it = items[f"{group}_{p}"]
+            it.display_name = want[f"{group}_{p}"].display_name
+            await db.execute(update(LabelDefinition).where(LabelDefinition.template_item_id == it.id)
+                             .values(display_name=it.display_name))
             n += 1
         for p in _LR_PARTS:
             code = f"{group}_{p}"
