@@ -20,7 +20,7 @@ from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.services import label_tree
+from app.services import label_template_service as tsvc
 from app.schemas.label_template import (
     ApplyTemplateResult,
     LabelTemplateCreate,
@@ -114,6 +114,9 @@ async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTe
                 .where(LabelDefinition.template_item_id == row.id)
                 .values(color=item.color)
             )
+        # 改名也同步给还跟着它的项目标签（以前只同步颜色，项目里看到的还是老名字）
+        if row.display_name != item.display_name:
+            await tsvc.rename_followers(db, row.id, item.display_name)
         row.display_name = item.display_name
         row.color = item.color
         row.sort_order = item.sort_order
@@ -219,6 +222,9 @@ async def update_template(template_id: int, body: LabelTemplateUpdate, db: Async
         tpl.description = body.description
     if body.items is not None:
         await _replace_items(db, template_id, body.items)
+        await db.flush()
+        # 加了条目 / 改了父子：套过这个模板的项目一并补齐
+        await tsvc.sync_projects(db, template_id)
 
     await db.commit()
     await db.refresh(tpl)
@@ -256,81 +262,6 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
     if not items:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个模板里还没有标签")
 
-    project_labels = (
-        await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
-    ).scalars().all()
-    existing = {l.code: l for l in project_labels}
-    # 同名的也算已有：项目里早就有「抓挠」（code 多半跟模板不一样），模板再带一个进来
-    # 不能变成第二个「抓挠」——直接复用，部位挂到它下面
-    by_name = {l.display_name: l for l in project_labels}
-
-    # 先建标签（父在前，子要用父的 id），再挂上级：上级可能是这次新建的，也可能是
-    # 项目里本来就有的
-    created = 0
-    skipped: list[str] = []
-    id_of: dict[str, int] = {code: l.id for code, l in existing.items()}
-    ordered = _parents_first(items)
-    for item in ordered:
-        hit = existing.get(item.code) or by_name.get(item.display_name)
-        if hit is not None:
-            skipped.append(item.code)
-            existing[item.code] = hit
-            id_of[item.code] = hit.id
-            continue
-        label = LabelDefinition(
-            project_id=project_id,
-            code=item.code,
-            display_name=item.display_name,
-            color=item.color,
-            sort_order=item.sort_order,
-            template_item_id=item.id,
-            created_by=admin.id,
-        )
-        db.add(label)
-        await db.flush()
-        id_of[item.code] = label.id
-        existing[item.code] = label
-        by_name[item.display_name] = label
-        created += 1
-    linked = 0
-    pool = list(existing.values())
-    for item in ordered:
-        if not item.parent_code:
-            continue
-        label = existing.get(item.code)
-        if label is None:
-            continue
-        # 上级：模板里另一条 / 项目里已有的 code / 按名字（抓挠、舔身体这类）/ 内置父标签没有就建
-        parent = await label_tree.resolve_parent(db, project_id, item.parent_code, pool, admin.id)
-        if parent is None or parent.id == label.id:
-            continue
-        if parent.code not in existing:
-            existing[parent.code] = parent
-            id_of[parent.code] = parent.id
-            created += 1
-        if label.parent_id is None:
-            label.parent_id = parent.id
-            if item.code in skipped:
-                linked += 1     # 老项目里本来就有的标签，这次把上级补上了
+    r = await tsvc.apply_to_project(db, items, project_id, admin.id)
     await db.commit()
-    return ok(ApplyTemplateResult(created=created, skipped=len(skipped), skipped_codes=skipped, linked=linked).model_dump())
-
-
-def _parents_first(items: list[LabelTemplateItem]) -> list[LabelTemplateItem]:
-    """按层级排：上级在前。坏数据（上级不在、绕圈）就按原顺序放最后。"""
-    by_code = {i.code: i for i in items}
-    out: list[LabelTemplateItem] = []
-    done: set[str] = set()
-
-    def visit(i: LabelTemplateItem, stack: set[str]) -> None:
-        if i.code in done or i.code in stack:
-            return
-        stack.add(i.code)
-        if i.parent_code and i.parent_code in by_code:
-            visit(by_code[i.parent_code], stack)
-        done.add(i.code)
-        out.append(i)
-
-    for i in items:
-        visit(i, set())
-    return out
+    return ok(ApplyTemplateResult(**r).model_dump())

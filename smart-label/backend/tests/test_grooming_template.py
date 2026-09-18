@@ -244,7 +244,7 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
 def test_old_paw_parts_are_renamed_and_split_once(db, run):
     """上一版：父叫「舔身体」，舔/啃只有「前肢爪」「后肢臀尾」，条目没有 parent_code。
     重启后：父改名「舔」、子前缀跟着改；「前肢爪」→「前爪」并补左右四条；parent_code 补齐。
-    升级过之后管理员删掉左右爪也不会再补回来；项目标签的名字不动（跟模板页改名一致）。"""
+    升级过之后管理员删掉左右爪也不会再补回来；还跟着模板的项目标签一起改名。"""
     admin = _admin(db, run)
     tpl = LabelTemplate(name=TEMPLATE_NAME, created_by=admin.id)
     db.add(tpl)
@@ -286,7 +286,7 @@ def test_old_paw_parts_are_renamed_and_split_once(db, run):
     assert got["lick_body_fore_l"].parent_code == "lick_body_fore" and got["lick_body_fore"].parent_code == "lick_body"
     assert got["lick_body"].parent_code is None
     run(db.refresh(lab))
-    assert lab.display_name == "舔身体-前肢爪"
+    assert lab.display_name == "舔-前爪"      # 还跟着模板的项目标签一起改名
     assert run(ensure_grooming_template(db)) == "exists"
 
     # 升级过了：删掉左右爪不会被补回来
