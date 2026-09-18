@@ -249,3 +249,8 @@ async def embed_search(paths: list[str], *, text: str | None = None, ref: dict |
     if ref is not None:
         body["ref"] = ref
     return await _post("/api/v1/embed/search", body, 120)
+
+
+async def embed_preview(video_rel_path: str, t_s: float) -> dict:
+    """以图搜图前给人看：这一帧框到了哪几只狗、拿哪一块去搜。只要狗检测模型，几百毫秒。"""
+    return await _post("/api/v1/embed/preview", {"path": video_rel_path, "t": t_s}, 30)

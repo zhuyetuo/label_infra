@@ -84,3 +84,18 @@ export const findSimilarCandidates = (body: {
       multi_dog_candidates: number;
     }
   >("/candidates/similar", body, { timeout: 120000 });
+
+/** 找相似之前看一眼样例帧：框到了哪几只狗、拿哪一块去搜。坐标都是归一化的 */
+export interface SimilarPreview {
+  t: number;
+  has_dog: boolean;
+  w: number;
+  h: number;
+  boxes: { bbox: [number, number, number, number]; conf: number }[];
+  crop: [number, number, number, number];
+  /** base64 JPEG，缩小过的整帧 */
+  jpeg: string;
+}
+
+export const previewSimilarFrame = (body: { task_id: number; cam?: "cam1" | "cam2" | "cam3"; t_s: number }) =>
+  request.post<never, SimilarPreview>("/candidates/similar/preview", body);

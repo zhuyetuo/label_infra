@@ -216,3 +216,36 @@ def test_找相似结果带样本和时间_便于找到落在哪(db, run):
     pt = next(x for x in r["per_task"] if x["task_id"] == t1.id)
     assert pt["sample_code"] == "s1" and pt["candidates"] == 2 and pt["multi_dog"] is False
     assert [i["start_s"] for i in pt["items"]] == [10, 200]          # 分数高的在前
+
+
+def test_找相似预览接口_把样例帧的狗框交给前端_没视频报人话(db, run, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.v1 import candidates as api
+    from app.services import vision_sam_client as vc
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    sent = {}
+
+    async def fake(path, t):
+        sent.update(path=path, t=t)
+        return {"t": t, "has_dog": True, "boxes": [{"bbox": [0.1, 0.1, 0.2, 0.2], "conf": 0.9}],
+                "crop": [0, 0, 0.5, 0.5], "jpeg": "", "w": 1920, "h": 1080}
+
+    monkeypatch.setattr(vc, "embed_preview", fake)
+    r = run(api.similar_preview(api.SimilarPreviewIn(task_id=t1.id, t_s=42.5), db=db, user=u))["data"]
+    assert r["has_dog"] is True and sent == {"path": "d/s1_cam1.mp4", "t": 42.5}
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_preview(api.SimilarPreviewIn(task_id=t1.id, cam="cam2", t_s=1), db=db, user=u))
+    assert e.value.status_code == 422 and "cam2" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_preview(api.SimilarPreviewIn(task_id=t1.id, cam="cam9", t_s=1), db=db, user=u))
+    assert e.value.status_code == 422
+
+    async def down(path, t):
+        raise vc.SamUnavailable("连不上视觉服务")
+
+    monkeypatch.setattr(vc, "embed_preview", down)
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_preview(api.SimilarPreviewIn(task_id=t1.id, t_s=1), db=db, user=u))
+    assert e.value.status_code == 503
