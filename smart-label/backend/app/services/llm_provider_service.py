@@ -11,6 +11,9 @@ import json
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from urllib.parse import urlsplit
+
+from app.core.config import settings
 from app.models.llm_provider import LlmProvider
 
 # 固定几家，顺序就是页面上的顺序。models 是初始建议，网页上随便改
@@ -45,6 +48,18 @@ PROVIDERS: list[dict] = [
 ]
 # 不需要 key 的提供方
 KEY_OPTIONAL = {"local"}
+
+# 本地 vLLM 的默认地址：跟视觉服务同一台机（算法机），端口 8386。地址按平台配的
+# vision_service_url 的主机名算（局域网 192.x 那种），不写 127.0.0.1——平台是在
+# docker 里跑的，127.0.0.1 指的是容器自己，页面上看着也不知道是哪台机
+_OLD_LOCAL_URLS = {"http://127.0.0.1:8000/v1", "http://127.0.0.1:8386/v1", "http://localhost:8386/v1"}
+
+
+def default_local_base_url() -> str:
+    host = (urlsplit(getattr(settings, "vision_service_url", "") or "").hostname or "").strip()
+    if not host or host in ("localhost", "127.0.0.1", "0.0.0.0"):
+        host = "127.0.0.1"
+    return f"http://{host}:8386/v1"
 PROVIDER_IDS = [p["provider"] for p in PROVIDERS]
 
 
@@ -98,15 +113,16 @@ async def ensure_rows(db: AsyncSession) -> list[LlmProvider]:
     """没有的补上（不带 key）。返回按固定顺序的几行。"""
     rows = {r.provider: r for r in (await db.execute(select(LlmProvider))).scalars().all()}
     created = False
-    # 老默认地址（8000）没人改过的话换成新默认；人改过的不动
+    # 老默认地址（127.0.0.1:8000 / 8386）没人改过的话换成按算法机算出来的新默认；人改过的不动
     loc = rows.get("local")
-    if loc is not None and loc.base_url == "http://127.0.0.1:8000/v1":
-        loc.base_url = "http://127.0.0.1:8386/v1"
+    if loc is not None and loc.base_url in _OLD_LOCAL_URLS and loc.base_url != default_local_base_url():
+        loc.base_url = default_local_base_url()
         created = True
     for spec in PROVIDERS:
         if spec["provider"] in rows:
             continue
-        r = LlmProvider(provider=spec["provider"], display_name=spec["display_name"], base_url=spec["base_url"],
+        base = default_local_base_url() if spec["provider"] == "local" else spec["base_url"]
+        r = LlmProvider(provider=spec["provider"], display_name=spec["display_name"], base_url=base,
                         models=json.dumps(spec["models"], ensure_ascii=False), default_model=spec["default_model"],
                         enabled=True)
         db.add(r)

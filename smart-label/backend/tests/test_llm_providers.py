@@ -140,3 +140,54 @@ def test_智谱走OpenAI兼容口(db, run, admin):
     run(api.update_provider("zhipu", api.ProviderUpdate(api_key="zk"), db=db, admin=admin))
     got = run(svc.resolve(db, "zhipu", None))
     assert got["base_url"] == "https://open.bigmodel.cn/api/paas/v4" and got["model"] == "glm-4.5v" and got["api_key"] == "zk"
+
+
+def test_本地服务地址跟着算法机的局域网地址走(db, run, admin, monkeypatch):
+    monkeypatch.setattr(svc.settings, "vision_service_url", "http://192.168.1.50:8385")
+    assert svc.default_local_base_url() == "http://192.168.1.50:8386/v1"
+    run(api.list_providers(db=db))
+    assert run(svc.get_row(db, "local")).base_url == "http://192.168.1.50:8386/v1"
+    # 老默认 127.0.0.1 没改过的换成新默认；人改过的不动
+    row = run(svc.get_row(db, "local"))
+    row.base_url = "http://127.0.0.1:8386/v1"
+    run(db.commit())
+    run(svc.ensure_rows(db))
+    assert run(svc.get_row(db, "local")).base_url == "http://192.168.1.50:8386/v1"
+    row.base_url = "http://gpu:9000/v1"
+    run(db.commit())
+    run(svc.ensure_rows(db))
+    assert run(svc.get_row(db, "local")).base_url == "http://gpu:9000/v1"
+    # 没配视觉服务地址就退回 127.0.0.1
+    monkeypatch.setattr(svc.settings, "vision_service_url", "")
+    assert svc.default_local_base_url() == "http://127.0.0.1:8386/v1"
+
+
+def test_调用统计_落表和汇总(db, run, admin, monkeypatch):
+    from app.services import llm_call_service as cs
+    from app.services import vision_sam_client as vc
+
+    run(api.list_providers(db=db))
+    run(api.update_provider("doubao", api.ProviderUpdate(api_key="dk"), db=db, admin=admin))
+
+    async def fake(llm):
+        return {"ok": True, "latency_ms": 120, "reply": "OK", "usage": {"input": 30, "output": 2}, "error": None}
+
+    monkeypatch.setattr(vc, "llm_test", fake)
+    run(api.test_provider("doubao", api.TestIn(model=None), db=db))
+    # 找片段带回来的每段一条
+    cs.record_calls(db, "doubao", "doubao-seed-1-6-vision-250815", [
+        {"latency_ms": 1000, "input": 5000, "output": 50, "est_usd": 0.01, "ok": True},
+        {"latency_ms": 3000, "input": 5200, "output": 40, "est_usd": 0.01, "ok": True},
+        {"latency_ms": 200, "input": 0, "output": 0, "ok": False, "error": "timeout"},
+    ], purpose="seek", project_id=7, task_id=42)
+    run(db.commit())
+    st = run(api.call_stats(days=7, db=db))["data"]
+    t = st["total"]
+    assert t["calls"] == 4 and t["errors"] == 1 and t["input_tokens"] == 10230 and t["output_tokens"] == 92
+    assert t["total_tokens"] == 10322 and t["avg_tokens_per_call"] == round(10322 / 4)
+    assert t["max_latency_ms"] == 3000 and t["avg_latency_ms"] == round((120 + 1000 + 3000 + 200) / 4)
+    assert st["all_time"]["calls"] == 4
+    assert st["by_model"][0]["provider"] == "doubao" and st["by_model"][0]["calls"] == 4
+    assert len(st["by_day"]) == 1 and st["by_day"][0]["calls"] == 4
+    assert st["recent"][0]["error"] == "timeout" and st["recent"][0]["task_id"] == 42
+    assert any(r["purpose"] == "test" and r["latency_ms"] == 120 for r in st["recent"])

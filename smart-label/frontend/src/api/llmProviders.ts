@@ -9,7 +9,7 @@ export interface LlmModel {
 }
 
 export interface LlmProvider {
-  provider: "anthropic" | "openai" | "doubao" | "gemini" | "local";
+  provider: "anthropic" | "openai" | "doubao" | "gemini" | "zhipu" | "local";
   display_name: string;
   has_key: boolean;
   /** 本地服务这种不需要 key */
@@ -40,3 +40,52 @@ export interface LlmTestResult {
 /** 用存着的 key 发一句最短的话，看 key 和模型名对不对（几乎不花钱） */
 export const testLlmProvider = (provider: string, model?: string) =>
   request.post<never, LlmTestResult>(`/llm-providers/${provider}/test`, { model: model ?? null }, { timeout: 90000 });
+
+/** 一段时间内的调用汇总（总 / 某家某模型 / 某一天共用这个形状） */
+export interface LlmCallSummary {
+  calls: number;
+  ok: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  avg_tokens_per_call: number;
+  avg_input_per_call: number;
+  avg_output_per_call: number;
+  est_usd: number;
+  avg_latency_ms: number;
+  p50_latency_ms: number;
+  p90_latency_ms: number;
+  max_latency_ms: number;
+  total_latency_s: number;
+}
+
+export interface LlmCallRow {
+  id: number;
+  provider: string;
+  model: string;
+  purpose: "seek" | "test" | string;
+  project_id: number | null;
+  task_id: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  est_usd: number;
+  latency_ms: number;
+  ok: boolean;
+  error: string | null;
+  created_at: string | null;
+}
+
+export interface LlmCallStats {
+  days: number;
+  since: string;
+  total: LlmCallSummary;
+  all_time: { calls: number; total_tokens: number; est_usd: number };
+  by_model: (LlmCallSummary & { provider: string; model: string })[];
+  by_day: (LlmCallSummary & { day: string })[];
+  recent: LlmCallRow[];
+}
+
+/** 调用统计：次数、token（总 / 单次）、花费、耗时，按家/模型、按天、最近几次 */
+export const getLlmCallStats = (days: number) =>
+  request.get<never, LlmCallStats>("/llm-providers/stats", { params: { days } });

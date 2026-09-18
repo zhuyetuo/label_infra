@@ -35,6 +35,7 @@ from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
+from app.services import llm_call_service
 from app.services import llm_provider_service as llmsvc
 from app.services import vision_sam_client as vc
 from app.services.ai_prelabel_service import CandidateItem
@@ -319,6 +320,13 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
         progress.clips_candidate += int(st.get("clips_candidate") or 0)
         progress.clips_sent += int(st.get("clips_sent") or 0)
         progress.est_usd = round(progress.est_usd + float((st.get("usage") or {}).get("est_usd") or 0.0), 4)
+        # 每一次问模型都落一行（次数 / token / 耗时），「大模型 API」页的统计从这里算
+        used = st.get("llm") or {}
+        prov = (llm or {}).get("provider") or used.get("provider")
+        mdl = (llm or {}).get("model") or used.get("model")
+        if st.get("calls") and prov and mdl:
+            llm_call_service.record_calls(db, prov, mdl, st["calls"], purpose="seek", project_id=project_id, task_id=task.id)
+            await db.commit()
         if params.dry_run:
             progress.succeeded += 1
             progress.processed += 1

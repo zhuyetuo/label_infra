@@ -10,6 +10,7 @@ from app.models.dog_measurement import DogMeasurement
 from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
+from app.models.llm_call import LlmCall
 from app.models.llm_provider import LlmProvider
 from app.models.media_file import MediaFile
 from app.models.model_version import ModelVersion
@@ -38,6 +39,7 @@ __all__ = [
     "LabelDefinition",
     "LabelTemplate",
     "LabelTemplateItem",
+    "LlmCall",
     "LlmProvider",
     "MediaFile",
     "AnnotationRecord",
