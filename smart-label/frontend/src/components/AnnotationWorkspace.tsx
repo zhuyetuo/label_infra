@@ -62,6 +62,8 @@ interface Props {
   approveText?: string;
   /** 打开就跳到这个时刻（相对 CSV 起点的毫秒）。从别处点「去修」进来时用 */
   initialSeekMs?: number | null;
+  /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
+  initialCandFilter?: "similar" | null;
   /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
   onClaim?: () => void | Promise<void>;
   /** 已通过的任务想再改：退回重标（轮次+1，上一轮内容原样带过去） */
@@ -113,6 +115,7 @@ export default function AnnotationWorkspace({
   approveText,
   onClaim,
   initialSeekMs,
+  initialCandFilter,
   onReopen,
   onConfirmScratch,
   confirmScratchText,
@@ -300,7 +303,16 @@ export default function AnnotationWorkspace({
 
       const draft = await getDraft(taskId);
       setItems(draft.items);
-      listCandidates(taskId).then(setCandidates).catch(() => setCandidates([]));
+      listCandidates(taskId)
+        .then((cs) => {
+          setCandidates(cs);
+          // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找
+          if (initialSeekMs != null && initialCandFilter === "similar") {
+            const hit = cs.find((c) => c.reason === "similar" && Math.abs(c.start_time_ms - initialSeekMs) < 1500);
+            if (hit) setLoop({ startMs: hit.start_time_ms, endMs: hit.end_time_ms });
+          }
+        })
+        .catch(() => setCandidates([]));
       getAiLabelInfo(sampleId).then(setAiInfo).catch(() => setAiInfo(null));
       setLoading(false);
     })();
@@ -709,7 +721,8 @@ export default function AnnotationWorkspace({
             跟已有同标签重叠的没重复写。
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            候选写在下面这些任务的「疑似片段」里，线索标着「画面相似」。本任务里的已经刷出来了；别的任务点「打开」（新标签页）。
+            候选写在下面这些任务的「疑似片段」里，线索标着「画面相似」，面板上多了个「画面相似」筛选。
+            点时间：本任务直接跳过去循环播放；别的任务在新标签页打开并停在那一段。
           </Typography.Text>
           <Table
             size="small"
@@ -724,9 +737,27 @@ export default function AnnotationWorkspace({
                 title: "时间（分数）",
                 render: (_, p) => (
                   <Space size={4} wrap>
-                    {p.items.slice(0, 6).map((it, i) => (
-                      <Tag key={i}>{formatMs(it.start_s * 1000)}{it.score != null ? ` ${it.score.toFixed(2)}` : ""}</Tag>
-                    ))}
+                    {p.items.slice(0, 6).map((it, i) =>
+                      p.task_id === taskId ? (
+                        // 本任务：点一下直接跳过去并循环播放这一段
+                        <Tag
+                          key={i}
+                          color="blue"
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            setLoop({ startMs: Math.round(it.start_s * 1000), endMs: Math.round(it.end_s * 1000) });
+                            setSimilarResult(null);
+                          }}
+                        >
+                          {formatMs(it.start_s * 1000)}{it.score != null ? ` ${it.score.toFixed(2)}` : ""}
+                        </Tag>
+                      ) : (
+                        // 别的任务：链接直接带上时刻，打开就停在这一段、只看「画面相似」
+                        <a key={i} href={`/tasks?task=${p.task_id}&seek=${Math.round(it.start_s * 1000)}&cand=similar`} target="_blank" rel="noreferrer">
+                          <Tag style={{ cursor: "pointer" }}>{formatMs(it.start_s * 1000)}{it.score != null ? ` ${it.score.toFixed(2)}` : ""}</Tag>
+                        </a>
+                      )
+                    )}
                     {p.items.length > 6 && <span>…</span>}
                   </Space>
                 ),
@@ -739,7 +770,7 @@ export default function AnnotationWorkspace({
                   p.task_id === taskId ? (
                     <Typography.Text type="secondary">本任务</Typography.Text>
                   ) : (
-                    <a href={`/tasks?task=${p.task_id}`} target="_blank" rel="noreferrer">打开</a>
+                    <a href={`/tasks?task=${p.task_id}${p.items[0] ? `&seek=${Math.round(p.items[0].start_s * 1000)}` : ""}&cand=similar`} target="_blank" rel="noreferrer">打开</a>
                   ),
               },
             ]}
@@ -1274,6 +1305,8 @@ export default function AnnotationWorkspace({
                   controlsPortalTarget={candControlsHost}
                   candidates={candidates}
                   labels={labels}
+                  focusMs={initialSeekMs}
+                  initialFilter={initialCandFilter ?? undefined}
                   onFindSimilar={
                     readOnly
                       ? undefined

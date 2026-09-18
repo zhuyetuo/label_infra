@@ -47,6 +47,9 @@ export default function Tasks() {
   // 皮肤评估的跟踪表是在它自己那一页开工作台，不走这里）
   const [searchParams] = useSearchParams();
   const focusLabelName = searchParams.get("seg");
+  // ?seek=毫秒：打开就停在这一刻（找相似的结果链接带的）；?cand=similar：候选面板只看「画面相似」
+  const urlSeekMs = searchParams.get("seek") != null && !Number.isNaN(Number(searchParams.get("seek"))) ? Number(searchParams.get("seek")) : null;
+  const urlCandFilter = searchParams.get("cand") === "similar" ? ("similar" as const) : null;
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -625,6 +628,8 @@ export default function Tasks() {
         focusLabelIds={workspaceFocusLabels}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
+        initialSeekMs={urlSeekMs}
+        initialCandFilter={urlCandFilter}
         onClose={() => setWorkspaceTask(null)}
         onSubmitted={refresh}
       />
