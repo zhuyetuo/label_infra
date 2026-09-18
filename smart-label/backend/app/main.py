@@ -28,6 +28,7 @@ async def _seed_builtin_templates():
             result = await ensure_grooming_template(db)
             # 老项目按模板套过的标签还没挂父子关系：按模板条目的 parent_code 补上
             linked = await label_tree.link_from_templates(db)
+            linked += await label_tree.link_by_convention(db)
             if linked:
                 await db.commit()
                 logger.info("按模板给 %d 条项目标签补上了上级", linked)

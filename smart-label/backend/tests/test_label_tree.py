@@ -194,3 +194,40 @@ def test_项目里没有抓挠_套模板或启动时把父标签建出来_有同
     lq = _labels(db, run, q.id)
     assert lq["scratch"].display_name == "抓挠" and lq["scratch_head"].parent_id == lq["scratch"].id
     assert run(label_tree.link_from_templates(db, q.id)) == 0
+
+
+def test_不是模板来的也按内置定义和名字补上级_中间层没有就退到上级(db, run):
+    admin = _admin(db, run)
+    p = _project(db, run, admin)
+    # 老项目：手工/脚本建的，没有 template_item_id；父叫旧名「舔身体」；抓挠父标签不存在
+    for code, name in (("lick_body", "舔身体"), ("lick_body_fore_l", "舔身体-前左爪"), ("scratch_head", "抓挠-头颈耳"),
+                       ("zz", "抓挠-自定义部位"), ("act", "活动")):
+        db.add(LabelDefinition(project_id=p.id, code=code, display_name=name, created_by=admin.id))
+    run(db.commit())
+    assert run(label_tree.link_by_convention(db, p.id)) == 3
+    run(db.commit())
+    ls = _labels(db, run, p.id)
+    assert ls["lick_body_fore_l"].parent_id == ls["lick_body"].id      # 中间层「前爪」没有 → 退到「舔身体」
+    assert ls["scratch"].display_name == "抓挠"                        # 建出来的
+    assert ls["scratch_head"].parent_id == ls["scratch"].id
+    assert ls["zz"].parent_id == ls["scratch"].id                      # 按「抓挠-xxx」名字挂
+    assert ls["act"].parent_id is None and ls["lick_body"].parent_id is None
+    assert run(label_tree.link_by_convention(db, p.id)) == 0
+
+
+def test_内置模板的抓挠部位也有parent_code(db, run):
+    from app.services.grooming_labels import ensure_grooming_template
+    from app.models.label_template import LabelTemplate as T
+
+    _admin(db, run)
+    run(ensure_grooming_template(db))
+    tpl = run(db.execute(select(T).where(T.name == "抓/舔/啃/蹭"))).scalar_one()
+    items = {i.code: i for i in run(db.execute(select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl.id))).scalars().all()}
+    assert items["scratch_head"].parent_code == "scratch"
+    # 老模板没 parent_code 的也补上（哪怕上级不在模板里）
+    for i in items.values():
+        i.parent_code = None
+    run(db.commit())
+    assert run(ensure_grooming_template(db)) == "updated"
+    items = {i.code: i for i in run(db.execute(select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl.id))).scalars().all()}
+    assert items["scratch_head"].parent_code == "scratch" and items["lick_body_fore_l"].parent_code == "lick_body_fore"
