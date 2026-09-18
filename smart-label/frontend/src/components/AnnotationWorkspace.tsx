@@ -13,7 +13,7 @@ import {
   Radio,
   Tooltip,
   Typography,
-  message, Select, Input, InputNumber, Checkbox
+  message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
 import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
@@ -205,6 +205,8 @@ export default function AnnotationWorkspace({
   const [similarTopK, setSimilarTopK] = useState(60);
   const [similarAtSec, setSimilarAtSec] = useState(0);
   const [similarRunning, setSimilarRunning] = useState(false);
+  // 找完之后的结果：落到了哪些任务、几点几分——不然人不知道去哪看
+  const [similarResult, setSimilarResult] = useState<Awaited<ReturnType<typeof findSimilarCandidates>> | null>(null);
   const runSimilar = async () => {
     if (taskId == null || !similarLabel) return;
     setSimilarRunning(true);
@@ -216,15 +218,14 @@ export default function AnnotationWorkspace({
         text: similarUseText ? similarText.trim() : undefined,
         scope: similarScope,
         top_k: similarTopK,
+        create_label: true,
       });
-      message.success(
-        `找到 ${r.segments} 段（${r.hits} 个命中，搜了 ${r.searched} 路视频${r.missing ? `，${r.missing} 路还没建索引` : ""}），新写入 ${r.written} 条候选`,
-        8
-      );
+      if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
       if (r.multi_dog_candidates > 0) {
         message.warning(`其中 ${r.multi_dog_candidates} 条落在多狗同场的任务上（影棚 / 公共区），画面里那只不一定是这条 IMU 的狗，确认时对着标题上的狗名看清`, 10);
       }
       setSimilarOpen(false);
+      setSimilarResult(r);
       setCandidates(await listCandidates(taskId));
     } finally {
       setSimilarRunning(false);
@@ -654,14 +655,19 @@ export default function AnnotationWorkspace({
           <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
           <Select
             size="small"
-            style={{ minWidth: 220 }}
+            style={{ minWidth: 260 }}
+            mode="tags"
+            maxCount={1}
             showSearch
             optionFilterProp="label"
-            placeholder="找到的段打什么标签"
-            value={similarLabel ?? undefined}
-            onChange={(v) => setSimilarLabel(v)}
+            placeholder="找到的段打什么标签；没有的直接打字回车，会新建"
+            value={similarLabel ? [similarLabel] : []}
+            onChange={(v: string[]) => setSimilarLabel(v.length ? v[v.length - 1].trim() : null)}
             options={labels.map((l) => ({ value: l.display_name, label: l.display_name }))}
           />
+          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            没有的标签（比如「舔后抓」）直接打字回车，找到就顺手建进项目
+          </Typography.Text>
         </div>
         <Checkbox checked={similarUseText} onChange={(e) => setSimilarUseText(e.target.checked)}>
           不用当前画面，用一句英文描述搜（如 dog licking its tail）
@@ -685,6 +691,61 @@ export default function AnnotationWorkspace({
           </span>
         </Space>
       </Space>
+    </Modal>
+    <Modal
+      title="找相似的结果：落到了哪些任务"
+      open={similarResult != null}
+      onCancel={() => setSimilarResult(null)}
+      onOk={() => setSimilarResult(null)}
+      cancelButtonProps={{ style: { display: "none" } }}
+      okText="知道了"
+      width={760}
+    >
+      {similarResult && (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Typography.Text>
+            找到 {similarResult.segments} 段（{similarResult.hits} 个命中，搜了 {similarResult.searched} 路视频
+            {similarResult.missing ? `，${similarResult.missing} 路还没建索引` : ""}），新写入 <b>{similarResult.written}</b> 条候选。
+            跟已有同标签重叠的没重复写。
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            候选写在下面这些任务的「疑似片段」里，线索标着「画面相似」。本任务里的已经刷出来了；别的任务点「打开」（新标签页）。
+          </Typography.Text>
+          <Table
+            size="small"
+            rowKey="task_id"
+            pagination={false}
+            dataSource={similarResult.per_task.filter((p) => p.candidates > 0)}
+            columns={[
+              { title: "任务", width: 80, render: (_, p) => `#${p.task_id}` },
+              { title: "样本", dataIndex: "sample_code", render: (v: string | null) => v ?? "-" },
+              { title: "新写入", width: 70, dataIndex: "candidates" },
+              {
+                title: "时间（分数）",
+                render: (_, p) => (
+                  <Space size={4} wrap>
+                    {p.items.slice(0, 6).map((it, i) => (
+                      <Tag key={i}>{formatMs(it.start_s * 1000)}{it.score != null ? ` ${it.score.toFixed(2)}` : ""}</Tag>
+                    ))}
+                    {p.items.length > 6 && <span>…</span>}
+                  </Space>
+                ),
+              },
+              { title: "", width: 60, render: (_, p) => p.multi_dog ? <Tag color="orange">多狗</Tag> : null },
+              {
+                title: "",
+                width: 70,
+                render: (_, p) =>
+                  p.task_id === taskId ? (
+                    <Typography.Text type="secondary">本任务</Typography.Text>
+                  ) : (
+                    <a href={`/tasks?task=${p.task_id}`} target="_blank" rel="noreferrer">打开</a>
+                  ),
+              },
+            ]}
+          />
+        </Space>
+      )}
     </Modal>
     <Modal
       title={

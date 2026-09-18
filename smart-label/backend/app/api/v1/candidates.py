@@ -20,7 +20,7 @@ from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource, RecordSourceType
 from app.models.label import LabelDefinition
 from app.models.task import Task
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import vision_index_service as vindex
 from app.services import vision_sam_client
@@ -273,6 +273,8 @@ class SimilarIn(BaseModel):
     scope: str = "project"     # project / task
     top_k: int = 60
     min_score: float = 0.0
+    # 标签项目里还没有：管理员可以顺手建（找相似的时候常常就是在攒一个新类别）
+    create_label: bool = False
 
 
 @router.post("/similar")
@@ -292,12 +294,28 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
     label = (await db.execute(select(LabelDefinition.id).where(
         LabelDefinition.project_id == task.project_id, LabelDefinition.display_name == body.label_name,
         LabelDefinition.is_active.is_(True)).limit(1))).scalar_one_or_none()
+    created_label = False
     if label is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"项目里没有「{body.label_name}」标签")
+        name = body.label_name.strip()
+        if not body.create_label or user.role not in (UserRole.admin, UserRole.super_admin) or not name:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"项目里没有「{body.label_name}」标签（管理员可以在弹窗里勾「没有就新建」）")
+        if len(name) > 50:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "标签名最长 50 字")
+        # code 用名字本身：项目内唯一即可，跟标签管理页手工建的一样
+        exists = (await db.execute(select(LabelDefinition.id).where(
+            LabelDefinition.project_id == task.project_id, LabelDefinition.code == name).limit(1))).scalar_one_or_none()
+        if exists is not None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"项目里已有 code 为「{name}」的标签（可能被停用了），去标签管理里看看")
+        db.add(LabelDefinition(project_id=task.project_id, code=name, display_name=name, sort_order=200, created_by=user.id))
+        await db.commit()
+        created_label = True
     params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score)
     try:
-        return ok(await vindex.find_similar(db, task, params))
+        r = await vindex.find_similar(db, task, params)
+        r["created_label"] = created_label
+        return ok(r)
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
     except vision_sam_client.SamUnavailable as e:

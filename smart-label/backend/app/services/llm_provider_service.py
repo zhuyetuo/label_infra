@@ -33,7 +33,8 @@ PROVIDERS: list[dict] = [
      "default_model": "gemini-2.5-flash"},
     # 本地起的服务：vLLM / SGLang / Ollama 都能开 OpenAI 兼容口。key 可不填。
     # 5090 32G 单卡：Qwen2.5-VL-7B 的 AWQ 量化版跑得动，先从这个试
-    {"provider": "local", "display_name": "本地服务（vLLM，OpenAI 兼容）", "base_url": "http://127.0.0.1:8000/v1",
+    # 端口用 8386（挨着 vision_service 的 8385）：8000 太常用，机器上多半被别的东西占着
+    {"provider": "local", "display_name": "本地服务（vLLM，OpenAI 兼容）", "base_url": "http://127.0.0.1:8386/v1",
      "models": [{"name": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ", "price_in": 0.0, "price_out": 0.0}],
      "default_model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"},
 ]
@@ -92,6 +93,11 @@ async def ensure_rows(db: AsyncSession) -> list[LlmProvider]:
     """四家没有的补上（不带 key）。返回按固定顺序的四行。"""
     rows = {r.provider: r for r in (await db.execute(select(LlmProvider))).scalars().all()}
     created = False
+    # 老默认地址（8000）没人改过的话换成新默认；人改过的不动
+    loc = rows.get("local")
+    if loc is not None and loc.base_url == "http://127.0.0.1:8000/v1":
+        loc.base_url = "http://127.0.0.1:8386/v1"
+        created = True
     for spec in PROVIDERS:
         if spec["provider"] in rows:
             continue

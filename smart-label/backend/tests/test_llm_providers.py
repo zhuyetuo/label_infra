@@ -84,7 +84,7 @@ def test_resolve_给视觉服务的整包(db, run, admin):
 def test_本地服务不要_key(db, run, admin):
     run(api.list_providers(db=db))
     got = run(svc.resolve(db, "local", None))
-    assert got["api_key"] == "" and got["base_url"] == "http://127.0.0.1:8000/v1" and "Qwen" in got["model"]
+    assert got["api_key"] == "" and got["base_url"] == "http://127.0.0.1:8386/v1" and "Qwen" in got["model"]
 
 
 def test_parse_models_容错():
@@ -120,3 +120,16 @@ def test_test接口_走视觉服务(db, run, admin, monkeypatch):
     with pytest.raises(HTTPException) as e:
         run(api.test_provider("doubao", api.TestIn(), db=db))
     assert e.value.status_code == 503
+
+
+def test_本地服务老默认端口8000自动换成8386_改过的不动(db, run, admin):
+    run(api.list_providers(db=db))
+    row = run(svc.get_row(db, "local"))
+    row.base_url = "http://127.0.0.1:8000/v1"
+    run(db.commit())
+    run(svc.ensure_rows(db))
+    assert run(svc.get_row(db, "local")).base_url == "http://127.0.0.1:8386/v1"
+    row.base_url = "http://gpu:9000/v1"
+    run(db.commit())
+    run(svc.ensure_rows(db))
+    assert run(svc.get_row(db, "local")).base_url == "http://gpu:9000/v1"
