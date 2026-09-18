@@ -21,7 +21,7 @@ export default function LocalModels() {
         if (r.ok) message.success(`${m.name} 通了：${fmtMs(r.latency_ms ?? 0)}${r.detail ? `，${r.detail}` : ""}`, 8);
         else message.error(`${m.name} 测试失败：${r.error}`, 10);
       } else if (r.ok) {
-        message.success(action === "load" ? `${m.name} 已加载` : `${m.name} 已卸载，显存已释放`);
+        message.success(action === "load" ? (m.vllm ? `${m.name} 已拉起，模型加载要一两分钟，状态变「已加载」才能用` : `${m.name} 已加载`) : `${m.name} 已${m.vllm ? "停止" : "卸载"}，显存已释放`, 6);
       } else {
         message.error(`${m.name} ${action === "load" ? "加载" : "卸载"}失败：${r.error}`, 10);
       }
@@ -102,16 +102,43 @@ export default function LocalModels() {
               ),
           },
           {
-            title: "错误",
-            render: (_, m: LocalModel) =>
-              m.error && !m.available ? <Typography.Text type="danger" style={{ fontSize: 12 }}>{m.error}</Typography.Text> : null,
+            title: "错误 / 说明",
+            render: (_, m: LocalModel) => (
+              <div>
+                {m.error && !m.available ? <Typography.Text type={m.loading ? "secondary" : "danger"} style={{ fontSize: 12 }}>{m.error}</Typography.Text> : null}
+                {m.vllm && (
+                  <div style={{ fontSize: 12, color: "#888" }}>
+                    {m.vllm.running ? `进程 ${m.vllm.pid} · 端口 ${m.vllm.port}${m.vllm.uptime_s != null ? ` · 已跑 ${Math.round(m.vllm.uptime_s / 60)} 分` : ""}` : `端口 ${m.vllm.port}`}
+                    {m.vllm.log_tail.length > 0 && (
+                      <Tooltip title={<pre style={{ margin: 0, maxWidth: 700, whiteSpace: "pre-wrap", fontSize: 11 }}>{m.vllm.log_tail.join("\n")}</pre>}>
+                        <a style={{ marginLeft: 8 }}>日志末尾</a>
+                      </Tooltip>
+                    )}
+                  </div>
+                )}
+              </div>
+            ),
           },
           {
             title: "操作",
             width: 220,
             render: (_, m: LocalModel) => (
               <Space size={0}>
-                {!m.available ? (
+                {m.vllm ? (
+                  m.vllm.running ? (
+                    <Popconfirm title="停掉 vLLM？" description="结束进程、释放显存；「画面找片段」选本地服务时会连不上" onConfirm={() => act(m, "unload")}>
+                      <Button size="small" type="link" danger loading={busy === `${m.key}:unload`} disabled={!!busy}>
+                        停止
+                      </Button>
+                    </Popconfirm>
+                  ) : (
+                    <Tooltip title="拉起 vllm 进程：权重不在本地会先下（几 GB），下好再点一次；模型加载要一两分钟，状态变「已加载」才能用">
+                      <Button size="small" type="link" loading={busy === `${m.key}:load`} disabled={!!busy || m.vllm.downloading} onClick={() => act(m, "load")}>
+                        {m.vllm.downloading ? "下载中…" : "启动"}
+                      </Button>
+                    </Tooltip>
+                  )
+                ) : !m.available ? (
                   <Button size="small" type="link" loading={busy === `${m.key}:load`} disabled={!!busy} onClick={() => act(m, "load")}>
                     加载
                   </Button>
