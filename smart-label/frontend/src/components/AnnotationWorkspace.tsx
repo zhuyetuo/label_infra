@@ -34,7 +34,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
-import { chainOf, childrenMap, descendantIds, related as labelsRelated, shortName } from "@/utils/labelTree";
+import { chainOf, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -1055,15 +1055,33 @@ export default function AnnotationWorkspace({
           <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
           <Select
             size="small"
-            style={{ minWidth: 260 }}
+            style={{ minWidth: 300 }}
             mode="tags"
             maxCount={1}
             showSearch
-            optionFilterProp="label"
+            // 选项按层级缩进、带颜色（跟候选面板「改成别的」一样）；搜索按名字匹配
+            filterOption={(input, opt) => String(opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
+            listHeight={380}
             placeholder="找到的段打什么标签；没有的直接打字回车，会新建"
             value={similarLabel ? [similarLabel] : []}
             onChange={(v: string[]) => setSimilarLabel(v.length ? v[v.length - 1].trim() : null)}
-            options={labels.map((l) => ({ value: l.display_name, label: l.display_name }))}
+            tagRender={({ value, closable, onClose }) => {
+              const l = labels.find((x) => x.display_name === value);
+              return (
+                <Tag color={l?.color || undefined} closable={closable} onClose={onClose} style={{ marginRight: 3 }}>
+                  {value}
+                </Tag>
+              );
+            }}
+            options={flattenLabels(labels).map(({ label: l, depth }) => ({
+              value: l.display_name,
+              label: (
+                <span style={{ paddingLeft: depth * 12 }}>
+                  {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
+                  <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.display_name}</Tag>
+                </span>
+              ),
+            }))}
           />
           <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
             没有的标签（比如「舔后抓」）直接打字回车，找到就顺手建进项目
