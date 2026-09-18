@@ -5,6 +5,8 @@ import { formatMs } from "@/components/SegmentPanel";
 
 interface Props {
   taskId: number;
+  /** 当前项目：跨项目搜时别的项目的命中标出来 */
+  projectId?: number | null;
   /** 样例：哪路视频第几秒（一句话搜的时候没有） */
   refPath: string | null;
   refT: number | null;
@@ -18,7 +20,7 @@ interface Props {
 
 // 「先看命中」：写候选之前，把样例那一块和命中的那一块并排摆出来，一眼看出检索靠不靠谱。
 // 缩略图是视觉服务现取的（每张要解一帧、跑一次狗检测），懒加载，滚到哪取到哪。
-export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered, poseUsed, onJump }: Props) {
+export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, hits, centered, poseUsed, onJump }: Props) {
   const [token, setToken] = useState<string | null>(null);
   const [mode, setMode] = useState<"crop" | "full">("crop");
   // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
@@ -78,6 +80,9 @@ export default function SimilarHitsGrid({ taskId, refPath, refT, hits, centered,
               </div>
               <div style={{ fontSize: 11, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {h.task_id === taskId ? <Tag color="blue" style={{ marginRight: 4, fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>本任务</Tag> : null}
+                {h.project_id != null && projectId != null && h.project_id !== projectId ? (
+                  <Tag color="purple" style={{ marginRight: 4, fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>项目 #{h.project_id}</Tag>
+                ) : null}
                 {h.multi_dog ? (
                   <Tooltip title="多狗同场（影棚 / 公共区）：画面里那只不一定是这条 IMU 的狗">
                     <Tag color="orange" style={{ marginRight: 4, fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>多狗</Tag>

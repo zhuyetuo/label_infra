@@ -15,7 +15,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
-import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -220,7 +220,7 @@ export default function AnnotationWorkspace({
   const [similarLabel, setSimilarLabel] = useState<string | null>(null);
   const [similarText, setSimilarText] = useState("");
   const [similarUseText, setSimilarUseText] = useState(false);
-  const [similarScope, setSimilarScope] = useState<"project" | "task">("project");
+  const [similarScope, setSimilarScope] = useState<"project" | "task" | "all">("project");
   const [similarTopK, setSimilarTopK] = useState(60);
   const [similarGap, setSimilarGap] = useState(15);
   const [similarAtSec, setSimilarAtSec] = useState(0);
@@ -1163,7 +1163,16 @@ export default function AnnotationWorkspace({
           <span>
             范围：
             <Select size="small" value={similarScope} onChange={(v) => setSimilarScope(v)} style={{ width: 130 }}
-              options={[{ value: "project", label: "整个项目" }, { value: "task", label: "只在本任务" }]} />
+              options={[
+                { value: "project", label: "整个项目" },
+                { value: "task", label: "只在本任务" },
+                { value: "all", label: "所有项目" },
+              ]} />
+            {similarScope === "all" && (
+              <Tooltip title="跨项目搜所有待认领 / 标注中任务的视频。别的项目没建画面索引的路搜不到（结果里会报几路没建）；命中落到别的项目时，那个项目要有同名标签才能确认">
+                <QuestionCircleOutlined style={{ color: "#999", marginLeft: 4 }} />
+              </Tooltip>
+            )}
           </span>
           <span>
             最多取：
@@ -1188,6 +1197,7 @@ export default function AnnotationWorkspace({
         {similarPeek && taskId != null && (
           <SimilarHitsGrid
             taskId={taskId}
+            projectId={task?.project_id ?? null}
             refPath={similarPeek.refPath}
             refT={similarPeek.refT}
             hits={similarPeek.hits}
@@ -1233,6 +1243,7 @@ export default function AnnotationWorkspace({
             dataSource={similarResult.per_task.filter((p) => p.candidates > 0)}
             columns={[
               { title: "任务", width: 80, render: (_, p) => `#${p.task_id}` },
+              { title: "项目", width: 70, render: (_, p) => (p.project_id === task?.project_id ? "本项目" : `#${p.project_id}`) },
               { title: "样本", dataIndex: "sample_code", render: (v: string | null) => v ?? "-" },
               { title: "新写入", width: 70, dataIndex: "candidates" },
               {

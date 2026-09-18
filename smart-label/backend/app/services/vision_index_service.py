@@ -137,11 +137,13 @@ def is_multi_dog(sample: Sample, cam: str) -> bool:
     return site_layout.classify(path, sample.sample_code, day_dir_of(sample)) == "public"
 
 
-async def project_videos(db: AsyncSession, project_id: int, cam: str,
+async def project_videos(db: AsyncSession, project_id: int | None, cam: str,
                          task_ids: list[int] | None = None) -> list[tuple[Task, Sample, str]]:
     """项目里待认领/标注中的任务 → (task, sample, 那一路的视频路径)。没那一路的不在里面。"""
-    q = select(Task).where(Task.project_id == project_id,
-                           Task.status.in_([TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS]))
+    # project_id=None：所有项目（找相似跨项目搜）
+    q = select(Task).where(Task.status.in_([TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS]))
+    if project_id is not None:
+        q = q.where(Task.project_id == project_id)
     if task_ids is not None:
         q = q.where(Task.id.in_(task_ids))
     tasks = (await db.execute(q.order_by(Task.id))).scalars().all()
@@ -206,7 +208,7 @@ class SimilarParams:
     cam: str = "cam1"
     t_s: float | None = None        # 以图搜图：当前任务视频的第几秒
     text: str | None = None         # 或一句英文描述
-    scope: str = "project"          # project = 整个项目；task = 只在当前任务里
+    scope: str = "project"          # project = 整个项目；task = 只在当前任务里；all = 所有项目
     top_k: int = 60
     min_score: float = 0.0
     # 相邻命中隔多久以内合成一段。舔一次往往持续几十秒、命中却断断续续，3 秒会拆成十几条
@@ -260,14 +262,16 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     if params.scope == "task":
         rows = [(task, sample, own_path)] if own_path else []
     else:
-        # 整个项目：每份样本只搜能对上 IMU 的那几路（一间一狗的场地只搜自己房间那一路）
-        rows = await project_videos(db, task.project_id, "all")
+        # 整个项目 / 所有项目：每份样本只搜能对上 IMU 的那几路（一间一狗的场地只搜自己房间那一路）
+        rows = await project_videos(db, None if params.scope == "all" else task.project_id, "all")
     by_path: dict[str, list[Task]] = {}
     _multi_of: dict[int, bool] = {}
     _code_of: dict[int, str | None] = {}
+    _proj_of: dict[int, int] = {}
     for t, s_, path in rows:
         by_path.setdefault(path, []).append(t)
         _code_of[t.id] = s_.sample_code if s_ else None
+        _proj_of[t.id] = t.project_id
         if s_ is not None:
             kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
             _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
@@ -293,6 +297,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
             or (tasks_here[0] if tasks_here else None)
         hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"], "pose_score": h.get("pose_score"),
                          "task_id": owner.id if owner else None,
+                         "project_id": _proj_of.get(owner.id) if owner else None,
                          "sample_code": _code_of.get(owner.id) if owner else None,
                          "multi_dog": bool(_multi_of.get(owner.id)) if owner else False})
     written = 0
@@ -310,7 +315,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                 segs_t = segs
             n = 0 if params.dry_run else await add_similar_candidates(db, t, params.label_name, segs_t)
             written += n
-            per_task.append({"task_id": t.id, "candidates": n, "segments": len(segs_t),
+            per_task.append({"task_id": t.id, "project_id": t.project_id, "candidates": n, "segments": len(segs_t),
                              "sample_code": _code_of.get(t.id), "multi_dog": bool(_multi_of.get(t.id)),
                              # 前几段的时间和分数：人要知道"落到哪了"，不然找完了不知道去哪看
                              "items": [{"start_s": x["start_s"], "end_s": x["end_s"], "score": x.get("score")}
