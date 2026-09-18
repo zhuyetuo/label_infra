@@ -146,3 +146,11 @@
 .seg-row--focus > td:first-child {
   box-shadow: inset 3px 0 0 #1677ff;
 }
+
+/* 候选面板里正在循环的那一行：左边一条竖杠 + 淡底，跟片段列表的定位行一个样式 */
+.cand-loop-row > td {
+  background: rgba(82, 196, 26, 0.12) !important;
+}
+.cand-loop-row > td:first-child {
+  box-shadow: inset 3px 0 0 #52c41a;
+}

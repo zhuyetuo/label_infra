@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
-import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined } from "@ant-design/icons";
+import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined, StepForwardOutlined } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
 
@@ -579,14 +579,51 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     setPlaying(!anyPlaying);
   };
 
-  // 空格 = 总播放/暂停（焦点在输入框里时不抢）
+  const setPlayState = (action: "toggle" | "play" | "pause") => {
+    const vids = refs.current.filter((v): v is HTMLVideoElement => v != null);
+    if (vids.length === 0) return;
+    const anyPlaying = vids.some((v) => !v.paused);
+    if (action === "toggle" || (action === "pause") === anyPlaying) toggleAll();
+  };
+
+  // 逐帧：先暂停，再按第一路的 currentTime 挪 n 帧（没 fps 就按 1/25 秒）。
+  // 停下来找"用哪一帧去检索"时前后一帧一帧地滑
+  const stepFrames = (n: number) => {
+    const vids = refs.current.filter((v): v is HTMLVideoElement => v != null);
+    const lead = vids[0];
+    if (!lead) return;
+    if (vids.some((v) => !v.paused)) toggleAll();
+    const dt = 1 / (fps || 25);
+    const target = Math.max(0, lead.currentTime + n * dt);
+    bus.seek(target);
+    if (fps) setFrame(Math.round(target * fps));
+  };
+  const setPlayStateRef = useRef(setPlayState);
+  const stepFramesRef = useRef(stepFrames);
+  setPlayStateRef.current = setPlayState;
+  stepFramesRef.current = stepFrames;
+  useEffect(() => {
+    bus.setPlayHandler((a) => setPlayStateRef.current(a));
+    bus.setStepHandler((n) => stepFramesRef.current(n));
+    return () => {
+      bus.setPlayHandler(null);
+      bus.setStepHandler(null);
+    };
+  }, [bus]);
+
+  // 空格 = 总播放/暂停；← → = 上一帧 / 下一帧，按住 Shift 一次 10 帧（焦点在输入框里时不抢）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "BUTTON" || el.isContentEditable)) return;
-      e.preventDefault();
-      toggleAll();
+      if (e.code === "Space") {
+        e.preventDefault();
+        toggleAll();
+      } else if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        e.preventDefault();
+        stepFramesRef.current((e.code === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1));
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -638,7 +675,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
             帧：
           </Typography.Text>
+          <Tooltip title="上一帧（← 键；Shift+← 一次 10 帧）。会先暂停">
+            <Button size="small" icon={<StepBackwardOutlined />} onClick={() => stepFrames(-1)} />
+          </Tooltip>
           <InputNumber size="small" min={0} max={totalFrames ?? undefined} value={frame} onChange={handleFrameJump} />
+          <Tooltip title="下一帧（→ 键；Shift+→ 一次 10 帧）。会先暂停">
+            <Button size="small" icon={<StepForwardOutlined />} onClick={() => stepFrames(1)} />
+          </Tooltip>
           {/* 操作说明收进问号里：这行字每次打开都占着一整行的宽度，
               而它只在第一次用的时候有用 */}
           <Tooltip

@@ -14,6 +14,9 @@ export class TimeBus {
   // 是视频 timeupdate 里高频读的东西，不该走渲染循环。
   private loop: { start: number; end: number } | null = null;
   private loopListeners: ((loop: { start: number; end: number } | null) => void)[] = [];
+  // 总播放/暂停 和 逐帧：由 SyncedVideoGroup 注册，别处（候选面板的「暂停」）通过这里调
+  private playHandler: ((action: "toggle" | "play" | "pause") => void) | null = null;
+  private stepHandler: ((frames: number) => void) | null = null;
 
   onTime(cb: (sec: number) => void): () => void {
     this.timeListeners.push(cb);
@@ -57,6 +60,24 @@ export class TimeBus {
       return;
     }
     this.seekHandler(sec);
+  }
+
+  setPlayHandler(fn: ((action: "toggle" | "play" | "pause") => void) | null): void {
+    this.playHandler = fn;
+  }
+
+  /** 三路一起 播放 / 暂停 / 切换。不动循环区间：暂停只是停在这一帧，循环还在 */
+  play(action: "toggle" | "play" | "pause" = "toggle"): void {
+    this.playHandler?.(action);
+  }
+
+  setStepHandler(fn: ((frames: number) => void) | null): void {
+    this.stepHandler = fn;
+  }
+
+  /** 逐帧：正数往后、负数往前。会先暂停 */
+  step(frames: number): void {
+    this.stepHandler?.(frames);
   }
 
   getLoop(): { start: number; end: number } | null {
