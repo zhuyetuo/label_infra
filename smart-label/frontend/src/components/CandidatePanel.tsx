@@ -59,6 +59,10 @@ interface Props {
   controlsPortalTarget?: HTMLElement | null;
   /** 「找相似」：拿当前画面（或一句话）在项目里找长得像的几秒。没建索引时不给 */
   onFindSimilar?: () => void;
+  /** 从找相似的结果/链接跳进来：起点是这个毫秒的那条排最前并高亮 */
+  focusMs?: number | null;
+  /** 打开时先筛哪一档（从找相似的链接进来默认只看「画面相似」） */
+  initialFilter?: "pending" | "all" | "similar";
 }
 
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
@@ -83,8 +87,14 @@ export default function CandidatePanel({
   onBeforeDecide,
   controlsPortalTarget,
   onFindSimilar,
+  focusMs,
+  initialFilter,
 }: Props) {
-  const [filter, setFilter] = useState<"pending" | "all">("pending");
+  const [filter, setFilter] = useState<"pending" | "all" | "similar">(initialFilter ?? "pending");
+  useEffect(() => {
+    if (initialFilter) setFilter(initialFilter);
+  }, [initialFilter]);
+  const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
   const [busy, setBusy] = useState<number | null>(null);
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
   // 人没法核对自己刚才做了什么——留着，直到手动收起或换任务
@@ -101,10 +111,22 @@ export default function CandidatePanel({
     if (pendingCount === 0 && candidates.length > 0) setFilter("all");
   }, [pendingCount, candidates.length]);
 
-  const rows = useMemo(
-    () => candidates.filter((c) => (filter === "all" ? true : c.status === "pending" || justDecided.has(c.id))),
-    [candidates, filter, justDecided]
-  );
+  const rows = useMemo(() => {
+    let list = candidates.filter((c) =>
+      filter === "all"
+        ? true
+        : filter === "similar"
+          ? c.reason === "similar" && (c.status === "pending" || justDecided.has(c.id))
+          : c.status === "pending" || justDecided.has(c.id)
+    );
+    // 从找相似/链接跳进来的那条排最前，人一眼就知道"是这段"
+    if (focusMs != null) {
+      const hit = (c: AiCandidate) => Math.abs(c.start_time_ms - focusMs) < 1500;
+      list = [...list.filter(hit), ...list.filter((c) => !hit(c))];
+    }
+    return list;
+  }, [candidates, filter, justDecided, focusMs]);
+  const isFocus = (c: AiCandidate) => focusMs != null && Math.abs(c.start_time_ms - focusMs) < 1500;
 
 
   const decide = async (
@@ -168,6 +190,7 @@ export default function CandidatePanel({
         onChange={(e) => setFilter(e.target.value)}
         options={[
           { label: `待确认 ${pendingCount}`, value: "pending" },
+          ...(similarCount > 0 ? [{ label: `画面相似 ${similarCount}`, value: "similar" }] : []),
           { label: `全部 ${candidates.length}`, value: "all" },
         ]}
       />
@@ -215,6 +238,8 @@ export default function CandidatePanel({
         size="small"
         rowKey="id"
         dataSource={rows}
+        rowClassName={(c: AiCandidate) => (isFocus(c) ? "cand-focus-row" : "")}
+        onRow={(c: AiCandidate) => (isFocus(c) ? { style: { background: "#e6f4ff" } } : {})}
         pagination={false}
         // 只留横向滚动：给了 y 之后表格自己会出一条纵向滚动条，跟外面那条
         // 套在一起——鼠标在表格里滚的是里面那条，想滚整页还得把鼠标挪出去。
