@@ -161,3 +161,36 @@ def test_子孙展开和祖先链(db, run):
     by_id = {l.id: l for l in (lick, fore, fl, other)}
     assert label_tree.ancestors_chain(by_id, fl.id) == [lick.id, fore.id, fl.id]
     assert label_tree.ancestors_chain(by_id, other.id) == [other.id]
+
+
+def test_项目里没有抓挠_套模板或启动时把父标签建出来_有同名的就用同名(db, run):
+    admin = _admin(db, run)
+    p = _project(db, run, admin)
+    # 项目里只有一条按名字叫「抓挠」但 code 不一样的
+    db.add(LabelDefinition(project_id=p.id, code="scratching", display_name="抓挠", created_by=admin.id))
+    run(db.commit())
+    body = LabelTemplateCreate(name="t", items=_items(
+        "t", ("scratch_head", "抓挠-头颈耳", "scratch"), ("lick_body_fore", "舔-前爪", "lick_body")))
+    tid = run(tpl_api.create_template(body, db=db, admin=admin))["data"]["id"]
+    r = run(tpl_api.apply_template(tid, p.id, db=db, admin=admin))["data"]
+    ls = _labels(db, run, p.id)
+    assert ls["scratch_head"].parent_id == ls["scratching"].id       # 按名字找到项目里的「抓挠」
+    assert "lick_body" in ls and ls["lick_body"].display_name == "舔"  # 「舔」项目里没有 → 建出来
+    assert ls["lick_body_fore"].parent_id == ls["lick_body"].id
+    assert r["created"] == 3                                          # 头颈耳、前爪、加建出来的「舔」
+
+    # 启动时的补链也一样：老项目里部位来自模板但父标签不在
+    q = _project(db, run, admin, "q")
+    tpl = LabelTemplate(name="t2", created_by=admin.id)
+    db.add(tpl)
+    run(db.flush())
+    it = LabelTemplateItem(template_id=tpl.id, code="scratch_head", display_name="抓挠-头颈耳", sort_order=1, parent_code="scratch")
+    db.add(it)
+    run(db.flush())
+    db.add(LabelDefinition(project_id=q.id, code="scratch_head", display_name="抓挠-头颈耳", template_item_id=it.id, created_by=admin.id))
+    run(db.commit())
+    assert run(label_tree.link_from_templates(db, q.id)) == 1
+    run(db.commit())
+    lq = _labels(db, run, q.id)
+    assert lq["scratch"].display_name == "抓挠" and lq["scratch_head"].parent_id == lq["scratch"].id
+    assert run(label_tree.link_from_templates(db, q.id)) == 0

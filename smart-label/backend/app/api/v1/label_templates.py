@@ -288,15 +288,23 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
         existing[item.code] = label
         created += 1
     linked = 0
+    pool = list(existing.values())
     for item in ordered:
         if not item.parent_code:
             continue
         label = existing.get(item.code)
-        pid = id_of.get(item.parent_code)
-        if label is None or pid is None or pid == label.id:
+        if label is None:
             continue
+        # 上级：模板里另一条 / 项目里已有的 code / 按名字（抓挠、舔身体这类）/ 内置父标签没有就建
+        parent = await label_tree.resolve_parent(db, project_id, item.parent_code, pool, admin.id)
+        if parent is None or parent.id == label.id:
+            continue
+        if parent.code not in existing:
+            existing[parent.code] = parent
+            id_of[parent.code] = parent.id
+            created += 1
         if label.parent_id is None:
-            label.parent_id = pid
+            label.parent_id = parent.id
             if item.code in skipped:
                 linked += 1     # 老项目里本来就有的标签，这次把上级补上了
     await db.commit()
