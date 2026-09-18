@@ -68,6 +68,8 @@ export const findSimilarCandidates = (body: {
   create_label?: boolean;
   /** 减掉所有帧的平均向量再比（去共同背景），默认开 */
   center?: boolean;
+  /** 姿态相似占多少（0 只看画面，1 只看姿态）；不传用服务默认。没姿态模型时自动只看画面 */
+  pose_w?: number;
   /** 只搜不写：先把命中摆出来看 */
   dry_run?: boolean;
 }) =>
@@ -91,6 +93,9 @@ export const findSimilarCandidates = (body: {
       /** 落在多狗同场（影棚）任务上的候选数：画面里那只不一定是这条 IMU 的狗，确认时要看清 */
       multi_dog_candidates: number;
       centered: boolean;
+      /** 这次搜有没有用上姿态那一路（样例测到了关键点、索引里也存了） */
+      pose_used: boolean;
+      pose_w: number | null;
       dry_run: boolean;
       /** 每个命中：哪路视频第几秒、分数、落在哪个任务 */
       hit_list: SimilarHit[];
@@ -103,6 +108,8 @@ export interface SimilarHit {
   path: string;
   t: number;
   score: number;
+  /** 姿态那一路单独的分（用上姿态时才有） */
+  pose_score?: number | null;
   task_id: number | null;
   sample_code: string | null;
   multi_dog: boolean;

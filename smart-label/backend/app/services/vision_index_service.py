@@ -214,6 +214,8 @@ class SimilarParams:
     gap_s: float = 15.0
     # 减掉所有帧的平均向量再比：同狗同房同地板的共同背景把余弦顶到 0.95+，动作差别被淹没
     center: bool = True
+    # 姿态相似占多少（0 只看画面，1 只看姿态）；None 用视觉服务的默认
+    pose_w: float | None = None
     # 只搜不写：先把命中的画面摆出来看，看着对再写候选
     dry_run: bool = False
 
@@ -275,7 +277,8 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
 
     ref = {"path": own_path, "t": params.t_s} if params.t_s is not None else None
     r = await search_fn(paths, text=params.text, ref=ref, top_k=params.top_k,
-                        min_score=params.min_score, gap_s=params.gap_s, center=params.center)
+                        min_score=params.min_score, gap_s=params.gap_s, center=params.center,
+                        pose_w=params.pose_w)
     # 每个命中对应哪个任务（同一路视频可能有几个任务：整段的 + 短任务），给"先看命中"画图和跳转
     hits_out: list[dict] = []
     for h in r.get("hits", []):
@@ -288,7 +291,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                       and t.segment_start_ms <= t_ms < t.segment_end_ms), None) \
             or next((t for t in tasks_here if t.segment_start_ms is None or t.segment_end_ms is None), None) \
             or (tasks_here[0] if tasks_here else None)
-        hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"],
+        hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"], "pose_score": h.get("pose_score"),
                          "task_id": owner.id if owner else None,
                          "sample_code": _code_of.get(owner.id) if owner else None,
                          "multi_dog": bool(_multi_of.get(owner.id)) if owner else False})
@@ -319,6 +322,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     return {"written": written, "hits": len(r.get("hits", [])), "segments": len(r.get("segments", [])),
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
-            "centered": bool(r.get("centered")), "dry_run": params.dry_run, "hit_list": hits_out,
+            "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),
+            "dry_run": params.dry_run, "hit_list": hits_out,
             # 样例自己那一路的路径：前端拿它请求样例帧的缩略图，跟命中并排比
             "ref_path": own_path}

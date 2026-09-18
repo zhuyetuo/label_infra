@@ -280,8 +280,9 @@ def test_找相似_只看不写_命中带任务和样本_缩略图要token(db, r
               "searched": 2, "missing": [], "centered": True,
               "segments": [{"path": "d/s2_cam1.mp4", "start_s": 69, "end_s": 71, "score": 0.5, "n": 1}]}
     fn = _search(result)
-    r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="随便什么", t_s=42.0, dry_run=True, center=False), search_fn=fn))
-    assert fn.calls[0]["center"] is False
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(label_name="随便什么", t_s=42.0, dry_run=True, center=False, pose_w=0.3), search_fn=fn))
+    assert fn.calls[0]["center"] is False and fn.calls[0]["pose_w"] == 0.3
+    assert r["pose_used"] is False
     assert r["dry_run"] is True and r["written"] == 0 and r["centered"] is True and r["ref_path"] == "d/s1_cam1.mp4"
     assert _cands(db, run, t2.id) == [] and _cands(db, run, t1.id) == []          # 一条都没写
     hl = r["hit_list"]

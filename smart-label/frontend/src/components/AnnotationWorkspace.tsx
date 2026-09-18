@@ -229,8 +229,10 @@ export default function AnnotationWorkspace({
   const [similarResult, setSimilarResult] = useState<Awaited<ReturnType<typeof findSimilarCandidates>> | null>(null);
   // 去共同背景：同狗同房同地板把余弦顶到 0.95+，动作差别被淹没；减掉均值再比。默认开
   const [similarCenter, setSimilarCenter] = useState(true);
+  // 姿态相似占多少：0 只看画面，1 只看姿态（鼻子够到了哪只爪）。没姿态模型时服务端自动只看画面
+  const [similarPoseW, setSimilarPoseW] = useState(0.5);
   // 「先看命中」：只搜不写，把命中的画面摆出来看
-  const [similarPeek, setSimilarPeek] = useState<{ hits: SimilarHit[]; refPath: string | null; refT: number | null; centered: boolean } | null>(null);
+  const [similarPeek, setSimilarPeek] = useState<{ hits: SimilarHit[]; refPath: string | null; refT: number | null; centered: boolean; poseUsed: boolean } | null>(null);
   const [similarPeeking, setSimilarPeeking] = useState(false);
   const peekSimilar = async () => {
     if (taskId == null) return;
@@ -245,9 +247,10 @@ export default function AnnotationWorkspace({
         top_k: similarTopK,
         gap_s: similarGap,
         center: similarCenter,
+        pose_w: similarPoseW,
         dry_run: true,
       });
-      setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered });
+      setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered, poseUsed: r.pose_used });
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
     } finally {
       setSimilarPeeking(false);
@@ -267,6 +270,7 @@ export default function AnnotationWorkspace({
         gap_s: similarGap,
         create_label: true,
         center: similarCenter,
+        pose_w: similarPoseW,
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
       if (r.multi_dog_candidates > 0) {
@@ -1174,6 +1178,12 @@ export default function AnnotationWorkspace({
               去共同背景
             </Checkbox>
           </Tooltip>
+          <Tooltip title="第二路信号：狗的姿态关键点（鼻子、脖子、尾根、四爪…）算出来的「鼻子够到了哪只爪」。0 只看画面，1 只看姿态。算法机上没装姿态模型时自动只看画面（先看命中的说明里会写）">
+            <span>
+              姿态占
+              <InputNumber size="small" min={0} max={1} step={0.1} value={similarPoseW} onChange={(v) => setSimilarPoseW(Math.max(0, Math.min(1, v ?? 0.5)))} style={{ width: 70, margin: "0 4px" }} />
+            </span>
+          </Tooltip>
         </Space>
         {similarPeek && taskId != null && (
           <SimilarHitsGrid
@@ -1182,6 +1192,7 @@ export default function AnnotationWorkspace({
             refT={similarPeek.refT}
             hits={similarPeek.hits}
             centered={similarPeek.centered}
+            poseUsed={similarPeek.poseUsed}
             onJump={(h) => {
               if (h.task_id === taskId) {
                 const ms = Math.round(h.t * 1000);
