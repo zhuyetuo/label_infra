@@ -206,6 +206,7 @@ export default function AnnotationWorkspace({
   const [similarUseText, setSimilarUseText] = useState(false);
   const [similarScope, setSimilarScope] = useState<"project" | "task">("project");
   const [similarTopK, setSimilarTopK] = useState(60);
+  const [similarGap, setSimilarGap] = useState(15);
   const [similarAtSec, setSimilarAtSec] = useState(0);
   const [similarRunning, setSimilarRunning] = useState(false);
   // 找完之后的结果：落到了哪些任务、几点几分——不然人不知道去哪看
@@ -221,6 +222,7 @@ export default function AnnotationWorkspace({
         text: similarUseText ? similarText.trim() : undefined,
         scope: similarScope,
         top_k: similarTopK,
+        gap_s: similarGap,
         create_label: true,
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
@@ -661,6 +663,7 @@ export default function AnnotationWorkspace({
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。
           不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
+          命中是按秒的，一次舔往往持续几十秒、命中断断续续，所以相邻命中会按下面的间隔合成一段。
           先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只。
         </Typography.Text>
         <div>
@@ -700,6 +703,10 @@ export default function AnnotationWorkspace({
           <span>
             最多取：
             <InputNumber size="small" min={1} max={2000} value={similarTopK} onChange={(v) => setSimilarTopK(v ?? 60)} style={{ width: 90 }} /> 个命中
+          </span>
+          <span>
+            隔
+            <InputNumber size="small" min={0} max={120} value={similarGap} onChange={(v) => setSimilarGap(v ?? 15)} style={{ width: 70 }} /> 秒以内算同一段
           </span>
         </Space>
       </Space>

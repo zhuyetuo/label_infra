@@ -58,6 +58,8 @@ export const findSimilarCandidates = (body: {
   scope?: "project" | "task";
   top_k?: number;
   min_score?: number;
+  /** 相邻命中隔多久以内合成一段（秒）；小了一次舔会拆成十几条 */
+  gap_s?: number;
   /** 标签项目里没有时顺手新建（管理员） */
   create_label?: boolean;
 }) =>
