@@ -1,3 +1,4 @@
+import type React from "react";
 import { useState } from "react";
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -157,13 +158,7 @@ export default function LabelTemplates() {
             title: "标签",
             render: (_, t: LabelTemplate) =>
               t.items.length ? (
-                <Space size={4} wrap>
-                  {t.items.map((i) => (
-                    <Tag key={i.code} color={i.color ?? undefined}>
-                      {i.display_name}
-                    </Tag>
-                  ))}
-                </Space>
+                <TemplateItemsView items={t.items} />
               ) : (
                 <Typography.Text type="secondary">（空模板）</Typography.Text>
               ),
@@ -333,5 +328,76 @@ export default function LabelTemplates() {
         />
       </Modal>
     </div>
+  );
+}
+
+
+// 模板里的标签：有父子关系的按树摆（父在前，子缩进跟在后面一行），平级的照旧一排。
+// 上级不在模板里的（「抓挠-部位」挂项目自己的「抓挠」）当一组，组头写成灰的。
+function TemplateItemsView({ items }: { items: LabelTemplateItem[] }) {
+  const codes = new Set(items.map((i) => i.code));
+  const hasTree = items.some((i) => i.parent_code);
+  if (!hasTree) {
+    return (
+      <Space size={4} wrap>
+        {items.map((i) => (
+          <Tag key={i.code} color={i.color ?? undefined}>
+            {i.display_name}
+          </Tag>
+        ))}
+      </Space>
+    );
+  }
+  const kids = new Map<string, LabelTemplateItem[]>();
+  const roots: { key: string; item: LabelTemplateItem | null }[] = [];
+  const seenRoot = new Set<string>();
+  for (const i of items) {
+    const p = i.parent_code ?? null;
+    if (p && codes.has(p)) {
+      kids.set(p, [...(kids.get(p) ?? []), i]);
+    } else if (p) {
+      // 上级不在模板里：按上级 code 归一组
+      kids.set(p, [...(kids.get(p) ?? []), i]);
+      if (!seenRoot.has(p)) {
+        seenRoot.add(p);
+        roots.push({ key: p, item: null });
+      }
+    } else {
+      roots.push({ key: i.code, item: i });
+    }
+  }
+  const short = (i: LabelTemplateItem, rootName: string) =>
+    i.display_name.startsWith(rootName + "-") ? i.display_name.slice(rootName.length + 1) : i.display_name;
+  const renderKids = (code: string, rootName: string, depth: number): React.ReactNode =>
+    (kids.get(code) ?? []).map((c) => (
+      <span key={c.code} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+        <span style={{ color: "#999", fontSize: 11 }}>{depth > 1 ? "··" : "›"}</span>
+        <Tag color={c.color ?? undefined} style={{ marginRight: 0 }}>
+          {short(c, rootName)}
+        </Tag>
+        {renderKids(c.code, rootName, depth + 1)}
+      </span>
+    ));
+  const ROOT_NAMES: Record<string, string> = { scratch: "抓挠", lick_body: "舔", chew_body: "啃", rub_body: "蹭" };
+  return (
+    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+      {roots.map((r) => {
+        const name = r.item ? r.item.display_name : ROOT_NAMES[r.key] ?? r.key;
+        return (
+          <Space key={r.key} size={4} wrap>
+            {r.item ? (
+              <Tag color={r.item.color ?? undefined} style={{ fontWeight: 600 }}>
+                {r.item.display_name}
+              </Tag>
+            ) : (
+              <Tooltip title={`上级「${name}」不在模板里，套用时挂到项目里已有的「${name}」下（没有会建出来）`}>
+                <Tag style={{ fontWeight: 600, borderStyle: "dashed" }}>{name}</Tag>
+              </Tooltip>
+            )}
+            {renderKids(r.key, name, 1)}
+          </Space>
+        );
+      })}
+    </Space>
   );
 }
