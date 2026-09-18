@@ -101,7 +101,7 @@ export interface LocalModel {
   weights: string | null;
   warm?: boolean;
   loading?: boolean;
-  progress?: { pct: number; done_mb: number; total_mb: number; eta_s: number | null } | null;
+  progress?: { pct: number | null; done_mb: number; total_mb: number | null; speed_mbps?: number; eta_s: number | null } | null;
   /** vLLM 那一行才有：进程 / 端口 / 权重 / 日志 */
   vllm?: {
     installed: boolean;

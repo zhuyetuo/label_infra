@@ -72,7 +72,7 @@ export default function LocalModels() {
               m.available ? (
                 <Tag color="green">{m.warm === false ? "已加载（未预热）" : "已加载"}</Tag>
               ) : m.loading ? (
-                <Tag color="blue">加载中{m.progress ? ` ${m.progress.pct}%` : ""}</Tag>
+                <Tag color="blue">{m.progress ? `下载中${m.progress.pct != null ? ` ${m.progress.pct}%` : ""}` : "加载中"}</Tag>
               ) : m.error ? (
                 <Tooltip title={m.error}>
                   <Tag color="red">不可用</Tag>
