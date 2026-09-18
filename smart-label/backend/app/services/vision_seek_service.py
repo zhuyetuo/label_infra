@@ -67,7 +67,11 @@ def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None) 
             continue
         if wanted is not None and name not in wanted:
             continue
+        # 部位按「父名-xxx」取项目里真有的：模板里的按模板顺序在前，项目自己加的
+        # （或老版本模板留下的「前肢爪」这种旧名）跟在后面，都送去让模型选
         have_parts = [p for _c, p, _col in parts if f"{name}-{p}" in names]
+        have_parts += sorted(n[len(name) + 1:] for n in names
+                             if n.startswith(name + "-") and n[len(name) + 1:] not in have_parts)
         out.append({"name": name, "description": DESCRIPTIONS.get(name, ""), "parts": have_parts})
     return out
 

@@ -37,7 +37,7 @@ def _labels(db, run, pid):
 def test_wanted_rows_parents_before_children_and_no_dupes():
     rows = wanted_rows()
     assert [r.display_name for r in rows[:4]] == ["舔身体", "啃身体", "抓挠", "蹭身体"]
-    assert len(rows) == sum(1 + len(g[4]) for g in GROUPS) == 20
+    assert len(rows) == sum(1 + len(g[4]) for g in GROUPS) == 28
     assert len({r.code for r in rows}) == len(rows)
     assert len({r.display_name for r in rows}) == len(rows)
     seen = set()
@@ -55,10 +55,10 @@ def test_fresh_project_gets_everything_and_candidate_lookup_works(db, run):
     actions = run(plan(db, p.id))
     assert all(a.kind == "create" for a in actions)
     counts = run(apply_plan(db, p.id, admin.id, actions))
-    assert counts == {"create": 20, "keep": 0, "reactivate": 0}
+    assert counts == {"create": 28, "keep": 0, "reactivate": 0}
 
     labels = _labels(db, run, p.id)
-    assert len(labels) == 20
+    assert len(labels) == 28
     # 候选确认走的就是这条查询：display_name == label_name
     hit = run(db.execute(select(LabelDefinition.id).where(
         LabelDefinition.project_id == p.id,
@@ -66,14 +66,14 @@ def test_fresh_project_gets_everything_and_candidate_lookup_works(db, run):
     ).limit(1))).scalar_one_or_none()
     assert hit is not None
     by_name = {l.display_name: l for l in labels}
-    assert by_name["舔身体-前肢爪"].parent_id == by_name["舔身体"].id
+    assert by_name["舔身体-前爪"].parent_id == by_name["舔身体"].id
     assert by_name["啃身体-生殖区肛周"].parent_id == by_name["啃身体"].id
     assert by_name["舔身体"].parent_id is None
     assert all(l.created_by == admin.id for l in labels)
     assert all(l.is_active for l in labels)
     assert all(l.color for l in labels)
     # 排序：父、它的子、下一个父、它的子
-    assert [l.display_name for l in labels][:3] == ["舔身体", "舔身体-前肢爪", "舔身体-后肢臀尾"]
+    assert [l.display_name for l in labels][:3] == ["舔身体", "舔身体-前爪", "舔身体-前左爪"]
 
 
 def test_second_run_changes_nothing(db, run):
@@ -83,7 +83,7 @@ def test_second_run_changes_nothing(db, run):
     actions = run(plan(db, p.id))
     assert all(a.kind == "keep" for a in actions)
     counts = run(apply_plan(db, p.id, admin.id, actions))
-    assert counts["create"] == 0 and counts["keep"] == 20
+    assert counts["create"] == 0 and counts["keep"] == 28
     assert sorted(l.id for l in _labels(db, run, p.id)) == ids
 
 
@@ -100,7 +100,7 @@ def test_hand_made_label_with_other_code_is_kept_and_used_as_parent(db, run):
     assert kinds["啃身体"] == "create"
     run(apply_plan(db, p.id, admin.id, actions))
     labels = _labels(db, run, p.id)
-    assert len(labels) == 20
+    assert len(labels) == 28
     by_name = {l.display_name: l for l in labels}
     assert by_name["舔身体"].id == mine.id
     assert by_name["舔身体"].code == "tian" and by_name["舔身体"].color == "#000"
@@ -118,7 +118,7 @@ def test_same_code_different_name_counts_as_present(db, run):
     assert a.kind == "keep" and a.existing_name == "啃咬身体"
     assert "「啃咬身体」" in describe(actions)
     run(apply_plan(db, p.id, admin.id, actions))
-    assert len(_labels(db, run, p.id)) == 20
+    assert len(_labels(db, run, p.id)) == 28
 
 
 def test_inactive_label_is_reactivated(db, run):
@@ -132,7 +132,7 @@ def test_inactive_label_is_reactivated(db, run):
     assert sum(a.kind == "reactivate" for a in actions) == 1
     run(apply_plan(db, p.id, admin.id, actions))
     assert all(l.is_active for l in _labels(db, run, p.id))
-    assert len(_labels(db, run, p.id)) == 20
+    assert len(_labels(db, run, p.id)) == 28
 
 
 def test_no_parts_only_parents(db, run):
@@ -172,7 +172,7 @@ def test_pick_user_prefers_admin_and_honors_explicit(db, run):
 def test_describe_lists_every_row(db, run):
     _, _, p = _seed_users_project(db, run)
     text = describe(run(plan(db, p.id)))
-    assert text.count("新增") == 20
+    assert text.count("新增") == 28
     assert "舔身体  [lick_body]" in text
 
 
@@ -196,13 +196,13 @@ def test_cli_preview_then_apply(db, run, monkeypatch, capsys):
 
     assert mod.main(["--project", str(p.id)]) == 0
     out = capsys.readouterr().out
-    assert "预览" in out and "20 条要改" in out
+    assert "预览" in out and "28 条要改" in out
     assert _labels(db, run, p.id) == []          # 预览不写
 
     assert mod.main(["--project", str(p.id), "--apply"]) == 0
     out = capsys.readouterr().out
-    assert "新增 20" in out and "created_by=adm" in out
-    assert len(_labels(db, run, p.id)) == 20
+    assert "新增 28" in out and "created_by=adm" in out
+    assert len(_labels(db, run, p.id)) == 28
 
     assert mod.main(["--project", str(p.id), "--apply"]) == 0
     assert "都齐了" in capsys.readouterr().out

@@ -41,16 +41,21 @@ TEMPLATE_DESC = (
 # 色相从深到浅四档（亮度 28% / 40% / 52% / 76%），一眼能看出是哪组、组内也分得开。
 #
 # 部位分组按"头戴 IMU 能不能分得开"来定，不按解剖学：
-#   舔/啃  用嘴够——舔前爪 / 舔后躯 / 舔侧腹的头部姿态差异最大，生殖区肛周最特殊
+#   舔/啃  用嘴够——舔前爪 / 舔后爪 / 舔侧腹的头部姿态差异最大，生殖区肛周最特殊；
+#          爪子再分左右（头往哪边偏）
 #   抓挠   用后腿够——挠头颈耳时头会歪着抖，挠躯干/胸腹时身子侧躺，挠后肢时扭身
 #   蹭     用身体蹭东西——蹭脸（口鼻眼）、仰躺翻滚蹭背、侧身蹭墙/地、坐着拖屁股
 GROUPS: list[tuple[str, str, str, bool, list[tuple[str, str, str]]]] = [
+    # 舔/啃 的爪子分到左右：「前爪」「后爪」是看不清哪只时用的笼统项，
+    # 看得清就标「前左爪」「前右爪」「后左爪」「后右爪」
     ("lick_body", "舔身体", "#FF8C42", True, [
-        ("fore", "前肢爪", "#8F3800"), ("hind", "后肢臀尾", "#CC5000"),
+        ("fore", "前爪", "#8F3800"), ("fore_l", "前左爪", "#702C00"), ("fore_r", "前右爪", "#AD4400"),
+        ("hind", "后爪", "#CC5000"), ("hind_l", "后左爪", "#EB5C00"), ("hind_r", "后右爪", "#FF7D29"),
         ("trunk", "躯干侧腹", "#FF6A0A"), ("groin", "生殖区肛周", "#FFB585"),
     ]),
     ("chew_body", "啃身体", "#C0392B", True, [
-        ("fore", "前肢爪", "#75231A"), ("hind", "后肢臀尾", "#A73125"),
+        ("fore", "前爪", "#75231A"), ("fore_l", "前左爪", "#5C1B15"), ("fore_r", "前右爪", "#8E2A20"),
+        ("hind", "后爪", "#A73125"), ("hind_l", "后左爪", "#B33528"), ("hind_r", "后右爪", "#D03E2F"),
         ("trunk", "躯干侧腹", "#D24637"), ("groin", "生殖区肛周", "#E9A29B"),
     ]),
     ("scratch", "抓挠", "#27AE60", False, [
@@ -66,6 +71,12 @@ GROUPS: list[tuple[str, str, str, bool, list[tuple[str, str, str]]]] = [
 # 上一版模板里每组所有条目都是父标签那一个色。启动时把还是这个旧色的条目换成
 # 新色（管理员自己改过颜色的不动）。
 _OLD_GROUP_COLORS = {"lick_body": "#FF8C42", "chew_body": "#C0392B", "scratch": "#F1C40F", "rub_body": "#8E44AD"}
+
+# 上一版舔/啃的爪子只有「前肢爪」「后肢臀尾」两条。启动时把还叫旧名的改成「前爪」「后爪」，
+# 并补上左右四条。以"fore/hind 还叫旧名"当没升级过的记号：升级过一次名字就变了，
+# 之后管理员把左右爪删掉也不会被重启补回来。
+_OLD_PART_NAMES = {"fore": "前肢爪", "hind": "后肢臀尾"}
+_LR_PARTS = ("fore_l", "fore_r", "hind_l", "hind_r")
 
 # 第一批放在现有标签后面。现有项目的标签 sort_order 一般在 0~20 之间，
 # 从 100 起排不会插到中间去。每组占 10 个号。
@@ -134,6 +145,34 @@ async def _recolor_from_old_scheme(db, tpl_id: int) -> int:
     return n
 
 
+async def _split_paws(db, tpl_id: int) -> int:
+    """舔/啃：「前肢爪」→「前爪」+ 前左/前右，「后肢臀尾」→「后爪」+ 后左/后右。
+    只动还叫旧名的；模板条目改名不下发到项目标签（跟标签模板页改名的行为一致）。
+    返回改/加了几条。"""
+    items = {it.code: it for it in (await db.execute(
+        select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
+    )).scalars().all()}
+    want = {r.code: r for r in template_rows()}
+    n = 0
+    for group in ("lick_body", "chew_body"):
+        stale = [p for p, old in _OLD_PART_NAMES.items()
+                 if (it := items.get(f"{group}_{p}")) is not None and it.display_name == f"{want[group].display_name}-{old}"]
+        if not stale:
+            continue
+        for p in stale:
+            items[f"{group}_{p}"].display_name = want[f"{group}_{p}"].display_name
+            n += 1
+        for p in _LR_PARTS:
+            code = f"{group}_{p}"
+            if code in items:
+                continue
+            r = want[code]
+            db.add(LabelTemplateItem(template_id=tpl_id, code=r.code, display_name=r.display_name,
+                                     color=r.color, sort_order=r.sort_order))
+            n += 1
+    return n
+
+
 async def ensure_grooming_template(db) -> str:
     """保证内置模板存在、且每一组都在。返回 "created" / "updated" / "exists" / "no_admin"。
 
@@ -181,6 +220,8 @@ async def ensure_grooming_template(db) -> str:
         changed = True
     await db.flush()
     if await _recolor_from_old_scheme(db, tpl.id):
+        changed = True
+    if await _split_paws(db, tpl.id):
         changed = True
     if not changed:
         return "exists"
