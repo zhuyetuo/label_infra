@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.label import LabelDefinition
+from app.services import label_tree
 from app.models.sample import Sample
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task, TaskStatus
@@ -118,7 +119,8 @@ async def collect_link_stats(
             )
         )
     ).scalars().all()
-    scratch_label_ids = set(label_rows)
+    # 加上子标签（抓挠-头颈耳……）：标了细的也算抓挠
+    scratch_label_ids = await label_tree.expand_ids(db, set(label_rows))
 
     # 人工片段算哪些任务：
     #  - 已提交/已通过：走完了流程，肯定算

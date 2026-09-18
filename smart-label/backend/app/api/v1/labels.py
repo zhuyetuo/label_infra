@@ -9,6 +9,7 @@ from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services import label_tree
 from app.services.task_scope import visible_project_ids
 from app.schemas.label import LabelCreate, LabelOut, LabelUpdate
 
@@ -58,6 +59,10 @@ async def create_label(
     )
     if exists.scalar_one_or_none() is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "该项目下标签code已存在")
+    try:
+        await label_tree.validate_parent(db, body.project_id, None, body.parent_id)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     label = LabelDefinition(**body.model_dump(), created_by=admin.id)
     db.add(label)
     await db.commit()
@@ -87,6 +92,10 @@ async def delete_label(label_id: int, db: AsyncSession = Depends(get_db)):
             f"已有 {used} 条标注在用这个标签，不能删除；可以改成停用（停用后标注界面不再出现，历史标注不受影响）",
         )
 
+    # 有子标签的先把子标签的上级摘掉，不留悬空的 parent_id
+    children = (await db.execute(select(LabelDefinition).where(LabelDefinition.parent_id == label_id))).scalars().all()
+    for c in children:
+        c.parent_id = label.parent_id
     await db.delete(label)
     await db.commit()
     return ok(msg="标签已删除")
@@ -98,6 +107,11 @@ async def update_label(label_id: int, body: LabelUpdate, db: AsyncSession = Depe
     if label is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "标签不存在")
     updates = body.model_dump(exclude_unset=True)
+    if "parent_id" in updates:
+        try:
+            await label_tree.validate_parent(db, label.project_id, label.id, updates["parent_id"])
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     # 手动改过颜色就断开跟模板的关联：改模板颜色以后不会再影响这条，这是
     # 用户自己接管这个颜色的信号，不能等模板一改又给覆盖回去
     if "color" in updates and label.template_item_id is not None:

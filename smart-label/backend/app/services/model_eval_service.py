@@ -34,6 +34,7 @@ from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
+from app.services import label_tree
 from app.models.sample import Sample
 from app.models.task import Task
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, parse_ts
@@ -129,7 +130,8 @@ async def _human_by_sample(
 
     「待定」的片段进第二个返回值：那是人看了也拿不准的，模型标不标都不该扣分。
     """
-    label_ids = set(
+    # 加上子标签：人标了「抓挠-头颈耳」，模型标「抓挠」也算对
+    label_ids = await label_tree.expand_ids(db, set(
         (
             await db.execute(
                 select(LabelDefinition.id).where(
@@ -137,7 +139,7 @@ async def _human_by_sample(
                 )
             )
         ).scalars().all()
-    )
+    ))
     if not label_ids or not sample_ids:
         return {}, {}
     rows = await db.execute(

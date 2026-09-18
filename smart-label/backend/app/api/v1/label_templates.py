@@ -20,6 +20,7 @@ from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services import label_tree
 from app.schemas.label_template import (
     ApplyTemplateResult,
     LabelTemplateCreate,
@@ -87,6 +88,21 @@ async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTe
         if item.code in seen:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"模板里 code 重复: {item.code}")
         seen.add(item.code)
+    # 上级一般是这一批里的另一条；也可以是项目里已有的 code（内置模板的「抓挠-头颈耳」
+    # 挂到项目自己的「抓挠」下），套用时按项目里的标签找。不能是自己、不能绕成圈
+    codes = {i.code: i for i in items}
+    for item in items:
+        if not item.parent_code:
+            item.parent_code = None
+            continue
+        if item.parent_code == item.code:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{item.display_name}」的上级不能是自己")
+        cur, hops = item.parent_code, 0
+        while cur and cur in codes and hops <= len(items):
+            if cur == item.code:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{item.display_name}」的上级关系绕成了圈")
+            cur, hops = codes[cur].parent_code, hops + 1
+    for item in items:
 
         row = existing.pop(item.code, None)
         if row is None:
@@ -101,6 +117,7 @@ async def _replace_items(db: AsyncSession, template_id: int, items: list[LabelTe
         row.display_name = item.display_name
         row.color = item.color
         row.sort_order = item.sort_order
+        row.parent_code = item.parent_code
 
     # 剩下没被本次提交的 code 覆盖到的旧条目，是真的从模板里删掉了
     for row in existing.values():
@@ -163,6 +180,7 @@ async def save_project_labels_as_template(
     tpl = LabelTemplate(name=body.name, description=body.description, created_by=admin.id)
     db.add(tpl)
     await db.flush()
+    code_of = {l.id: l.code for l in labels}
     for label in labels:
         tpl_item = LabelTemplateItem(
             template_id=tpl.id,
@@ -170,6 +188,8 @@ async def save_project_labels_as_template(
             display_name=label.display_name,
             color=label.color,
             sort_order=label.sort_order,
+            # 父子关系一起存进模板（上级停用了就不带，模板里没有那条）
+            parent_code=code_of.get(label.parent_id) if label.parent_id is not None else None,
         )
         db.add(tpl_item)
         await db.flush()
@@ -236,33 +256,68 @@ async def apply_template(template_id: int, project_id: int, db: AsyncSession = D
     if not items:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个模板里还没有标签")
 
-    existing_codes = set(
-        (
-            await db.execute(
-                select(LabelDefinition.code).where(LabelDefinition.project_id == project_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    existing = {
+        l.code: l
+        for l in (
+            await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == project_id))
+        ).scalars().all()
+    }
 
+    # 先建标签（父在前，子要用父的 id），再挂上级：上级可能是这次新建的，也可能是
+    # 项目里本来就有的（「抓挠-头颈耳」挂到项目已有的「抓挠」下）
     created = 0
     skipped: list[str] = []
-    for item in items:
-        if item.code in existing_codes:
+    id_of: dict[str, int] = {code: l.id for code, l in existing.items()}
+    ordered = _parents_first(items)
+    for item in ordered:
+        if item.code in existing:
             skipped.append(item.code)
             continue
-        db.add(
-            LabelDefinition(
-                project_id=project_id,
-                code=item.code,
-                display_name=item.display_name,
-                color=item.color,
-                sort_order=item.sort_order,
-                template_item_id=item.id,
-                created_by=admin.id,
-            )
+        label = LabelDefinition(
+            project_id=project_id,
+            code=item.code,
+            display_name=item.display_name,
+            color=item.color,
+            sort_order=item.sort_order,
+            template_item_id=item.id,
+            created_by=admin.id,
         )
+        db.add(label)
+        await db.flush()
+        id_of[item.code] = label.id
+        existing[item.code] = label
         created += 1
+    linked = 0
+    for item in ordered:
+        if not item.parent_code:
+            continue
+        label = existing.get(item.code)
+        pid = id_of.get(item.parent_code)
+        if label is None or pid is None or pid == label.id:
+            continue
+        if label.parent_id is None:
+            label.parent_id = pid
+            if item.code in skipped:
+                linked += 1     # 老项目里本来就有的标签，这次把上级补上了
     await db.commit()
-    return ok(ApplyTemplateResult(created=created, skipped=len(skipped), skipped_codes=skipped).model_dump())
+    return ok(ApplyTemplateResult(created=created, skipped=len(skipped), skipped_codes=skipped, linked=linked).model_dump())
+
+
+def _parents_first(items: list[LabelTemplateItem]) -> list[LabelTemplateItem]:
+    """按层级排：上级在前。坏数据（上级不在、绕圈）就按原顺序放最后。"""
+    by_code = {i.code: i for i in items}
+    out: list[LabelTemplateItem] = []
+    done: set[str] = set()
+
+    def visit(i: LabelTemplateItem, stack: set[str]) -> None:
+        if i.code in done or i.code in stack:
+            return
+        stack.add(i.code)
+        if i.parent_code and i.parent_code in by_code:
+            visit(by_code[i.parent_code], stack)
+        done.add(i.code)
+        out.append(i)
+
+    for i in items:
+        visit(i, set())
+    return out

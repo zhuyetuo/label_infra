@@ -25,48 +25,73 @@ TEMPLATE_NAME = "抓/舔/啃/蹭"
 # 以前叫这个；启动时发现旧名字的就改名，不会再多建一个
 OLD_TEMPLATE_NAMES = ("舔/啃（IMU 候选）",)
 TEMPLATE_DESC = (
-    "抓挠 / 舔 / 啃 / 蹭 四组按部位细分的标签。「舔身体」是疑似舔/啃候选默认落的类别；"
+    "抓 / 舔 / 啃 / 蹭 四个大类，按部位分层（舔 → 前爪 → 前左爪）。看得清标最细的，"
+    "看不清停在上级；标了细的自动算进上级。「舔」是疑似舔/啃候选默认落的类别；"
     "「抓挠」本身项目里已有所以不带，只带部位。同一组一个色系，组内深浅不同。"
-    "不需要分部位可以把子项删掉。"
 )
 
-# 每组：(父 code, 父名, 父颜色, 父标签要不要进模板, [(部位 code, 部位名, 颜色), ...])
+# 每组：(父 code, 父名, 父颜色, 父标签要不要进模板, [部位...])
+# 部位：(部位 code, 部位名, 颜色) 或 (部位 code, 部位名, 颜色, [下一层部位...])
+#
+# 层级：舔 → 前爪 → 前左爪 / 前右爪。看得清标最细的，看不清停在上一级；标了细的
+# 自动算进上级（统计、导出都按树算，见 label_tree.py）。
 #
 # 「抓挠」父标签**不进模板**：每个项目早就有「抓挠」了（AI 预标注/统计都靠它），
 # 模板再带一个同名的进去，套用时按 code 查重发现不一样就会多出第二个「抓挠」，
-# 统计就乱了。模板里只带「抓挠-部位」子项；命令行脚本会把它们挂到项目里
-# 已有的「抓挠」下面。
+# 统计就乱了。模板里只带「抓挠-部位」子项，套用时挂到项目里已有的「抓挠」下面。
 #
-# 颜色：一组一个色系（舔=橙 啃=红 抓=绿 蹭=紫），父标签是本色，四个部位是同一
-# 色相从深到浅四档（亮度 28% / 40% / 52% / 76%），一眼能看出是哪组、组内也分得开。
+# 颜色：一组一个色系（舔=橙 啃=红 抓=绿 蹭=紫），父标签是本色，部位是同一色相
+# 深浅不同，一眼能看出是哪组、组内也分得开。
 #
 # 部位分组按"头戴 IMU 能不能分得开"来定，不按解剖学：
 #   舔/啃  用嘴够——舔前爪 / 舔后爪 / 舔侧腹的头部姿态差异最大，生殖区肛周最特殊；
 #          爪子再分左右（头往哪边偏）
 #   抓挠   用后腿够——挠头颈耳时头会歪着抖，挠躯干/胸腹时身子侧躺，挠后肢时扭身
 #   蹭     用身体蹭东西——蹭脸（口鼻眼）、仰躺翻滚蹭背、侧身蹭墙/地、坐着拖屁股
-GROUPS: list[tuple[str, str, str, bool, list[tuple[str, str, str]]]] = [
-    # 舔/啃 的爪子分到左右：「前爪」「后爪」是看不清哪只时用的笼统项，
-    # 看得清就标「前左爪」「前右爪」「后左爪」「后右爪」
-    ("lick_body", "舔身体", "#FF8C42", True, [
-        ("fore", "前爪", "#8F3800"), ("fore_l", "前左爪", "#702C00"), ("fore_r", "前右爪", "#AD4400"),
-        ("hind", "后爪", "#CC5000"), ("hind_l", "后左爪", "#EB5C00"), ("hind_r", "后右爪", "#FF7D29"),
+Part = tuple  # (code, name, color) | (code, name, color, [Part, ...])
+GROUPS: list[tuple[str, str, str, bool, list]] = [
+    ("lick_body", "舔", "#FF8C42", True, [
+        ("fore", "前爪", "#8F3800", [("fore_l", "前左爪", "#702C00"), ("fore_r", "前右爪", "#AD4400")]),
+        ("hind", "后爪", "#CC5000", [("hind_l", "后左爪", "#EB5C00"), ("hind_r", "后右爪", "#FF7D29")]),
         ("trunk", "躯干侧腹", "#FF6A0A"), ("groin", "生殖区肛周", "#FFB585"),
     ]),
-    ("chew_body", "啃身体", "#C0392B", True, [
-        ("fore", "前爪", "#75231A"), ("fore_l", "前左爪", "#5C1B15"), ("fore_r", "前右爪", "#8E2A20"),
-        ("hind", "后爪", "#A73125"), ("hind_l", "后左爪", "#B33528"), ("hind_r", "后右爪", "#D03E2F"),
+    ("chew_body", "啃", "#C0392B", True, [
+        ("fore", "前爪", "#75231A", [("fore_l", "前左爪", "#5C1B15"), ("fore_r", "前右爪", "#8E2A20")]),
+        ("hind", "后爪", "#A73125", [("hind_l", "后左爪", "#B33528"), ("hind_r", "后右爪", "#D03E2F")]),
         ("trunk", "躯干侧腹", "#D24637"), ("groin", "生殖区肛周", "#E9A29B"),
     ]),
     ("scratch", "抓挠", "#27AE60", False, [
         ("head", "头颈耳", "#1A7540"), ("trunk", "躯干侧腹", "#25A75C"),
         ("belly", "胸腹", "#37D279"), ("hind", "后肢臀尾", "#9BE9BC"),
     ]),
-    ("rub_body", "蹭身体", "#8E44AD", True, [
+    ("rub_body", "蹭", "#8E44AD", True, [
         ("face", "头脸口鼻", "#542867"), ("back", "背部翻滚", "#783A92"),
         ("trunk", "躯干侧腹", "#9A4FBA"), ("rump", "臀尾肛周", "#CDA7DC"),
     ]),
 ]
+# 父标签的旧显示名（上一版叫「舔身体」这种）。IMU 候选送上来的 label_name 还是旧名，
+# 平台找标签时新旧都认（见 candidates.py 的 alias）；模板里还叫旧名的启动时改成新名。
+OLD_PARENT_NAMES = {"lick_body": "舔身体", "chew_body": "啃身体", "rub_body": "蹭身体"}
+NAME_ALIASES = {old: new for old, new in ((v, next(g[1] for g in GROUPS if g[0] == k)) for k, v in OLD_PARENT_NAMES.items())}
+NAME_ALIASES.update({v: k for k, v in list(NAME_ALIASES.items())})   # 两个方向都认
+
+
+def alias_names(name: str) -> list[str]:
+    """一个标签名可能对应的全部名字（自己 + 新旧别名）。找标签时用 in_。"""
+    return [name] + ([NAME_ALIASES[name]] if name in NAME_ALIASES else [])
+
+
+def walk_parts(parts: list, group_code: str, group_name: str, parent_code: str | None = None):
+    """把嵌套的部位摊平成 (code, 显示名, 颜色, 上级 code)，父在前子在后。
+    code 一律是「组 code_部位 code」（lick_body_fore_l），显示名一律是「组名-部位名」（舔-前左爪）：
+    不把中间那层拼进去，名字短，工作台上摆得下。"""
+    for p in parts:
+        pcode, pname, pcolor = p[0], p[1], p[2]
+        code = f"{group_code}_{pcode}"
+        yield code, f"{group_name}-{pname}", pcolor, parent_code or group_code
+        if len(p) > 3:
+            yield from walk_parts(p[3], group_code, group_name, code)
+
 
 # 上一版模板里每组所有条目都是父标签那一个色。启动时把还是这个旧色的条目换成
 # 新色（管理员自己改过颜色的不动）。
@@ -79,8 +104,9 @@ _OLD_PART_NAMES = {"fore": "前肢爪", "hind": "后肢臀尾"}
 _LR_PARTS = ("fore_l", "fore_r", "hind_l", "hind_r")
 
 # 第一批放在现有标签后面。现有项目的标签 sort_order 一般在 0~20 之间，
-# 从 100 起排不会插到中间去。每组占 10 个号。
+# 从 100 起排不会插到中间去。每组占 20 个号（舔/啃各 12 条）。
 SORT_BASE = 100
+SORT_STRIDE = 20
 
 
 @dataclass
@@ -97,12 +123,11 @@ def wanted_rows(with_parts: bool = True) -> list[Row]:
     """项目里要保证存在的全部标签，父在前子在后（子要用父的 id）。"""
     rows: list[Row] = []
     for i, (code, name, color, in_tpl, _parts) in enumerate(GROUPS):
-        rows.append(Row(code, name, color, SORT_BASE + i * 10, in_template=in_tpl))
+        rows.append(Row(code, name, color, SORT_BASE + i * SORT_STRIDE, in_template=in_tpl))
     if with_parts:
         for i, (code, name, _color, _in_tpl, parts) in enumerate(GROUPS):
-            for j, (pcode, pname, pcolor) in enumerate(parts):
-                rows.append(Row(f"{code}_{pcode}", f"{name}-{pname}", pcolor,
-                                SORT_BASE + i * 10 + 1 + j, parent_code=code))
+            for j, (pcode, pname, pcolor, parent) in enumerate(walk_parts(parts, code, name)):
+                rows.append(Row(pcode, pname, pcolor, SORT_BASE + i * SORT_STRIDE + 1 + j, parent_code=parent))
     return rows
 
 
@@ -145,6 +170,41 @@ async def _recolor_from_old_scheme(db, tpl_id: int) -> int:
     return n
 
 
+async def _rename_parents(db, tpl_id: int) -> int:
+    """上一版父标签叫「舔身体 / 啃身体 / 蹭身体」，现在大类就叫「舔 / 啃 / 蹭」。
+    只改还叫旧名的模板条目（连带「舔身体-xxx」的前缀）；项目标签不动（新旧名都认）。"""
+    items = (await db.execute(
+        select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
+    )).scalars().all()
+    new_of = {g[0]: g[1] for g in GROUPS}
+    n = 0
+    for it in items:
+        for gcode, old in OLD_PARENT_NAMES.items():
+            if it.code == gcode and it.display_name == old:
+                it.display_name = new_of[gcode]
+                n += 1
+            elif it.code.startswith(gcode + "_") and it.display_name.startswith(old + "-"):
+                it.display_name = new_of[gcode] + it.display_name[len(old):]
+                n += 1
+    return n
+
+
+async def _fill_parent_codes(db, tpl_id: int) -> int:
+    """老模板条目没有 parent_code：按内置定义补上（只补空的，管理员改过的不动）。"""
+    items = (await db.execute(
+        select(LabelTemplateItem).where(LabelTemplateItem.template_id == tpl_id)
+    )).scalars().all()
+    want = {r.code: r for r in template_rows()}
+    codes = {it.code for it in items}
+    n = 0
+    for it in items:
+        r = want.get(it.code)
+        if it.parent_code is None and r is not None and r.parent_code and r.parent_code in codes:
+            it.parent_code = r.parent_code
+            n += 1
+    return n
+
+
 async def _split_paws(db, tpl_id: int) -> int:
     """舔/啃：「前肢爪」→「前爪」+ 前左/前右，「后肢臀尾」→「后爪」+ 后左/后右。
     只动还叫旧名的；模板条目改名不下发到项目标签（跟标签模板页改名的行为一致）。
@@ -168,7 +228,7 @@ async def _split_paws(db, tpl_id: int) -> int:
                 continue
             r = want[code]
             db.add(LabelTemplateItem(template_id=tpl_id, code=r.code, display_name=r.display_name,
-                                     color=r.color, sort_order=r.sort_order))
+                                     color=r.color, sort_order=r.sort_order, parent_code=r.parent_code))
             n += 1
     return n
 
@@ -203,7 +263,7 @@ async def ensure_grooming_template(db) -> str:
         await db.flush()
         for r in template_rows():
             db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=r.display_name,
-                                     color=r.color, sort_order=r.sort_order))
+                                     color=r.color, sort_order=r.sort_order, parent_code=r.parent_code))
         await db.commit()
         return "created"
 
@@ -211,18 +271,19 @@ async def ensure_grooming_template(db) -> str:
         select(LabelTemplateItem.code).where(LabelTemplateItem.template_id == tpl.id)
     )).scalars().all())
     for code, _name, _color, _in_tpl, _parts in GROUPS:
-        group = [r for r in template_rows() if r.code == code or r.parent_code == code]
+        group = [r for r in template_rows() if r.code == code or r.code.startswith(code + "_")]
         if any(r.code in have for r in group):
             continue
         for r in group:
             db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=r.display_name,
-                                     color=r.color, sort_order=r.sort_order))
+                                     color=r.color, sort_order=r.sort_order, parent_code=r.parent_code))
         changed = True
     await db.flush()
-    if await _recolor_from_old_scheme(db, tpl.id):
-        changed = True
-    if await _split_paws(db, tpl.id):
-        changed = True
+    # 几步升级按先后：先改父名（后面的步骤按新名认），再拆爪子，最后补上级
+    for step in (_recolor_from_old_scheme, _rename_parents, _split_paws, _fill_parent_codes):
+        if await step(db, tpl.id):
+            changed = True
+            await db.flush()
     if not changed:
         return "exists"
     await db.commit()

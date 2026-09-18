@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
+import { descendantIds, flatten } from "@/utils/labelTree";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -177,6 +178,8 @@ export default function SegmentPanel({
       )
     ) : null;
   const [filterLabels, setFilterLabels] = useState<number[]>(initialFilterLabels ?? []);
+  // 层级：筛「舔」把「舔-前爪」「舔-前左爪」一起带上（标了细的也算上级）
+  const filterLabelSet = useMemo(() => descendantIds(labels, filterLabels), [labels, filterLabels]);
   // 换任务（比如从跟踪表连着看好几条）时把默认筛选重新套上
   useEffect(() => {
     if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
@@ -229,7 +232,7 @@ export default function SegmentPanel({
       sorted.filter((i) => {
         // 刚改过的一律留着，好让人核对自己改成了什么
         if (justEdited.has(i.id)) return true;
-        if (filterLabels.length && !filterLabels.includes(i.label_id)) return false;
+        if (filterLabels.length && !filterLabelSet.has(i.label_id)) return false;
         const st = aiState(i);
         if (filterSource === "ai" && !st) return false;
         if (filterSource === "human" && st) return false;
@@ -246,7 +249,7 @@ export default function SegmentPanel({
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
       }),
-    [sorted, filterLabels, filterSource, minConf, maxConf, justEdited]
+    [sorted, filterLabelSet, filterSource, minConf, maxConf, justEdited]
   );
 
   // 按类别统计：数量、总时长、置信度范围、待确认/已确认/已纠正/人工各多少
@@ -284,8 +287,22 @@ export default function SegmentPanel({
       else if (st === "modified") s.modified += 1;
       else s.human += 1;
     }
-    return [...by.values()].sort((a, b) => b.count - a.count);
-  }, [items]);
+    // 层级：每个类别再算一份"含子类"的数（标了「舔-前左爪」也算「舔」）
+    const rows = [...by.values()].map((r) => {
+      const ids = descendantIds(labels, [r.label_id]);
+      let rollCount = 0;
+      let rollMs = 0;
+      for (const id of ids) {
+        const x = by.get(id);
+        if (x) {
+          rollCount += x.count;
+          rollMs += x.totalMs;
+        }
+      }
+      return { ...r, rollCount, rollMs, hasKids: ids.size > 1 && rollCount > r.count };
+    });
+    return rows.sort((a, b) => b.rollCount - a.rollCount || b.count - a.count);
+  }, [items, labels]);
 
   const cov = useMemo(() => coverage(items, durationMs), [items, durationMs]);
   const pendingTotal = items.filter((i) => aiState(i) === "pending").length;
@@ -313,9 +330,15 @@ export default function SegmentPanel({
   };
 
   // 改类别/补标用：项目下全部标签
-  const labelOptions = labels.map((l) => ({
+  // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨在一起，好找
+  const labelOptions = flatten(labels).map(({ label: l, depth }) => ({
     value: l.id,
-    label: <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 0 }}>{l.display_name}</Tag>,
+    label: (
+      <span style={{ paddingLeft: depth * 12 }}>
+        {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
+        <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 0 }}>{l.display_name}</Tag>
+      </span>
+    ),
   }));
   // 筛选用：只列当前片段里实际出现过的类别（带数量），项目里配了但一段都没有的不出现
   const usedCounts = useMemo(() => {
@@ -466,8 +489,32 @@ export default function SegmentPanel({
             })}
             columns={[
               { title: "类别", render: (_, s) => <Tag color={colorOf(s.label_id)}>{nameOf(s.label_id)}</Tag> },
-              { title: "片段数", dataIndex: "count", width: 70, sorter: (a, b) => a.count - b.count },
-              { title: "总时长", width: 90, sorter: (a, b) => a.totalMs - b.totalMs, render: (_, s) => fmtDur(s.totalMs) },
+              {
+                title: "片段数",
+                width: 110,
+                sorter: (a, b) => a.count - b.count,
+                render: (_, s) => (
+                  <span>
+                    {s.count}
+                    {s.hasKids && (
+                      <Tooltip title="含子类：标成它下面细分类别的也算进来">
+                        <span style={{ color: "#999", fontSize: 12 }}>（含子类 {s.rollCount}）</span>
+                      </Tooltip>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                title: "总时长",
+                width: 150,
+                sorter: (a, b) => a.totalMs - b.totalMs,
+                render: (_, s) => (
+                  <span>
+                    {fmtDur(s.totalMs)}
+                    {s.hasKids && <span style={{ color: "#999", fontSize: 12 }}>（含子类 {fmtDur(s.rollMs)}）</span>}
+                  </span>
+                ),
+              },
               {
                 title: "单段时长 最短 / 平均 / 最长",
                 width: 200,

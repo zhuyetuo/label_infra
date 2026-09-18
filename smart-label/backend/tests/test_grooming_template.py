@@ -37,12 +37,14 @@ def test_created_once_with_all_items(db, run):
     assert tpl is not None and tpl.created_by == admin.id and tpl.description
     items = _items(db, run, tpl.id)
     names = [i.display_name for i in items]
-    assert names[0] == "舔身体" and names[9] == "啃身体"   # 父在前，部位跟在后面
-    assert {(i.code, i.display_name, i.color, i.sort_order) for i in items} == \
-        {(r.code, r.display_name, r.color, r.sort_order) for r in template_rows()}
+    assert names[0] == "舔" and names[9] == "啃"   # 父在前，部位跟在后面
+    assert {(i.code, i.display_name, i.color, i.sort_order, i.parent_code) for i in items} == \
+        {(r.code, r.display_name, r.color, r.sort_order, r.parent_code) for r in template_rows()}
+    assert next(i for i in items if i.code == "lick_body_fore_l").parent_code == "lick_body_fore"
+    assert next(i for i in items if i.code == "scratch_head").parent_code == "scratch"   # 挂到项目已有的「抓挠」
     assert len(items) == 27
     # 「抓挠」本身不进模板（项目里已有，带进去会变成两个），只带部位
-    assert "抓挠" not in names and "抓挠-头颈耳" in names and "蹭身体" in names
+    assert "抓挠" not in names and "抓挠-头颈耳" in names and "蹭" in names
     assert "scratch" not in {i.code for i in items}
 
     assert run(ensure_grooming_template(db)) == "exists"
@@ -112,7 +114,7 @@ def test_applying_template_makes_candidate_lookup_work(db, run):
     run(db.commit())
     hit = run(db.execute(select(LabelDefinition.id).where(
         LabelDefinition.project_id == p.id,
-        (LabelDefinition.display_name == "舔身体") | (LabelDefinition.code == "舔身体"),
+        (LabelDefinition.display_name == "舔") | (LabelDefinition.code == "舔"),
     ).limit(1))).scalar_one_or_none()
     assert hit is not None
 
@@ -170,8 +172,9 @@ def test_colors_same_hue_within_group_distinct_everywhere():
     rows = template_rows() + [r for r in GROUPS_PARENTS()]
     colors = [r.color for r in rows]
     assert len(set(c.upper() for c in colors)) == len(colors)   # 全部不重样
+    from app.services.grooming_labels import walk_parts
     for code, _n, pcolor, _t, parts in GROUPS:
-        hues = [_hue(pcolor)] + [_hue(c) for _c, _n2, c in parts]
+        hues = [_hue(pcolor)] + [_hue(c) for _c, _n2, c, _p in walk_parts(parts, code, "x")]
         assert max(hues) - min(hues) < 0.02, code                 # 组内同色相
     parents = [g[2] for g in GROUPS]
     assert len({round(_hue(c), 1) for c in parents}) == 4       # 组间色相分开
@@ -187,7 +190,7 @@ def test_old_name_is_renamed_not_duplicated(db, run):
     old = LabelTemplate(name=OLD_TEMPLATE_NAMES[0], description="老的", created_by=admin.id)
     db.add(old)
     run(db.flush())
-    db.add(LabelTemplateItem(template_id=old.id, code="lick_body", display_name="舔身体", color="#FF8C42", sort_order=100))
+    db.add(LabelTemplateItem(template_id=old.id, code="lick_body", display_name="舔", color="#FF8C42", sort_order=100))
     run(db.commit())
 
     assert run(ensure_grooming_template(db)) == "updated"
@@ -206,7 +209,7 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
     db.add(tpl)
     run(db.flush())
     for r in template_rows():
-        grp = r.parent_code or r.code
+        grp = next(g for g in _OLD_GROUP_COLORS if r.code == g or r.code.startswith(g + "_"))
         db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=r.display_name,
                                  color=_OLD_GROUP_COLORS[grp], sort_order=r.sort_order))
     run(db.flush())
@@ -215,9 +218,9 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
     p = Project(name="p", created_by=admin.id)
     db.add(p)
     run(db.flush())
-    follow = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔身体-前爪",
+    follow = LabelDefinition(project_id=p.id, code="lick_body_fore", display_name="舔-前爪",
                              color="#FF8C42", template_item_id=items["lick_body_fore"].id, created_by=admin.id)
-    detached = LabelDefinition(project_id=p.id, code="lick_body_hind", display_name="舔身体-后爪",
+    detached = LabelDefinition(project_id=p.id, code="lick_body_hind", display_name="舔-后爪",
                                color="#FF8C42", template_item_id=None, created_by=admin.id)
     db.add(follow)
     db.add(detached)
@@ -239,23 +242,29 @@ def test_recolor_only_untouched_old_colors_and_follows_to_projects(db, run):
 
 
 def test_old_paw_parts_are_renamed_and_split_once(db, run):
-    """上一版舔/啃只有「前肢爪」「后肢臀尾」：重启后改名成「前爪」「后爪」并补左右四条；
+    """上一版：父叫「舔身体」，舔/啃只有「前肢爪」「后肢臀尾」，条目没有 parent_code。
+    重启后：父改名「舔」、子前缀跟着改；「前肢爪」→「前爪」并补左右四条；parent_code 补齐。
     升级过之后管理员删掉左右爪也不会再补回来；项目标签的名字不动（跟模板页改名一致）。"""
     admin = _admin(db, run)
     tpl = LabelTemplate(name=TEMPLATE_NAME, created_by=admin.id)
     db.add(tpl)
     run(db.flush())
-    old = {"fore": "前肢爪", "hind": "后肢臀尾"}
+    old_parent = {"lick_body": "舔身体", "chew_body": "啃身体", "rub_body": "蹭身体"}
+    old_part = {"fore": "前肢爪", "hind": "后肢臀尾"}
     for r in template_rows():
         if r.code.endswith(("_fore_l", "_fore_r", "_hind_l", "_hind_r")):
             continue
+        grp = r.code if r.code in old_parent else next((g for g in old_parent if r.code.startswith(g + "_")), None)
         name = r.display_name
-        for p, oname in old.items():
-            if r.code in (f"lick_body_{p}", f"chew_body_{p}"):
-                name = f"{r.display_name.split('-')[0]}-{oname}"
+        if grp:
+            name = name.replace(r.display_name.split("-")[0], old_parent[grp], 1)
+            for p, oname in old_part.items():
+                if r.code in (f"lick_body_{p}", f"chew_body_{p}"):
+                    name = f"{old_parent[grp]}-{oname}"
         db.add(LabelTemplateItem(template_id=tpl.id, code=r.code, display_name=name, color=r.color, sort_order=r.sort_order))
     run(db.flush())
     items = {i.code: i for i in _items(db, run, tpl.id)}
+    assert items["lick_body"].display_name == "舔身体" and items["lick_body_fore"].display_name == "舔身体-前肢爪"
     items["chew_body_hind"].display_name = "啃身体-后腿"     # 管理员自己改过名的不动
     p = Project(name="p", created_by=admin.id)
     db.add(p)
@@ -267,11 +276,15 @@ def test_old_paw_parts_are_renamed_and_split_once(db, run):
     assert len(items) == 19
 
     assert run(ensure_grooming_template(db)) == "updated"
-    got = {i.code: i.display_name for i in _items(db, run, tpl.id)}
-    assert got["lick_body_fore"] == "舔身体-前爪" and got["lick_body_hind"] == "舔身体-后爪"
-    assert got["chew_body_fore"] == "啃身体-前爪" and got["chew_body_hind"] == "啃身体-后腿"
-    assert got["lick_body_fore_l"] == "舔身体-前左爪" and got["chew_body_hind_r"] == "啃身体-后右爪"
+    got = {i.code: i for i in _items(db, run, tpl.id)}
+    names = {c: i.display_name for c, i in got.items()}
+    assert names["lick_body"] == "舔" and names["rub_body_face"] == "蹭-头脸口鼻"
+    assert names["lick_body_fore"] == "舔-前爪" and names["lick_body_hind"] == "舔-后爪"
+    assert names["chew_body_fore"] == "啃-前爪" and names["chew_body_hind"] == "啃-后腿"   # 自己改过的部位名保留，父前缀跟着改
+    assert names["lick_body_fore_l"] == "舔-前左爪" and names["chew_body_hind_r"] == "啃-后右爪"
     assert len(got) == 27
+    assert got["lick_body_fore_l"].parent_code == "lick_body_fore" and got["lick_body_fore"].parent_code == "lick_body"
+    assert got["lick_body"].parent_code is None
     run(db.refresh(lab))
     assert lab.display_name == "舔身体-前肢爪"
     assert run(ensure_grooming_template(db)) == "exists"

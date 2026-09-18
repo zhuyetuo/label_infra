@@ -25,6 +25,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import vision_index_service as vindex
 from app.services import vision_sam_client
+from app.services.grooming_labels import alias_names
 from app.services.task_scope import apply_task_scope
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
@@ -132,7 +133,7 @@ async def repair_items(task_id: int, db: AsyncSession = Depends(get_db), user: U
                 await db.execute(
                     select(LabelDefinition.id).where(
                         LabelDefinition.project_id == task.project_id,
-                        (LabelDefinition.display_name == c.label_name) | (LabelDefinition.code == c.label_name),
+                        (LabelDefinition.display_name.in_(alias_names(c.label_name))) | (LabelDefinition.code == c.label_name),
                     ).limit(1)
                 )
             ).scalar_one_or_none()
@@ -181,7 +182,7 @@ async def decide(
                 await db.execute(
                     select(LabelDefinition.id).where(
                         LabelDefinition.project_id == task.project_id,
-                        (LabelDefinition.display_name == cand.label_name) | (LabelDefinition.code == cand.label_name),
+                        (LabelDefinition.display_name.in_(alias_names(cand.label_name))) | (LabelDefinition.code == cand.label_name),
                     ).limit(1)
                 )
             ).scalar_one_or_none()

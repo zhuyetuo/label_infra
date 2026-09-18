@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   applyLabelTemplate,
@@ -59,6 +59,7 @@ export default function LabelTemplates() {
         display_name: i.display_name,
         color: i.color ?? PRESET_COLORS[idx % PRESET_COLORS.length],
         sort_order: i.sort_order,
+        parent_code: i.parent_code ?? null,
       }))
     );
     setOpen(true);
@@ -73,6 +74,7 @@ export default function LabelTemplates() {
         display_name: "",
         color: PRESET_COLORS[prev.length % PRESET_COLORS.length],
         sort_order: prev.length + 1,
+        parent_code: null,
       },
       ...prev,
     ]);
@@ -90,11 +92,12 @@ export default function LabelTemplates() {
       message.warning("每条标签的 code 和显示名都要填");
       return;
     }
-    const payload = items.map(({ code, display_name, color, sort_order }) => ({
+    const payload = items.map(({ code, display_name, color, sort_order, parent_code }) => ({
       code: code.trim(),
       display_name: display_name.trim(),
       color,
       sort_order,
+      parent_code: parent_code?.trim() || null,
     }));
     setSaving(true);
     try {
@@ -260,6 +263,30 @@ export default function LabelTemplates() {
                   <ColorSwatchPicker
                     value={r.color ?? undefined}
                     onChange={(c) => patchRow(r.key, { color: c })}
+                  />
+                ),
+              },
+              {
+                title: (
+                  <Tooltip title="层级标签的上级（按 code）。一般选模板里另一条；也可以填项目里已有的 code（比如「抓挠-头颈耳」挂到项目自己的「抓挠」下），套用时按项目里的标签找">
+                    上级 code
+                  </Tooltip>
+                ),
+                width: 170,
+                render: (_, r: EditItem) => (
+                  <Select
+                    size="small"
+                    style={{ width: "100%" }}
+                    allowClear
+                    showSearch
+                    mode="tags"
+                    maxCount={1}
+                    placeholder="无"
+                    value={r.parent_code ? [r.parent_code] : []}
+                    onChange={(v: string[]) => patchRow(r.key, { parent_code: v.length ? v[v.length - 1].trim() : null })}
+                    options={items
+                      .filter((i) => i.key !== r.key && i.code.trim())
+                      .map((i) => ({ value: i.code.trim(), label: `${i.display_name || i.code}（${i.code}）` }))}
                   />
                 ),
               },

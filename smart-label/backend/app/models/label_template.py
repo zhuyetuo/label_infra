@@ -24,7 +24,7 @@ class LabelTemplate(Base):
 
 
 class LabelTemplateItem(Base):
-    """模板里的一条标签，字段跟 label_definitions 对齐，套用时原样拷过去。"""
+    """模板里的一条标签，字段跟 label_definitions 对齐，套用时原样拷过去；parent_code 套用时换算成 parent_id。"""
 
     __tablename__ = "label_template_items"
     __table_args__ = (UniqueConstraint("template_id", "code", name="uq_tpl_item_code"),)
@@ -37,3 +37,5 @@ class LabelTemplateItem(Base):
     display_name: Mapped[str] = mapped_column(String(50), nullable=False)
     color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    # 上级条目的 code（同一模板内）。套用时按它把项目标签的 parent_id 挂上
+    parent_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
