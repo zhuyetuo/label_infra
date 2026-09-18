@@ -13,7 +13,7 @@ interface EditModel extends LlmModel {
   key: number;
 }
 
-// 「大模型 API」：五家各一行。key 在这里填，视觉服务那边不存 key，每次找片段时平台带过去。
+// 「大模型 API」：六家各一行。key 在这里填，视觉服务那边不存 key，每次找片段时平台带过去。
 // key 只写不读：填过之后这里只显示末四位，没有任何地方能把整串拿回来。
 export default function LlmProviders() {
   const qc = useQueryClient();
@@ -82,6 +82,9 @@ export default function LlmProviders() {
         填过之后只显示末四位，没有地方能再看到整串。「测试」是用存着的 key 发一句最短的话（不带图，几乎不花钱），
         看 key 和模型名对不对。价格是 $/百万 token，只用来估花费，账以各家后台为准。
         本地服务（vLLM / SGLang / Ollama 开 OpenAI 兼容口）不需要 key，只填地址。
+        <br />
+        <b>模型必须是能看图的（多模态 / 视觉版）</b>：找片段是把几帧画面发过去问，纯文本模型收不了图会直接报错。
+        各家默认列的都是视觉模型（Claude / GPT-5 / Gemini 本身多模态；豆包选带 vision 的；智谱选 glm-4.5v / glm-4v；本地选 Qwen-VL 这类）。
       </Typography.Paragraph>
       <Table
         rowKey="provider"
@@ -207,7 +210,7 @@ export default function LlmProviders() {
                 dataSource={models}
                 columns={[
                   {
-                    title: "模型名（各家后台的原名）",
+                    title: "模型名（各家后台的原名，必须能看图：多模态 / 视觉版）",
                     render: (_, m: EditModel) => <Input size="small" value={m.name} onChange={(e) => patchRow(m.key, { name: e.target.value })} />,
                   },
                   {

@@ -1,6 +1,6 @@
 """「大模型 API」配置页。
 
-要守住的：key 只写不读（任何输出里都没有整串）；五家一定都在；改列表时默认模型
+要守住的：key 只写不读（任何输出里都没有整串）；六家一定都在；改列表时默认模型
 跟着合法；resolve 给视觉服务的东西完整、配错了报人话；本地服务不要 key。
 """
 
@@ -22,15 +22,15 @@ def admin(db, run):
     return u
 
 
-def test_列表_五家都在_没_key_也不炸(db, run, admin):
+def test_列表_六家都在_没_key_也不炸(db, run, admin):
     rows = run(api.list_providers(db=db))["data"]
-    assert [r["provider"] for r in rows] == ["anthropic", "openai", "doubao", "gemini", "local"]
+    assert [r["provider"] for r in rows] == ["anthropic", "openai", "doubao", "gemini", "zhipu", "local"]
     a = rows[0]
     assert a["has_key"] is False and a["key_hint"] is None and a["enabled"] is True
     assert a["default_model"] == "claude-opus-5" and any(m["name"] == "claude-sonnet-5" for m in a["models"])
     assert rows[-1]["key_optional"] is True and rows[0]["key_optional"] is False
     # 再取一次不会重复建
-    assert len(run(api.list_providers(db=db))["data"]) == 5
+    assert len(run(api.list_providers(db=db))["data"]) == 6
 
 
 def test_存_key_只露末四位_整串永远不出来(db, run, admin):
@@ -133,3 +133,10 @@ def test_本地服务老默认端口8000自动换成8386_改过的不动(db, run
     run(db.commit())
     run(svc.ensure_rows(db))
     assert run(svc.get_row(db, "local")).base_url == "http://gpu:9000/v1"
+
+
+def test_智谱走OpenAI兼容口(db, run, admin):
+    run(api.list_providers(db=db))
+    run(api.update_provider("zhipu", api.ProviderUpdate(api_key="zk"), db=db, admin=admin))
+    got = run(svc.resolve(db, "zhipu", None))
+    assert got["base_url"] == "https://open.bigmodel.cn/api/paas/v4" and got["model"] == "glm-4.5v" and got["api_key"] == "zk"
