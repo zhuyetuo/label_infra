@@ -15,7 +15,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
-import { LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -33,6 +33,15 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
+import {
+  PANEL_TITLES,
+  loadHidden,
+  loadOrder,
+  moveAmongShown,
+  saveHidden,
+  saveOrder,
+  type PanelKey,
+} from "@/utils/panelLayout";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 
@@ -169,6 +178,9 @@ export default function AnnotationWorkspace({
   // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
   const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
   const [panelKeys, setPanelKeys] = useState<string[]>(() => getSavedKeys(PANELS_KEY, ["segs"]));
+  // 四个面板的先后顺序和哪些被藏起来了：也是用户习惯，记住
+  const [panelOrder, setPanelOrder] = useState<PanelKey[]>(loadOrder);
+  const [panelHidden, setPanelHidden] = useState<PanelKey[]>(loadHidden);
 
   const [items, setItems] = useState<LabelItem[]>([]);
   // 疑似抓挠候选：不在草稿里，单独一张表，人工逐条确认/排除
@@ -647,6 +659,348 @@ export default function AnnotationWorkspace({
     return () => window.removeEventListener("keydown", onKey);
   }, [taskId, readOnly, labels]);
 
+  // ── 下面四个面板 ─────────────────────────────────────────────────────
+  // 每个面板一个 Collapse，按 panelOrder 的顺序摆，panelHidden 里的不摆。
+  // 面板标题右边有「上移 / 下移 / 隐藏」三个小按钮；隐藏了的在面板区上方留一个
+  // 「已隐藏」标签，点一下恢复。顺序、隐藏、展开状态都记在 localStorage 里。
+  const hasCross = !!(cross && (cross.items.length || cross.note));
+  // 当前任务里实际存在的面板（没跑过画面对照就没有那一块），按用户顺序
+  const presentPanels: PanelKey[] = panelOrder.filter((k) => k !== "cross" || hasCross);
+  const shownPanels = presentPanels.filter((k) => !panelHidden.includes(k));
+  // IMU 波形排在最前面时钉在滚动区外面（跟原来一样：波形要跟视频一起盯着看，
+  // 翻列表时不能被滚走）；挪到别的位置就跟其他面板一起在滚动区里
+  const pinnedImu = shownPanels[0] === "imu";
+  const isPanelOpen = (k: PanelKey) => (k === "imu" ? imuOpen : panelKeys.includes(k));
+  const anyOpenInside = shownPanels.some((k) => !(pinnedImu && k === "imu") && isPanelOpen(k));
+  const setPanelOpen = (k: PanelKey, open: boolean) => {
+    if (k === "imu") {
+      saveBool(IMU_OPEN_KEY, open);
+      setImuOpen(open);
+      return;
+    }
+    const next = open ? [...panelKeys.filter((x) => x !== k), k] : panelKeys.filter((x) => x !== k);
+    setPanelKeys(next);
+    saveKeys(PANELS_KEY, next);
+  };
+  const movePanel = (k: PanelKey, dir: "up" | "down") => {
+    const next = moveAmongShown(panelOrder, shownPanels, k, dir);
+    setPanelOrder(next);
+    saveOrder(next);
+  };
+  const hidePanel = (k: PanelKey) => {
+    const next = [...panelHidden.filter((x) => x !== k), k];
+    setPanelHidden(next);
+    saveHidden(next);
+  };
+  const showPanel = (k: PanelKey) => {
+    const next = panelHidden.filter((x) => x !== k);
+    setPanelHidden(next);
+    saveHidden(next);
+  };
+  const panelTools = (k: PanelKey) => {
+    const i = shownPanels.indexOf(k);
+    return (
+      <span className="ws-panel-tools" onClick={(e) => e.stopPropagation()}>
+        <Tooltip title="往上挪一格（会记住）">
+          <Button type="text" size="small" icon={<ArrowUpOutlined />} disabled={i <= 0} onClick={() => movePanel(k, "up")} />
+        </Tooltip>
+        <Tooltip title="往下挪一格（会记住）">
+          <Button type="text" size="small" icon={<ArrowDownOutlined />} disabled={i < 0 || i >= shownPanels.length - 1} onClick={() => movePanel(k, "down")} />
+        </Tooltip>
+        <Tooltip title="隐藏这个面板（会记住）。面板区上方会留一个「已隐藏」标签，点它恢复">
+          <Button type="text" size="small" icon={<EyeInvisibleOutlined />} onClick={() => hidePanel(k)} />
+        </Tooltip>
+      </span>
+    );
+  };
+
+  const imuItem = {
+  key: "imu",
+  label: (
+    // 这排开关本来单独占一行。工作台里高度最紧，跟标题拼一行，
+    // 省下来的给波形
+    <span
+      style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span onClick={() => { const next = !imuOpen; saveBool(IMU_OPEN_KEY, next); setImuOpen(next); }} style={{ cursor: "pointer" }}>
+        IMU 波形
+      </span>
+      {hasCsv && sampleId != null && (
+        <>
+          <Segmented
+            size="small"
+            options={["曲线图", "表格"]}
+            value={imuView}
+            onChange={(v) => setImuView(v as "曲线图" | "表格")}
+          />
+          {imuView === "曲线图" && (
+            <>
+              <Segmented
+                size="small"
+                options={["单条波形", "展开全部"]}
+                value={chartExpanded ? "展开全部" : "单条波形"}
+                onChange={(v) => {
+                  const next = v === "展开全部";
+                  setChartExpanded(next);
+                  saveBool(CHART_MODE_KEY, next);
+                }}
+              />
+            </>
+          )}
+          {imuView === "曲线图" && <ImuChartHint />}
+          {imuView === "曲线图" && !chartExpanded && (
+            <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
+              <Button
+                size="small"
+                type={chartScrollLocked ? "primary" : "default"}
+                icon={chartScrollLocked ? <LockOutlined /> : <UnlockOutlined />}
+                onClick={() => {
+                  const next = !chartScrollLocked;
+                  setChartScrollLocked(next);
+                  saveBool(CHART_SCROLL_LOCK_KEY, next);
+                }}
+              />
+            </Tooltip>
+          )}
+        </>
+      )}
+    </span>
+  ),
+  children: (hasCsv && sampleId != null ? (
+    <>
+      {imuView === "曲线图" ? (
+        // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
+        // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏）。
+        // 两种模式都是这个盒子，底边可以拖：展开全部原来是 flex:1 占满剩余
+        // 高度，结果高度由别人（视频、片段面板）决定，想让波形高一点只能
+        // 去改别的地方。给个能拖的高度，要多高自己说了算。
+        <>
+          <div
+            ref={chartBoxRef}
+            className="ws-charts"
+            style={{
+              flex: "0 0 auto",
+              height: chartHeight,
+              // 锁定时不响应滚动，停在当前看到的通道，不会被无意的滚轮带走
+              overflowY: chartScrollLocked ? "hidden" : "auto",
+            }}
+          >
+            <ImuChart
+              sampleId={sampleId}
+              bus={bus}
+              rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+              // 展开全部时六条共用最下面那一条时间轴：六条各画一条，
+              // 光轴就吃掉一百多像素，而横轴本来就是同一条时间线
+              timeAxisOnlyLast={chartExpanded}
+              key={chartExpanded ? "expanded" : "single"}
+              segments={segments}
+              activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
+              onCreateSegment={readOnly ? undefined : handleCreateFromChart}
+              onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+            />
+          </div>
+          {(
+            // 两种模式都给这个把手：波形要多高是看数据的人说了算
+            <div
+              onMouseDown={handleChartResizeStart}
+              onDoubleClick={() => {
+                setChartHeight(chartHeightDefault);
+                saveHeight(chartHeightKey, null);
+              }}
+              title="拖拽调整波形区域高度，双击恢复默认"
+              className="ws-chart-grip"
+            >
+              <div className="ws-chart-grip__bar" />
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="ws-charts" style={{ height: chartHeight }}>
+          <ImuTable sampleId={sampleId} />
+        </div>
+      )}
+    </>
+  ) : (
+    !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
+  )),
+  };
+
+  const crossItem = hasCross && cross ? {
+    key: "cross",
+    label: (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        画面对照
+        {cross.counts?.no_dog ? <Tag color="red">{cross.counts.no_dog} 段画面里没狗</Tag> : null}
+        {cross.counts?.unknown ? <Tag>{cross.counts.unknown} 段判不了</Tag> : null}
+        {cross.counts?.agree ? <Tag color="green">{cross.counts.agree} 段对得上</Tag> : null}
+      </span>
+    ),
+    children: (
+      <div style={{ maxHeight: 220, overflow: "auto" }}>
+        {cross.note && (
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+            {cross.note}
+          </Typography.Text>
+        )}
+        {/* 可疑的已经由后端排在前面了——这一块的全部意义就是"先看哪几段"，
+            按时间排的话人还是得从头翻 */}
+        {cross.items.map((it: { id: number; start_time_ms: number; end_time_ms: number; cross: ScratchCross }) => {
+          const META: Record<string, { color: string; text: string }> = {
+            no_dog: { color: "#d4380d", text: "画面里没狗" },
+            unknown: { color: "#8c8c8c", text: "判不了" },
+            agree: { color: "#52c41a", text: "对得上" },
+          };
+          const meta = META[it.cross.state] ?? META.unknown;
+          return (
+            <div
+              key={it.id}
+              onClick={() => bus.seek(it.start_time_ms / 1000)}
+              title={it.cross.reason}
+              style={{ cursor: "pointer", fontSize: 12, padding: "3px 6px", borderRadius: 3,
+                       display: "flex", gap: 8, alignItems: "center" }}
+            >
+              <span style={{ color: meta.color, flexShrink: 0, width: 72 }}>{meta.text}</span>
+              <span style={{ color: "#888" }}>{formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}</span>
+              <span style={{ color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {it.cross.reason}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    ),
+  } : null;
+
+  const segsItem = {
+    key: "segs",
+    label: (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        已标注片段（{items.length}）
+        <span ref={setSegControlsHost} style={{ display: "inline-flex" }} />
+      </span>
+    ),
+    children: (
+      <SegmentPanel
+        controlsPortalTarget={segControlsHost}
+        focusMs={initialSeekMs}
+        items={items}
+        labels={labels}
+        readOnly={readOnly}
+        durationMs={durationMs}
+        colorOf={colorOf}
+        nameOf={nameOf}
+        onSeek={(ms) => bus.seek(ms / 1000)}
+        onLoop={setLoop}
+        loopRange={loopRange}
+        dupIds={dupIds}
+        onUpdate={updateItems}
+        onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+        onReturnToCandidate={async (i) => {
+          if (i.from_candidate_id == null || taskId == null) return;
+          // 先把候选放回「待确认」，再把这条片段从草稿里去掉并落库——
+          // 只删片段不动候选的话，那条候选还挂着"已确认"，再也不会出现
+          await decideCandidate(i.from_candidate_id, "pending");
+          const next = items.filter((x) => x.id !== i.id);
+          setItems(next);
+          await saveDraft(taskId, toDraftPayload(next));
+          setCandidates(await listCandidates(taskId));
+          message.success("已退回候选，可以重新判断");
+        }}
+        onCreate={readOnly ? undefined : appendItem}
+        initialFilterLabels={initialSegmentFilter}
+      />
+    ),
+  };
+
+  const candsItem = {
+    key: "cands",
+    label: (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {candidates.some((c) => c.reason === "vision")
+          ? "疑似片段"
+          : candidates.some((c) => c.reason === "grooming")
+            ? "疑似抓挠 / 舔啃"
+            : "疑似抓挠"}（
+        {candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
+        <span ref={setCandControlsHost} style={{ display: "inline-flex" }} />
+      </span>
+    ),
+    children: (
+      <CandidatePanel
+        controlsPortalTarget={candControlsHost}
+        candidates={candidates}
+        labels={labels}
+        focusMs={initialSeekMs}
+        initialFilter={initialCandFilter ?? undefined}
+        onFindSimilar={
+          readOnly
+            ? undefined
+            : () => {
+                setSimilarAtSec(Math.round(curSecRef.current * 10) / 10);
+                setSimilarOpen(true);
+              }
+        }
+        scratchLabelIds={focusIds.length ? focusIds : scratchIds}
+        readOnly={readOnly}
+        onSeek={(ms) => bus.seek(ms / 1000)}
+        onLoop={setLoop}
+        loopRange={loopRange}
+        // 判断之前先落库，判断之后再拉。顺序反了会丢东西：
+        //   先判断再存 → 存的是本地这份（还不知道后端刚写的那条），
+        //               那条会被当成"删掉的条目"清掉；
+        //   先拉再存   → 把还没保存的本地改动整个盖掉。
+        onBeforeDecide={async () => {
+          if (!readOnly && taskId != null) await persist();
+        }}
+        onDecided={async () => {
+          if (taskId == null) return;
+          const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
+          setItems(draft.items);
+          setCandidates(cs);
+        }}
+        onUndo={async (c) => {
+          if (taskId == null) return;
+          // 跟确认时同一个顺序：先把本地改动落库，再动服务器上的东西，
+          // 不然下面重新拉草稿会把还没保存的改动整个盖掉
+          if (!readOnly) await persist();
+          await decideCandidate(c.id, "pending");
+          // 「确认」时后端往草稿里写了一条，撤回要把它一起收回；
+          // 「排除」「待定」没写过条目，这里自然什么都不会删
+          const draft = await getDraft(taskId);
+          const next = draft.items.filter((x) => x.from_candidate_id !== c.id);
+          if (!readOnly && next.length !== draft.items.length) {
+            await saveDraft(taskId, toDraftPayload(next));
+          }
+          setItems(next);
+          setCandidates(await listCandidates(taskId));
+        }}
+      />
+    ),
+  };
+
+  const renderPanel = (k: PanelKey) => {
+    const item = k === "imu" ? imuItem : k === "cross" ? crossItem : k === "segs" ? segsItem : candsItem;
+    if (!item) return null;
+    const el = (
+      <Collapse
+        size="small"
+        className={k === "imu" ? "ws-imu" : "ws-panel"}
+        activeKey={isPanelOpen(k) ? [k] : []}
+        onChange={(keys) => setPanelOpen(k, (Array.isArray(keys) ? keys : [keys]).includes(k))}
+        items={[{ ...item, extra: panelTools(k) }]}
+      />
+    );
+    if (k !== "imu") return <div key={k} style={{ flex: "0 0 auto" }}>{el}</div>;
+    // 波形区自己是固定高度（可拖），这一块永远按内容高度、不可压缩：跟视频区
+    // 都是 flex:1 的话，片段列表一展开两者一起被压，波形区会被压到比内容还矮
+    return (
+      <div key={k} style={{ marginTop: 4, flex: "0 0 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {el}
+      </div>
+    );
+  };
+
   return (
     <>
     <Modal
@@ -1042,325 +1396,38 @@ export default function AnnotationWorkspace({
             </Space>
           </div>
         )}
+        {pinnedImu && renderPanel("imu")}
 
+        {panelHidden.some((k) => presentPanels.includes(k)) && (
+          <div style={{ marginTop: 6, fontSize: 12, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+            <Typography.Text type="secondary">已隐藏：</Typography.Text>
+            {panelHidden.filter((k) => presentPanels.includes(k)).map((k) => (
+              <Tooltip key={k} title="点一下恢复显示">
+                <Tag style={{ cursor: "pointer" }} onClick={() => showPanel(k)}>
+                  {PANEL_TITLES[k]}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        )}
+
+        {/* 占满视频下面剩余的高度，面板在这个框里滚——想看列表最后几条不用把视频滚出屏幕。
+            面板全收起来时不再占着剩余高度（写死 flex:1 的话折叠了照样撑着一大片空白）。
+            每个面板的标题行在这个框里吸顶：滚到候选列表下面时，「待确认 / 画面相似 / 找相似」
+            那排按钮还在最上面，不用滚回去找 */}
         <div
-          // 单条波形模式下波形区本身是固定高度，这个外层不能再 flex:1——它和视频区
-          // 都是 flex:1 的话，下面片段列表一展开，两者一起被压，波形区被压到比内容
-          // 还矮，内容就溢出来跟片段列表叠在一起。改成按内容撑开、不可压缩，
-          // 让会自适应量尺寸的视频区独自让出高度。
-          style={{
-            marginTop: 4,
-            // 波形区自己是固定高度（可拖），所以这一块永远按内容高度，
-            // 剩下的高度让视频区去吃——这样拖高波形，视频跟着让位，
-            // 而不是两边抢
-            flex: "0 0 auto",
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          {/* 用 Collapse 而不是自己写一个折叠按钮：下面「已标注片段」「疑似抓挠」
-              都是 Collapse，这块原来是一个光秃秃的文字按钮，三块并排看着不像一套东西。
-              折起来之后只留标题这一行，视频区自动占满剩下的高度 */}
-          <Collapse
-            size="small"
-            className="ws-imu"
-            activeKey={imuOpen ? ["imu"] : []}
-            onChange={(keys) => {
-              const open = (keys as string[]).includes("imu");
-              saveBool(IMU_OPEN_KEY, open);
-              setImuOpen(open);
-            }}
-            items={[{
-              key: "imu",
-              label: (
-                // 这排开关本来单独占一行。工作台里高度最紧，跟标题拼一行，
-                // 省下来的给波形
-                <span
-                  style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span onClick={() => { const next = !imuOpen; saveBool(IMU_OPEN_KEY, next); setImuOpen(next); }} style={{ cursor: "pointer" }}>
-                    IMU 波形
-                  </span>
-                  {hasCsv && sampleId != null && (
-                    <>
-                      <Segmented
-                        size="small"
-                        options={["曲线图", "表格"]}
-                        value={imuView}
-                        onChange={(v) => setImuView(v as "曲线图" | "表格")}
-                      />
-                      {imuView === "曲线图" && (
-                        <>
-                          <Segmented
-                            size="small"
-                            options={["单条波形", "展开全部"]}
-                            value={chartExpanded ? "展开全部" : "单条波形"}
-                            onChange={(v) => {
-                              const next = v === "展开全部";
-                              setChartExpanded(next);
-                              saveBool(CHART_MODE_KEY, next);
-                            }}
-                          />
-                        </>
-                      )}
-                      {imuView === "曲线图" && <ImuChartHint />}
-                      {imuView === "曲线图" && !chartExpanded && (
-                        <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
-                          <Button
-                            size="small"
-                            type={chartScrollLocked ? "primary" : "default"}
-                            icon={chartScrollLocked ? <LockOutlined /> : <UnlockOutlined />}
-                            onClick={() => {
-                              const next = !chartScrollLocked;
-                              setChartScrollLocked(next);
-                              saveBool(CHART_SCROLL_LOCK_KEY, next);
-                            }}
-                          />
-                        </Tooltip>
-                      )}
-                    </>
-                  )}
-                </span>
-              ),
-              children: (hasCsv && sampleId != null ? (
-            <>
-              {imuView === "曲线图" ? (
-                // 单条波形模式：盒子固定卡在刚好一条波形的高度（flex:"0 0 auto"，
-                // 不是 flex:1——写 flex:1 会跟视频抢剩余高度，波形区平白占大半屏）。
-                // 两种模式都是这个盒子，底边可以拖：展开全部原来是 flex:1 占满剩余
-                // 高度，结果高度由别人（视频、片段面板）决定，想让波形高一点只能
-                // 去改别的地方。给个能拖的高度，要多高自己说了算。
-                <>
-                  <div
-                    ref={chartBoxRef}
-                    className="ws-charts"
-                    style={{
-                      flex: "0 0 auto",
-                      height: chartHeight,
-                      // 锁定时不响应滚动，停在当前看到的通道，不会被无意的滚轮带走
-                      overflowY: chartScrollLocked ? "hidden" : "auto",
-                    }}
-                  >
-                    <ImuChart
-                      sampleId={sampleId}
-                      bus={bus}
-                      rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
-                      // 展开全部时六条共用最下面那一条时间轴：六条各画一条，
-                      // 光轴就吃掉一百多像素，而横轴本来就是同一条时间线
-                      timeAxisOnlyLast={chartExpanded}
-                      key={chartExpanded ? "expanded" : "single"}
-                      segments={segments}
-                      activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
-                      onCreateSegment={readOnly ? undefined : handleCreateFromChart}
-                      onResizeSegment={readOnly ? undefined : handleResizeFromChart}
-                    />
-                  </div>
-                  {(
-                    // 两种模式都给这个把手：波形要多高是看数据的人说了算
-                    <div
-                      onMouseDown={handleChartResizeStart}
-                      onDoubleClick={() => {
-                        setChartHeight(chartHeightDefault);
-                        saveHeight(chartHeightKey, null);
-                      }}
-                      title="拖拽调整波形区域高度，双击恢复默认"
-                      className="ws-chart-grip"
-                    >
-                      <div className="ws-chart-grip__bar" />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="ws-charts" style={{ height: chartHeight }}>
-                  <ImuTable sampleId={sampleId} />
-                </div>
-              )}
-            </>
-              ) : (
-                !loading && <Typography.Text type="secondary">没有找到 IMU CSV</Typography.Text>
-              )),
-            }]}
-          />
-        </div>
-
-        <Collapse
-          size="small"
           className="ws-segs"
-          // 占满视频下面剩余的高度，列表在自己里面滚——以前是整块往下溢出、
-          // 由弹窗 body 滚动，结果想看列表最后几条就得把视频滚出屏幕。复看这件事
-          // 本来就是"对着画面看这一条对不对"，两样东西必须同时在眼前
-          // 两个面板都收起来时不要再占着剩余高度：CSS 里写死 flex:1 的话，
-          // 折叠了照样撑着一大片空白，看着像页面坏了
-          // minHeight 也要跟着：写死 140 的话，两个面板都收起来时下面还是空一块
           style={{
             marginTop: 8,
-            flex: panelKeys.length ? "1 1 auto" : "0 0 auto",
-            minHeight: panelKeys.length ? 140 : 0,
+            flex: anyOpenInside ? "1 1 auto" : "0 0 auto",
+            minHeight: anyOpenInside ? 140 : 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
           }}
-          // 标注时优先把高度让给视频，列表默认收起（波形上的色块已经是主要反馈）；
-          // 审核就是来看这些片段的，默认展开
-          // 展开哪些面板记成用户的习惯，不用每开一个任务重点一遍
-          activeKey={panelKeys}
-          onChange={(keys) => {
-            const next = Array.isArray(keys) ? keys : [keys];
-            setPanelKeys(next as string[]);
-            saveKeys(PANELS_KEY, next as string[]);
-          }}
-          items={[
-            ...(cross && (cross.items.length || cross.note) ? [{
-              key: "cross",
-              label: (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  画面对照
-                  {cross.counts?.no_dog ? <Tag color="red">{cross.counts.no_dog} 段画面里没狗</Tag> : null}
-                  {cross.counts?.unknown ? <Tag>{cross.counts.unknown} 段判不了</Tag> : null}
-                  {cross.counts?.agree ? <Tag color="green">{cross.counts.agree} 段对得上</Tag> : null}
-                </span>
-              ),
-              children: (
-                <div style={{ maxHeight: 220, overflow: "auto" }}>
-                  {cross.note && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
-                      {cross.note}
-                    </Typography.Text>
-                  )}
-                  {/* 可疑的已经由后端排在前面了——这一块的全部意义就是"先看哪几段"，
-                      按时间排的话人还是得从头翻 */}
-                  {cross.items.map((it: { id: number; start_time_ms: number; end_time_ms: number; cross: ScratchCross }) => {
-                    const META: Record<string, { color: string; text: string }> = {
-                      no_dog: { color: "#d4380d", text: "画面里没狗" },
-                      unknown: { color: "#8c8c8c", text: "判不了" },
-                      agree: { color: "#52c41a", text: "对得上" },
-                    };
-                    const meta = META[it.cross.state] ?? META.unknown;
-                    return (
-                      <div
-                        key={it.id}
-                        onClick={() => bus.seek(it.start_time_ms / 1000)}
-                        title={it.cross.reason}
-                        style={{ cursor: "pointer", fontSize: 12, padding: "3px 6px", borderRadius: 3,
-                                 display: "flex", gap: 8, alignItems: "center" }}
-                      >
-                        <span style={{ color: meta.color, flexShrink: 0, width: 72 }}>{meta.text}</span>
-                        <span style={{ color: "#888" }}>{formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}</span>
-                        <span style={{ color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {it.cross.reason}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ),
-            }] : []),
-            {
-              key: "segs",
-              label: (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  已标注片段（{items.length}）
-                  <span ref={setSegControlsHost} style={{ display: "inline-flex" }} />
-                </span>
-              ),
-              children: (
-                <SegmentPanel
-                  controlsPortalTarget={segControlsHost}
-                  focusMs={initialSeekMs}
-                  items={items}
-                  labels={labels}
-                  readOnly={readOnly}
-                  durationMs={durationMs}
-                  colorOf={colorOf}
-                  nameOf={nameOf}
-                  onSeek={(ms) => bus.seek(ms / 1000)}
-                  onLoop={setLoop}
-                  loopRange={loopRange}
-                  dupIds={dupIds}
-                  onUpdate={updateItems}
-                  onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
-                  onReturnToCandidate={async (i) => {
-                    if (i.from_candidate_id == null || taskId == null) return;
-                    // 先把候选放回「待确认」，再把这条片段从草稿里去掉并落库——
-                    // 只删片段不动候选的话，那条候选还挂着"已确认"，再也不会出现
-                    await decideCandidate(i.from_candidate_id, "pending");
-                    const next = items.filter((x) => x.id !== i.id);
-                    setItems(next);
-                    await saveDraft(taskId, toDraftPayload(next));
-                    setCandidates(await listCandidates(taskId));
-                    message.success("已退回候选，可以重新判断");
-                  }}
-                  onCreate={readOnly ? undefined : appendItem}
-                  initialFilterLabels={initialSegmentFilter}
-                />
-              ),
-            },
-            {
-              key: "cands",
-              label: (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  {candidates.some((c) => c.reason === "vision")
-                    ? "疑似片段"
-                    : candidates.some((c) => c.reason === "grooming")
-                      ? "疑似抓挠 / 舔啃"
-                      : "疑似抓挠"}（
-                  {candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
-                  <span ref={setCandControlsHost} style={{ display: "inline-flex" }} />
-                </span>
-              ),
-              children: (
-                <CandidatePanel
-                  controlsPortalTarget={candControlsHost}
-                  candidates={candidates}
-                  labels={labels}
-                  focusMs={initialSeekMs}
-                  initialFilter={initialCandFilter ?? undefined}
-                  onFindSimilar={
-                    readOnly
-                      ? undefined
-                      : () => {
-                          setSimilarAtSec(Math.round(curSecRef.current * 10) / 10);
-                          setSimilarOpen(true);
-                        }
-                  }
-                  scratchLabelIds={focusIds.length ? focusIds : scratchIds}
-                  readOnly={readOnly}
-                  onSeek={(ms) => bus.seek(ms / 1000)}
-                  onLoop={setLoop}
-                  loopRange={loopRange}
-                  // 判断之前先落库，判断之后再拉。顺序反了会丢东西：
-                  //   先判断再存 → 存的是本地这份（还不知道后端刚写的那条），
-                  //               那条会被当成"删掉的条目"清掉；
-                  //   先拉再存   → 把还没保存的本地改动整个盖掉。
-                  onBeforeDecide={async () => {
-                    if (!readOnly && taskId != null) await persist();
-                  }}
-                  onDecided={async () => {
-                    if (taskId == null) return;
-                    const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
-                    setItems(draft.items);
-                    setCandidates(cs);
-                  }}
-                  onUndo={async (c) => {
-                    if (taskId == null) return;
-                    // 跟确认时同一个顺序：先把本地改动落库，再动服务器上的东西，
-                    // 不然下面重新拉草稿会把还没保存的改动整个盖掉
-                    if (!readOnly) await persist();
-                    await decideCandidate(c.id, "pending");
-                    // 「确认」时后端往草稿里写了一条，撤回要把它一起收回；
-                    // 「排除」「待定」没写过条目，这里自然什么都不会删
-                    const draft = await getDraft(taskId);
-                    const next = draft.items.filter((x) => x.from_candidate_id !== c.id);
-                    if (!readOnly && next.length !== draft.items.length) {
-                      await saveDraft(taskId, toDraftPayload(next));
-                    }
-                    setItems(next);
-                    setCandidates(await listCandidates(taskId));
-                  }}
-                />
-              ),
-            },
-          ]}
-        />
+        >
+          {shownPanels.filter((k) => !(pinnedImu && k === "imu")).map(renderPanel)}
+        </div>
       </Spin>
       </div>
     </Modal>

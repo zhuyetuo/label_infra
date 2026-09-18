@@ -102,6 +102,26 @@
   overscroll-behavior: contain;
 }
 
+/* 面板标题行在滚动框里吸顶：往下翻候选列表时，标题上那排「待确认 / 画面相似 / 找相似」
+   还在最上面，看到下面某段想找相似不用先滚回去。背景要不透明，不然下面的行透上来 */
+.ws-segs .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #f5f5f5;
+}
+
+/* 标题右侧的「上移 / 下移 / 隐藏」：平时淡一点，别跟标题上的筛选按钮抢眼 */
+.ws-panel-tools {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.ant-collapse-header:hover .ws-panel-tools {
+  opacity: 1;
+}
+
 /* 片段表格自己的滚动条滚到头之后，滚轮不要"接着"把外面的 body 带着一起滚；
    鼠标在表格里就只滚表格，想滚外面把鼠标移出去 */
 .ws-segs .ant-table-body,
