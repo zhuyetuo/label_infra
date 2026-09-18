@@ -66,6 +66,10 @@ export const findSimilarCandidates = (body: {
   gap_s?: number;
   /** 标签项目里没有时顺手新建（管理员） */
   create_label?: boolean;
+  /** 减掉所有帧的平均向量再比（去共同背景），默认开 */
+  center?: boolean;
+  /** 只搜不写：先把命中摆出来看 */
+  dry_run?: boolean;
 }) =>
   request.post<
     never,
@@ -86,8 +90,30 @@ export const findSimilarCandidates = (body: {
       }[];
       /** 落在多狗同场（影棚）任务上的候选数：画面里那只不一定是这条 IMU 的狗，确认时要看清 */
       multi_dog_candidates: number;
+      centered: boolean;
+      dry_run: boolean;
+      /** 每个命中：哪路视频第几秒、分数、落在哪个任务 */
+      hit_list: SimilarHit[];
+      /** 样例自己那一路视频的路径（拿它请求样例帧缩略图，跟命中并排比） */
+      ref_path: string | null;
     }
   >("/candidates/similar", body, { timeout: 120000 });
+
+export interface SimilarHit {
+  path: string;
+  t: number;
+  score: number;
+  task_id: number | null;
+  sample_code: string | null;
+  multi_dog: boolean;
+}
+
+/** <img> 带不了 Authorization：换一个短期 token 拼进缩略图地址 */
+export const similarThumbToken = (taskId: number) =>
+  request.post<never, { token: string }>("/candidates/similar/thumb-token", null, { params: { task_id: taskId } });
+
+export const similarThumbUrl = (taskId: number, path: string, t: number, token: string, crop = true) =>
+  `/api/v1/candidates/similar/thumb?task_id=${taskId}&path=${encodeURIComponent(path)}&t=${t}&token=${token}&crop=${crop}`;
 
 /** 找相似之前看一眼样例帧：框到了哪几只狗、拿哪一块去搜。坐标都是归一化的 */
 export interface SimilarPreview {

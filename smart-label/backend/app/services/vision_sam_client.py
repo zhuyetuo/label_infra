@@ -242,8 +242,9 @@ async def embed_indexed(paths: list[str]) -> dict[str, bool]:
 
 async def embed_search(paths: list[str], *, text: str | None = None, ref: dict | None = None,
                        top_k: int = 50, min_score: float = 0.0, gap_s: float = 3.0,
-                       exclude_self_s: float = 10.0) -> dict:
-    body = {"paths": paths, "top_k": top_k, "min_score": min_score, "gap_s": gap_s, "exclude_self_s": exclude_self_s}
+                       exclude_self_s: float = 10.0, center: bool = True) -> dict:
+    body = {"paths": paths, "top_k": top_k, "min_score": min_score, "gap_s": gap_s, "exclude_self_s": exclude_self_s,
+            "center": center}
     if text is not None:
         body["text"] = text
     if ref is not None:
@@ -254,3 +255,18 @@ async def embed_search(paths: list[str], *, text: str | None = None, ref: dict |
 async def embed_preview(video_rel_path: str, t_s: float) -> dict:
     """以图搜图前给人看：这一帧框到了哪几只狗、拿哪一块去搜。只要狗检测模型，几百毫秒。"""
     return await _post("/api/v1/embed/preview", {"path": video_rel_path, "t": t_s}, 30)
+
+
+async def embed_thumb(video_rel_path: str, t_s: float, crop: bool = True) -> bytes:
+    """某视频某一秒的缩略图 JPEG（狗框那一块 / 整帧带框）。给"先看命中"那一排图用。"""
+    if not enabled():
+        raise SamUnavailable(_off_reason())
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/embed/thumb"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url, params={"path": video_rel_path, "t": t_s, "crop": "true" if crop else "false"})
+    except Exception as e:  # noqa: BLE001
+        raise SamUnavailable(f"连不上视觉服务：{type(e).__name__}") from e
+    if resp.status_code != 200:
+        raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
+    return resp.content

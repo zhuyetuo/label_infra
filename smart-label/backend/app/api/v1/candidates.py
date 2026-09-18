@@ -297,6 +297,10 @@ class SimilarIn(BaseModel):
     gap_s: float = 15.0
     # 标签项目里还没有：管理员可以顺手建（找相似的时候常常就是在攒一个新类别）
     create_label: bool = False
+    # 减掉所有帧的平均向量再比（去共同背景）。默认开
+    center: bool = True
+    # 只搜不写：先把命中摆出来看
+    dry_run: bool = False
 
 
 @router.post("/similar")
@@ -317,7 +321,9 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
         LabelDefinition.project_id == task.project_id, LabelDefinition.display_name == body.label_name,
         LabelDefinition.is_active.is_(True)).limit(1))).scalar_one_or_none()
     created_label = False
-    if label is None:
+    if label is None and body.dry_run:
+        pass    # 只看不写，标签有没有无所谓
+    elif label is None:
         name = body.label_name.strip()
         if not body.create_label or user.role not in (UserRole.admin, UserRole.super_admin) or not name:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -334,7 +340,7 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
         created_label = True
     params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score,
-                                  gap_s=max(0.0, min(120.0, body.gap_s)))
+                                  gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center, dry_run=body.dry_run)
     try:
         r = await vindex.find_similar(db, task, params)
         r["created_label"] = created_label
@@ -370,3 +376,38 @@ async def similar_preview(body: SimilarPreviewIn, db: AsyncSession = Depends(get
         return ok(await vision_sam_client.embed_preview(path, max(0.0, body.t_s)))
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+
+
+@router.post("/similar/thumb-token")
+async def similar_thumb_token(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """<img> 带不了 Authorization 头：换一个短期 token 拼进缩略图地址里（跟视频流一个办法）。"""
+    from app.core.media_token import issue_media_token
+
+    task = await _visible_task(db, task_id, user)
+    return ok({"token": issue_media_token(task.id)})
+
+
+@router.get("/similar/thumb")
+async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: bool = True,
+                        db: AsyncSession = Depends(get_db)):
+    """命中那一帧的缩略图（狗框那一块）。path 必须是这个任务所在项目里某份样本的视频。"""
+    from fastapi.responses import Response
+
+    from app.core.media_token import verify_media_token
+
+    if not verify_media_token(task_id, token):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "缩略图 token 无效或过期")
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    allowed = {p for _t, _s, p in await vindex.project_videos(db, task.project_id, "all")}
+    sample = await db.get(Sample, task.sample_id)
+    if sample is not None:
+        allowed.update(p for p in (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path) if p)
+    if path not in allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不在该项目里")
+    try:
+        data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop)
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
