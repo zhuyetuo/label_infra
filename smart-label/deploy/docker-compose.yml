@@ -22,9 +22,16 @@ services:
   # 数据库迁移单独跑一次性容器：api 和 scheduler 都等它跑完再起，
   # 避免两个容器同时执行迁移打架，也避免忘记手动执行迁移导致表结构对不上
   # （之前就是没有这一步，加了新表/新字段之后线上直接 ProgrammingError）。
+  # 后端镜像只在这里 build 一次（打成 smart-label-backend），api / scheduler 直接用同一个镜像。
+  # 原来三个 service 各写一遍 build，compose 并行起三次构建，apt / pip 那几层各跑各的。
   migrate:
     build:
       context: ../backend
+      args:
+        # 国内机器走镜像站快得多；要换回官方就在 .env 里写 APT_MIRROR=deb.debian.org 等
+        APT_MIRROR: ${APT_MIRROR:-mirrors.tuna.tsinghua.edu.cn}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    image: smart-label-backend:latest
     restart: "no"
     depends_on:
       mysql:
@@ -37,8 +44,7 @@ services:
     networks: [smart-label]
 
   api:
-    build:
-      context: ../backend
+    image: smart-label-backend:latest
     restart: unless-stopped
     depends_on:
       mysql:
@@ -89,8 +95,7 @@ services:
     networks: [smart-label]
 
   scheduler:
-    build:
-      context: ../backend
+    image: smart-label-backend:latest
     restart: unless-stopped
     depends_on:
       mysql:
@@ -113,6 +118,8 @@ services:
   frontend:
     build:
       context: ../frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
