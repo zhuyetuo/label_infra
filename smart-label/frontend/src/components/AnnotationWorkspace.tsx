@@ -24,6 +24,7 @@ import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
+import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
@@ -238,6 +239,18 @@ export default function AnnotationWorkspace({
   const [similarPeeking, setSimilarPeeking] = useState(false);
   // 样例大图和命中缩略图看哪种（抠图 / 原图 / 姿态 / 整帧）：一个开关，上下一起切
   const [similarView, setSimilarView] = useState<SimilarThumbView>("mask");
+  // 预览里正在循环播的那一段（左栏播放器）
+  const [similarClip, setSimilarClip] = useState<Clip | null>(null);
+  // 点命中：本任务的直接把主画面跳过去循环；别的任务开新页（cand=similar：那边候选置顶高亮、视频停在这一刻循环）
+  const openSimilarHit = (h: SimilarHit) => {
+    if (h.task_id === taskId) {
+      const ms = Math.round(h.t * 1000);
+      setLoop({ startMs: Math.max(0, ms - 2000), endMs: ms + 4000 });
+      bus.seek(Math.max(0, h.t - 2));
+    } else if (h.task_id != null) {
+      window.open(`/tasks?task=${h.task_id}&seek=${Math.round(h.t * 1000)}&cand=similar`, "_blank");
+    }
+  };
   const peekSimilar = async () => {
     if (taskId == null) return;
     setSimilarPeeking(true);
@@ -1094,9 +1107,13 @@ export default function AnnotationWorkspace({
       title="找相似的画面 → 候选"
       open={similarOpen}
       onCancel={() => setSimilarOpen(false)}
-      width={similarPeek ? 1000 : 640}
+      // 满屏、左右分栏：左边样例 + 参数 + 循环播放器，右边命中一屏浏览。之前上下排着，
+      // 看命中要往下滚、看播放器又往上滚，来回折腾
+      width="100vw"
+      style={{ top: 0, maxWidth: "100vw", paddingBottom: 0 }}
+      styles={{ body: { height: "calc(100vh - 110px)", overflow: "hidden", padding: "8px 12px" }, content: { borderRadius: 0 } }}
       destroyOnClose
-      afterClose={() => setSimilarPeek(null)}
+      afterClose={() => { setSimilarPeek(null); setSimilarClip(null); }}
       footer={
         <Space>
           <Button onClick={() => setSimilarOpen(false)}>取消</Button>
@@ -1111,12 +1128,15 @@ export default function AnnotationWorkspace({
         </Space>
       }
     >
+      <div style={{ display: "flex", gap: 12, height: "100%" }}>
+      <div style={{ flex: "0 0 38%", minWidth: 360, overflowY: "auto", paddingRight: 4 }}>
       <Space direction="vertical" style={{ width: "100%" }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。
           不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
-          命中是按秒的，一次舔往往持续几十秒、命中断断续续，所以相邻命中会按下面的间隔合成一段。
-          先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只。
+          <Tooltip title="命中是按秒的，一次舔往往持续几十秒、命中断断续续，所以相邻命中会按「隔 N 秒以内算同一段」合成一段。先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只">
+            <QuestionCircleOutlined style={{ color: "#999", marginLeft: 4 }} />
+          </Tooltip>
         </Typography.Text>
         <div>
           <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
@@ -1217,7 +1237,18 @@ export default function AnnotationWorkspace({
             </span>
           </Tooltip>
         </Space>
-        {similarPeek && taskId != null && (
+        {taskId != null && (
+          <SimilarClipPlayer
+            taskId={taskId}
+            clip={similarClip}
+            onClose={() => setSimilarClip(null)}
+            onOpenTask={(h) => openSimilarHit(h)}
+          />
+        )}
+      </Space>
+      </div>
+      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: "1px solid #f0f0f0", paddingLeft: 12 }}>
+        {similarPeek && taskId != null ? (
           <SimilarHitsGrid
             taskId={taskId}
             projectId={task?.project_id ?? null}
@@ -1230,19 +1261,17 @@ export default function AnnotationWorkspace({
             poseUsed={similarPeek.poseUsed}
             view={similarView}
             onViewChange={setSimilarView}
-            onJump={(h) => {
-              if (h.task_id === taskId) {
-                const ms = Math.round(h.t * 1000);
-                setLoop({ startMs: Math.max(0, ms - 2000), endMs: ms + 4000 });
-                bus.seek(Math.max(0, h.t - 2));
-              } else if (h.task_id != null) {
-                // cand=similar：那边打开时候选面板只看「画面相似」、这一条置顶高亮、视频停在这一刻循环
-                window.open(`/tasks?task=${h.task_id}&seek=${Math.round(h.t * 1000)}&cand=similar`, "_blank");
-              }
-            }}
+            playing={similarClip}
+            onPlay={setSimilarClip}
+            onJump={openSimilarHit}
           />
+        ) : (
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13 }}>
+            {similarPeeking ? <Spin tip="在索引里找…" /> : "左边选好样例和参数，点下面「先看命中」，命中的画面在这里一屏浏览"}
+          </div>
         )}
-      </Space>
+      </div>
+      </div>
     </Modal>
     <Modal
       title="找相似的结果：落到了哪些任务"
