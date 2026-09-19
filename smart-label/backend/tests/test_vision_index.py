@@ -328,3 +328,54 @@ def test_找相似_所有项目(db, run):
     fn2 = _search(result)
     run(vi.find_similar(db, t1, vi.SimilarParams(label_name="舔", t_s=1.0, scope="project"), search_fn=fn2))
     assert "d/s9_cam1.mp4" not in fn2.calls[0]["paths"]
+
+
+def test_建索引_暂停继续_停止立刻掐掉正在建的(db, run, monkeypatch):
+    """暂停：正在建的建完，后面的停在门口；继续：接着建。停止：正在建的那一路也直接掐掉，不等。"""
+    import asyncio
+
+    u, p, _, _ = _world(db, run)
+    monkeypatch.setattr(vi.settings, "vision_index_concurrency", 1)
+
+    async def go():
+        started, release = [], asyncio.Event()
+
+        async def build(path, force=False):
+            started.append(path)
+            await release.wait()
+            return {"n": 1, "cached": False, "seconds": 1}
+
+        prog = vi.IndexProgress(status="running", project_id=p.id)
+        _prev = vi._progress.get(p.id)
+        vi._progress[p.id] = prog
+        vi._running.add(p.id)
+        gate = asyncio.Event()
+        gate.set()
+        vi._gate[p.id] = gate
+        try:
+            job = asyncio.ensure_future(vi.run_project(db, p.id, None, "all", False, prog, build_fn=build))
+            await asyncio.sleep(0.01)
+            assert len(started) == 1                       # 并行 1，只开了第一路
+            assert vi.pause(p.id) is True and prog.status == "paused"
+            release.set()                                  # 第一路建完
+            await asyncio.sleep(0.02)
+            assert prog.processed == 1 and len(started) == 1   # 第二路停在门口没开始
+            release.clear()
+            assert vi.resume(p.id) is True and prog.status == "running"
+            await asyncio.sleep(0.01)
+            assert len(started) == 2                       # 继续：第二路开了
+            assert vi.cancel(p.id) is True                 # 停止：第二路正在等 build，直接掐
+            await asyncio.wait_for(job, 1)
+            assert prog.processed == 1 and prog.total == 3
+            assert any("停止" in line for line in prog.detail)
+        finally:
+            vi._running.discard(p.id)
+            vi._cancelled.discard(p.id)
+            vi._paused.discard(p.id)
+            vi._gate.pop(p.id, None)
+            vi._tasks.pop(p.id, None)
+            if _prev is None:
+                vi._progress.pop(p.id, None)
+
+    run(go())
+    assert vi.pause(p.id) is False and vi.resume(p.id) is False and vi.cancel(p.id) is False   # 没在跑

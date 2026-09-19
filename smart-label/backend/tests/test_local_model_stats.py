@@ -24,8 +24,6 @@ def test_差值_重启归零():
 
 
 def test_采集_第一次只记快照_之后记差值_按小时(db, run, monkeypatch):
-    lms._last.clear()
-    lms._primed = False
     snaps = iter([_ov(100, 1000), _ov(130, 1300, 2), _ov(5, 50, 2)])     # 第三次：视觉服务重启过
 
     async def fake():
@@ -33,7 +31,9 @@ def test_采集_第一次只记快照_之后记差值_按小时(db, run, monkeyp
 
     monkeypatch.setattr(lms.vc, "models_overview", fake)
     t = datetime(2026, 9, 19, 10, 20)
-    assert run(lms.collect(db, t))["collected"] == 0                  # 平台刚起来：只记快照
+    assert run(lms.collect(db, t))["collected"] == 0                  # 库里没快照：只记快照
+    from app.models.local_model_stat import LocalModelSnapshot
+    assert {r.model_key: r.calls for r in run(db.execute(select(LocalModelSnapshot))).scalars().all()} == {"dog": 100, "sam": 0}
     assert run(lms.collect(db, t.replace(minute=40)))["collected"] == 2
     assert run(lms.collect(db, t.replace(hour=11)))["collected"] == 1  # sam 没变不记
     rows = run(db.execute(select(LocalModelStat).order_by(LocalModelStat.model_key, LocalModelStat.hour))).scalars().all()
@@ -78,3 +78,25 @@ def test_imu预测模型按天汇总(db, run):
     rf = next(m for m in st["models"] if m["model_tag"] == "ml_rf")
     assert rf["samples"] == 3 and rf["windows"] == 300 and [d["samples"] for d in rf["by_day"]] == [2, 1]
     assert st["models"][0]["model_tag"] == "ml_rf"
+
+
+def test_即时采集_限流_出错不影响读数(db, run, monkeypatch):
+    calls = {"n": 0}
+
+    async def fake():
+        calls["n"] += 1
+        return _ov(10 + calls["n"], 100)
+
+    monkeypatch.setattr(lms.vc, "models_overview", fake)
+    lms._last_collect_at = 0.0
+    run(lms.collect_throttled(db))
+    run(lms.collect_throttled(db))          # 20 秒内不再采
+    assert calls["n"] == 1
+    lms._last_collect_at = 0.0
+
+    async def boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(lms.vc, "models_overview", boom)
+    run(lms.collect_throttled(db))          # 不抛
+    assert run(lms.stats(db, 30))["models"] == []

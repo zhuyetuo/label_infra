@@ -142,7 +142,8 @@ export const cancelVisionSeek = (id: number) =>
 // ── 画面向量索引（以图搜图 / 一句话搜的前提） ────────────────────────
 
 export interface VisionIndexProgress {
-  status: "idle" | "running" | "done" | "cancelled" | "error";
+  /** paused：正在建的那几路建完就停在那，「继续」接着建 */
+  status: "idle" | "running" | "paused" | "done" | "cancelled" | "error";
   project_id: number;
   cam: string;
   total: number;
@@ -166,5 +167,12 @@ export const startVisionIndex = (id: number, body: { task_ids?: number[]; cam?: 
 export const getVisionIndexStatus = (id: number) =>
   request.get<never, VisionIndexProgress>(`/projects/${id}/vision-index/status`);
 
+/** 停止：立刻，正在建的那几路也掐掉；建好的保留 */
 export const cancelVisionIndex = (id: number) =>
   request.post<never, { stopped: boolean }>(`/projects/${id}/vision-index/cancel`);
+
+export const pauseVisionIndex = (id: number) =>
+  request.post<never, { paused: boolean }>(`/projects/${id}/vision-index/pause`);
+
+export const resumeVisionIndex = (id: number) =>
+  request.post<never, { resumed: boolean }>(`/projects/${id}/vision-index/resume`);

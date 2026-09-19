@@ -13,18 +13,17 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.local_model_stat import LocalModelStat
+from app.models.local_model_stat import LocalModelSnapshot, LocalModelStat
 from app.services import vision_sam_client as vc
 
 _logger = logging.getLogger("smart-label.local-model-stats")
 
-# 上一次快照：model_key → {calls, frames, errors, total_ms}。进程内存，平台重启后第一次采集
-# 只记快照不记差值（不然会把视觉服务累计的量一次性算进当前小时）
-_last: dict[str, dict] = {}
-_primed = False
-
 FIELDS = ("calls", "frames", "errors", "total_ms")
 NAMES = {"dog": "狗检测（YOLO）", "sam": "SAM 分割", "embed": "画面向量（SigLIP）", "pose": "姿态关键点（RTMPose）", "vllm": "本地大模型（vLLM）"}
+
+# 打开统计页时即时采一次，但同一进程 20 秒内不重复（几个人同时开着页面时别把视觉服务问烦）
+COLLECT_MIN_INTERVAL_S = 20.0
+_last_collect_at = 0.0
 
 
 def delta(prev: dict | None, cur: dict) -> dict:
@@ -38,13 +37,19 @@ def delta(prev: dict | None, cur: dict) -> dict:
 
 
 async def collect(db: AsyncSession, now: datetime | None = None) -> dict:
-    """拉一次快照，把差值加到当前小时。返回 {collected: 记了几个模型, skipped: 原因}。"""
-    global _primed
+    """拉一次快照，跟库里上一次比出差值加到当前小时。返回 {collected, skipped}。
+
+    快照存库（local_model_snapshots），API 进程和调度器进程都可以采：谁先采谁记差值，
+    另一个再采时差值就是 0。行加锁，两边几乎同时采也不会把同一段量算两遍。
+    某个模型第一次出现（库里没它的快照）只记快照不记差值：视觉服务里累计的历史量
+    不知道是哪天的，不能算进这一小时。
+    """
     ov = await vc.models_overview()
     if not ov.get("available"):
         return {"collected": 0, "skipped": ov.get("error") or "视觉服务不可用"}
     now = now or datetime.now()
     hour = now.replace(minute=0, second=0, microsecond=0)
+    snaps = {r.model_key: r for r in (await db.execute(select(LocalModelSnapshot).with_for_update())).scalars().all()}
     n = 0
     for m in ov.get("models") or []:
         key = m.get("key")
@@ -52,12 +57,14 @@ async def collect(db: AsyncSession, now: datetime | None = None) -> dict:
         if not key:
             continue
         cur = {f: meter.get(f) or 0 for f in FIELDS}
-        prev = _last.get(key)
-        _last[key] = cur
-        if not _primed and prev is None:
-            # 平台刚起来：只记快照。视觉服务里累计的历史量不知道是哪天的，不能算进这一小时
+        snap = snaps.get(key)
+        if snap is None:
+            db.add(LocalModelSnapshot(model_key=key, taken_at=now, **{f: cur[f] for f in FIELDS}))
             continue
-        d = delta(prev, cur)
+        d = delta({f: getattr(snap, f) for f in FIELDS}, cur)
+        for f in FIELDS:
+            setattr(snap, f, cur[f])
+        snap.taken_at = now
         if not any(d[f] for f in FIELDS):
             continue
         row = (await db.execute(select(LocalModelStat).where(LocalModelStat.model_key == key, LocalModelStat.hour == hour))).scalar_one_or_none()
@@ -69,9 +76,23 @@ async def collect(db: AsyncSession, now: datetime | None = None) -> dict:
         row.errors += int(d["errors"])
         row.total_ms += float(d["total_ms"])
         n += 1
-    _primed = True
     await db.commit()
     return {"collected": n, "skipped": None}
+
+
+async def collect_throttled(db: AsyncSession) -> None:
+    """给统计接口用：最多 20 秒采一次，采不成也不影响读数。"""
+    global _last_collect_at
+    import time
+
+    if time.time() - _last_collect_at < COLLECT_MIN_INTERVAL_S:
+        return
+    _last_collect_at = time.time()
+    try:
+        await collect(db)
+    except Exception:  # noqa: BLE001 采集出错不能让统计页打不开
+        _logger.exception("本地模型计数即时采集失败")
+        await db.rollback()
 
 
 async def stats(db: AsyncSession, days: int = 30) -> dict:

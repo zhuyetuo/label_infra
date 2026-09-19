@@ -67,6 +67,11 @@ class IndexProgress:
 _progress: dict[int, IndexProgress] = {}
 _running: set[int] = set()
 _cancelled: set[int] = set()
+# 暂停：gate 没 set 的时候，每一路开始前都会停在 gate 上等；正在建的那几路建完
+_paused: set[int] = set()
+_gate: dict[int, asyncio.Event] = {}
+# 正在跑的每一路（asyncio.Task），停止时直接 cancel，不等它建完
+_tasks: dict[int, list[asyncio.Task]] = {}
 
 
 def get_progress(project_id: int) -> IndexProgress:
@@ -74,9 +79,40 @@ def get_progress(project_id: int) -> IndexProgress:
 
 
 def cancel(project_id: int) -> bool:
+    """停止：立刻。正在建的几路也掐掉（视觉服务那边这一路可能还会跑完，但这里不再等）。"""
     if project_id not in _running:
         return False
     _cancelled.add(project_id)
+    _paused.discard(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.set()             # 停在暂停上的也放出来，让它们看到取消
+    for t in _tasks.get(project_id, []):
+        if not t.done():
+            t.cancel()
+    return True
+
+
+def pause(project_id: int) -> bool:
+    if project_id not in _running or project_id in _cancelled:
+        return False
+    _paused.add(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.clear()
+    p = _progress.get(project_id)
+    if p is not None:
+        p.status = "paused"
+    return True
+
+
+def resume(project_id: int) -> bool:
+    if project_id not in _running:
+        return False
+    _paused.discard(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.set()
+    p = _progress.get(project_id)
+    if p is not None and p.status == "paused":
+        p.status = "running"
     return True
 
 
@@ -91,6 +127,10 @@ async def start(project_id: int, task_ids: list[int] | None, cam: str, force: bo
 async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: bool) -> None:
     progress = IndexProgress(status="running", project_id=project_id, cam=cam, started_at=time.time())
     _progress[project_id] = progress
+    gate = asyncio.Event()      # 每次跑新建：Event 绑当前事件循环
+    gate.set()
+    _gate[project_id] = gate
+    _paused.discard(project_id)
     try:
         async with SessionLocal() as db:
             await run_project(db, project_id, task_ids, cam, force, progress)
@@ -104,6 +144,9 @@ async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: boo
         progress.current = None
         _running.discard(project_id)
         _cancelled.discard(project_id)
+        _paused.discard(project_id)
+        _gate.pop(project_id, None)
+        _tasks.pop(project_id, None)
 
 
 def day_dir_of(sample: Sample) -> str | None:
@@ -175,13 +218,20 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
     # 再多没意义（GPU 排队），还占显存
     sem = asyncio.Semaphore(max(1, settings.vision_index_concurrency))
 
+    gate = _gate.get(project_id)
+
     async def one(code: str, path: str) -> None:
         async with sem:
+            if gate is not None:
+                await gate.wait()       # 暂停时停在这里；继续 / 停止都会放行
             if project_id in _cancelled:
                 return
             progress.current = code
             try:
                 r = await build_fn(path, force=force)
+            except asyncio.CancelledError:
+                progress.log(f"{code}：停止，这一路没建完")
+                return
             except Exception as e:  # noqa: BLE001
                 progress.failed += 1
                 progress.processed += 1
@@ -195,9 +245,12 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
                 progress.built += 1
                 progress.log(f"{code}：建好 {r.get('n', 0)} 帧，{r.get('seconds', 0)} 秒")
 
-    await asyncio.gather(*(one(code, path) for code, path in paths))
+    # 每一路一个 Task，停止时能挨个 cancel；被 cancel 的那一路在 one() 里自己收尾，不往外抛
+    tasks = [asyncio.ensure_future(one(code, path)) for code, path in paths]
+    _tasks[project_id] = tasks
+    await asyncio.gather(*tasks, return_exceptions=True)
     if project_id in _cancelled and progress.processed < progress.total:
-        progress.log(f"已取消，剩下 {progress.total - progress.processed} 路没建")
+        progress.log(f"已停止，剩下 {progress.total - progress.processed} 路没建")
 
 
 # ── 找相似 → 候选 ─────────────────────────────────────────────────────
