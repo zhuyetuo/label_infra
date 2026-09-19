@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models.user import UserRole
 from app.schemas.envelope import ok
 from app.services import daily_stats_service as svc
+from app.services import room_presence_service as room_svc
 
 router = APIRouter(
     prefix="/daily-stats",
@@ -32,6 +33,21 @@ async def list_versions(db: AsyncSession = Depends(get_db)):
 async def list_dogs(db: AsyncSession = Depends(get_db)):
     """能筛的狗（含它们的设备号）。"""
     return ok(await svc.dogs(db))
+
+
+@router.get("/rooms")
+async def rooms(
+    date_from: _dt.date = Query(...),
+    date_to: _dt.date = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """狗场单间：按摄像头算录了多久、画面里有狗多久。不按 IMU 算——一只狗两个项圈
+    同时录，按样本加就是双倍。同一段视频只算一次。见 room_presence_service.py。"""
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "日期范围反了")
+    if (date_to - date_from).days > 400:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "一次最多查 400 天")
+    return ok(await room_svc.rooms(db, date_from, date_to))
 
 
 @router.get("")
