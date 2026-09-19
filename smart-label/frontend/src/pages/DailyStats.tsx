@@ -10,6 +10,7 @@ import {
 } from "@/api/dailyStats";
 import DailyStatsCharts from "@/components/DailyStatsCharts";
 import DayTotalHelp from "@/components/DayTotalHelp";
+import RoomPresenceTable from "@/components/RoomPresenceTable";
 
 /**
  * 日常统计：每只狗每天各类行为多久、多少次。
@@ -348,6 +349,15 @@ export default function DailyStats() {
               key: "charts",
               label: "趋势图",
               children: <DailyStatsCharts rows={data ?? []} labels={labels} />,
+            },
+            {
+              key: "rooms",
+              label: (
+                <Tooltip title="狗场一间一狗一摄像头：按摄像头算这间录了多久、画面里有狗多久。一只狗两个项圈同时录，按 IMU 加时长会翻倍，这里同一段视频只算一次">
+                  单间采集时长（按摄像头）
+                </Tooltip>
+              ),
+              children: <RoomPresenceTable dateFrom={range[0].format("YYYY-MM-DD")} dateTo={range[1].format("YYYY-MM-DD")} />,
             },
           ]}
         />

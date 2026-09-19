@@ -40,6 +40,28 @@ export interface DailyStatsDog {
   imus: string[];
 }
 
+/** 狗场单间：按摄像头算的一天。同一段视频不管配了几个 IMU 只算一次 */
+export interface RoomPresenceRow {
+  stat_date: string;
+  /** 单间的机位号（cam4 = 4 号单间） */
+  cam: string;
+  dog_name: string | null;
+  imus: string[];
+  n_videos: number;
+  n_scanned: number;
+  /** 还没扫画面（或扫失败）的段数，它们的时间不在 present_seconds 里 */
+  n_unscanned: number;
+  /** 这一天这间录了多久 */
+  recorded_seconds: number;
+  /** 扫过画面的那些段加起来多久 */
+  scanned_seconds: number;
+  /** 扫过的那些段里，画面里有狗多久 */
+  present_seconds: number;
+}
+
+export const listRoomPresence = (p: { date_from: string; date_to: string }) =>
+  request.get<never, RoomPresenceRow[]>("/daily-stats/rooms", { params: p });
+
 export const listDailyStatsDogs = () =>
   request.get<never, DailyStatsDog[]>("/daily-stats/dogs");
 
