@@ -210,6 +210,8 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
             "present_seconds": round(v["present"], 1) if v["present"] is not None else None,
             # 这段画面还挂在哪些别的样本上（轮换的另一个项圈、或者错误导入的）
             "also_on": v["also_on"],
+            # 在当前这批后台扫描里的状态：scanning / queued / None（全部重扫时扫过的段也会排队）
+            "job": video_job_state(v["own"].id, v["own_slot"]),
         }
 
     # 公用机位按 (日期, 场地, cam) 归一组，给单间取并集用
@@ -241,6 +243,7 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
             "n_videos": len(vids),
             "n_scanned": len(scanned),
             "n_unscanned": len(vids) - len(scanned),
+            "n_in_job": sum(1 for x in vids if video_job_state(x["own"].id, x["own_slot"])),
             "recorded_seconds": round(recorded, 1),
             "scanned_seconds": round(sum(x["dur"] for x in scanned), 1),
             # 自己机位看到有狗的时间（只按扫过的算）
@@ -284,6 +287,14 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
                     if bk:
                         extra |= bk
             if alignable and (own_buckets or extra):
+                # cam7 补的只算本机位**扫过的那几段时间**里的：补的是死角，不是没扫的小时。
+                # 不限的话「在单间里」会超过「扫过多久」，百分比冒到 100% 以上
+                covered: set[int] = set()
+                for x in scanned:
+                    if x["start"] is not None and x["dur"]:
+                        t0 = int(x["start"].timestamp() // step)
+                        covered.update(range(t0, t0 + int(x["dur"] // step) + 1))
+                extra &= covered
                 union = own_buckets | extra
                 row["present_seconds"] = round(len(union) * step, 1)
                 row["present_shared_extra_seconds"] = round(len(union - own_buckets) * step, 1)
@@ -331,14 +342,25 @@ class ScanJob:
 
 _job = ScanJob()
 _job_lock = asyncio.Lock()
-# 暂停 / 取消：set 了才往下走；取消是个标志，正在扫的那几段扫完就收
+# 暂停 / 取消都是**立刻**生效：把正在扫的那几路协程直接 cancel（视觉服务那边那一段会白算，
+# 但几秒钟的事）。暂停时被打断的段放回队列头，继续时先扫它们；取消就全部不要了
 _resume = asyncio.Event()
 _resume.set()
 _cancel = False
+_workers: list[asyncio.Task] = []
+# 还没扫的（排队中）和正在扫的：(sample_id, slot)，rooms() 拿它给每段标「排队中 / 扫描中」
+_queued: set[tuple[int, str]] = set()
+_inflight: set[tuple[int, str]] = set()
 
 
 def scan_status() -> dict:
     return _job.as_dict()
+
+
+def _kill_workers() -> None:
+    for t in _workers:
+        if not t.done():
+            t.cancel()
 
 
 def pause_scan() -> dict:
@@ -347,6 +369,7 @@ def pause_scan() -> dict:
         _job.status = "paused"
         _job._paused_at = time.time()      # type: ignore[attr-defined]
         _resume.clear()
+        _kill_workers()                    # 正在扫的立刻停，段回队列
     return _job.as_dict()
 
 
@@ -364,7 +387,18 @@ def cancel_scan() -> dict:
     if _job.status in ("running", "paused"):
         _cancel = True
         _resume.set()
+        _kill_workers()
     return _job.as_dict()
+
+
+def video_job_state(sample_id: int, slot: str) -> str | None:
+    """这段在当前这批扫描里的状态：scanning / queued / None（不在这批里）。"""
+    k = (sample_id, slot)
+    if k in _inflight:
+        return "scanning"
+    if k in _queued:
+        return "queued"
+    return None
 
 
 async def pending_videos(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
@@ -419,52 +453,76 @@ async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, con
 
 
 async def _run_scan(todo: list[dict], date_from: date, date_to: date, every_sec: float, conf: float) -> None:
-    """并行 CONCURRENCY 路扫；每段扫完各自写库；暂停在取下一段之前生效，取消在正在扫的
-    几段扫完之后生效。"""
-    global _job, _cancel
+    """并行 CONCURRENCY 路扫；每段扫完各自写库。暂停 / 取消把正在扫的协程直接 cancel：
+    暂停被打断的段放回队列头，继续时重新起一批协程接着扫；取消就收工。"""
+    global _job, _cancel, _workers, _resume
+    from collections import deque
+
     async with _job_lock:
         _job = ScanJob(status="running", total=len(todo), started_at=time.time(),
                        date_from=date_from.isoformat(), date_to=date_to.isoformat(), current=[],
                        concurrency=CONCURRENCY)
         _cancel = False
+        # 每批新建一个 Event：asyncio 的 Event 绑在第一次等它的那个循环上，换了循环（测试里）会炸
+        _resume = asyncio.Event()
         _resume.set()
+        queue: deque = deque(todo)
+        _queued.clear()
+        _inflight.clear()
+        _queued.update((it["sample_id"], it["slot"]) for it in todo)
         try:
             weights = await _weights()
-            queue: asyncio.Queue = asyncio.Queue()
-            for item in todo:
-                queue.put_nowait(item)
             db_lock = asyncio.Lock()          # 一个 session 不能被几个协程同时用
 
             async def worker(db):
-                while True:
-                    await _resume.wait()
-                    if _cancel or queue.empty():
-                        return
-                    item = queue.get_nowait()
+                while queue and not _cancel:
+                    item = queue.popleft()
+                    key = (item["sample_id"], item["slot"])
+                    _queued.discard(key)
+                    _inflight.add(key)
                     _job.current.append(item["file"])
                     try:
                         r = await vc.scan_dog(item["path"], every_sec=every_sec, conf=conf)
                         async with db_lock:
-                            await vscan._upsert(db, vscan.scan_to_row(item["sample_id"], item["slot"], r, weights))
-                            await db.commit()
+                            # 写库这一小步不许被打断，不然半条记录
+                            await asyncio.shield(_write(db, vscan.scan_to_row(item["sample_id"], item["slot"], r, weights)))
                         _job.done += 1
+                    except asyncio.CancelledError:
+                        # 暂停 / 取消：这段没扫完，放回队列头（取消的话队列整个作废，放不放无所谓）
+                        queue.appendleft(item)
+                        _queued.add(key)
+                        raise
                     except Exception as e:  # noqa: BLE001 一段挂了不该带倒整批
                         async with db_lock:
-                            await vscan._upsert(db, vscan.failed_row(item["sample_id"], item["slot"], f"{type(e).__name__}: {e}"))
-                            await db.commit()
+                            await asyncio.shield(_write(db, vscan.failed_row(item["sample_id"], item["slot"], f"{type(e).__name__}: {e}")))
                         _job.failed += 1
                     finally:
+                        _inflight.discard(key)
                         if item["file"] in _job.current:
                             _job.current.remove(item["file"])
 
             async with SessionLocal() as db:
-                await asyncio.gather(*(worker(db) for _ in range(_job.concurrency)))
-            _job.status = "cancelled" if _cancel and not queue.empty() else "done"
-            _job.current = []
+                while queue and not _cancel:
+                    await _resume.wait()
+                    if _cancel:
+                        break
+                    _workers = [asyncio.create_task(worker(db)) for _ in range(_job.concurrency)]
+                    await asyncio.gather(*_workers, return_exceptions=True)
+                    _workers = []
+            _job.status = "cancelled" if _cancel else "done"
         except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩，记录状态即可
             _job.status = "error"
             _job.error = f"{type(exc).__name__}: {exc}"
+        finally:
             _job.current = []
+            _queued.clear()
+            _inflight.clear()
+            _workers = []
+
+
+async def _write(db: AsyncSession, row: dict) -> None:
+    await vscan._upsert(db, row)
+    await db.commit()
 
 
 __all__ = ["rooms", "parse_video", "parse_room_video", "present_seconds", "in_region", "load_regions",

@@ -51,6 +51,8 @@ export interface RoomPresenceRow {
   n_scanned: number;
   /** 还没扫画面（或扫失败）的段数，它们的时间不在 present_seconds 里 */
   n_unscanned: number;
+  /** 在当前这批后台扫描里排队或正在扫的段数（全部重扫时扫过的段也会排队） */
+  n_in_job: number;
   /** 这一天这间录了多久 */
   recorded_seconds: number;
   /** 扫过画面的那些段加起来多久 */
@@ -92,6 +94,8 @@ export interface RoomVideo {
   present_seconds: number | null;
   /** 这段画面还挂在哪些别的样本上（轮换的另一个项圈、或者错误导入的） */
   also_on: string[];
+  /** 在当前这批后台扫描里的状态：scanning / queued / null */
+  job?: "scanning" | "queued" | null;
 }
 
 export const listRoomPresence = (p: { date_from: string; date_to: string }) =>
