@@ -608,14 +608,15 @@ export default function Samples() {
                           <span>
                             {imu}（{rows.length} 个样本）
                           </span>
-                          {cur && (
-                            <>
-                              <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
-                                {cur.text}
-                              </Tag>
-                              {/* 解除单独放一个按钮，不塞进上面那个下拉当一个选项：
-                                  它是清空不是改值，混在狗名列表里太容易点错 */}
-                              <span onClick={(e) => e.stopPropagation()}>
+                          {/* 关联状态和下拉放在一起、靠右：分开摆在两头的话，隔着一整行空白，
+                              人看着右边的下拉不知道左边到底关联过没有 */}
+                          <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                            {cur ? (
+                              <>
+                                <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
+                                  {cur.text}
+                                </Tag>
+                                {/* 解除单独放一个按钮，不塞进下拉当一个选项：它是清空不是改值，混在狗名列表里太容易点错 */}
                                 <Popconfirm
                                   title={`解除 ${imu} 这 ${rows.length} 个样本的狗关联？`}
                                   onConfirm={() => assignDog(rows.map((r) => r.id), null)}
@@ -624,11 +625,13 @@ export default function Samples() {
                                     解除
                                   </Button>
                                 </Popconfirm>
-                              </span>
-                            </>
-                          )}
-                          {/* 挡掉冒泡：不挡的话点下拉会把这个折叠面板收起来，选项列表跟着消失 */}
-                          <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: "auto" }}>
+                              </>
+                            ) : (
+                              <Tooltip title="这一组还没关联到哪只狗。平台按狗档案里的 IMU 号也能认，但明确关联一下更稳">
+                                <Tag style={{ marginRight: 0 }}>未关联</Tag>
+                              </Tooltip>
+                            )}
+                            {/* 挡掉冒泡：不挡的话点下拉会把这个折叠面板收起来，选项列表跟着消失 */}
                             <Select
                               size="small"
                               placeholder={`整组关联到…（${rows.length} 个）`}
