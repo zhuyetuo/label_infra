@@ -357,3 +357,40 @@ def test_cams_for_imu_caps_at_three_slots(nas):
     got = cams_for_imu(g, 9, {}, genuinely_shared_cams(g))
     assert set(got) <= {1, 2, 3}, f"槽位超出 1~3：{sorted(got)}"
     assert len(got) == 3
+
+
+# ── 第二台采集机的场次（cam4~7，没有 cam1）也要进 ─────────────────────────
+
+
+def test_gouchang_session_without_cam1_still_counts(nas):
+    """真实数据（2026-09-18）：imu15~20 一个都没进。
+
+    狗场两台采集机各录一半房间，session 时间戳差几秒，落成两个 session；
+    第二台那场只有 cam4~cam7。原来的判据是"必须有 cam1"，这一场整个被跳掉。
+    """
+    from app.services.sample_import_service import _scan_filesystem, cams_for_imu, genuinely_shared_cams, session_has_video
+
+    d = nas / "2026_9_18_gouchang"
+    d.mkdir()
+    # 第一台：cam1~3 配 imu9/11/13
+    for cam, imu in ((1, 9), (2, 11), (3, 13)):
+        _touch(d, f"multicam_20260918_000016056_cam{cam}_imu{imu}_raw.mp4")
+        _touch(d, f"multicam_20260918_000016056_cam{cam}_imu{imu}_raw.csv")
+    # 第二台：cam4~6 配 imu15~20，cam7 天花板公用
+    for cam, imu in ((4, 15), (4, 16), (5, 17), (5, 18), (6, 19), (6, 20)):
+        _touch(d, f"multicam_20260918_000011910_cam{cam}_imu{imu}_raw.mp4")
+        _touch(d, f"multicam_20260918_000011910_cam{cam}_imu{imu}_raw.csv")
+    _touch(d, "multicam_20260918_000011910_cam7_raw.mp4")
+    groups = _scan_filesystem(str(nas), str(nas))
+    first = groups["multicam_20260918_000016056"]
+    second = groups["multicam_20260918_000011910"]
+    assert session_has_video(first) and session_has_video(second)
+    assert sorted(second["csvs"]) == [15, 16, 17, 18, 19, 20]
+    # imu15 那只：自己那间 cam4 + 天花板 cam7 → 两路
+    shared = genuinely_shared_cams(second)
+    cams = cams_for_imu(second, 15, {}, shared)
+    assert [os.path.basename(p) for p in cams.values()] == [
+        "multicam_20260918_000011910_cam4_imu15_raw.mp4", "multicam_20260918_000011910_cam7_raw.mp4"]
+    # 影棚（非配对站点）没有 cam1 仍然不算
+    assert session_has_video({"videos": {2: "x"}, "paired_site": False}) is False
+    assert session_has_video({"videos": {}, "paired_site": True}) is False
