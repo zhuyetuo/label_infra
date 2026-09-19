@@ -68,9 +68,11 @@ def test_按文件名归房间_去重_没扫不算在场_影棚不算(db, run):
 
     rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
     by = {r["cam"]: r for r in rows}
-    assert set(by) == {"cam4", "cam5"}
+    assert set(by) == {"cam4", "cam5", "cam7"}
+    assert by["cam7"]["shared"] and by["cam7"]["n_videos"] == 1 and by["cam7"]["n_unscanned"] == 1
     r4 = by["cam4"]
     assert r4["dog_name"] == "旺财" and r4["imus"] == ["IMU15"]        # 狗按文件名，不按样本
+    assert r4["shared_cams"] == ["cam7"] and r4["present_shared_extra_seconds"] == 0
     assert r4["n_videos"] == 1 and r4["recorded_seconds"] == 3600 and r4["present_seconds"] == 3000
     assert r4["n_scanned"] == 1 and r4["n_unscanned"] == 0 and not r4["over_day"]
     vid = r4["videos"][0]
@@ -206,3 +208,45 @@ def test_并行扫_暂停_取消(db, run, monkeypatch):
     assert out["verdict"] == "has_dog"
     rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
     assert sum(r["n_unscanned"] for r in rows) == 1
+
+
+def test_公共区补死角_按区域归房间_取并集(db, run):
+    from app.models.cam_region import CamRegion
+    u = User(username="d", password_hash="x", display_name="d", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    v4 = f"{BASE}_cam4_imu15_raw.mp4"
+    ceiling = f"{BASE}_cam7_raw.mp4"
+    a = _sample(db, run, u, "20260917_gouchang_imu15", v4, ceiling)
+    # 单间机位：前 10 个点有狗（0~50s），后面没有
+    _scan(db, run, a, n_dog=[1] * 10 + [0] * 710)
+    # 公共区：同一时刻起录；第 8~20 个点有一只狗在 4 号间的区域里，第 30 个点有狗在别的区域
+    pts = []
+    for i in range(720):
+        if 8 <= i < 20:
+            pts.append([i * 5.0, 1, [[0.1, 0.1, 0.1, 0.1, 0.9]]])
+        elif i == 30:
+            pts.append([i * 5.0, 1, [[0.8, 0.8, 0.1, 0.1, 0.9]]])
+        else:
+            pts.append([i * 5.0, 0])
+    db.add(SampleVisionScan(sample_id=a.id, cam="cam2", state="ok", verdict="has_dog", timeline=json.dumps(pts),
+                            every_sec=5.0, duration_sec=3600))
+    run(db.commit())
+
+    # 还没划区域：cam7 不参与，只提示
+    rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
+    r4 = next(r for r in rows if r["cam"] == "cam4")
+    assert r4["present_seconds"] == 50 and r4["regions_missing"] and r4["present_shared_extra_seconds"] == 0
+    r7 = next(r for r in rows if r["cam"] == "cam7")
+    assert r7["shared"] and r7["n_scanned"] == 1 and r7["present_own_seconds"] == 13 * 5
+
+    # 划了区域：4 号间在画面左上角 → 8~20 个点补进来，30 那个点不算（在别的区域）
+    db.add(CamRegion(site="gouchang", cam=7, room=4, x=0.0, y=0.0, w=0.5, h=0.5))
+    run(db.commit())
+    rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
+    r4 = next(r for r in rows if r["cam"] == "cam4")
+    assert not r4["regions_missing"]
+    assert r4["present_own_seconds"] == 50                  # 自己机位：0~9
+    assert r4["present_shared_extra_seconds"] == 10 * 5     # cam7 补的：10~19（8、9 跟自己重叠不重复算）
+    assert r4["present_seconds"] == 20 * 5                  # 并集 0~19
+    assert svc.in_region([0.1, 0.1, 0.1, 0.1, 0.9], (0, 0, 0.5, 0.5)) and not svc.in_region([0.8, 0.8, 0.1, 0.1], (0, 0, 0.5, 0.5))

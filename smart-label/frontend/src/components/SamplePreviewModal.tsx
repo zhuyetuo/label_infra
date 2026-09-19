@@ -11,6 +11,8 @@ interface Props {
   sampleId: number | null;
   sampleCode?: string;
   onClose: () => void;
+  /** 按槽位（cam1/cam2/cam3）给的固定区域（公用机位里各单间的位置），虚线叠在画面上 */
+  regionsBySlot?: Record<string, { label: string; x: number; y: number; w: number; h: number }[]>;
 }
 
 interface VideoSrc {
@@ -41,7 +43,7 @@ function overlayOf(tl: VisionScanTimeline | undefined): ((t: number) => number[]
   };
 }
 
-export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Props) {
+export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regionsBySlot }: Props) {
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   const [hasCsv, setHasCsv] = useState(false);
@@ -102,7 +104,13 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
     >
       <Spin spinning={loading}>
         {videos.length > 0 && (
-          <SyncedVideoGroup videos={videos} bus={bus} fps={fps} overlays={videos.map((v) => overlayOf(timelines[v.cam]))} />
+          <SyncedVideoGroup
+            videos={videos}
+            bus={bus}
+            fps={fps}
+            overlays={videos.map((v) => overlayOf(timelines[v.cam]))}
+            statics={videos.map((v) => regionsBySlot?.[v.cam] ?? null)}
+          />
         )}
         {videos.some((v) => timelines[v.cam]) && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

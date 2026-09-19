@@ -55,8 +55,18 @@ export interface RoomPresenceRow {
   recorded_seconds: number;
   /** 扫过画面的那些段加起来多久 */
   scanned_seconds: number;
-  /** 扫过的那些段里，画面里有狗多久 */
+  /** 扫过的那些段里，画面里有狗多久：自己机位 ∪ 公用机位里落在这间区域的（按绝对时刻对齐取并集） */
   present_seconds: number;
+  /** 自己机位看到有狗的时间 */
+  present_own_seconds: number;
+  /** 公用机位补上的、自己机位没看到的时间 */
+  present_shared_extra_seconds: number;
+  /** 这一行是不是公用机位（天花板 cam7）本身 */
+  shared: boolean;
+  /** 这一天同场地有哪些公用机位 */
+  shared_cams: string[];
+  /** 有公用机位但还没给这间划区域，cam7 没参与 */
+  regions_missing: boolean;
   /** 一天超过 24 小时：同一段画面以不同名字导了两遍，要查 */
   over_day: boolean;
   /** 这一天这间的每段视频，点开看画面复查 */
@@ -74,7 +84,8 @@ export interface RoomVideo {
   file: string;
   /** 录制起始时刻 HH:MM:SS，文件名里没有就是 null */
   start: string | null;
-  imu: string;
+  /** 公用机位的段没有项圈号 */
+  imu: string | null;
   dog_name: string | null;
   duration_seconds: number;
   scanned: boolean;
@@ -132,3 +143,26 @@ export const listDailyStats = (p: {
   /** 设备号，逗号分隔。空 = 全部狗 */
   imus?: string;
 }) => request.get<never, DailyStatsRow[]>("/daily-stats", { params: p });
+
+/** 公用机位画面里一个单间占的那块（归一化） */
+export interface CamRegion {
+  site: string;
+  cam: number;
+  room: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export const listCamRegions = (site = "gouchang") =>
+  request.get<never, CamRegion[]>("/daily-stats/rooms/regions", { params: { site } });
+
+export const saveCamRegions = (body: { site: string; cam: number; regions: Omit<CamRegion, "site" | "cam">[] }) =>
+  request.put<never, { saved: number }>("/daily-stats/rooms/regions", body);
+
+export const getFrameToken = (sampleId: number) =>
+  request.post<never, { token: string }>("/daily-stats/rooms/frame-token", undefined, { params: { sample_id: sampleId } });
+
+export const frameUrl = (sampleId: number, slot: string, t: number, token: string) =>
+  `/api/v1/daily-stats/rooms/frame?sample_id=${sampleId}&slot=${slot}&t=${t}&token=${encodeURIComponent(token)}`;

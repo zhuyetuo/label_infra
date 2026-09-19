@@ -32,6 +32,8 @@ interface Props {
    * 复查"这段到底有没有狗"不用再重扫。框跟着缩放/平移一起动。
    */
   overlays?: (((timeSec: number) => number[][] | null) | null)[];
+  /** 每一路固定不动的形状（公用机位里各单间的区域），虚线画、带名字 */
+  statics?: ({ label: string; x: number; y: number; w: number; h: number }[] | null)[];
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -61,10 +63,12 @@ interface ZoomState {
   ty: number;
 }
 
-export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays }: Props) {
+export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays, statics }: Props) {
   const overlayRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const overlaysRef = useRef(overlays);
   overlaysRef.current = overlays;
+  const staticsRef = useRef(statics);
+  staticsRef.current = statics;
 
   // 叠框：每一路在 timeupdate / seeked 时重画一次。框是归一化坐标，要先算出画面在
   // <video> 元素里实际占的那块（object-fit: contain 会留黑边），再把 video 的缩放/平移
@@ -86,14 +90,28 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
         ctx.clearRect(0, 0, w, h);
-        if (!fn || !video.videoWidth || !video.videoHeight) return;
-        const boxes = fn(video.currentTime);
-        if (!boxes || !boxes.length) return;
+        if (!video.videoWidth || !video.videoHeight) return;
         const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
         const cw = video.videoWidth * scale;
         const ch = video.videoHeight * scale;
         const ox = (w - cw) / 2;
         const oy = (h - ch) / 2;
+        const shapes = staticsRef.current?.[i];
+        if (shapes?.length) {
+          ctx.save();
+          ctx.setLineDash([6, 4]);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "rgba(255,255,255,0.85)";
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.font = "12px sans-serif";
+          for (const sh of shapes) {
+            ctx.strokeRect(ox + sh.x * cw, oy + sh.y * ch, sh.w * cw, sh.h * ch);
+            ctx.fillText(sh.label, ox + sh.x * cw + 4, oy + sh.y * ch + 14);
+          }
+          ctx.restore();
+        }
+        const boxes = fn ? fn(video.currentTime) : null;
+        if (!boxes || !boxes.length) return;
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#52c41a";
         ctx.fillStyle = "#52c41a";
