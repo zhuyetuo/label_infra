@@ -25,9 +25,16 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, hits
   const [mode, setMode] = useState<"crop" | "full">("crop");
   // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
   const [scope, setScope] = useState<"all" | "own" | "other">("all");
-  const own = hits.filter((h) => h.task_id === taskId);
-  const other = hits.filter((h) => h.task_id !== taskId);
-  const shown = scope === "own" ? own : scope === "other" ? other : hits;
+  // 排序：综合（视觉服务给的顺序）/ 纯画面 / 纯姿态。混在一起的分看不出是哪一路把它顶上来的
+  const [sortBy, setSortBy] = useState<"score" | "vis" | "pose">("score");
+  const hasVis = hits.some((h) => h.vis_score != null);
+  const hasPose = hits.some((h) => h.pose_score != null);
+  const keyOf = (h: SimilarHit) =>
+    sortBy === "vis" ? (h.vis_score ?? h.score) : sortBy === "pose" ? (h.pose_score ?? -1) : h.score;
+  const ordered = [...hits].sort((a, b) => keyOf(b) - keyOf(a));
+  const own = ordered.filter((h) => h.task_id === taskId);
+  const other = ordered.filter((h) => h.task_id !== taskId);
+  const shown = scope === "own" ? own : scope === "other" ? other : ordered;
   useEffect(() => {
     let alive = true;
     similarThumbToken(taskId).then((r) => alive && setToken(r.token)).catch(() => alive && setToken(null));
@@ -47,6 +54,10 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, hits
                    options={[{ label: `全部 ${hits.length}`, value: "all" }, { label: `本任务 ${own.length}`, value: "own" }, { label: `其他任务 ${other.length}`, value: "other" }]} />
         <Segmented size="small" value={mode} onChange={(v) => setMode(v as "crop" | "full")}
                    options={[{ label: "狗框那一块", value: "crop" }, { label: "整帧", value: "full" }]} />
+        <Tooltip title="综合 = 画面 × (1−姿态占比) + 姿态 × 姿态占比，视觉服务按它排的；画面 / 姿态是各自单独的分，看看是哪一路把它顶上来的">
+          <Segmented size="small" value={sortBy} onChange={(v) => setSortBy(v as "score" | "vis" | "pose")}
+                     options={[{ label: "按综合", value: "score" }, { label: "按画面", value: "vis", disabled: !hasVis }, { label: "按姿态", value: "pose", disabled: !hasPose }]} />
+        </Tooltip>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {centered ? "已去共同背景（减掉所有帧的平均向量再比），分数是相对的，0.3 以上算像" : "没去背景，分数普遍 0.9+，看相对高低"}
           {poseUsed ? "；已混入姿态相似（悬停看姿态分）" : "；这次没用上姿态（算法机没装姿态模型，或样例 / 索引里没测到关键点）"}
@@ -71,12 +82,12 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, hits
               key={`${h.path}@${h.t}`}
               onClick={() => onJump(h)}
               style={{ width: 150, border: "1px solid #f0f0f0", borderRadius: 6, padding: 3, cursor: "pointer" }}
-              title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 分数 ${h.score.toFixed(3)}${h.pose_score != null ? ` · 姿态 ${h.pose_score.toFixed(3)}` : ""}`}
+              title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 综合 ${h.score.toFixed(3)}${h.vis_score != null ? ` · 画面 ${h.vis_score.toFixed(3)}` : ""}${h.pose_score != null ? ` · 姿态 ${h.pose_score.toFixed(3)}` : ""}`}
             >
               <img src={url(h.path, h.t)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4 }} />
               <div style={{ fontSize: 12, lineHeight: 1.4, marginTop: 2, display: "flex", justifyContent: "space-between", gap: 4 }}>
-                <span style={{ color: "#999" }}>#{hits.indexOf(h) + 1}</span>
-                <span style={{ color: scoreColor(h.score), fontWeight: 600 }}>{h.score.toFixed(3)}</span>
+                <span style={{ color: "#999" }}>#{ordered.indexOf(h) + 1}</span>
+                <span style={{ color: scoreColor(keyOf(h)), fontWeight: 600 }}>{keyOf(h).toFixed(3)}</span>
               </div>
               <div style={{ fontSize: 11, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {h.task_id === taskId ? <Tag color="blue" style={{ marginRight: 4, fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>本任务</Tag> : null}

@@ -349,6 +349,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
             or next((t for t in tasks_here if t.segment_start_ms is None or t.segment_end_ms is None), None) \
             or (tasks_here[0] if tasks_here else None)
         hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"], "pose_score": h.get("pose_score"),
+                         "vis_score": h.get("vis_score"),
                          "task_id": owner.id if owner else None,
                          "project_id": _proj_of.get(owner.id) if owner else None,
                          "sample_code": _code_of.get(owner.id) if owner else None,
