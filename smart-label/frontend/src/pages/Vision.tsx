@@ -256,10 +256,24 @@ export default function Vision() {
   // 原因是相邻牙同色、边界连着、牙龈紧贴，SAM 没有依据把"这颗"和"这排"分开。
   //
   // 框就没这个歧义：范围是人给的，SAM 只负责在里面贴边。
+  // 标牙龈时给 SAM 的额外信息：牙龈专用修整（只留粉红），并把这张图上已经标好的牙挖掉——
+  // 牙和龈缘紧贴，SAM 的框提示常常连牙一起圈进来，而牙是人已经标过的，直接减掉最准。
+  // 有轮廓的用轮廓，只有框的用框的四个角
+  const gingivaExtras = (code: string | null) => {
+    if (code !== "gingiva") return {};
+    const exclude = items
+      .filter((it) => it.label_code !== "gingiva")
+      .map((it) => (it.polygon && it.polygon.length >= 3 ? it.polygon : (() => {
+        const [x, y, w, h] = it.bbox;
+        return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+      })()));
+    return { refine: "gingiva" as const, exclude };
+  };
+
   const samRefine = useMutation({
     mutationFn: async ({ idx, box }: { idx: number; box: VisionBox }) => {
       const forPath = current!;
-      const r = await samSegment({ album, path: forPath, points: [], box });
+      const r = await samSegment({ album, path: forPath, points: [], box, ...gingivaExtras(brush) });
       return { ...r, forPath, idx };
     },
     onSuccess: (r) => {
@@ -280,7 +294,7 @@ export default function Vision() {
   const samPick = useMutation({
     mutationFn: async (pt: { x: number; y: number }) => {
       const forPath = current!;
-      const r = await samSegment({ album, path: forPath, points: [{ ...pt, label: 1 }] });
+      const r = await samSegment({ album, path: forPath, points: [{ ...pt, label: 1 }], ...gingivaExtras(brush) });
       return { ...r, forPath };
     },
     onSuccess: (r) => {
@@ -1124,6 +1138,8 @@ export default function Vision() {
         <Typography.Paragraph>
           <b>牙龈是单独一类（快捷键 5）</b>，框<b>龈缘那条带</b>——牙冠根部往上那一条，
           一段一段地框，不要把整排牙连牙带龈圈进去。<br />
+          <b>先标牙，再标牙龈</b>：开着 SAM 拖牙龈框时，这张图上已经标好的牙会从结果里直接挖掉，
+          再按颜色只留粉红那部分（白牙、黑嘴唇去掉）。牙没标的话只有颜色这一道，边缘会糙一些。<br />
           选中牙龈框之后，右栏出现的是<b>牙龈颜色 / 肿胀 / 出血</b>；选中牙的框，出现的是
           <b>牙位 / 牙结石</b>。GI 两边都能填。<br />
           <Typography.Text type="secondary">
