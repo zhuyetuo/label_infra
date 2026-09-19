@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
 import {
+  Alert,
   Button,
   Empty,
   Modal,
@@ -355,10 +356,11 @@ export default function AnnotationWorkspace({
       listCandidates(taskId)
         .then((cs) => {
           setCandidates(cs);
-          // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找
+          // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找。
+          // 「先看命中」跳来的还没写候选，那就循环命中前 2 秒到后 4 秒
           if (initialSeekMs != null && initialCandFilter === "similar") {
             const hit = cs.find((c) => c.reason === "similar" && Math.abs(c.start_time_ms - initialSeekMs) < 1500);
-            if (hit) setLoop({ startMs: hit.start_time_ms, endMs: hit.end_time_ms });
+            setLoop(hit ? { startMs: hit.start_time_ms, endMs: hit.end_time_ms } : { startMs: Math.max(0, initialSeekMs - 2000), endMs: initialSeekMs + 4000 });
           }
         })
         .catch(() => setCandidates([]));
@@ -1218,6 +1220,8 @@ export default function AnnotationWorkspace({
             projectId={task?.project_id ?? null}
             refPath={similarPeek.refPath}
             refT={similarPeek.refT}
+            refSampleId={sampleId}
+            refCam="cam1"
             hits={similarPeek.hits}
             centered={similarPeek.centered}
             poseUsed={similarPeek.poseUsed}
@@ -1227,7 +1231,8 @@ export default function AnnotationWorkspace({
                 setLoop({ startMs: Math.max(0, ms - 2000), endMs: ms + 4000 });
                 bus.seek(Math.max(0, h.t - 2));
               } else if (h.task_id != null) {
-                window.open(`/tasks?task=${h.task_id}&seek=${Math.round(h.t * 1000)}`, "_blank");
+                // cand=similar：那边打开时候选面板只看「画面相似」、这一条置顶高亮、视频停在这一刻循环
+                window.open(`/tasks?task=${h.task_id}&seek=${Math.round(h.t * 1000)}&cand=similar`, "_blank");
               }
             }}
           />
@@ -1458,6 +1463,27 @@ export default function AnnotationWorkspace({
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
             「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
+        {initialSeekMs != null && initialCandFilter === "similar" && (
+          // 从找相似跳来的：说清楚定位到了哪一刻、正在循环哪几秒——不然人不知道该看哪一条
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 6 }}
+            message={
+              <span>
+                从「找相似」跳来：命中在 <b>{formatMs(initialSeekMs)}</b>
+                {loopRange ? `，正在循环播放 ${formatMs(loopRange.startMs)} ~ ${formatMs(loopRange.endMs)}` : "，已定位到这一刻"}
+                ；下面候选列表里这一条置顶高亮（还没写候选的话列表里没有，看画面就行）
+              </span>
+            }
+            action={
+              <Space size={4}>
+                <Button size="small" onClick={() => { bus.seek(initialSeekMs / 1000); setLoop({ startMs: Math.max(0, initialSeekMs - 2000), endMs: initialSeekMs + 4000 }); }}>再定位</Button>
+                {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
+              </Space>
+            }
+          />
+        )}
         {videos.length > 0 ? (
           <SyncedVideoGroup
             videos={videos}

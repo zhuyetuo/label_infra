@@ -321,10 +321,16 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     _multi_of: dict[int, bool] = {}
     _code_of: dict[int, str | None] = {}
     _proj_of: dict[int, int] = {}
+    # 每路视频是哪份样本的哪个槽位：前端拿它去换视频流，在预览里直接循环播放命中的那几秒
+    _media_of: dict[str, tuple[int, str]] = {}
     for t, s_, path in rows:
         by_path.setdefault(path, []).append(t)
         _code_of[t.id] = s_.sample_code if s_ else None
         _proj_of[t.id] = t.project_id
+        if s_ is not None and path not in _media_of:
+            slot = next((c for c in ("cam1", "cam2", "cam3") if video_path_of(s_, c) == path), None)
+            if slot:
+                _media_of[path] = (s_.id, slot)
         if s_ is not None:
             kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
             _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
@@ -348,8 +354,10 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                       and t.segment_start_ms <= t_ms < t.segment_end_ms), None) \
             or next((t for t in tasks_here if t.segment_start_ms is None or t.segment_end_ms is None), None) \
             or (tasks_here[0] if tasks_here else None)
+        m = _media_of.get(h["path"])
         hits_out.append({"path": h["path"], "t": h["t"], "score": h["score"], "pose_score": h.get("pose_score"),
                          "vis_score": h.get("vis_score"),
+                         "sample_id": m[0] if m else None, "cam": m[1] if m else None,
                          "task_id": owner.id if owner else None,
                          "project_id": _proj_of.get(owner.id) if owner else None,
                          "sample_code": _code_of.get(owner.id) if owner else None,

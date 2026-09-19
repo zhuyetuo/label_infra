@@ -291,12 +291,20 @@ def test_找相似_只看不写_命中带任务和样本_缩略图要token(db, r
     # 缩略图：要 token，path 得在项目里
     tok = run(api.similar_thumb_token(t1.id, db=db, user=u))["data"]["token"]
 
-    async def thumb(path, t, crop=True):
-        return b"\xff\xd8" + path.encode() + (b"c" if crop else b"f")
+    # 每个命中带样本 id 和槽位：前端拿它换视频流，在预览里直接循环播放
+    assert [(h["sample_id"], h["cam"]) for h in hl] == [(s2.id, "cam1"), (s1.id, "cam1"), (s2.id, "cam1")]
+
+    async def thumb(path, t, crop=True, view=None):
+        return b"\xff\xd8" + path.encode() + (b"c" if crop else b"f") + (view or "").encode()
 
     monkeypatch.setattr(vc, "embed_thumb", thumb)
     resp = run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 70.0, tok, crop=False, db=db))
     assert resp.media_type == "image/jpeg" and resp.body.endswith(b"s2_cam1.mp4f")
+    resp = run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 70.0, tok, view="pose", db=db))
+    assert resp.body.endswith(b"cpose")
+    with pytest.raises(HTTPException) as e:
+        run(api.similar_thumb(t1.id, "d/s2_cam1.mp4", 70.0, tok, view="xx", db=db))
+    assert e.value.status_code == 422
     with pytest.raises(HTTPException) as e:
         run(api.similar_thumb(t1.id, "d/other.mp4", 1.0, tok, db=db))      # 不是库里登记的视频
     assert e.value.status_code == 403

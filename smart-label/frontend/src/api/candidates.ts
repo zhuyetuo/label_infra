@@ -116,15 +116,21 @@ export interface SimilarHit {
   task_id: number | null;
   project_id: number | null;
   sample_code: string | null;
+  /** 这路视频是哪份样本的哪个槽位（cam1/2/3）：换视频流、在预览里循环播放用 */
+  sample_id?: number | null;
+  cam?: string | null;
   multi_dog: boolean;
 }
+
+/** 命中缩略图看哪种：mask 抠掉背景（拿去比的那张）/ raw 那块原图 / pose 画关键点骨架 / box 整帧带检测框 */
+export type SimilarThumbView = "mask" | "raw" | "pose" | "box";
 
 /** <img> 带不了 Authorization：换一个短期 token 拼进缩略图地址 */
 export const similarThumbToken = (taskId: number) =>
   request.post<never, { token: string }>("/candidates/similar/thumb-token", null, { params: { task_id: taskId } });
 
-export const similarThumbUrl = (taskId: number, path: string, t: number, token: string, crop = true) =>
-  `/api/v1/candidates/similar/thumb?task_id=${taskId}&path=${encodeURIComponent(path)}&t=${t}&token=${token}&crop=${crop}`;
+export const similarThumbUrl = (taskId: number, path: string, t: number, token: string, view: SimilarThumbView = "mask") =>
+  `/api/v1/candidates/similar/thumb?task_id=${taskId}&path=${encodeURIComponent(path)}&t=${t}&token=${token}&view=${view}`;
 
 /** 找相似之前看一眼样例帧：框到了哪几只狗、拿哪一块去搜。坐标都是归一化的 */
 export interface SimilarPreview {
