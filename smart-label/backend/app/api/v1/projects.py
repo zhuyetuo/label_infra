@@ -221,7 +221,19 @@ async def vision_index_status(project_id: int):
 
 @router.post("/{project_id}/vision-index/cancel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def cancel_vision_index(project_id: int):
+    """停止：立刻，正在建的那几路也掐掉；建好的保留。"""
     return ok({"stopped": vindex.cancel(project_id)})
+
+
+@router.post("/{project_id}/vision-index/pause", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def pause_vision_index(project_id: int):
+    """暂停：正在建的那几路建完就停，后面的不开始；「继续」接着建。"""
+    return ok({"paused": vindex.pause(project_id), **vindex.get_progress(project_id).to_dict()})
+
+
+@router.post("/{project_id}/vision-index/resume", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def resume_vision_index(project_id: int):
+    return ok({"resumed": vindex.resume(project_id), **vindex.get_progress(project_id).to_dict()})
 
 
 @router.get("/{project_id}/ai-prelabel/status")

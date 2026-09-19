@@ -24,3 +24,20 @@ class LocalModelStat(Base):
     frames: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class LocalModelSnapshot(Base):
+    """上一次从视觉服务拉到的累计计数（每个模型一行）。差值要跟它比。
+
+    存库而不是存进程内存：API 进程（打开统计页时即时采一次）和调度器进程（每 5 分钟）
+    都要采，各自记内存快照会把同一段量算两遍。
+    """
+
+    __tablename__ = "local_model_snapshots"
+
+    model_key: Mapped[str] = mapped_column(String(20), primary_key=True)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frames: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    taken_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

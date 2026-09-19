@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelRoomScan, getRoomScanStatus, listCamRegions, listRoomPresence, pauseRoomScan, resumeRoomScan, scanRoomVideo, startRoomScan,
   type RoomPresenceRow, type RoomVideo,
@@ -26,9 +26,11 @@ const fmtH = (sec: number) => {
  * 不做重识别；「在单间里」用画面扫描（每 5 秒一点看有没有狗）的时间线算。每段画面能点开复查。
  */
 export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: string; dateTo: string }) {
-  const { data, isFetching } = useQuery({
+  // 扫描跑着的时候每 5 秒刷一次：只在第一次没数据时转圈，后台刷新不遮表、不闪
+  const { data, isLoading } = useQuery({
     queryKey: ["room-presence", dateFrom, dateTo],
     queryFn: () => listRoomPresence({ date_from: dateFrom, date_to: dateTo }),
+    placeholderData: keepPreviousData,
   });
   const rows = data ?? [];
   const [preview, setPreview] = useState<RoomVideo | null>(null);
@@ -209,7 +211,7 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
         size="small"
         rowKey="cam"
         pagination={false}
-        loading={isFetching}
+        loading={isLoading}
         title={() => (
           <b>
             这段日期累计：录了 {fmtH(grand.rec)}，扫过 {fmtH(grand.scanned)}，画面里有狗 {fmtH(grand.present)}
@@ -246,7 +248,7 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
       <Table
         size="small"
         rowKey={(r) => `${r.stat_date}-${r.cam}`}
-        loading={isFetching}
+        loading={isLoading}
         dataSource={rows}
         pagination={{ pageSize: 50, showSizeChanger: true }}
         expandable={{

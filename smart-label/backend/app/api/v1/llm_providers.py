@@ -159,6 +159,8 @@ async def local_models_stats(days: int = 30, db: AsyncSession = Depends(get_db))
     """本地模型最近 days 天的调用量，每个模型按天一行（平台每 5 分钟从视觉服务采一次计数）。"""
     from app.services import local_model_stats_service as lms
 
+    # 打开页面时即时采一次（20 秒限流），不用等调度器那 5 分钟
+    await lms.collect_throttled(db)
     return ok(await lms.stats(db, max(1, min(400, days))))
 
 

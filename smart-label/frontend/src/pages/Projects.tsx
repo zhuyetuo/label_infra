@@ -84,6 +84,8 @@ import { listLlmProviders } from "@/api/llmProviders";
 import {
   cancelVisionIndex,
   getVisionIndexStatus,
+  pauseVisionIndex,
+  resumeVisionIndex,
   startVisionIndex,
   type VisionIndexProgress,
 } from "@/api/projects";
@@ -307,7 +309,7 @@ export default function Projects() {
     pollIndex(projectIds.split(",").map(Number));
   }, [projectIds]);
   const indexRunningIds = Object.values(indexProgress)
-    .filter((p) => p.status === "running")
+    .filter((p) => p.status === "running" || p.status === "paused")
     .map((p) => p.project_id)
     .join(",");
   useEffect(() => {
@@ -1406,18 +1408,30 @@ export default function Projects() {
                   {(() => {
                     const ip = indexProgress[p.id];
                     if (!ip || ip.status === "idle") return null;
-                    if (ip.status === "running") {
+                    if (ip.status === "running" || ip.status === "paused") {
+                      const paused = ip.status === "paused";
                       return (
                         <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
-                          <Progress size="small" status="active" strokeColor="#2f54eb"
+                          <Progress size="small" status={paused ? "normal" : "active"} strokeColor={paused ? "#8c8c8c" : "#2f54eb"}
                             percent={ip.total ? Math.round((ip.processed / ip.total) * 100) : 0}
-                            format={() => `索引 ${ip.processed}/${ip.total}`} />
+                            format={() => `索引 ${ip.processed}/${ip.total}${paused ? "（已暂停）" : ""}`} />
                           <Space size={4}>
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               {ip.current ?? ""} · 已用 {fmtClock(ip.elapsed_sec)}
                             </Typography.Text>
-                            <Popconfirm title="停止建索引？" description="正在建的这一路会建完，之后的不再建；建好的保留"
-                              onConfirm={async () => { await cancelVisionIndex(p.id); message.success("正在停止"); }}>
+                            {paused ? (
+                              <Tooltip title="接着建没建的那些路">
+                                <Button size="small" type="link" style={{ padding: 0 }}
+                                  onClick={async () => { await resumeVisionIndex(p.id); pollIndex([p.id]); }}>继续</Button>
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title="正在建的那几路建完就停住，后面的不开始；点「继续」接着建">
+                                <Button size="small" type="link" style={{ padding: 0 }}
+                                  onClick={async () => { await pauseVisionIndex(p.id); pollIndex([p.id]); }}>暂停</Button>
+                              </Tooltip>
+                            )}
+                            <Popconfirm title="停止建索引？" description="立刻停，正在建的那几路也掐掉；建好的保留，下次不用重建"
+                              onConfirm={async () => { await cancelVisionIndex(p.id); message.success("已停止"); pollIndex([p.id]); }}>
                               <Button size="small" danger type="link" style={{ padding: 0 }}>停止</Button>
                             </Popconfirm>
                           </Space>
@@ -1515,7 +1529,7 @@ export default function Projects() {
                   <Button
                     size="small"
                     type="link"
-                    loading={indexProgress[p.id]?.status === "running"}
+                    loading={["running", "paused"].includes(indexProgress[p.id]?.status ?? "")}
                     onClick={() => {
                       setIndexTarget(p);
                       pollIndex([p.id]);
@@ -1567,7 +1581,7 @@ export default function Projects() {
         okButtonProps={{
           disabled:
             !indexTarget ||
-            indexProgress[indexTarget.id]?.status === "running" ||
+            ["running", "paused"].includes(indexProgress[indexTarget.id]?.status ?? "") ||
             indexProgress[indexTarget.id]?.service?.available === false,
         }}
         onOk={async () => {

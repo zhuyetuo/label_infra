@@ -111,7 +111,8 @@ function SectionTitle({ children, tip, extra }: { children: React.ReactNode; tip
 // 大模型 API。每个模型一张卡：几个总数 + 按天的柱状图，悬停柱子看那天的数。
 export default function LlmCallStats() {
   const [days, setDays] = useState(30);
-  const local = useQuery({ queryKey: ["local-model-stats", days], queryFn: () => getLocalModelStats(days), refetchInterval: 60_000 });
+  // 本地模型：这个接口每次会顺手从视觉服务采一次计数（20 秒限流），所以开着页面每 20 秒刷一次就是准实时
+  const local = useQuery({ queryKey: ["local-model-stats", days], queryFn: () => getLocalModelStats(days), refetchInterval: 20_000 });
   const live = useQuery({ queryKey: ["local-models"], queryFn: listLocalModels, refetchInterval: 30_000 });
   const imu = useQuery({ queryKey: ["imu-model-stats", days], queryFn: () => getImuModelStats(days), refetchInterval: 60_000 });
   const llm = useQuery({ queryKey: ["llm-call-stats", days], queryFn: () => getLlmCallStats(days), refetchInterval: 30_000 });
@@ -133,7 +134,7 @@ export default function LlmCallStats() {
 
       <div>
         <SectionTitle
-          tip="算法机（视觉服务）上的模型。它的计数在进程内存里，平台每 5 分钟采一次、按小时落表，所以这里能按天看；「帧」是处理过的图片数，批量检测一次几十张。视觉服务重启不影响这里的历史"
+          tip="算法机（视觉服务）上的模型。它的计数在进程内存里，平台按小时落表：开着这页每 20 秒采一次、没人看时调度器每 5 分钟采一次，所以这里近乎实时又能按天看；「帧」是处理过的图片数，批量检测一次几十张。视觉服务重启不影响这里的历史"
           extra={
             <Popconfirm title="把视觉服务里的实时计数清零？（这里按天的历史不受影响）" onConfirm={async () => { await resetLocalModelMeter(); message.success("已清零"); live.refetch(); }}>
               <Button size="small" type="text">清零实时计数</Button>
