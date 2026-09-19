@@ -57,6 +57,27 @@ export interface RoomPresenceRow {
   scanned_seconds: number;
   /** 扫过的那些段里，画面里有狗多久 */
   present_seconds: number;
+  /** 一天超过 24 小时：同一段画面以不同名字导了两遍，要查 */
+  over_day: boolean;
+  /** 这一天这间的每段视频，点开看画面复查 */
+  videos: RoomVideo[];
+}
+
+/** 单间的一段画面。房间和狗都是从文件名 `_camN_imuM` 读的，不看样本挂的是哪个 IMU */
+export interface RoomVideo {
+  /** 这段画面"自己的"样本（文件名里的项圈号跟样本一致的那份），点开看画面用它 */
+  sample_id: number;
+  sample_code: string;
+  file: string;
+  /** 录制起始时刻 HH:MM:SS，文件名里没有就是 null */
+  start: string | null;
+  imu: string;
+  dog_name: string | null;
+  duration_seconds: number;
+  scanned: boolean;
+  present_seconds: number | null;
+  /** 这段画面还挂在哪些别的样本上（轮换的另一个项圈、或者错误导入的） */
+  also_on: string[];
 }
 
 export const listRoomPresence = (p: { date_from: string; date_to: string }) =>
