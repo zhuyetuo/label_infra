@@ -117,16 +117,54 @@ async def vision_scan_timeline(sample_id: int, db: AsyncSession = Depends(get_db
     返回 {cam1: {every_sec, points: [[秒, 几只, [[x,y,w,h,conf],...]], ...]}, ...}。
     老结果没有第三项（那时不存框），前端按可缺处理；没扫过的路不出现。
     """
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    from app.services import room_presence_service as room_svc
+
+    slots = {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path, "cam3": sample.video_cam3_path}
+    paths = [p for p in slots.values() if p]
+    # 同一段画面（公共区 cam7、轮换项圈共用的单间画面）挂在好几份样本上，但只在其中一份上扫过。
+    # 按**视频文件**找扫描结果，不只按这份样本自己的：哪份样本上扫的都认
+    carriers = (await db.execute(select(Sample).where(
+        (Sample.video_cam1_path.in_(paths)) | (Sample.video_cam2_path.in_(paths)) | (Sample.video_cam3_path.in_(paths))
+    ))).scalars().all() if paths else []
+    pairs: dict[tuple[int, str], str] = {}      # (样本, 槽位) → 视频路径
+    for c in carriers:
+        for cam, p in (("cam1", c.video_cam1_path), ("cam2", c.video_cam2_path), ("cam3", c.video_cam3_path)):
+            if p and p in paths:
+                pairs[(c.id, cam)] = p
     rows = (await db.execute(
-        select(SampleVisionScan).where(SampleVisionScan.sample_id == sample_id, SampleVisionScan.state == "ok")
-    )).scalars().all()
-    out = {}
+        select(SampleVisionScan).where(SampleVisionScan.sample_id.in_({sid for sid, _ in pairs}), SampleVisionScan.state == "ok")
+    )).scalars().all() if pairs else []
+    by_path: dict[str, SampleVisionScan] = {}
     for r in rows:
-        out[r.cam] = {
-            "every_sec": float(r.every_sec) if r.every_sec is not None else 5.0,
-            "verdict": r.verdict,
-            "weights": r.weights,
-            "points": vscan.load_timeline(r.timeline),
+        p = pairs.get((r.sample_id, r.cam))
+        if p is None:
+            continue
+        # 自己这份样本上的优先，其次随便哪份扫过的
+        if p not in by_path or r.sample_id == sample_id:
+            by_path[p] = r
+    regions = await room_svc.load_regions(db)
+    site = room_svc._site_key(sample)
+    out = {}
+    for cam, p in slots.items():
+        r = by_path.get(p) if p else None
+        pv = room_svc.parse_video(p) if p else None
+        # 公共区那一路（_cam7_raw）：把各单间的区域一起带回去，预览时叠在画面上
+        regs = None
+        if pv is not None and pv["imu"] is None and site:
+            regs = [{"label": f"{room} 号", "x": x, "y": y, "w": w, "h": h}
+                    for room, (x, y, w, h) in sorted(regions.get((site, pv["cam"]), {}).items())] or None
+        if r is None and regs is None:
+            continue
+        out[cam] = {
+            "every_sec": float(r.every_sec) if r is not None and r.every_sec is not None else 5.0,
+            "verdict": r.verdict if r is not None else None,
+            "weights": r.weights if r is not None else None,
+            "points": vscan.load_timeline(r.timeline) if r is not None else [],
+            "scanned_on": r.sample_id if r is not None else None,
+            "regions": regs,
         }
     return ok(out)
 

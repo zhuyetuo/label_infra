@@ -250,3 +250,22 @@ def test_公共区补死角_按区域归房间_取并集(db, run):
     assert r4["present_shared_extra_seconds"] == 10 * 5     # cam7 补的：10~19（8、9 跟自己重叠不重复算）
     assert r4["present_seconds"] == 20 * 5                  # 并集 0~19
     assert svc.in_region([0.1, 0.1, 0.1, 0.1, 0.9], (0, 0, 0.5, 0.5)) and not svc.in_region([0.8, 0.8, 0.1, 0.1], (0, 0, 0.5, 0.5))
+
+
+def test_预览时间线_按视频文件找扫描结果_公共区带区域(db, run):
+    from app.api.v1.samples import vision_scan_timeline
+    from app.models.cam_region import CamRegion
+    u = User(username="e", password_hash="x", display_name="e", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    v6 = f"{BASE}_cam6_imu19_raw.mp4"
+    ceiling = f"{BASE}_cam7_raw.mp4"
+    a = _sample(db, run, u, "20260917_gouchang_imu19", v6, ceiling)
+    b = _sample(db, run, u, "20260917_gouchang_imu20", v6, ceiling)     # 轮换项圈：同样两段画面
+    _scan(db, run, a, cam="cam2", n_dog=[1, 0])                          # cam7 只在 a 上扫过
+    db.add(CamRegion(site="gouchang", cam=7, room=6, x=0.7, y=0.5, w=0.2, h=0.3))
+    run(db.commit())
+    out = run(vision_scan_timeline(b.id, db=db))["data"]
+    assert "cam1" not in out                                            # 单间那段谁都没扫
+    assert out["cam2"]["scanned_on"] == a.id and out["cam2"]["points"][0][1] == 1
+    assert out["cam2"]["regions"] == [{"label": "6 号", "x": 0.7, "y": 0.5, "w": 0.2, "h": 0.3}]

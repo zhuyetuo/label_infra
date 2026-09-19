@@ -109,13 +109,14 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regi
             bus={bus}
             fps={fps}
             overlays={videos.map((v) => overlayOf(timelines[v.cam]))}
-            statics={videos.map((v) => regionsBySlot?.[v.cam] ?? null)}
+            statics={videos.map((v) => regionsBySlot?.[v.cam] ?? timelines[v.cam]?.regions ?? null)}
           />
         )}
         {videos.some((v) => timelines[v.cam]) && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             绿框是画面扫描时检测到的狗（每 {timelines[videos.find((v) => timelines[v.cam])!.cam].every_sec} 秒看一帧，框跟着最近的那一帧走，中间的时刻不画）。
-            没框不等于没狗，只是那一帧没检出来
+            没框不等于没狗，只是那一帧没检出来；白色虚线是公共区里各单间的位置。
+            {videos.filter((v) => timelines[v.cam] && !timelines[v.cam].points.length).map((v) => ` ${v.label} 还没扫过。`).join("")}
           </Typography.Text>
         )}
         {!loading && videos.length === 0 && (
