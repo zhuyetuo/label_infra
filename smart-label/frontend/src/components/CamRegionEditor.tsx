@@ -38,6 +38,8 @@ export default function CamRegionEditor({ open, onClose, site, cam, sampleId, sl
   const [saving, setSaving] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // 调整已有的框：整个拖着走，或者拉某条边 / 某个角
+  const edit = useRef<{ room: number; mode: "move" | string; px: number; py: number; orig: Rect } | null>(null);
   const [, force] = useState(0);
 
   useEffect(() => {
@@ -75,14 +77,47 @@ export default function CamRegionEditor({ open, onClose, site, cam, sampleId, sl
     drag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     e.preventDefault();
   };
-  const onMove = (e: React.MouseEvent) => {
-    if (!drag.current) return;
+  // 按在已有的框上：选中那间；从框身拖是整个挪，从边 / 角拖是改大小
+  const onRectDown = (e: React.MouseEvent, r: Rect, mode: "move" | string) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
     const p = rel(e);
+    setRoom(r.room);
+    edit.current = { room: r.room, mode, px: p.x, py: p.y, orig: { ...r } };
+  };
+  const MIN = 0.02;
+  const onMove = (e: React.MouseEvent) => {
+    const p = rel(e);
+    const ed = edit.current;
+    if (ed) {
+      const dx = p.x - ed.px;
+      const dy = p.y - ed.py;
+      const o = ed.orig;
+      let { x, y, w, h } = o;
+      if (ed.mode === "move") {
+        x = Math.min(1 - w, Math.max(0, o.x + dx));
+        y = Math.min(1 - h, Math.max(0, o.y + dy));
+      } else {
+        // n/s/e/w 及其组合：拉哪条边就动哪条边，对边不动
+        if (ed.mode.includes("w")) { x = Math.min(o.x + o.w - MIN, Math.max(0, o.x + dx)); w = o.x + o.w - x; }
+        if (ed.mode.includes("e")) { w = Math.min(1 - o.x, Math.max(MIN, o.w + dx)); }
+        if (ed.mode.includes("n")) { y = Math.min(o.y + o.h - MIN, Math.max(0, o.y + dy)); h = o.y + o.h - y; }
+        if (ed.mode.includes("s")) { h = Math.min(1 - o.y, Math.max(MIN, o.h + dy)); }
+      }
+      setRects((prev) => prev.map((r) => (r.room === ed.room ? { room: r.room, x, y, w, h } : r)));
+      return;
+    }
+    if (!drag.current) return;
     drag.current.x1 = p.x;
     drag.current.y1 = p.y;
     force((n) => n + 1);
   };
   const onUp = () => {
+    if (edit.current) {
+      edit.current = null;
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     if (!d || room == null) return;
@@ -118,7 +153,7 @@ export default function CamRegionEditor({ open, onClose, site, cam, sampleId, sl
         type="info"
         showIcon
         style={{ marginBottom: 8 }}
-        message="选一个房间号，在画面上拖一个框把那间圈起来；每间一个框。cam7 里检出的狗，框的中心落在哪块就算哪间的，跟单间自己的机位取并集"
+        message="选一个房间号，在画面上拖一个框把那间圈起来；每间一个框。画好的框可以整个拖着挪、拉边或角改大小。cam7 里检出的狗，框的中心落在哪块就算哪间的"
       />
       <Space wrap style={{ marginBottom: 8 }}>
         <span>正在画：</span>
@@ -137,11 +172,30 @@ export default function CamRegionEditor({ open, onClose, site, cam, sampleId, sl
           style={{ position: "relative", width: "100%", background: "#000", cursor: room != null ? "crosshair" : "default", userSelect: "none" }}
         >
           {img ? <img src={img} alt="" style={{ width: "100%", display: "block" }} draggable={false} /> : <div style={{ height: 400 }} />}
-          {rects.map((r) => (
-            <div key={r.room} style={{ position: "absolute", left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%`, border: `2px solid ${r.room === room ? "#faad14" : "#52c41a"}`, boxSizing: "border-box", pointerEvents: "none" }}>
-              <span style={{ position: "absolute", left: 2, top: 2, background: r.room === room ? "#faad14" : "#52c41a", color: "#000", fontSize: 12, padding: "0 4px" }}>{r.room} 号</span>
-            </div>
-          ))}
+          {rects.map((r) => {
+            const c = r.room === room ? "#faad14" : "#52c41a";
+            const handle = (mode: string, style: React.CSSProperties, cursor: string) => (
+              <div key={mode} onMouseDown={(e) => onRectDown(e, r, mode)} style={{ position: "absolute", width: 10, height: 10, background: c, border: "1px solid #000", cursor, ...style }} />
+            );
+            return (
+              <div
+                key={r.room}
+                onMouseDown={(e) => onRectDown(e, r, "move")}
+                title="拖动整个框挪位置；拉边或角改大小"
+                style={{ position: "absolute", left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%`, border: `2px solid ${c}`, boxSizing: "border-box", cursor: "move" }}
+              >
+                <span style={{ position: "absolute", left: 2, top: 2, background: c, color: "#000", fontSize: 12, padding: "0 4px", pointerEvents: "none" }}>{r.room} 号</span>
+                {handle("nw", { left: -5, top: -5 }, "nwse-resize")}
+                {handle("ne", { right: -5, top: -5 }, "nesw-resize")}
+                {handle("sw", { left: -5, bottom: -5 }, "nesw-resize")}
+                {handle("se", { right: -5, bottom: -5 }, "nwse-resize")}
+                {handle("n", { left: "calc(50% - 5px)", top: -5 }, "ns-resize")}
+                {handle("s", { left: "calc(50% - 5px)", bottom: -5 }, "ns-resize")}
+                {handle("w", { left: -5, top: "calc(50% - 5px)" }, "ew-resize")}
+                {handle("e", { right: -5, top: "calc(50% - 5px)" }, "ew-resize")}
+              </div>
+            );
+          })}
           {d && (
             <div style={{ position: "absolute", left: `${Math.min(d.x0, d.x1) * 100}%`, top: `${Math.min(d.y0, d.y1) * 100}%`, width: `${Math.abs(d.x1 - d.x0) * 100}%`, height: `${Math.abs(d.y1 - d.y0) * 100}%`, border: "2px dashed #faad14", pointerEvents: "none" }} />
           )}
