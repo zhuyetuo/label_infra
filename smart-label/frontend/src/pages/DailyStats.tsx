@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Card, DatePicker, Empty, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
@@ -50,14 +50,41 @@ const fmtDur = (sec: number) => {
   return h ? `${h} 小时 ${m} 分` : `${m} 分`;
 };
 
+// 日期范围 / 版本 / 狗 记在这台电脑上：换个页面再回来、刷新，选的还在。
+// 不然每次进来都是"最近 14 天"，看历史数据的人每次都要重新选一遍
+const FILTER_KEY = "daily-stats-filters";
+
+function loadFilters(): { range: [Dayjs, Dayjs]; version: string; imus: string[] } {
+  const fallback: [Dayjs, Dayjs] = [dayjs().subtract(13, "day"), dayjs()];
+  try {
+    const raw = localStorage.getItem(FILTER_KEY);
+    if (!raw) return { range: fallback, version: "", imus: [] };
+    const v = JSON.parse(raw);
+    const a = dayjs(v.from);
+    const b = dayjs(v.to);
+    return {
+      range: a.isValid() && b.isValid() && !b.isBefore(a) ? [a, b] : fallback,
+      version: typeof v.version === "string" ? v.version : "",
+      imus: Array.isArray(v.imus) ? v.imus.filter((x: unknown) => typeof x === "string") : [],
+    };
+  } catch {
+    return { range: fallback, version: "", imus: [] };
+  }
+}
+
 export default function DailyStats() {
-  const [range, setRange] = useState<[Dayjs, Dayjs]>([
-    dayjs().subtract(13, "day"),
-    dayjs(),
-  ]);
-  const [version, setVersion] = useState<string>("");
+  const [initial] = useState(loadFilters);
+  const [range, setRange] = useState<[Dayjs, Dayjs]>(initial.range);
+  const [version, setVersion] = useState<string>(initial.version);
   // 选中的狗（空 = 全部）。存的是设备号——一只狗可能有两个，一起选上
-  const [imus, setImus] = useState<string[]>([]);
+  const [imus, setImus] = useState<string[]>(initial.imus);
+  useEffect(() => {
+    try {
+      localStorage.setItem(FILTER_KEY, JSON.stringify({ from: range[0].format("YYYY-MM-DD"), to: range[1].format("YYYY-MM-DD"), version, imus }));
+    } catch {
+      // 存不下（隐私模式）不影响用
+    }
+  }, [range, version, imus]);
 
   const { data: dogs } = useQuery({
     queryKey: ["daily-stats-dogs"],
