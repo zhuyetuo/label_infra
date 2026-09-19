@@ -37,6 +37,43 @@ function formatDuration(sec: number): string {
   return `${m}分${s}秒`;
 }
 
+type DayItem = { key: string; label: React.ReactNode; children: React.ReactNode; count?: number };
+
+/** 把按天的折叠项归成 年 → 月 → 日 三层。key 是 YYYY-MM-DD；认不出日期的归到「其他」。
+ *  每层标题带样本数；最新的月默认展开，年由外层的 defaultActiveKey 管 */
+function nestByYearMonth(days: DayItem[]) {
+  const years = new Map<string, Map<string, DayItem[]>>();
+  for (const d of days) {
+    const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(d.key);
+    const y = m ? m[1] : "其他";
+    const mo = m ? `${m[1]}-${m[2]}` : "其他";
+    if (!years.has(y)) years.set(y, new Map());
+    const months = years.get(y)!;
+    if (!months.has(mo)) months.set(mo, []);
+    months.get(mo)!.push(d);
+  }
+  const sum = (items: DayItem[]) => items.reduce((a, d) => a + (d.count ?? 0), 0);
+  return [...years.entries()]
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([y, months]) => {
+      const monthKeys = [...months.keys()].sort((a, b) => b.localeCompare(a));
+      const monthItems = monthKeys.map((mo) => {
+        const items = months.get(mo)!;
+        return {
+          key: mo,
+          label: `${mo === "其他" ? "其他" : `${Number(mo.slice(5))} 月`}（${items.length} 天 · ${sum(items)} 个样本）`,
+          children: <Collapse size="small" items={items} />,
+        };
+      });
+      const all = monthKeys.flatMap((mo) => months.get(mo)!);
+      return {
+        key: y,
+        label: `${y === "其他" ? "其他" : `${y} 年`}（${all.length} 天 · ${sum(all)} 个样本）`,
+        children: <Collapse size="small" defaultActiveKey={monthKeys[0] ? [monthKeys[0]] : []} items={monthItems} />,
+      };
+    });
+}
+
 export default function Samples() {
   const qc = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
@@ -352,6 +389,8 @@ export default function Samples() {
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [data, sensitiveFilter, onlyEmpty]);
+  // 最新的那一年默认展开（年 → 月 → 日三层，见 nestByYearMonth）
+  const latestYear = groups.map(([k]) => (/^\d{4}-/.test(k) ? k.slice(0, 4) : "其他")).sort().reverse()[0];
 
   const handleScan = async () => {
     const result = await startImportScan();
@@ -550,7 +589,9 @@ export default function Samples() {
         <Table loading rowKey="id" columns={columns} dataSource={[]} />
       ) : (
         <Collapse
-          items={groups.map(([dateKey, samples]) => {
+          // 年 → 月 → 日三层，最新的年和月默认展开：几十天平铺一列太空，翻到底才看到早的
+          defaultActiveKey={latestYear ? [latestYear] : []}
+          items={nestByYearMonth(groups.map(([dateKey, samples]) => {
             // 日期目录下再按 imu 分成子目录：imu1/imu2/imu3/imu4 各对应一只狗，
             // 看某只狗的数据直接点开它的目录。NAS 上的文件不动，只是页面里这么归纳
             const byImu = new Map<string, Sample[]>();
@@ -590,6 +631,7 @@ export default function Samples() {
             );
             return {
               key: dateKey,
+              count: samples.length,
               label: `${dateKey}（${samples.length} 个样本）`,
               children: (
                 <Collapse
@@ -652,7 +694,7 @@ export default function Samples() {
                 />
               ),
             };
-          })}
+          }))}
         />
       )}
 
