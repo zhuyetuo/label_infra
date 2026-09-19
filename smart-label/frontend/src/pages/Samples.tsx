@@ -608,9 +608,9 @@ export default function Samples() {
                           <span>
                             {imu}（{rows.length} 个样本）
                           </span>
-                          {/* 关联状态和下拉放在一起、靠右：分开摆在两头的话，隔着一整行空白，
-                              人看着右边的下拉不知道左边到底关联过没有 */}
-                          <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          {/* 关联状态、解除、下拉都紧跟在组名后面挨着放：摆到右边的话跟组名隔着一整行空白，
+                              对不上是哪一组的 */}
+                          <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                             {cur ? (
                               <>
                                 <Tag color={cur.mixed ? "orange" : "blue"} style={{ marginRight: 0 }}>
