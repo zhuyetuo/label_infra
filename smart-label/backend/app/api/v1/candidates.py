@@ -376,7 +376,9 @@ async def similar_preview(body: SimilarPreviewIn, db: AsyncSession = Depends(get
     if not path:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"这个任务的样本没有 {body.cam} 视频")
     try:
-        return ok(await vision_sam_client.embed_preview(path, max(0.0, body.t_s)))
+        r = await vision_sam_client.embed_preview(path, max(0.0, body.t_s))
+        r["path"] = path        # 前端拿它再请求这一帧的抠图 / 姿态大图（缩略图接口按 path 取）
+        return ok(r)
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
 
@@ -392,7 +394,7 @@ async def similar_thumb_token(task_id: int, db: AsyncSession = Depends(get_db), 
 
 @router.get("/similar/thumb")
 async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: bool = True,
-                        view: str | None = None, db: AsyncSession = Depends(get_db)):
+                        view: str | None = None, max_side: int | None = None, db: AsyncSession = Depends(get_db)):
     """命中那一帧的缩略图。view：mask 抠掉背景的那块（拿去比的就是它）/ raw 那块原图 /
     pose 那块画上关键点骨架 / box 整帧带检测框；不给按 crop（True=mask，False=box）。
     path 必须是库里登记的样本视频。"""
@@ -414,7 +416,9 @@ async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: boo
     if known is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不是库里登记的样本视频")
     try:
-        data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop, view=view)
+        # max_side：样例大图要看得清（900），命中那排缩略图用默认 320
+        data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop, view=view,
+                                                   max_side=max(64, min(1920, max_side)) if max_side else None)
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})

@@ -24,6 +24,7 @@ import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
+import type { SimilarThumbView } from "@/api/candidates";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
@@ -235,6 +236,8 @@ export default function AnnotationWorkspace({
   // 「先看命中」：只搜不写，把命中的画面摆出来看
   const [similarPeek, setSimilarPeek] = useState<{ hits: SimilarHit[]; refPath: string | null; refT: number | null; centered: boolean; poseUsed: boolean } | null>(null);
   const [similarPeeking, setSimilarPeeking] = useState(false);
+  // 样例大图和命中缩略图看哪种（抠图 / 原图 / 姿态 / 整帧）：一个开关，上下一起切
+  const [similarView, setSimilarView] = useState<SimilarThumbView>("mask");
   const peekSimilar = async () => {
     if (taskId == null) return;
     setSimilarPeeking(true);
@@ -1176,7 +1179,7 @@ export default function AnnotationWorkspace({
                 先在视频里停到最像的那一帧再点「找相似」；下面是这一帧框到的狗
               </Typography.Text>
             </Space>
-            {taskId != null && <SimilarFramePreview taskId={taskId} tSec={similarAtSec} />}
+            {taskId != null && <SimilarFramePreview taskId={taskId} tSec={similarAtSec} view={similarView} onViewChange={setSimilarView} />}
           </div>
         )}
         <Space wrap>
@@ -1225,6 +1228,8 @@ export default function AnnotationWorkspace({
             hits={similarPeek.hits}
             centered={similarPeek.centered}
             poseUsed={similarPeek.poseUsed}
+            view={similarView}
+            onViewChange={setSimilarView}
             onJump={(h) => {
               if (h.task_id === taskId) {
                 const ms = Math.round(h.t * 1000);
