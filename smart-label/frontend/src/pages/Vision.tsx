@@ -15,6 +15,7 @@ import {
   type VisionAttrDef, type VisionBox, type VisionDatasetMeta, type VisionItem, type VisionPhoto,
 } from "@/api/vision";
 import OralScoreHelp from "@/components/OralScoreHelp";
+import DentitionDiagram from "@/components/DentitionDiagram";
 
 // 视觉标注工作台（雏形）：在素材库的口腔/皮肤照片上画框、打类别、填属性。
 //
@@ -1101,11 +1102,14 @@ export default function Vision() {
         open={helpOpen}
         onCancel={() => setHelpOpen(false)}
         footer={null}
-        width={620}
+        width={780}
         title="怎么标"
       >
+        <Typography.Title level={5} style={{ marginTop: 0 }}>哪颗是什么牙、什么是牙龈</Typography.Title>
+        <DentitionDiagram />
+        <Typography.Title level={5}>画框</Typography.Title>
         <Typography.Paragraph style={{ marginBottom: 12 }}>
-          <b>画框</b>：左键在图上拖一个框。选中的类别见右栏最上面那排。
+          左键在图上拖一个框。选中的类别见右栏最上面那排。
         </Typography.Paragraph>
 
         <Typography.Title level={5} style={{ marginTop: 0 }}>两排类别按钮，管的不是一回事</Typography.Title>
@@ -1211,7 +1215,7 @@ export default function Vision() {
         title={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             类别与属性
-            <Tooltip title="怎么标（快捷键、SAM 辅助、缩放平移）">
+            <Tooltip title="哪颗是什么牙、什么是牙龈（示意图）；怎么标（快捷键、SAM 辅助、缩放平移）">
               <QuestionCircleOutlined style={{ cursor: "pointer", color: "#999" }}
                                       onClick={() => setHelpOpen(true)} />
             </Tooltip>
