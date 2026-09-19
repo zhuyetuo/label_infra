@@ -385,7 +385,7 @@ async def _weights() -> str | None:
     return st.get("loaded_weights") or st.get("weights")
 
 
-async def scan_one(db: AsyncSession, sample_id: int, slot: str, every_sec: float = 5.0, conf: float = 0.35) -> dict:
+async def scan_one(db: AsyncSession, sample_id: int, slot: str, every_sec: float = 5.0, conf: float = 0.2) -> dict:
     """单独扫一段（页面上某一行点「扫这段」）。同步等结果，一小时的视频几秒钟。"""
     sample = await db.get(Sample, sample_id)
     if sample is None:
@@ -401,7 +401,7 @@ async def scan_one(db: AsyncSession, sample_id: int, slot: str, every_sec: float
             "frames_with_dog": r.get("frames_with_dog"), "duration_sec": r.get("duration_sec")}
 
 
-async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, conf: float = 0.35,
+async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, conf: float = 0.2,
                      force: bool = False) -> dict:
     """后台扫这段日期没扫的单间画面（force=True 连扫过的也重扫）。已经有一个在跑就不重复起。"""
     if _job_lock.locked():

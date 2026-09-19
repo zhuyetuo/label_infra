@@ -115,7 +115,7 @@ async def dog_status() -> dict:
         return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}"}
 
 
-async def scan_dog(video_rel_path: str, every_sec: float = 5.0, conf: float = 0.35) -> dict:
+async def scan_dog(video_rel_path: str, every_sec: float = 5.0, conf: float = 0.2) -> dict:
     """扫一路视频里有没有狗。video_rel_path 相对采集 NAS 根（不是素材库）。"""
     if not enabled():
         raise SamUnavailable(_off_reason())

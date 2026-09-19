@@ -71,7 +71,7 @@ async def list_samples(db: AsyncSession = Depends(get_db)):
 class VisionScanIn(BaseModel):
     sample_ids: list[int] = Field(..., min_length=1, max_length=200)
     every_sec: float = Field(5.0, ge=1.0, le=60.0, description="多少秒看一眼")
-    conf: float = Field(0.35, ge=0.05, le=0.95)
+    conf: float = Field(0.2, ge=0.05, le=0.95, description="0.35 漏检的代价（一整段没狗）比误检大得多，放低")
 
 
 @router.get("/vision-scans")
