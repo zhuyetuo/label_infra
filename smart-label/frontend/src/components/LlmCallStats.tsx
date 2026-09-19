@@ -1,234 +1,180 @@
 import { useState } from "react";
-import { Card, Col, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Popconfirm, Segmented, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getLlmCallStats, listLocalModels, resetLocalModelMeter, type LlmCallRow, type LlmCallSummary } from "@/api/llmProviders";
-import { Button, Popconfirm, message } from "antd";
 
-const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
+const { Text } = Typography;
+
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 const fmtN = (n: number) => n.toLocaleString("zh-CN");
+const fmtK = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : fmtN(n));
 
-// 「大模型 API」页下面的统计面板：调用了多少次、进出多少 token、单次平均多少、
-// 每次从发出到回来多久、估了多少钱。视觉服务每问一段就是一次调用，平台落表后从这里汇总。
+// 一个主色（次数 / token）、一个状态色（失败）、一个中性色（轨道）。深浅色下都能看
+const BLUE = "#2a78d6";
+const RED = "#e34948";
+const TRACK = "rgba(128,128,128,0.18)";
+
+/** 一个大数字 + 一行小字。解释放 tooltip，不铺在页面上 */
+function Tile({ title, value, sub, tip }: { title: string; value: React.ReactNode; sub?: React.ReactNode; tip?: string }) {
+  return (
+    <div style={{ flex: "1 1 150px", minWidth: 150, padding: "10px 14px", border: "1px solid rgba(128,128,128,0.25)", borderRadius: 8 }}>
+      <Tooltip title={tip}>
+        <Text type="secondary" style={{ fontSize: 12, borderBottom: tip ? "1px dashed rgba(128,128,128,0.6)" : undefined }}>{title}</Text>
+      </Tooltip>
+      <div style={{ fontSize: 24, fontWeight: 600, lineHeight: 1.3, marginTop: 2 }}>{value}</div>
+      {sub && <Text type="secondary" style={{ fontSize: 12 }}>{sub}</Text>}
+    </div>
+  );
+}
+
+/** 一行一个条：名字 | 条 | 数字。条长按这一组里的最大值算 */
+function BarRow({ name, value, max, label, extra, failed }: { name: React.ReactNode; value: number; max: number; label: string; extra?: React.ReactNode; failed?: number }) {
+  const w = max > 0 ? Math.max(value > 0 ? 2 : 0, (value / max) * 100) : 0;
+  const fw = max > 0 && failed ? (failed / max) * 100 : 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0" }}>
+      <div style={{ width: 220, flex: "0 0 220px", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+      <div style={{ flex: 1, height: 10, background: TRACK, borderRadius: 4, position: "relative", overflow: "hidden" }}>
+        <div style={{ width: `${w}%`, height: "100%", background: BLUE, borderRadius: 4 }} />
+        {fw > 0 && <div style={{ position: "absolute", left: 0, top: 0, width: `${fw}%`, height: "100%", background: RED, borderRadius: 4 }} />}
+      </div>
+      <div style={{ width: 210, flex: "0 0 210px", fontSize: 12, textAlign: "right" }}>
+        <b>{label}</b>
+        {extra && <Text type="secondary" style={{ marginLeft: 6 }}>{extra}</Text>}
+      </div>
+    </div>
+  );
+}
+
+/** 按天的柱：一天一根，失败的那部分红。悬停看数 */
+function DayBars({ rows, pick, unit }: { rows: (LlmCallSummary & { day: string })[]; pick: (r: LlmCallSummary) => number; unit: string }) {
+  const max = Math.max(1, ...rows.map(pick));
+  const H = 72;
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: H + 18, overflowX: "auto" }}>
+      {rows.map((r) => {
+        const v = pick(r);
+        const h = (v / max) * H;
+        const fh = unit === "次" && r.errors ? (r.errors / max) * H : 0;
+        return (
+          <Tooltip key={r.day} title={`${r.day}：${fmtN(v)} ${unit}${unit === "次" && r.errors ? `，失败 ${r.errors}` : ""}`}>
+            <div style={{ flex: "1 0 8px", maxWidth: 28, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: H + 18 }}>
+              <div style={{ width: "100%", height: Math.max(v > 0 ? 2 : 0, h), background: BLUE, borderRadius: "3px 3px 0 0", position: "relative" }}>
+                {fh > 0 && <div style={{ position: "absolute", left: 0, bottom: 0, width: "100%", height: fh, background: RED, borderRadius: "3px 3px 0 0" }} />}
+              </div>
+              <div style={{ fontSize: 10, color: "#999", marginTop: 3, whiteSpace: "nowrap" }}>{r.day.slice(5)}</div>
+            </div>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+// 「模型服务」→「调用统计」：一屏看完。数字放瓷砖里，占比用条，按天用柱，解释放 tooltip。
 export default function LlmCallStats() {
   const [days, setDays] = useState(30);
-  const { data, isLoading } = useQuery({
-    queryKey: ["llm-call-stats", days],
-    queryFn: () => getLlmCallStats(days),
-    refetchInterval: 30_000,
-  });
-  const t = data?.total;
-  // 本地模型的调用（视觉服务进程内存里的计数，重启归零）
+  const { data, isLoading } = useQuery({ queryKey: ["llm-call-stats", days], queryFn: () => getLlmCallStats(days), refetchInterval: 30_000 });
   const local = useQuery({ queryKey: ["local-models"], queryFn: listLocalModels, refetchInterval: 30_000 });
-
-  const summaryCols = [
-    { title: "调用次数", dataIndex: "calls", width: 90, sorter: (a: LlmCallSummary, b: LlmCallSummary) => a.calls - b.calls },
-    {
-      title: "失败",
-      dataIndex: "errors",
-      width: 70,
-      render: (v: number) => (v ? <span style={{ color: "#ff4d4f" }}>{v}</span> : 0),
-    },
-    {
-      title: (
-        <Tooltip title="输入 + 输出。输入是送进去的图和提示词，输出是模型回的那几十个字">总 token</Tooltip>
-      ),
-      dataIndex: "total_tokens",
-      width: 120,
-      sorter: (a: LlmCallSummary, b: LlmCallSummary) => a.total_tokens - b.total_tokens,
-      render: (v: number, r: LlmCallSummary) => (
-        <Tooltip title={`输入 ${fmtN(r.input_tokens)} / 输出 ${fmtN(r.output_tokens)}`}>{fmtN(v)}</Tooltip>
-      ),
-    },
-    {
-      title: <Tooltip title="平均每次调用消耗的 token（输入 + 输出）">单次 token</Tooltip>,
-      dataIndex: "avg_tokens_per_call",
-      width: 110,
-      render: (v: number, r: LlmCallSummary) => (
-        <Tooltip title={`输入 ${fmtN(r.avg_input_per_call)} / 输出 ${fmtN(r.avg_output_per_call)}`}>{fmtN(v)}</Tooltip>
-      ),
-    },
-    {
-      title: <Tooltip title="按各家价格估的，账以各家后台为准">估算花费</Tooltip>,
-      dataIndex: "est_usd",
-      width: 100,
-      sorter: (a: LlmCallSummary, b: LlmCallSummary) => a.est_usd - b.est_usd,
-      render: (v: number) => `$${v.toFixed(4)}`,
-    },
-    {
-      title: <Tooltip title="一次调用从发出到收到回答的时间：平均 / 一半的调用在这以内 / 九成在这以内 / 最慢一次">耗时 均 / p50 / p90 / 最慢</Tooltip>,
-      width: 260,
-      render: (_: unknown, r: LlmCallSummary) =>
-        r.calls ? `${fmtMs(r.avg_latency_ms)} / ${fmtMs(r.p50_latency_ms)} / ${fmtMs(r.p90_latency_ms)} / ${fmtMs(r.max_latency_ms)}` : "—",
-    },
-    {
-      title: <Tooltip title="所有调用的耗时加起来（并行跑的话墙上时间比这短）">累计耗时</Tooltip>,
-      dataIndex: "total_latency_s",
-      width: 100,
-      render: (v: number) => (v >= 60 ? `${(v / 60).toFixed(1)} 分` : `${v} 秒`),
-    },
-  ];
+  const t = data?.total;
+  const models = local.data?.models ?? [];
+  const maxCalls = Math.max(0, ...models.map((m) => m.meter.calls));
+  const byModel = data?.by_model ?? [];
+  const maxModel = Math.max(0, ...byModel.map((m) => m.calls));
 
   return (
-    <div>
-      <Space style={{ marginBottom: 8 }} wrap>
-        <Typography.Title level={5} style={{ margin: 0 }}>
-          本地模型调用
-        </Typography.Title>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          算法机上狗检测 / SAM / 画面向量 / 姿态的推理次数和耗时。计数在视觉服务进程里，服务重启归零
-          {local.data?.uptime_s != null ? `（已运行 ${Math.round(local.data.uptime_s / 60)} 分钟）` : ""}。
-        </Typography.Text>
-        <Popconfirm title="把本地模型的计数清零？" onConfirm={async () => { await resetLocalModelMeter(); message.success("已清零"); local.refetch(); }}>
-          <Button size="small">清零</Button>
-        </Popconfirm>
-      </Space>
-      <Table
-        size="small"
-        rowKey="key"
-        loading={local.isLoading}
-        dataSource={local.data?.models ?? []}
-        pagination={false}
-        style={{ marginBottom: 24 }}
-        columns={[
-          { title: "模型", dataIndex: "name", width: 240 },
-          { title: "调用次数", width: 100, render: (_, m) => fmtN(m.meter.calls) },
-          { title: <Tooltip title="处理过的图片数：批量检测一次几十张，所以帧数远大于次数">帧数</Tooltip>, width: 100, render: (_, m) => fmtN(m.meter.frames) },
-          { title: "失败", width: 70, render: (_, m) => (m.meter.errors ? <span style={{ color: "#ff4d4f" }}>{m.meter.errors}</span> : 0) },
-          { title: "单次平均耗时", width: 120, render: (_, m) => (m.meter.calls ? fmtMs(m.meter.avg_ms) : "—") },
-          { title: "每帧平均耗时", width: 120, render: (_, m) => (m.meter.frames ? `${m.meter.avg_ms_per_frame} ms` : "—") },
-          { title: "最慢一次", width: 100, render: (_, m) => (m.meter.calls ? fmtMs(m.meter.max_ms) : "—") },
-          { title: "累计耗时", width: 100, render: (_, m) => (m.meter.total_ms >= 60000 ? `${(m.meter.total_ms / 60000).toFixed(1)} 分` : `${(m.meter.total_ms / 1000).toFixed(1)} 秒`) },
-          { title: "最近一次", render: (_, m) => (m.meter.last_at ? new Date(m.meter.last_at * 1000).toLocaleString("zh-CN") : "—") },
-          { title: "状态", width: 90, render: (_, m) => (m.available ? <Tag color="green">已加载</Tag> : <Tag>未加载</Tag>) },
-        ]}
-      />
+    <Space direction="vertical" size={20} style={{ width: "100%" }}>
+      <div>
+        <Space style={{ marginBottom: 6 }}>
+          <Tooltip title={`算法机上各模型的推理次数和耗时。计数在视觉服务进程里，服务重启归零${local.data?.uptime_s != null ? `（已运行 ${Math.round(local.data.uptime_s / 60)} 分钟）` : ""}。「帧」是处理过的图片数，批量检测一次几十张`}>
+            <Text strong style={{ borderBottom: "1px dashed rgba(128,128,128,0.6)" }}>本地模型</Text>
+          </Tooltip>
+          <Popconfirm title="把本地模型的计数清零？" onConfirm={async () => { await resetLocalModelMeter(); message.success("已清零"); local.refetch(); }}>
+            <Button size="small" type="text">清零</Button>
+          </Popconfirm>
+        </Space>
+        {models.map((m) => (
+          <BarRow
+            key={m.key}
+            name={<span>{m.available ? <Tag color="green" style={{ marginRight: 6 }}>在</Tag> : <Tag style={{ marginRight: 6 }}>未加载</Tag>}{m.name}</span>}
+            value={m.meter.calls}
+            max={maxCalls}
+            failed={m.meter.errors}
+            label={m.meter.calls ? `${fmtN(m.meter.calls)} 次` : "—"}
+            extra={m.meter.calls ? `${fmtK(m.meter.frames)} 帧 · ${m.meter.avg_ms_per_frame} ms/帧${m.meter.errors ? ` · 失败 ${m.meter.errors}` : ""}` : "还没调过"}
+          />
+        ))}
+      </div>
 
-      <Space style={{ marginBottom: 8 }} wrap>
-        <Typography.Title level={5} style={{ margin: 0 }}>
-          大模型 API 调用
-        </Typography.Title>
-        <Segmented
+      <div>
+        <Space style={{ marginBottom: 8 }} wrap>
+          <Tooltip title="「画面找片段」每问一段就是一次调用，「测试」也算一次。花费按各家价格估的，账以各家后台为准。半分钟自动刷新">
+            <Text strong style={{ borderBottom: "1px dashed rgba(128,128,128,0.6)" }}>大模型 API</Text>
+          </Tooltip>
+          <Segmented size="small" value={days} onChange={(v) => setDays(v as number)}
+                     options={[{ label: "今天", value: 1 }, { label: "7 天", value: 7 }, { label: "30 天", value: 30 }, { label: "90 天", value: 90 }, { label: "一年", value: 365 }]} />
+          {data && <Text type="secondary" style={{ fontSize: 12 }}>累计 {fmtN(data.all_time.calls)} 次 · {fmtK(data.all_time.total_tokens)} token · ${data.all_time.est_usd.toFixed(2)}</Text>}
+        </Space>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <Tile title="调用" value={isLoading ? "…" : fmtN(t?.calls ?? 0)} sub={t?.errors ? <span style={{ color: RED }}>失败 {t.errors}</span> : t?.calls ? "没有失败" : undefined} />
+          <Tile title="token" value={isLoading ? "…" : fmtK(t?.total_tokens ?? 0)} sub={t?.calls ? `单次 ${fmtN(t.avg_tokens_per_call)}` : undefined} tip={`输入 ${fmtN(t?.input_tokens ?? 0)} / 输出 ${fmtN(t?.output_tokens ?? 0)}`} />
+          <Tile title="花费" value={`$${(t?.est_usd ?? 0).toFixed(t && t.est_usd >= 1 ? 2 : 4)}`} tip="按各家价格估的，账以各家后台为准" />
+          <Tile title="耗时" value={t?.calls ? fmtMs(t.p50_latency_ms) : "—"} sub={t?.calls ? `九成在 ${fmtMs(t.p90_latency_ms)} 内 · 最慢 ${fmtMs(t.max_latency_ms)}` : undefined} tip="一次调用从发出到收到回答。大数字是中位数（一半的调用比它快）" />
+        </div>
+        {(data?.by_day.length ?? 0) > 1 && (
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 320px" }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>每天调用次数（红色是失败）</Text>
+              <DayBars rows={data!.by_day} pick={(r) => r.calls} unit="次" />
+            </div>
+            <div style={{ flex: "1 1 320px" }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>每天 token</Text>
+              <DayBars rows={data!.by_day} pick={(r) => r.total_tokens} unit="token" />
+            </div>
+          </div>
+        )}
+        {byModel.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>按模型（条是调用次数，红色是失败）</Text>
+            {byModel.map((m) => (
+              <BarRow
+                key={`${m.provider}:${m.model}`}
+                name={<Tooltip title={m.model}><span><Text type="secondary">{m.provider}</Text> {m.model.split("/").pop()}</span></Tooltip>}
+                value={m.calls}
+                max={maxModel}
+                failed={m.errors}
+                label={`${fmtN(m.calls)} 次`}
+                extra={`${fmtK(m.total_tokens)} token · $${m.est_usd.toFixed(m.est_usd >= 1 ? 2 : 4)} · ${fmtMs(m.p50_latency_ms)}`}
+              />
+            ))}
+          </div>
+        )}
+        <Table
           size="small"
-          value={days}
-          onChange={(v) => setDays(v as number)}
-          options={[
-            { label: "今天", value: 1 },
-            { label: "7 天", value: 7 },
-            { label: "30 天", value: 30 },
-            { label: "90 天", value: 90 },
-            { label: "一年", value: 365 },
+          rowKey="id"
+          loading={isLoading}
+          dataSource={data?.recent ?? []}
+          pagination={false}
+          title={() => <Text type="secondary" style={{ fontSize: 12 }}>最近 {data?.recent.length ?? 0} 次</Text>}
+          columns={[
+            { title: "时间", dataIndex: "created_at", width: 150, render: (v: string | null) => (v ? v.replace("T", " ").slice(5, 19) : "—") },
+            { title: "模型", width: 260, render: (_: unknown, r: LlmCallRow) => <span><Text type="secondary">{r.provider}</Text> {r.model.split("/").pop()}</span> },
+            { title: "用途", dataIndex: "purpose", width: 80, render: (v: string, r: LlmCallRow) => (v === "test" ? <Tag>测试</Tag> : <Tag color="blue">找片段{r.task_id != null ? ` #${r.task_id}` : ""}</Tag>) },
+            { title: "token", width: 110, render: (_: unknown, r: LlmCallRow) => <Tooltip title={`输入 ${fmtN(r.input_tokens)} / 输出 ${fmtN(r.output_tokens)}`}>{fmtN(r.input_tokens + r.output_tokens)}</Tooltip> },
+            { title: "耗时", dataIndex: "latency_ms", width: 90, render: fmtMs },
+            {
+              title: "结果",
+              render: (_: unknown, r: LlmCallRow) =>
+                r.ok ? <Tag color="green">成功</Tag> : (
+                  <Tooltip title={r.error ?? ""}>
+                    <Tag color="red">失败</Tag>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{(r.error ?? "").slice(0, 50)}</Text>
+                  </Tooltip>
+                ),
+            },
           ]}
         />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          「画面找片段」每问一段就是一次调用，「测试」也算一次。半分钟自动刷新。
-          {data && (
-            <>
-              {" "}
-              历史累计：{fmtN(data.all_time.calls)} 次、{fmtN(data.all_time.total_tokens)} token、约 ${data.all_time.est_usd.toFixed(4)}
-            </>
-          )}
-        </Typography.Text>
-      </Space>
-
-      <Row gutter={12} style={{ marginBottom: 12 }}>
-        <Col span={4}>
-          <Card size="small" loading={isLoading}>
-            <Statistic title="调用次数" value={t?.calls ?? 0} suffix={t?.errors ? <span style={{ color: "#ff4d4f", fontSize: 13 }}>失败 {t.errors}</span> : undefined} />
-          </Card>
-        </Col>
-        <Col span={5}>
-          <Card size="small" loading={isLoading}>
-            <Statistic
-              title={<Tooltip title={`输入 ${fmtN(t?.input_tokens ?? 0)} / 输出 ${fmtN(t?.output_tokens ?? 0)}`}>总消耗 token</Tooltip>}
-              value={t?.total_tokens ?? 0}
-            />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small" loading={isLoading}>
-            <Statistic title="单次平均 token" value={t?.avg_tokens_per_call ?? 0} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small" loading={isLoading}>
-            <Statistic title="估算花费" prefix="$" value={t?.est_usd ?? 0} precision={4} />
-          </Card>
-        </Col>
-        <Col span={7}>
-          <Card size="small" loading={isLoading}>
-            <Statistic
-              title={<Tooltip title="一次调用从发出到收到回答；括号里是一半 / 九成的调用在这以内、最慢一次">单次耗时（平均）</Tooltip>}
-              value={t ? fmtMs(t.avg_latency_ms) : "—"}
-              suffix={t?.calls ? <span style={{ fontSize: 12, color: "#999" }}>p50 {fmtMs(t.p50_latency_ms)} · p90 {fmtMs(t.p90_latency_ms)} · 最慢 {fmtMs(t.max_latency_ms)}</span> : undefined}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <Typography.Text strong>按提供方 / 模型</Typography.Text>
-      <Table
-        size="small"
-        rowKey={(r) => `${r.provider}:${r.model}`}
-        loading={isLoading}
-        dataSource={data?.by_model ?? []}
-        pagination={false}
-        style={{ marginBottom: 16 }}
-        columns={[
-          { title: "提供方", dataIndex: "provider", width: 100 },
-          { title: "模型", dataIndex: "model", width: 260 },
-          ...summaryCols,
-        ]}
-      />
-
-      <Typography.Text strong>按天</Typography.Text>
-      <Table
-        size="small"
-        rowKey="day"
-        loading={isLoading}
-        dataSource={[...(data?.by_day ?? [])].reverse()}
-        pagination={{ pageSize: 10, size: "small", hideOnSinglePage: true }}
-        style={{ marginBottom: 16 }}
-        columns={[{ title: "日期", dataIndex: "day", width: 120 }, ...summaryCols]}
-      />
-
-      <Typography.Text strong>最近 {data?.recent.length ?? 0} 次调用</Typography.Text>
-      <Table
-        size="small"
-        rowKey="id"
-        loading={isLoading}
-        dataSource={data?.recent ?? []}
-        pagination={{ pageSize: 10, size: "small", hideOnSinglePage: true }}
-        columns={[
-          { title: "时间", dataIndex: "created_at", width: 170, render: (v: string | null) => (v ? v.replace("T", " ").slice(0, 19) : "—") },
-          { title: "提供方", dataIndex: "provider", width: 90 },
-          { title: "模型", dataIndex: "model", width: 240 },
-          {
-            title: "用途",
-            dataIndex: "purpose",
-            width: 90,
-            render: (v: string) => (v === "test" ? <Tag>测试</Tag> : <Tag color="blue">找片段</Tag>),
-          },
-          {
-            title: "任务",
-            width: 100,
-            render: (_: unknown, r: LlmCallRow) => (r.task_id != null ? `#${r.task_id}` : "—"),
-          },
-          { title: "输入 token", dataIndex: "input_tokens", width: 100, render: fmtN },
-          { title: "输出 token", dataIndex: "output_tokens", width: 100, render: fmtN },
-          { title: "花费", dataIndex: "est_usd", width: 90, render: (v: number) => `$${v.toFixed(4)}` },
-          { title: "耗时", dataIndex: "latency_ms", width: 90, render: fmtMs },
-          {
-            title: "结果",
-            render: (_: unknown, r: LlmCallRow) =>
-              r.ok ? <Tag color="green">成功</Tag> : (
-                <Tooltip title={r.error ?? ""}>
-                  <Tag color="red">失败</Tag>
-                  <span style={{ color: "#999", fontSize: 12 }}>{(r.error ?? "").slice(0, 60)}</span>
-                </Tooltip>
-              ),
-          },
-        ]}
-      />
-    </div>
+      </div>
+    </Space>
   );
 }
