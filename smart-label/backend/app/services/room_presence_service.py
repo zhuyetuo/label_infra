@@ -35,45 +35,58 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
+from app.models.cam_region import CamRegion
 from app.models.sample import Sample
 from app.models.sample_vision_scan import STATE_OK, SampleVisionScan
 from app.services import vision_sam_client as vc
 from app.services import vision_scan_service as vscan
 from app.services.daily_stats_service import _imu_to_dog
-from app.services.dog_presence_service import is_one_dog_site
+from app.services.dog_presence_service import is_one_dog_site, site_of
 from app.services.skin_tracking_service import _imu_of
 
 # multicam_20260917_030015023_cam4_imu15_raw.mp4 → 起始时间戳 / 机位 / 项圈
+# multicam_20260917_030015023_cam7_raw.mp4       → 公用机位（天花板），没有项圈号
 _CAM_IMU_RE = re.compile(r"_cam(\d+)_imu(\d+)", re.IGNORECASE)
+_CAM_ONLY_RE = re.compile(r"_cam(\d+)_raw", re.IGNORECASE)
 _STAMP_RE = re.compile(r"(\d{8}_\d{6,9})")
 _SLOTS = ("cam1", "cam2", "cam3")
 
 
-def parse_room_video(path: str) -> tuple[int, int, str] | None:
-    """(机位号, 文件名里的项圈号, 去重键)。不是单间画面（没有 _camN_imuM）返回 None。
+def parse_video(path: str) -> dict | None:
+    """一段画面的文件名说了什么：{cam, imu(None=公用机位), key, start(绝对时刻)}。
+    不是狗场那种带机位号的文件名返回 None。
 
-    去重键：同一段录制可能以不同路径出现（原始 / 重采样、两台机器各传一份），按
-    「起始时间戳 + 机位」认是同一段；文件名里没时间戳就退回按文件名。
-    """
+    key 是去重键：同一段录制可能以不同路径出现（原始 / 重采样、两台机器各传一份），按
+    「起始时间戳 + 机位」认是同一段；文件名里没时间戳就退回按文件名。"""
     base = os.path.basename(path or "")
     m = _CAM_IMU_RE.search(base)
-    if not m:
+    m2 = None if m else _CAM_ONLY_RE.search(base)
+    if not m and not m2:
         return None
-    cam, imu = int(m.group(1)), int(m.group(2))
+    cam = int((m or m2).group(1))
+    imu = int(m.group(2)) if m else None
     st = _STAMP_RE.search(base)
     key = f"{st.group(1)}_cam{cam}" if st else re.sub(r"\.[^.]+$", "", base)
-    return cam, imu, key
+    start = None
+    if st:
+        try:
+            start = datetime.strptime(st.group(1)[:15], "%Y%m%d_%H%M%S")
+        except ValueError:
+            start = None
+    return {"cam": cam, "imu": imu, "key": key, "start": start}
+
+
+def parse_room_video(path: str) -> tuple[int, int, str] | None:
+    """(机位号, 文件名里的项圈号, 去重键)。公用机位 / 不是单间画面返回 None。"""
+    v = parse_video(path)
+    if v is None or v["imu"] is None:
+        return None
+    return v["cam"], v["imu"], v["key"]
 
 
 def _start_of(path: str) -> str | None:
-    st = _STAMP_RE.search(os.path.basename(path or ""))
-    if not st:
-        return None
-    s = st.group(1)
-    try:
-        return datetime.strptime(s[:15], "%Y%m%d_%H%M%S").strftime("%H:%M:%S")
-    except ValueError:
-        return None
+    v = parse_video(path)
+    return v["start"].strftime("%H:%M:%S") if v and v["start"] else None
 
 
 def present_seconds(timeline: list[list[float]], every_sec: float | None,
@@ -88,9 +101,47 @@ def present_seconds(timeline: list[list[float]], every_sec: float | None,
     return None
 
 
+def in_region(box: list[float], region: tuple[float, float, float, float]) -> bool:
+    """框的中心点落在这块里就算这间的。框是 [x, y, w, h(, conf)]，区域是 (x, y, w, h)，都归一化。"""
+    if len(box) < 4:
+        return False
+    cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+    x, y, w, h = region
+    return x <= cx <= x + w and y <= cy <= y + h
+
+
+def _site_key(sample: Sample) -> str | None:
+    day_dir = os.path.dirname(sample.video_cam1_path or "")
+    site = site_of(sample.sample_code) or site_of(day_dir)
+    return "gouchang" if site in ("gouchang", "狗场") else site
+
+
+async def load_regions(db: AsyncSession) -> dict[tuple[str, int], dict[int, tuple[float, float, float, float]]]:
+    """{(场地, 公用机位): {房间号: (x, y, w, h)}}"""
+    out: dict[tuple[str, int], dict[int, tuple[float, float, float, float]]] = {}
+    for r in (await db.execute(select(CamRegion))).scalars().all():
+        out.setdefault((r.site, r.cam), {})[r.room] = (float(r.x), float(r.y), float(r.w), float(r.h))
+    return out
+
+
+def _abs_buckets(start: datetime | None, points: list, step: float, keep) -> set[int] | None:
+    """采样点 → 绝对时刻的 step 秒桶集合（两路画面按同一把尺子对齐才能取并集）。
+    文件名里没有起始时刻的算不了，返回 None。keep(pt) 说这个点算不算"有狗"。"""
+    if start is None:
+        return None
+    base = start.timestamp()
+    return {int((base + float(pt[0])) // step) for pt in points if len(pt) >= 2 and keep(pt)}
+
+
 async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
-    """按 (日期, 单间机位) 汇总：录了多久、画面里有狗多久、每段视频挂在哪份样本上。"""
+    """按 (日期, 机位) 汇总：单间机位一行一间，公用机位（天花板 cam7）另起一行。
+
+    单间的「在单间里」= 自己机位看到有狗的时间 ∪ 公用机位里落在这间区域的狗的时间
+    （区域见 cam_regions；没划区域的公用机位不参与）。两路按绝对时刻对齐取并集，
+    单间有死角时靠 cam7 补，cam7 看不清时靠单间补。
+    """
     imu_map = await _imu_to_dog(db)
+    regions = await load_regions(db)
     samples = (await db.execute(
         select(Sample).where(Sample.session_date.is_not(None), Sample.session_date >= date_from,
                              Sample.session_date <= date_to)
@@ -110,17 +161,17 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
         for slot, path in zip(_SLOTS, (s.video_cam1_path, s.video_cam2_path, s.video_cam3_path)):
             if not path:
                 continue
-            parsed = parse_room_video(path)
-            if parsed is None:
+            pv = parse_video(path)
+            if pv is None:
                 continue
-            cam, imu, key = parsed
-            v = videos.setdefault((s.session_date, cam, key), {
-                "cam": cam, "imu": f"IMU{imu}", "path": path, "carriers": []})
+            v = videos.setdefault((s.session_date, pv["cam"], pv["key"]), {
+                "cam": pv["cam"], "imu": f"IMU{pv['imu']}" if pv["imu"] is not None else None,
+                "path": path, "start": pv["start"], "site": _site_key(s), "carriers": []})
             # 文件名里的项圈号跟样本的一致的排前面：它是这段画面"自己的"样本，扫描结果和时长优先用它的
-            v["carriers"].append((own_imu == f"IMU{imu}", s, slot))
+            v["carriers"].append((own_imu == v["imu"], s, slot))
 
-    buckets: dict[tuple, dict] = {}
-    for (day, cam, _key), v in videos.items():
+    # 每段视频：扫描结果、时长、有狗的桶
+    for v in videos.values():
         carriers = sorted(v["carriers"], key=lambda c: (not c[0], c[1].id))
         scan = next((scan_by[(s.id, slot)] for _o, s, slot in carriers
                      if (s.id, slot) in scan_by and scan_by[(s.id, slot)].state == STATE_OK), None)
@@ -128,57 +179,116 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
         if not dur:
             dur = next((float(s.video_duration_sec) for _o, s, slot in carriers if slot == "cam1" and s.video_duration_sec), 0.0)
         present = None
+        points: list = []
+        step = 5.0
         if scan is not None:
-            present = present_seconds(vscan.load_timeline(scan.timeline),
-                                      float(scan.every_sec) if scan.every_sec is not None else None,
+            points = vscan.load_timeline(scan.timeline)
+            step = float(scan.every_sec) if scan.every_sec else 5.0
+            present = present_seconds(points, step,
                                       float(scan.no_dog_ratio) if scan.no_dog_ratio is not None else None,
                                       float(scan.duration_sec) if scan.duration_sec is not None else None)
             if present is not None and dur:
                 present = min(present, dur)
         own, own_slot = carriers[0][1], carriers[0][2]
-        b = buckets.setdefault((day, cam), {"imus": set(), "dogs": set(), "videos": []})
-        b["imus"].add(v["imu"])
-        if imu_map.get(v["imu"]):
-            b["dogs"].add(imu_map[v["imu"]])
-        b["videos"].append({
-            "sample_id": own.id,
-            "sample_code": own.sample_code,
+        v.update({"scan": scan, "dur": dur, "present": present, "points": points, "step": step,
+                  "own": own, "own_slot": own_slot, "scanned": scan is not None and present is not None,
+                  "also_on": sorted({s.sample_code for _o, s, _sl in carriers[1:]})})
+
+    def video_dict(v: dict) -> dict:
+        return {
+            "sample_id": v["own"].id,
+            "sample_code": v["own"].sample_code,
             # 这段画面在"自己的"样本上占哪个槽位：补扫时扫描结果写到这一格
-            "slot": own_slot,
+            "slot": v["own_slot"],
             "path": v["path"],
             "file": os.path.basename(v["path"]),
-            "start": _start_of(v["path"]),
+            "start": v["start"].strftime("%H:%M:%S") if v["start"] else None,
             "imu": v["imu"],
-            "dog_name": imu_map.get(v["imu"]),
-            "duration_seconds": round(dur, 1),
-            "scanned": scan is not None and present is not None,
-            "present_seconds": round(present, 1) if present is not None else None,
+            "dog_name": imu_map.get(v["imu"]) if v["imu"] else None,
+            "duration_seconds": round(v["dur"], 1),
+            "scanned": v["scanned"],
+            "present_seconds": round(v["present"], 1) if v["present"] is not None else None,
             # 这段画面还挂在哪些别的样本上（轮换的另一个项圈、或者错误导入的）
-            "also_on": sorted({s.sample_code for _o, s, _sl in carriers[1:]}),
-        })
+            "also_on": v["also_on"],
+        }
+
+    # 公用机位按 (日期, 场地, cam) 归一组，给单间取并集用
+    shared_by_day: dict[tuple, list[dict]] = {}
+    buckets: dict[tuple, dict] = {}
+    for (day, cam, _key), v in videos.items():
+        b = buckets.setdefault((day, cam), {"imus": set(), "dogs": set(), "videos": [], "shared": v["imu"] is None,
+                                             "site": v["site"]})
+        b["videos"].append(v)
+        if v["imu"] is None:
+            shared_by_day.setdefault((day, v["site"], cam), []).append(v)
+        else:
+            b["imus"].add(v["imu"])
+            if imu_map.get(v["imu"]):
+                b["dogs"].add(imu_map[v["imu"]])
 
     out = []
     for (day, cam), b in buckets.items():
-        vids = sorted(b["videos"], key=lambda x: (x["start"] or "", x["file"]))
+        vids = sorted(b["videos"], key=lambda x: (x["start"] or datetime.min, x["path"]))
         scanned = [x for x in vids if x["scanned"]]
-        recorded = sum(x["duration_seconds"] for x in vids)
-        out.append({
+        recorded = sum(x["dur"] for x in vids)
+        own_present = sum(x["present"] or 0.0 for x in scanned)
+        row = {
             "stat_date": day.isoformat(),
             "cam": f"cam{cam}",
-            "dog_name": "、".join(sorted(b["dogs"])) or None,
+            "shared": b["shared"],
+            "dog_name": ("公共区（各间都能看到）" if b["shared"] else "、".join(sorted(b["dogs"])) or None),
             "imus": sorted(b["imus"], key=lambda x: int(x[3:]) if x[3:].isdigit() else 0),
             "n_videos": len(vids),
             "n_scanned": len(scanned),
             "n_unscanned": len(vids) - len(scanned),
             "recorded_seconds": round(recorded, 1),
-            "scanned_seconds": round(sum(x["duration_seconds"] for x in scanned), 1),
-            # 只按扫过的那些视频算；没扫的不知道，不包含它们的时间
-            "present_seconds": round(sum(x["present_seconds"] or 0.0 for x in scanned), 1),
+            "scanned_seconds": round(sum(x["dur"] for x in scanned), 1),
+            # 自己机位看到有狗的时间（只按扫过的算）
+            "present_own_seconds": round(own_present, 1),
+            # 公用机位补上的、自己机位没看到的时间
+            "present_shared_extra_seconds": 0.0,
+            # 两路并起来
+            "present_seconds": round(own_present, 1),
+            "shared_cams": [],
+            "regions_missing": False,
             # 一天超过 24 小时 = 同一段画面以不同名字导了两遍，要查
             "over_day": recorded > 24 * 3600 + 60,
-            "videos": vids,
-        })
-    out.sort(key=lambda r: (r["stat_date"], r["cam"]), reverse=True)
+            "videos": [video_dict(x) for x in vids],
+        }
+        if not b["shared"]:
+            # 跟同一天、同一场地的公用机位取并集
+            union: set[int] = set()
+            own_buckets: set[int] = set()
+            step = next((x["step"] for x in scanned), 5.0)
+            alignable = True
+            for x in scanned:
+                bk = _abs_buckets(x["start"], x["points"], step, lambda pt: (pt[1] or 0) >= 1)
+                if bk is None:
+                    alignable = False
+                    break
+                own_buckets |= bk
+            extra: set[int] = set()
+            for (d2, site, scam), svids in shared_by_day.items():
+                if d2 != day or site != b["site"]:
+                    continue
+                row["shared_cams"].append(f"cam{scam}")
+                region = regions.get((site, scam), {}).get(cam)
+                if region is None:
+                    row["regions_missing"] = True
+                    continue
+                for sv in svids:
+                    if not sv["scanned"]:
+                        continue
+                    bk = _abs_buckets(sv["start"], sv["points"], step,
+                                      lambda pt, region=region: any(in_region(bx, region) for bx in (pt[2] if len(pt) > 2 else [])))
+                    if bk:
+                        extra |= bk
+            if alignable and (own_buckets or extra):
+                union = own_buckets | extra
+                row["present_seconds"] = round(len(union) * step, 1)
+                row["present_shared_extra_seconds"] = round(len(union - own_buckets) * step, 1)
+        out.append(row)
+    out.sort(key=lambda r: (r["stat_date"], r["shared"], r["cam"]), reverse=True)
     return out
 
 
@@ -357,4 +467,5 @@ async def _run_scan(todo: list[dict], date_from: date, date_to: date, every_sec:
             _job.current = []
 
 
-__all__ = ["rooms", "parse_room_video", "present_seconds", "pending_videos", "start_scan", "scan_status"]
+__all__ = ["rooms", "parse_video", "parse_room_video", "present_seconds", "in_region", "load_regions",
+           "pending_videos", "start_scan", "scan_status"]

@@ -4,6 +4,7 @@ from app.models.ai_candidate import AiCandidate
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.audit_log import AuditLog
 from app.models.background_job import BackgroundJob
+from app.models.cam_region import CamRegion
 from app.models.clip import ClipJob
 from app.models.dog import Dog
 from app.models.dog_measurement import DogMeasurement
@@ -47,6 +48,7 @@ __all__ = [
     "ReviewRecord",
     "ClipJob",
     "BackgroundJob",
+    "CamRegion",
     "AuditLog",
     "ModelVersion",
     "ToothPhotoResult",
