@@ -1129,27 +1129,20 @@ export default function AnnotationWorkspace({
       }
     >
       <div style={{ display: "flex", gap: 12, height: "100%" }}>
-      <div style={{ flex: "0 0 38%", minWidth: 360, overflowY: "auto", paddingRight: 4 }}>
-      <Space direction="vertical" style={{ width: "100%" }}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。
-          不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
-          <Tooltip title="命中是按秒的，一次舔往往持续几十秒、命中断断续续，所以相邻命中会按「隔 N 秒以内算同一段」合成一段。先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只">
-            <QuestionCircleOutlined style={{ color: "#999", marginLeft: 4 }} />
-          </Tooltip>
-        </Typography.Text>
-        <div>
-          <Typography.Text style={{ marginRight: 8 }}>标成：</Typography.Text>
+      {/* 左栏：一屏放得下，不用滚——说明全收进问号；大图限高，播放器占剩下的 */}
+      <div style={{ flex: "0 0 38%", minWidth: 360, display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+          <Typography.Text style={{ whiteSpace: "nowrap" }}>标成：</Typography.Text>
           <Select
             size="small"
-            style={{ minWidth: 300 }}
+            style={{ flex: 1, minWidth: 0 }}
             mode="tags"
             maxCount={1}
             showSearch
             // 选项按层级缩进、带颜色（跟候选面板「改成别的」一样）；搜索按名字匹配
             filterOption={(input, opt) => String(opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
             listHeight={380}
-            placeholder="找到的段打什么标签；没有的直接打字回车，会新建"
+            placeholder="找到的段打什么标签；没有的打字回车，会新建"
             value={similarLabel ? [similarLabel] : []}
             onChange={(v: string[]) => setSimilarLabel(v.length ? v[v.length - 1].trim() : null)}
             tagRender={({ value, closable, onClose }) => {
@@ -1170,18 +1163,27 @@ export default function AnnotationWorkspace({
               ),
             }))}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-            没有的标签（比如「舔后抓」）直接打字回车，找到就顺手建进项目
-          </Typography.Text>
+          <Tooltip
+            title={
+              <div>
+                拿当前画面（狗框出来那一块）的向量，在已建索引的视频里找长得像的几秒，写成候选。不问大模型、不花钱、几秒出结果；粗，"长得像"不等于同一个动作，人再确认。
+                <br />命中是按秒的，一次舔往往持续几十秒、命中断断续续，所以相邻命中会按「隔 N 秒以内算同一段」合成一段。
+                <br />先在项目页「建画面索引」，没建的视频搜不到。狗场只搜每只狗自己房间那一路（公共区对不上是哪只狗）；影棚三路都是公共的，命中要看清是哪只。
+                <br />标签没有的（比如「舔后抓」）直接打字回车，找到就顺手建进项目。
+              </div>
+            }
+          >
+            <QuestionCircleOutlined style={{ color: "#999" }} />
+          </Tooltip>
         </div>
-        <Checkbox checked={similarUseText} onChange={(e) => setSimilarUseText(e.target.checked)}>
-          不用当前画面，用一句英文描述搜（如 dog licking its tail）
-        </Checkbox>
-        {similarUseText ? (
-          <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" />
-        ) : (
-          <div>
-            <Space size={6} style={{ marginBottom: 6 }} wrap>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <Checkbox checked={similarUseText} onChange={(e) => setSimilarUseText(e.target.checked)}>
+            用一句英文描述搜
+          </Checkbox>
+          {similarUseText ? (
+            <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" style={{ flex: 1, minWidth: 160 }} />
+          ) : (
+            <>
               <Typography.Text>样例：视角1 第</Typography.Text>
               <InputNumber
                 size="small"
@@ -1189,23 +1191,26 @@ export default function AnnotationWorkspace({
                 step={0.5}
                 value={similarAtSec}
                 onChange={(v) => setSimilarAtSec(Math.max(0, Math.round((v ?? 0) * 10) / 10))}
-                style={{ width: 90 }}
+                style={{ width: 84 }}
               />
-              <Typography.Text>秒那一帧</Typography.Text>
-              <Button size="small" onClick={() => setSimilarAtSec(Math.round(curSecRef.current * 10) / 10)}>
-                用视频当前时刻
-              </Button>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                先在视频里停到最像的那一帧再点「找相似」；下面是这一帧框到的狗
-              </Typography.Text>
-            </Space>
-            {taskId != null && <SimilarFramePreview taskId={taskId} tSec={similarAtSec} view={similarView} onViewChange={setSimilarView} />}
+              <Typography.Text>秒</Typography.Text>
+              <Tooltip title="先在视频里停到最像的那一帧再点；下面是这一帧框到的狗">
+                <Button size="small" onClick={() => setSimilarAtSec(Math.round(curSecRef.current * 10) / 10)}>
+                  用视频当前时刻
+                </Button>
+              </Tooltip>
+            </>
+          )}
+        </div>
+        {!similarUseText && taskId != null && (
+          <div style={{ flex: "0 1 auto", minHeight: 0, overflow: "hidden" }}>
+            <SimilarFramePreview taskId={taskId} tSec={similarAtSec} view={similarView} onViewChange={setSimilarView} compact />
           </div>
         )}
-        <Space wrap>
+        <Space size={[8, 4]} wrap>
           <span>
-            范围：
-            <Select size="small" value={similarScope} onChange={(v) => setSimilarScope(v)} style={{ width: 130 }}
+            范围
+            <Select size="small" value={similarScope} onChange={(v) => setSimilarScope(v)} style={{ width: 110, marginLeft: 4 }}
               options={[
                 { value: "project", label: "整个项目" },
                 { value: "task", label: "只在本任务" },
@@ -1217,35 +1222,37 @@ export default function AnnotationWorkspace({
               </Tooltip>
             )}
           </span>
-          <span>
-            最多取：
-            <InputNumber size="small" min={1} max={2000} value={similarTopK} onChange={(v) => setSimilarTopK(v ?? 60)} style={{ width: 90 }} /> 个命中
-          </span>
-          <span>
-            隔
-            <InputNumber size="small" min={0} max={120} value={similarGap} onChange={(v) => setSimilarGap(v ?? 15)} style={{ width: 70 }} /> 秒以内算同一段
-          </span>
+          <Tooltip title="最多取多少个命中">
+            <span>
+              取 <InputNumber size="small" min={1} max={2000} value={similarTopK} onChange={(v) => setSimilarTopK(v ?? 60)} style={{ width: 70 }} /> 个
+            </span>
+          </Tooltip>
+          <Tooltip title="同一路视频里相邻命中隔多少秒以内合成一段">
+            <span>
+              隔 <InputNumber size="small" min={0} max={120} value={similarGap} onChange={(v) => setSimilarGap(v ?? 15)} style={{ width: 60 }} /> 秒合段
+            </span>
+          </Tooltip>
           <Tooltip title="同一只狗、同一间房、同一块地板，每一帧的向量里都带着这坨共同背景，原始相似度全在 0.95 以上分不开。减掉所有帧的平均向量再比，剩下的才是姿态和部位的差别。不勾就按原始相似度">
             <Checkbox checked={similarCenter} onChange={(e) => setSimilarCenter(e.target.checked)}>
-              去共同背景
+              去背景
             </Checkbox>
           </Tooltip>
           <Tooltip title="第二路信号：狗的姿态关键点（鼻子、脖子、尾根、四爪…）算出来的「鼻子够到了哪只爪」。0 只看画面，1 只看姿态。算法机上没装姿态模型时自动只看画面（先看命中的说明里会写）">
             <span>
-              姿态占
-              <InputNumber size="small" min={0} max={1} step={0.1} value={similarPoseW} onChange={(v) => setSimilarPoseW(Math.max(0, Math.min(1, v ?? 0.5)))} style={{ width: 70, margin: "0 4px" }} />
+              姿态占 <InputNumber size="small" min={0} max={1} step={0.1} value={similarPoseW} onChange={(v) => setSimilarPoseW(Math.max(0, Math.min(1, v ?? 0.5)))} style={{ width: 60 }} />
             </span>
           </Tooltip>
         </Space>
         {taskId != null && (
-          <SimilarClipPlayer
-            taskId={taskId}
-            clip={similarClip}
-            onClose={() => setSimilarClip(null)}
-            onOpenTask={(h) => openSimilarHit(h)}
-          />
+          <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
+            <SimilarClipPlayer
+              taskId={taskId}
+              clip={similarClip}
+              onClose={() => setSimilarClip(null)}
+              onOpenTask={(h) => openSimilarHit(h)}
+            />
+          </div>
         )}
-      </Space>
       </div>
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: "1px solid #f0f0f0", paddingLeft: 12 }}>
         {similarPeek && taskId != null ? (
