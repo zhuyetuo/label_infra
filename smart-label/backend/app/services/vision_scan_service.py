@@ -127,7 +127,7 @@ async def _upsert(db: AsyncSession, row: dict) -> None:
 
 
 async def scan_sample(db: AsyncSession, sample: Sample, every_sec: float = 5.0,
-                      conf: float = 0.35) -> dict:
+                      conf: float = 0.2) -> dict:
     """扫一份样本的全部视频路。每一路单独成败，一路挂了不影响别的路。"""
     weights = None
     try:
@@ -152,7 +152,7 @@ async def scan_sample(db: AsyncSession, sample: Sample, every_sec: float = 5.0,
 
 
 async def scan_many(db: AsyncSession, sample_ids: list[int], every_sec: float = 5.0,
-                    conf: float = 0.35) -> dict:
+                    conf: float = 0.2) -> dict:
     """批量扫。**串行**，不是并发：
 
     扫描吃的是同一张 GPU，而那张卡上还挂着 SAM。几十个并发请求打过去，显存
