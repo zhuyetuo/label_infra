@@ -64,8 +64,10 @@ class SampleVisionScan(Base):
     frames_with_dog: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_sec: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
 
+    # MEDIUMTEXT：带框之后一小时一只狗约 25KB，两三只就顶到 TEXT 的 64KB 了
     timeline: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="JSON [[秒, 几只], ...]，给第3/4步按时间对齐用；不存框",
+        Text(length=16777215), nullable=True,
+        comment="JSON [[秒, 几只, [[x,y,w,h,conf],...]], ...]，给第3/4步按时间对齐、复查画面叠框用",
     )
 
     every_sec: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)

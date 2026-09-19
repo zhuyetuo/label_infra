@@ -110,6 +110,27 @@ async def list_vision_scans(db: AsyncSession = Depends(get_db)):
     return ok(out)
 
 
+@router.get("/{sample_id}/vision-scan/timeline")
+async def vision_scan_timeline(sample_id: int, db: AsyncSession = Depends(get_db)):
+    """这份样本各路的扫描时间线，带框：预览视频时把狗框叠在画面上复查。
+
+    返回 {cam1: {every_sec, points: [[秒, 几只, [[x,y,w,h,conf],...]], ...]}, ...}。
+    老结果没有第三项（那时不存框），前端按可缺处理；没扫过的路不出现。
+    """
+    rows = (await db.execute(
+        select(SampleVisionScan).where(SampleVisionScan.sample_id == sample_id, SampleVisionScan.state == "ok")
+    )).scalars().all()
+    out = {}
+    for r in rows:
+        out[r.cam] = {
+            "every_sec": float(r.every_sec) if r.every_sec is not None else 5.0,
+            "verdict": r.verdict,
+            "weights": r.weights,
+            "points": vscan.load_timeline(r.timeline),
+        }
+    return ok(out)
+
+
 @router.post("/vision-scan")
 async def run_vision_scan(body: VisionScanIn, db: AsyncSession = Depends(get_db)):
     """扫一批样本的视频。

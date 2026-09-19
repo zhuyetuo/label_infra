@@ -51,16 +51,47 @@ async def rooms(
 
 
 @router.post("/rooms/scan")
-async def rooms_scan(date_from: _dt.date = Query(...), date_to: _dt.date = Query(...)):
-    """后台把这段日期里没扫过的单间画面扫一遍（串行，一段几十秒）。已有在跑的不重复起。"""
+async def rooms_scan(date_from: _dt.date = Query(...), date_to: _dt.date = Query(...),
+                     force: bool = Query(False, description="连扫过的也重扫")):
+    """后台把这段日期里没扫过的单间画面扫一遍（几路并行，一段几秒）。已有在跑的不重复起。"""
     if date_to < date_from:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "日期范围反了")
-    return ok(await room_svc.start_scan(date_from, date_to))
+    return ok(await room_svc.start_scan(date_from, date_to, force=force))
 
 
 @router.get("/rooms/scan/status")
 async def rooms_scan_status():
     return ok(room_svc.scan_status())
+
+
+@router.post("/rooms/scan/pause")
+async def rooms_scan_pause():
+    """暂停：正在扫的那几段扫完就停，不再取下一段。"""
+    return ok(room_svc.pause_scan())
+
+
+@router.post("/rooms/scan/resume")
+async def rooms_scan_resume():
+    return ok(room_svc.resume_scan())
+
+
+@router.post("/rooms/scan/cancel")
+async def rooms_scan_cancel():
+    """取消：正在扫的那几段扫完就收，剩下的不扫；已扫完的结果留着。"""
+    return ok(room_svc.cancel_scan())
+
+
+@router.post("/rooms/scan-one")
+async def rooms_scan_one(sample_id: int = Query(...), slot: str = Query("cam1"), db: AsyncSession = Depends(get_db)):
+    """单独扫一段：同步等结果，一小时的视频几秒钟。"""
+    if slot not in ("cam1", "cam2", "cam3"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "slot 只能是 cam1 / cam2 / cam3")
+    try:
+        return ok(await room_svc.scan_one(db, sample_id, slot))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+    except Exception as e:  # noqa: BLE001 视觉服务的错原样带给人看
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"扫描失败：{type(e).__name__}: {e}") from e
 
 
 @router.get("")

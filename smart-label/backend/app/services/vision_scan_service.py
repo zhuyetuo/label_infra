@@ -48,8 +48,20 @@ def video_paths(sample: Sample) -> list[tuple[str, str]]:
 
 
 def compact_timeline(frames: list[dict]) -> str:
-    """逐采样点的 [[秒, 几只], ...]。不存框——见 model 里的说明。"""
-    return json.dumps([[f.get("t"), f.get("n_dogs", 0)] for f in frames], separators=(",", ":"))
+    """逐采样点的 [[秒, 几只, [[x, y, w, h, conf], ...]], ...]。
+
+    框现在也存（第三项，只在有狗的点上带；归一化、两位小数）：复查画面时要把框叠在
+    视频上，不存的话每次点开都得重扫一遍。一小时 720 个点、一只狗，大约 25KB。
+    老数据只有两项，读的地方按 pt[2] 可缺处理。"""
+    out = []
+    for f in frames:
+        pt = [f.get("t"), f.get("n_dogs", 0)]
+        boxes = [[round(float(v), 3) for v in b.get("bbox", [])] + [round(float(b.get("conf", 0)), 2)]
+                 for b in (f.get("boxes") or []) if len(b.get("bbox", [])) == 4]
+        if boxes:
+            pt.append(boxes)
+        out.append(pt)
+    return json.dumps(out, separators=(",", ":"))
 
 
 def load_timeline(raw: str | None) -> list[list[float]]:

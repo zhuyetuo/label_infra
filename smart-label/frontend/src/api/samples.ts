@@ -182,3 +182,15 @@ export const scratchCrosscheck = (sampleId: number, cam?: string) =>
     /** 没扫过画面时**明说**——不然人会以为"一段可疑的都没有" */
     note: string | null;
   }>(`/samples/${sampleId}/scratch-crosscheck`, { params: cam ? { cam } : undefined });
+
+/** 画面扫描的时间线（带框）：预览视频时把狗框叠在画面上复查。
+ *  points 每项 [秒, 几只, [[x,y,w,h,conf], ...]]；老结果没有第三项 */
+export interface VisionScanTimeline {
+  every_sec: number;
+  verdict: string | null;
+  weights: string | null;
+  points: [number, number, number[][]?][];
+}
+
+export const getVisionScanTimeline = (sampleId: number) =>
+  request.get<never, Record<string, VisionScanTimeline>>(`/samples/${sampleId}/vision-scan/timeline`);

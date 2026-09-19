@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Segmented, Spin, Typography } from "antd";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
-import { getSampleMedia } from "@/api/samples";
+import { getSampleMedia, getVisionScanTimeline, type VisionScanTimeline } from "@/api/samples";
 import ImuChart from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
@@ -16,6 +16,29 @@ interface Props {
 interface VideoSrc {
   label: string;
   url: string;
+  /** 这一路在样本上的槽位（cam1/cam2/cam3），对应扫描结果的 cam */
+  cam: string;
+}
+
+/** 扫描时间线 → "这一刻有哪些框"。采样点每 every_sec 一个，取离当前时刻最近的那个，
+ *  超过半个间隔就算没有（画面已经走到下一个采样点之间了，框位置不可信） */
+function overlayOf(tl: VisionScanTimeline | undefined): ((t: number) => number[][] | null) | null {
+  if (!tl || !tl.points.length) return null;
+  const pts = tl.points;
+  const half = (tl.every_sec || 5) / 2 + 0.05;
+  return (t: number) => {
+    let lo = 0;
+    let hi = pts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid][0] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    const cands = [pts[lo], pts[lo - 1]].filter(Boolean) as VisionScanTimeline["points"];
+    const best = cands.sort((a, b) => Math.abs(a[0] - t) - Math.abs(b[0] - t))[0];
+    if (!best || Math.abs(best[0] - t) > half) return null;
+    return best[2] ?? null;
+  };
 }
 
 export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Props) {
@@ -23,6 +46,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   const [hasCsv, setHasCsv] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
+  const [timelines, setTimelines] = useState<Record<string, VisionScanTimeline>>({});
   const [imuView, setImuView] = useState<"曲线图" | "表格">("曲线图");
   const bus = useMemo(() => new TimeBus(), [sampleId]);
 
@@ -31,6 +55,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       setVideos([]);
       setHasCsv(false);
       setFps(null);
+      setTimelines({});
       return;
     }
     setLoading(true);
@@ -38,18 +63,20 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
     (async () => {
       try {
         const media = await getSampleMedia(sampleId);
-        const entries: [string, number | null][] = [
-          ["视角1", media.video1_id],
-          ["视角2", media.video2_id],
-          ["视角3", media.video3_id],
+        const entries: [string, number | null, string][] = [
+          ["视角1", media.video1_id, "cam1"],
+          ["视角2", media.video2_id, "cam2"],
+          ["视角3", media.video3_id, "cam3"],
         ];
+        // 扫描时间线（带框）另外拿，拿不到不影响看视频
+        getVisionScanTimeline(sampleId).then(setTimelines).catch(() => setTimelines({}));
         // 三路 token 一起要，不用一个等一个
         const vids = (
           await Promise.all(
-            entries.map(async ([label, id]) => {
+            entries.map(async ([label, id, cam]) => {
               if (id == null) return null;
               const { token } = await getMediaToken(id);
-              return { label, url: mediaStreamUrl(id, token) } as VideoSrc;
+              return { label, url: mediaStreamUrl(id, token), cam } as VideoSrc;
             })
           )
         ).filter((v): v is VideoSrc => v != null);
@@ -74,7 +101,15 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose }: Pr
       destroyOnClose
     >
       <Spin spinning={loading}>
-        {videos.length > 0 && <SyncedVideoGroup videos={videos} bus={bus} fps={fps} />}
+        {videos.length > 0 && (
+          <SyncedVideoGroup videos={videos} bus={bus} fps={fps} overlays={videos.map((v) => overlayOf(timelines[v.cam]))} />
+        )}
+        {videos.some((v) => timelines[v.cam]) && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            绿框是画面扫描时检测到的狗（每 {timelines[videos.find((v) => timelines[v.cam])!.cam].every_sec} 秒看一帧，框跟着最近的那一帧走，中间的时刻不画）。
+            没框不等于没狗，只是那一帧没检出来
+          </Typography.Text>
+        )}
         {!loading && videos.length === 0 && (
           <Typography.Text type="secondary">没有找到可播放的视频（可能未走标准导入流程）</Typography.Text>
         )}
