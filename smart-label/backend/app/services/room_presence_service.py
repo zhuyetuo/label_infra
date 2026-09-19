@@ -24,15 +24,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import time
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import SessionLocal
 from app.models.sample import Sample
 from app.models.sample_vision_scan import STATE_OK, SampleVisionScan
+from app.services import vision_sam_client as vc
 from app.services import vision_scan_service as vscan
 from app.services.daily_stats_service import _imu_to_dog
 from app.services.dog_presence_service import is_one_dog_site
@@ -130,7 +135,7 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
                                       float(scan.duration_sec) if scan.duration_sec is not None else None)
             if present is not None and dur:
                 present = min(present, dur)
-        own = carriers[0][1]
+        own, own_slot = carriers[0][1], carriers[0][2]
         b = buckets.setdefault((day, cam), {"imus": set(), "dogs": set(), "videos": []})
         b["imus"].add(v["imu"])
         if imu_map.get(v["imu"]):
@@ -138,6 +143,9 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
         b["videos"].append({
             "sample_id": own.id,
             "sample_code": own.sample_code,
+            # 这段画面在"自己的"样本上占哪个槽位：补扫时扫描结果写到这一格
+            "slot": own_slot,
+            "path": v["path"],
             "file": os.path.basename(v["path"]),
             "start": _start_of(v["path"]),
             "imu": v["imu"],
@@ -174,4 +182,98 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
     return out
 
 
-__all__ = ["rooms", "parse_room_video", "present_seconds"]
+# ── 补扫：把这段日期里没扫过的单间画面在后台扫一遍 ─────────────────────────
+#
+# 扫描本来只有样本列表里手动勾选那条路，而且是同步等结果的。单间统计这一页要的是
+# "这几天没扫的全扫了"，几十上百段、一段几十秒，得放后台、看进度。
+# 串行不并发：扫描跟 SAM 用的是同一张卡，并发会把两个模型一起 OOM（见 scan_many）。
+# 每段只扫"自己的"那份样本的那个槽位，同一段画面挂在几份样本上也只扫一次。
+
+
+@dataclass
+class ScanJob:
+    status: str = "idle"            # idle | running | done | error
+    total: int = 0
+    done: int = 0
+    failed: int = 0
+    current: str | None = None
+    started_at: float | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    error: str | None = None
+
+    def as_dict(self) -> dict:
+        d = asdict(self)
+        d["elapsed_sec"] = round(time.time() - self.started_at, 1) if self.started_at else 0.0
+        remain = self.total - self.done - self.failed
+        rate = (self.done + self.failed) / max(1e-6, d["elapsed_sec"]) if self.started_at else 0.0
+        d["estimated_remaining_sec"] = round(remain / rate) if rate > 0 and self.status == "running" else None
+        return d
+
+
+_job = ScanJob()
+_job_lock = asyncio.Lock()
+
+
+def scan_status() -> dict:
+    return _job.as_dict()
+
+
+async def pending_videos(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
+    """这段日期里还没扫过（或扫失败）的单间画面，每段一条 {sample_id, slot, path, file}。"""
+    out = []
+    for r in await rooms(db, date_from, date_to):
+        for v in r["videos"]:
+            if not v["scanned"]:
+                out.append({"sample_id": v["sample_id"], "slot": v["slot"], "path": v["path"], "file": v["file"]})
+    return out
+
+
+async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, conf: float = 0.35) -> dict:
+    """后台扫这段日期没扫的单间画面。已经有一个在跑就不重复起，返回 already_running。"""
+    if _job_lock.locked():
+        return {"started": False, "already_running": True, **_job.as_dict()}
+    async with SessionLocal() as db:
+        todo = await pending_videos(db, date_from, date_to)
+    if not todo:
+        return {"started": False, "already_running": False, "total": 0, **{k: v for k, v in _job.as_dict().items() if k != "total"}}
+    asyncio.create_task(_run_scan(todo, date_from, date_to, every_sec, conf))
+    return {"started": True, "already_running": False, "total": len(todo)}
+
+
+async def _run_scan(todo: list[dict], date_from: date, date_to: date, every_sec: float, conf: float) -> None:
+    global _job
+    async with _job_lock:
+        _job = ScanJob(status="running", total=len(todo), started_at=time.time(),
+                       date_from=date_from.isoformat(), date_to=date_to.isoformat())
+        try:
+            weights = None
+            try:
+                st = await vc.dog_status()
+                if not st.get("available", True):
+                    raise RuntimeError(f"狗检测不可用：{st.get('error') or '视觉服务没起'}")
+                weights = st.get("loaded_weights") or st.get("weights")
+            except RuntimeError:
+                raise
+            except Exception:  # noqa: BLE001 拿不到型号不影响扫描本身
+                pass
+            async with SessionLocal() as db:
+                for item in todo:
+                    _job.current = item["file"]
+                    try:
+                        r = await vc.scan_dog(item["path"], every_sec=every_sec, conf=conf)
+                        await vscan._upsert(db, vscan.scan_to_row(item["sample_id"], item["slot"], r, weights))
+                        _job.done += 1
+                    except Exception as e:  # noqa: BLE001 一段挂了不该带倒整批
+                        await vscan._upsert(db, vscan.failed_row(item["sample_id"], item["slot"], f"{type(e).__name__}: {e}"))
+                        _job.failed += 1
+                    await db.commit()
+                    await asyncio.sleep(0)
+            _job.status = "done"
+            _job.current = None
+        except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩，记录状态即可
+            _job.status = "error"
+            _job.error = f"{type(exc).__name__}: {exc}"
+
+
+__all__ = ["rooms", "parse_room_video", "present_seconds", "pending_videos", "start_scan", "scan_status"]

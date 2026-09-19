@@ -78,3 +78,55 @@ def test_按文件名归房间_去重_没扫不算在场_影棚不算(db, run):
     r5 = by["cam5"]
     assert r5["dog_name"] == "大金毛" and r5["n_videos"] == 1              # 原始 + 重采样 = 一段
     assert r5["recorded_seconds"] == 3600 and r5["present_seconds"] == 0 and r5["n_unscanned"] == 1
+
+
+def test_补扫_只扫没扫的_每段一次_进度能看(db, run, monkeypatch):
+    u = User(username="b", password_hash="x", display_name="b", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    v4 = f"{BASE}_cam4_imu15_raw.mp4"
+    v5 = f"{BASE}_cam5_imu17_raw.mp4"
+    a = _sample(db, run, u, "20260917_gouchang_imu15", v4)
+    _sample(db, run, u, "20260917_gouchang_imu16", v4)               # 同一段画面：不扫第二次
+    c = _sample(db, run, u, "20260917_gouchang_imu17", v5)
+    _scan(db, run, a, n_dog=[1] * 720)                                # 4 号间扫过了
+    run(db.commit())
+
+    class Ctx:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(svc, "SessionLocal", lambda: Ctx())
+    calls = []
+
+    async def fake_scan(path, every_sec=5.0, conf=0.35):
+        calls.append(path)
+        return {"verdict": "has_dog", "no_dog_ratio": 0.0, "max_dogs": 1, "sampled": 2, "frames_with_dog": 2,
+                "duration_sec": 3600, "frames": [{"t": 0, "n_dogs": 1}, {"t": 5, "n_dogs": 1}], "every_sec": 5.0, "conf": conf}
+
+    async def fake_status():
+        return {"available": True, "weights": "yolo26x.pt"}
+
+    monkeypatch.setattr(svc.vc, "scan_dog", fake_scan)
+    monkeypatch.setattr(svc.vc, "dog_status", fake_status)
+
+    async def go():
+        r = await svc.start_scan(date(2026, 9, 1), date(2026, 9, 30))
+        assert r["started"] and r["total"] == 1
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if svc.scan_status()["status"] == "done":
+                break
+        return svc.scan_status()
+
+    import asyncio
+    st = asyncio.run(go())
+    assert st["status"] == "done" and st["done"] == 1 and st["failed"] == 0 and calls == [v5]
+    rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
+    r5 = next(r for r in rows if r["cam"] == "cam5")
+    assert r5["n_scanned"] == 1 and r5["present_seconds"] == 10 and r5["videos"][0]["sample_id"] == c.id
+    # 没有要扫的了
+    assert asyncio.run(svc.start_scan(date(2026, 9, 1), date(2026, 9, 30)))["total"] == 0

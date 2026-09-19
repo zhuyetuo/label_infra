@@ -83,6 +83,25 @@ export interface RoomVideo {
 export const listRoomPresence = (p: { date_from: string; date_to: string }) =>
   request.get<never, RoomPresenceRow[]>("/daily-stats/rooms", { params: p });
 
+/** 后台补扫这段日期没扫的单间画面：串行，一段几十秒 */
+export interface RoomScanJob {
+  status: "idle" | "running" | "done" | "error";
+  total: number;
+  done: number;
+  failed: number;
+  current: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  error: string | null;
+  elapsed_sec: number;
+  estimated_remaining_sec: number | null;
+}
+
+export const startRoomScan = (p: { date_from: string; date_to: string }) =>
+  request.post<never, { started: boolean; already_running: boolean; total: number }>("/daily-stats/rooms/scan", undefined, { params: p });
+
+export const getRoomScanStatus = () => request.get<never, RoomScanJob>("/daily-stats/rooms/scan/status");
+
 export const listDailyStatsDogs = () =>
   request.get<never, DailyStatsDog[]>("/daily-stats/dogs");
 
