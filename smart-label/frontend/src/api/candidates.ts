@@ -111,6 +111,8 @@ export interface SimilarHit {
   score: number;
   /** 姿态那一路单独的分（用上姿态时才有） */
   pose_score?: number | null;
+  /** 纯画面分（混姿态之前的；老版本视觉服务没有） */
+  vis_score?: number | null;
   task_id: number | null;
   project_id: number | null;
   sample_code: string | null;
