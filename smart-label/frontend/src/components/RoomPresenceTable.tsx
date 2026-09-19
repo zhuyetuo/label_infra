@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
-import { Alert, Button, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { useQuery } from "@tanstack/react-query";
-import { listRoomPresence, type RoomPresenceRow, type RoomVideo } from "@/api/dailyStats";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Button, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getRoomScanStatus, listRoomPresence, startRoomScan, type RoomPresenceRow, type RoomVideo } from "@/api/dailyStats";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 
 const { Text } = Typography;
@@ -28,6 +28,27 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
   });
   const rows = data ?? [];
   const [preview, setPreview] = useState<RoomVideo | null>(null);
+  const qc = useQueryClient();
+
+  // 补扫是后台跑的（一段几十秒，几百段要个把小时）：跑着的时候每 3 秒问一次进度，
+  // 跑完把统计刷新一下。扫描没有自动触发——扫画面吃 GPU，要人决定什么时候扫
+  const { data: job } = useQuery({
+    queryKey: ["room-scan-status"],
+    queryFn: getRoomScanStatus,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 3000 : false),
+  });
+  const running = job?.status === "running";
+  useEffect(() => {
+    if (job?.status === "done" || job?.status === "error") qc.invalidateQueries({ queryKey: ["room-presence"] });
+  }, [job?.status, qc]);
+  const nPending = rows.reduce((a, r) => a + r.n_unscanned, 0);
+  const handleScan = async () => {
+    const r = await startRoomScan({ date_from: dateFrom, date_to: dateTo });
+    if (r.already_running) message.info("已经有一批在后台扫了，看进度就行");
+    else if (!r.started) message.info("这段日期没有要扫的");
+    else message.success(`开始扫 ${r.total} 段，一段几十秒，可以先干别的`);
+    qc.invalidateQueries({ queryKey: ["room-scan-status"] });
+  };
 
   // 每个单间在这段日期里的累计：录了多久、扫了多久、有狗多久
   const totals = useMemo(() => {
@@ -67,12 +88,34 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
           </>
         }
       />
-      {anyUnscanned && (
+      {(anyUnscanned || running || job?.status === "error") && (
         <Alert
-          type="warning"
+          type={job?.status === "error" ? "error" : "warning"}
           showIcon
-          message="有些段还没扫过画面，它们的时间只算进「录了多久」，不算进「在单间里」"
-          description="去样本列表对这些天点「扫画面」，或者在模型服务页确认狗检测能用，扫完这里自动更新。"
+          message={
+            running
+              ? `正在扫：${job!.done + job!.failed} / ${job!.total} 段${job!.failed ? `，失败 ${job!.failed}` : ""}${job!.estimated_remaining_sec != null ? `，预计还要 ${Math.ceil(job!.estimated_remaining_sec / 60)} 分钟` : ""}`
+              : job?.status === "error"
+                ? `上一批扫描出错：${job.error}`
+                : `有 ${nPending} 段还没扫过画面，它们的时间只算进「录了多久」，不算进「在单间里」`
+          }
+          description={
+            running ? (
+              <div>
+                <Progress percent={Math.round(((job!.done + job!.failed) / Math.max(1, job!.total)) * 100)} size="small" status="active" />
+                <Text type="secondary" style={{ fontSize: 12 }}>正在扫 {job!.current ?? ""}（{job!.date_from} ~ {job!.date_to}）。扫画面和 SAM 用同一张卡，串行跑，不并发</Text>
+              </div>
+            ) : (
+              <Space wrap>
+                <Tooltip title="扫描不会自动跑：扫画面吃算法机的 GPU，一段几十秒，什么时候扫由人决定。只扫这段日期里没扫过的，扫过的不重扫；同一段画面挂在几份样本上也只扫一次">
+                  <Button type="primary" size="small" onClick={handleScan} disabled={nPending === 0 && job?.status !== "error"}>
+                    扫这段日期没扫的画面（{nPending} 段）
+                  </Button>
+                </Tooltip>
+                <Text type="secondary" style={{ fontSize: 12 }}>先在「模型服务」页确认狗检测（YOLO）已加载。也可以在样本列表勾选样本单独扫</Text>
+              </Space>
+            )
+          }
         />
       )}
       {anyOver && (

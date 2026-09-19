@@ -50,6 +50,19 @@ async def rooms(
     return ok(await room_svc.rooms(db, date_from, date_to))
 
 
+@router.post("/rooms/scan")
+async def rooms_scan(date_from: _dt.date = Query(...), date_to: _dt.date = Query(...)):
+    """后台把这段日期里没扫过的单间画面扫一遍（串行，一段几十秒）。已有在跑的不重复起。"""
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "日期范围反了")
+    return ok(await room_svc.start_scan(date_from, date_to))
+
+
+@router.get("/rooms/scan/status")
+async def rooms_scan_status():
+    return ok(room_svc.scan_status())
+
+
 @router.get("")
 async def daily(
     date_from: _dt.date = Query(...),
