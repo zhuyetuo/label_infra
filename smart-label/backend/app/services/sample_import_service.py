@@ -385,6 +385,21 @@ def genuinely_shared_cams(group: dict) -> dict[int, str]:
     }
 
 
+def session_has_video(group: dict) -> bool:
+    """这一场有没有能用的视频。
+
+    影棚 / 旧数据：必须有 cam1（三路共用，cam1 是主机位，没它标注无从谈起）。
+    配对站点（狗场）：**任何一路**都行。狗场是两台采集机各录一半房间
+    （cam1~3 + cam4~7），各自的 session 时间戳差几秒，落成两个 session：
+    第二台那场只有 cam4~cam7、没有 cam1——按"必须有 cam1"判，imu15~20
+    整场被当成"一路视频都没有"跳掉，NAS 上明明有。
+    """
+    videos = group.get("videos") or {}
+    if 1 in videos:
+        return True
+    return bool(group.get("paired_site")) and bool(videos)
+
+
 def cams_for_imu(group: dict, imu_idx: int, shared_cams: dict[int, str],
                  shared_videos: dict[int, str] | None = None) -> dict[int, str]:
     """这只狗该挂哪几路 → {样本表的槽位: 相对路径}。
@@ -778,8 +793,8 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
         videos, csvs = g["videos"], g["csvs"]
         # 只要求 cam1。狗场是一间一狗一摄像头，一只狗的样本天生只有一路视频；
         # 要求两路的话那批数据一条都进不来，而那正是接下来主要的数据来源。
-        if 1 not in videos:
-            _progress.detail.append(f"跳过 {session_key}：一路视频都没有")
+        if not session_has_video(g):
+            _progress.detail.append(f"跳过 {session_key}：一路视频都没有" if not videos else f"跳过 {session_key}：没有 cam1")
             _progress.processed += 1
             _progress.tick()
             continue
