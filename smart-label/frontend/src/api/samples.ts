@@ -190,6 +190,10 @@ export interface VisionScanTimeline {
   verdict: string | null;
   weights: string | null;
   points: [number, number, number[][]?][];
+  /** 这段画面是在哪份样本上扫的（同一段公共区画面挂在好几份样本上，只扫一次） */
+  scanned_on?: number | null;
+  /** 公共区那一路：各单间在画面里的区域，预览时叠在画面上 */
+  regions?: { label: string; x: number; y: number; w: number; h: number }[] | null;
 }
 
 export const getVisionScanTimeline = (sampleId: number) =>
