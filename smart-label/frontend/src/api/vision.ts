@@ -176,6 +176,10 @@ export const samSegment = (body: {
   points: { x: number; y: number; label: number }[];
   /** [x, y, w, h] 归一化。给了框就以框为准，点只作辅助 */
   box?: VisionBox;
+  /** gingiva = 牙龈专用修整：SAM 的掩膜里只留粉红那部分（去掉连带的牙和嘴唇），轮廓更细 */
+  refine?: "gingiva";
+  /** 这张图上已经标好的别的东西的轮廓（框给四个角）：从结果里挖掉。标牙龈时传牙 */
+  exclude?: number[][][];
 }) =>
   request.post<never, {
     bbox: VisionBox;

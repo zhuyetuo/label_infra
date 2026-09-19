@@ -57,14 +57,19 @@ class SamUnavailable(Exception):
     """SAM 暂时用不了。调用方据此返回 503，让前端置灰按钮而不是弹红叉。"""
 
 
-async def segment(material_rel_path: str, points: list[dict], box: list[float] | None = None) -> dict:
-    """material_rel_path 是相对素材库根目录的路径（带相册目录那一层）。"""
+async def segment(material_rel_path: str, points: list[dict], box: list[float] | None = None,
+                  refine: str | None = None, exclude: list | None = None) -> dict:
+    """material_rel_path 是相对素材库根目录的路径（带相册目录那一层）。refine="gingiva" 是牙龈专用修整。"""
     if not enabled():
         raise SamUnavailable(_off_reason())
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/sam/segment"
     payload = {"path": material_rel_path, "points": points}
     if box:
         payload["box"] = box
+    if refine:
+        payload["refine"] = refine
+    if exclude:
+        payload["exclude"] = exclude
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(url, json=payload)

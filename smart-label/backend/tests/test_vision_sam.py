@@ -116,7 +116,7 @@ def test_路径带上了相册目录那一层(album, db, run, admin, monkeypatch
     """vision_service 那边的路径是相对素材库根的，少了 口腔验证/ 这一层就读不到文件。"""
     seen = {}
 
-    async def fake(path, points, box=None):
+    async def fake(path, points, box=None, refine=None, exclude=None):
         seen["path"] = path
         seen["points"] = points
         return {"bbox": [0.1, 0.1, 0.2, 0.2], "polygon": None, "score": 0.9}

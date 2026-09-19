@@ -378,6 +378,10 @@ class SamIn(BaseModel):
     path: str
     points: list[SamPoint] = Field(default_factory=list, max_length=32)
     box: list[float] | None = Field(None, min_length=4, max_length=4)
+    # gingiva：牙龈专用修整（SAM 的掩膜里只留粉红那部分，去掉连带的牙和嘴唇；多边形抽稀更细）
+    refine: str | None = Field(None, pattern="^(gingiva)$")
+    # 这张图上已经标好的别的东西的轮廓（归一化，框给四个角），从结果里挖掉：标牙龈时把牙减掉
+    exclude: list[list[list[float]]] = Field(default_factory=list, max_length=200)
 
 
 @router.get("/sam/status")
@@ -401,7 +405,8 @@ async def sam_segment(body: SamIn, db: AsyncSession = Depends(get_db), user: Use
     # 混合树（狗场合作那批）本来就是相对根的，补了反而多一层——见 material_rel
     material_rel = tooth_service.material_rel(body.path, body.album)
     try:
-        data = await sam_client.segment(material_rel, [p.model_dump() for p in body.points], body.box)
+        data = await sam_client.segment(material_rel, [p.model_dump() for p in body.points], body.box, refine=body.refine,
+                                        exclude=body.exclude or None)
     except sam_client.SamUnavailable as e:
         # 503 而不是 500：前端据此提示"SAM 暂时用不了，先手画"，而不是弹个报错
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
