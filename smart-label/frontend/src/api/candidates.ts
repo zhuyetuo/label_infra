@@ -129,8 +129,13 @@ export type SimilarThumbView = "mask" | "raw" | "pose" | "box";
 export const similarThumbToken = (taskId: number) =>
   request.post<never, { token: string }>("/candidates/similar/thumb-token", null, { params: { task_id: taskId } });
 
-export const similarThumbUrl = (taskId: number, path: string, t: number, token: string, view: SimilarThumbView = "mask") =>
-  `/api/v1/candidates/similar/thumb?task_id=${taskId}&path=${encodeURIComponent(path)}&t=${t}&token=${token}&view=${view}`;
+export const similarThumbUrl = (taskId: number, path: string, t: number, token: string, view: SimilarThumbView = "mask", maxSide?: number) =>
+  `/api/v1/candidates/similar/thumb?task_id=${taskId}&path=${encodeURIComponent(path)}&t=${t}&token=${token}&view=${view}${maxSide ? `&max_side=${maxSide}` : ""}`;
+
+export const SIMILAR_VIEW_OPTIONS: { label: string; value: SimilarThumbView }[] = [
+  { label: "抠图", value: "mask" }, { label: "原图", value: "raw" }, { label: "姿态", value: "pose" }, { label: "整帧", value: "box" },
+];
+export const SIMILAR_VIEW_HELP = "抠图 = 拿去比的那张（背景涂灰，只剩狗）；原图 = 狗框那一块没抠；姿态 = 那一块画上关键点和骨架（红点鼻子、橙点四爪）；整帧 = 整帧带检测框，看狗在房间哪。样例大图和下面的命中一起切";
 
 /** 找相似之前看一眼样例帧：框到了哪几只狗、拿哪一块去搜。坐标都是归一化的 */
 export interface SimilarPreview {
@@ -142,6 +147,8 @@ export interface SimilarPreview {
   crop: [number, number, number, number];
   /** base64 JPEG，缩小过的整帧 */
   jpeg: string;
+  /** 这一帧是哪路视频（再请求抠图 / 姿态大图用） */
+  path?: string;
 }
 
 export const previewSimilarFrame = (body: { task_id: number; cam?: "cam1" | "cam2" | "cam3"; t_s: number }) =>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
-import { similarThumbToken, similarThumbUrl, type SimilarHit, type SimilarThumbView } from "@/api/candidates";
+import { SIMILAR_VIEW_HELP, SIMILAR_VIEW_OPTIONS, similarThumbToken, similarThumbUrl, type SimilarHit, type SimilarThumbView } from "@/api/candidates";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleMedia } from "@/api/samples";
 import { formatMs } from "@/components/SegmentPanel";
@@ -21,6 +21,9 @@ interface Props {
   poseUsed?: boolean;
   /** 点某个命中：本任务直接跳过去；别的任务开新页 */
   onJump: (hit: SimilarHit) => void;
+  /** 缩略图看哪种（跟样例大图共用一个开关，由外面管） */
+  view: SimilarThumbView;
+  onViewChange: (v: SimilarThumbView) => void;
 }
 
 /** 内嵌循环播放的那一段：前后各留几秒 */
@@ -39,10 +42,8 @@ interface Clip {
 // 「先看命中」：写候选之前，把样例那一块和命中的那一块并排摆出来，一眼看出检索靠不靠谱。
 // 缩略图是视觉服务现取的（每张要解一帧、跑一次狗检测），懒加载，滚到哪取到哪。
 // 点一张：下面内嵌一个小播放器循环播那几秒——不用关掉预览去主画面找，主画面被这个弹窗挡着也看不见。
-export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump }: Props) {
+export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump, view, onViewChange }: Props) {
   const [token, setToken] = useState<string | null>(null);
-  // 缩略图看哪种：抠图 = 拿去比的那张；原图 = 那块没抠；姿态 = 那块画上关键点骨架；整帧 = 整帧带检测框
-  const [view, setView] = useState<SimilarThumbView>("mask");
   // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
   const [scope, setScope] = useState<"all" | "own" | "other">("all");
   // 排序：综合（视觉服务给的顺序）/ 纯画面 / 纯姿态。混在一起的分看不出是哪一路把它顶上来的
@@ -143,9 +144,8 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
         <Typography.Text strong>命中 {hits.length} 帧</Typography.Text>
         <Segmented size="small" value={scope} onChange={(v) => setScope(v as "all" | "own" | "other")}
                    options={[{ label: `全部 ${hits.length}`, value: "all" }, { label: `本任务 ${own.length}`, value: "own" }, { label: `其他任务 ${other.length}`, value: "other" }]} />
-        <Tooltip title="抠图 = 拿去比的那张（背景涂灰，只剩狗）；原图 = 狗框那一块没抠；姿态 = 那一块画上关键点和骨架（红点鼻子、橙点四爪）；整帧 = 整帧带检测框，看狗在房间哪">
-          <Segmented size="small" value={view} onChange={(v) => setView(v as SimilarThumbView)}
-                     options={[{ label: "抠图", value: "mask" }, { label: "原图", value: "raw" }, { label: "姿态", value: "pose" }, { label: "整帧", value: "box" }]} />
+        <Tooltip title={SIMILAR_VIEW_HELP}>
+          <Segmented size="small" value={view} onChange={(v) => onViewChange(v as SimilarThumbView)} options={SIMILAR_VIEW_OPTIONS} />
         </Tooltip>
         <Tooltip title="综合 = 画面 × (1−姿态占比) + 姿态 × 姿态占比，视觉服务按它排的；画面 / 姿态是各自单独的分，看看是哪一路把它顶上来的">
           <Segmented size="small" value={sortBy} onChange={(v) => setSortBy(v as "score" | "vis" | "pose")}
