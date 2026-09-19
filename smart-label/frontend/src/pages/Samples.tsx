@@ -632,7 +632,25 @@ export default function Samples() {
             return {
               key: dateKey,
               count: samples.length,
-              label: `${dateKey}（${samples.length} 个样本）`,
+              // 整天删掉：NAS 上传错了、改了文件之后，库里已经登记的那批是错的，扫描只认新
+              // sample_code 不会回头改。删掉这一天再扫一次，就按 NAS 上现在的样子重新进
+              label: (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  {dateKey}（{samples.length} 个样本）
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <Popconfirm
+                      title={`删除 ${dateKey} 这 ${samples.length} 个样本？`}
+                      description="连同上面的任务、草稿、审核记录一起删；NAS 上的文件不动。之后点「立即扫描一次」会按 NAS 上现在的文件重新登记。不可恢复"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => removeSamples(samples.map((r) => r.id))}
+                    >
+                      <Tooltip title="NAS 上传错了 / 改过文件，库里登记的还是旧的：删掉这一天再扫一次">
+                        <Button size="small" type="link" danger style={{ padding: 0 }}>删除这一天</Button>
+                      </Tooltip>
+                    </Popconfirm>
+                  </span>
+                </span>
+              ),
               children: (
                 <Collapse
                   size="small"
@@ -685,6 +703,16 @@ export default function Samples() {
                               showSearch
                               optionFilterProp="label"
                             />
+                            <Popconfirm
+                              title={`删除 ${imu} 这 ${rows.length} 个样本？`}
+                              description="连同上面的任务、草稿、审核记录一起删；NAS 上的文件不动。之后点「立即扫描一次」会按 NAS 上现在的文件重新登记。不可恢复"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={() => removeSamples(rows.map((r) => r.id))}
+                            >
+                              <Tooltip title="这一组登记错了（NAS 上传错 / 改过文件）：删掉再扫一次">
+                                <Button size="small" type="link" danger style={{ padding: 0 }}>删除这组</Button>
+                              </Tooltip>
+                            </Popconfirm>
                           </span>
                         </div>
                       ),
