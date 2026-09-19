@@ -190,32 +190,70 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
 # 每段只扫"自己的"那份样本的那个槽位，同一段画面挂在几份样本上也只扫一次。
 
 
+#: 同时扫几段。视觉服务那边 GPU 推理有锁、解码是各自的 ffmpeg 进程，4 路并行时 GPU
+#: 才吃得满；再多就是排队。算法机 4 核，解码也就撑这么多
+CONCURRENCY = max(1, int(os.environ.get("ROOM_SCAN_CONCURRENCY", "4") or 4))
+
+
 @dataclass
 class ScanJob:
-    status: str = "idle"            # idle | running | done | error
+    status: str = "idle"            # idle | running | paused | done | cancelled | error
     total: int = 0
     done: int = 0
     failed: int = 0
-    current: str | None = None
+    current: list[str] | None = None      # 正在扫的那几段
     started_at: float | None = None
     date_from: str | None = None
     date_to: str | None = None
     error: str | None = None
+    concurrency: int = CONCURRENCY
+    paused_sec: float = 0.0               # 暂停累计，估算剩余时间时扣掉
 
     def as_dict(self) -> dict:
         d = asdict(self)
-        d["elapsed_sec"] = round(time.time() - self.started_at, 1) if self.started_at else 0.0
+        active = (time.time() - self.started_at - self.paused_sec) if self.started_at else 0.0
+        d["elapsed_sec"] = round(max(0.0, active), 1)
         remain = self.total - self.done - self.failed
-        rate = (self.done + self.failed) / max(1e-6, d["elapsed_sec"]) if self.started_at else 0.0
+        rate = (self.done + self.failed) / max(1e-6, active) if self.started_at else 0.0
         d["estimated_remaining_sec"] = round(remain / rate) if rate > 0 and self.status == "running" else None
         return d
 
 
 _job = ScanJob()
 _job_lock = asyncio.Lock()
+# 暂停 / 取消：set 了才往下走；取消是个标志，正在扫的那几段扫完就收
+_resume = asyncio.Event()
+_resume.set()
+_cancel = False
 
 
 def scan_status() -> dict:
+    return _job.as_dict()
+
+
+def pause_scan() -> dict:
+    global _job
+    if _job.status == "running":
+        _job.status = "paused"
+        _job._paused_at = time.time()      # type: ignore[attr-defined]
+        _resume.clear()
+    return _job.as_dict()
+
+
+def resume_scan() -> dict:
+    global _job
+    if _job.status == "paused":
+        _job.paused_sec += time.time() - getattr(_job, "_paused_at", time.time())
+        _job.status = "running"
+        _resume.set()
+    return _job.as_dict()
+
+
+def cancel_scan() -> dict:
+    global _cancel
+    if _job.status in ("running", "paused"):
+        _cancel = True
+        _resume.set()
     return _job.as_dict()
 
 
@@ -229,12 +267,41 @@ async def pending_videos(db: AsyncSession, date_from: date, date_to: date) -> li
     return out
 
 
-async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, conf: float = 0.35) -> dict:
-    """后台扫这段日期没扫的单间画面。已经有一个在跑就不重复起，返回 already_running。"""
+async def _weights() -> str | None:
+    """狗检测在不在、用的哪份权重。不在就抛，别把几百段全扫成失败。"""
+    st = await vc.dog_status()
+    if not st.get("available", True):
+        raise RuntimeError(f"狗检测不可用：{st.get('error') or '视觉服务没起'}")
+    return st.get("loaded_weights") or st.get("weights")
+
+
+async def scan_one(db: AsyncSession, sample_id: int, slot: str, every_sec: float = 5.0, conf: float = 0.35) -> dict:
+    """单独扫一段（页面上某一行点「扫这段」）。同步等结果，一小时的视频几秒钟。"""
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise ValueError("样本不存在")
+    path = {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path, "cam3": sample.video_cam3_path}.get(slot)
+    if not path:
+        raise ValueError(f"这份样本没有 {slot} 这一路")
+    weights = await _weights()
+    r = await vc.scan_dog(path, every_sec=every_sec, conf=conf)
+    await vscan._upsert(db, vscan.scan_to_row(sample_id, slot, r, weights))
+    await db.commit()
+    return {"sample_id": sample_id, "slot": slot, "verdict": r.get("verdict"), "sampled": r.get("sampled"),
+            "frames_with_dog": r.get("frames_with_dog"), "duration_sec": r.get("duration_sec")}
+
+
+async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, conf: float = 0.35,
+                     force: bool = False) -> dict:
+    """后台扫这段日期没扫的单间画面（force=True 连扫过的也重扫）。已经有一个在跑就不重复起。"""
     if _job_lock.locked():
         return {"started": False, "already_running": True, **_job.as_dict()}
     async with SessionLocal() as db:
-        todo = await pending_videos(db, date_from, date_to)
+        if force:
+            todo = [{"sample_id": v["sample_id"], "slot": v["slot"], "path": v["path"], "file": v["file"]}
+                    for r in await rooms(db, date_from, date_to) for v in r["videos"]]
+        else:
+            todo = await pending_videos(db, date_from, date_to)
     if not todo:
         return {"started": False, "already_running": False, "total": 0, **{k: v for k, v in _job.as_dict().items() if k != "total"}}
     asyncio.create_task(_run_scan(todo, date_from, date_to, every_sec, conf))
@@ -242,38 +309,52 @@ async def start_scan(date_from: date, date_to: date, every_sec: float = 5.0, con
 
 
 async def _run_scan(todo: list[dict], date_from: date, date_to: date, every_sec: float, conf: float) -> None:
-    global _job
+    """并行 CONCURRENCY 路扫；每段扫完各自写库；暂停在取下一段之前生效，取消在正在扫的
+    几段扫完之后生效。"""
+    global _job, _cancel
     async with _job_lock:
         _job = ScanJob(status="running", total=len(todo), started_at=time.time(),
-                       date_from=date_from.isoformat(), date_to=date_to.isoformat())
+                       date_from=date_from.isoformat(), date_to=date_to.isoformat(), current=[],
+                       concurrency=CONCURRENCY)
+        _cancel = False
+        _resume.set()
         try:
-            weights = None
-            try:
-                st = await vc.dog_status()
-                if not st.get("available", True):
-                    raise RuntimeError(f"狗检测不可用：{st.get('error') or '视觉服务没起'}")
-                weights = st.get("loaded_weights") or st.get("weights")
-            except RuntimeError:
-                raise
-            except Exception:  # noqa: BLE001 拿不到型号不影响扫描本身
-                pass
-            async with SessionLocal() as db:
-                for item in todo:
-                    _job.current = item["file"]
+            weights = await _weights()
+            queue: asyncio.Queue = asyncio.Queue()
+            for item in todo:
+                queue.put_nowait(item)
+            db_lock = asyncio.Lock()          # 一个 session 不能被几个协程同时用
+
+            async def worker(db):
+                while True:
+                    await _resume.wait()
+                    if _cancel or queue.empty():
+                        return
+                    item = queue.get_nowait()
+                    _job.current.append(item["file"])
                     try:
                         r = await vc.scan_dog(item["path"], every_sec=every_sec, conf=conf)
-                        await vscan._upsert(db, vscan.scan_to_row(item["sample_id"], item["slot"], r, weights))
+                        async with db_lock:
+                            await vscan._upsert(db, vscan.scan_to_row(item["sample_id"], item["slot"], r, weights))
+                            await db.commit()
                         _job.done += 1
                     except Exception as e:  # noqa: BLE001 一段挂了不该带倒整批
-                        await vscan._upsert(db, vscan.failed_row(item["sample_id"], item["slot"], f"{type(e).__name__}: {e}"))
+                        async with db_lock:
+                            await vscan._upsert(db, vscan.failed_row(item["sample_id"], item["slot"], f"{type(e).__name__}: {e}"))
+                            await db.commit()
                         _job.failed += 1
-                    await db.commit()
-                    await asyncio.sleep(0)
-            _job.status = "done"
-            _job.current = None
+                    finally:
+                        if item["file"] in _job.current:
+                            _job.current.remove(item["file"])
+
+            async with SessionLocal() as db:
+                await asyncio.gather(*(worker(db) for _ in range(_job.concurrency)))
+            _job.status = "cancelled" if _cancel and not queue.empty() else "done"
+            _job.current = []
         except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩，记录状态即可
             _job.status = "error"
             _job.error = f"{type(exc).__name__}: {exc}"
+            _job.current = []
 
 
 __all__ = ["rooms", "parse_room_video", "present_seconds", "pending_videos", "start_scan", "scan_status"]

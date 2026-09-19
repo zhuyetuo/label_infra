@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getRoomScanStatus, listRoomPresence, startRoomScan, type RoomPresenceRow, type RoomVideo } from "@/api/dailyStats";
+import {
+  cancelRoomScan, getRoomScanStatus, listRoomPresence, pauseRoomScan, resumeRoomScan, scanRoomVideo, startRoomScan,
+  type RoomPresenceRow, type RoomVideo,
+} from "@/api/dailyStats";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 
 const { Text } = Typography;
@@ -38,16 +41,36 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
     refetchInterval: (q) => (q.state.data?.status === "running" ? 3000 : false),
   });
   const running = job?.status === "running";
+  const paused = job?.status === "paused";
+  const active = running || paused;
   useEffect(() => {
-    if (job?.status === "done" || job?.status === "error") qc.invalidateQueries({ queryKey: ["room-presence"] });
+    if (job?.status === "done" || job?.status === "error" || job?.status === "cancelled") qc.invalidateQueries({ queryKey: ["room-presence"] });
   }, [job?.status, qc]);
+  // 跑着的时候统计也跟着刷（每段扫完就写库了，不用等整批结束）
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => qc.invalidateQueries({ queryKey: ["room-presence"] }), 15_000);
+    return () => clearInterval(t);
+  }, [running, qc]);
   const nPending = rows.reduce((a, r) => a + r.n_unscanned, 0);
-  const handleScan = async () => {
-    const r = await startRoomScan({ date_from: dateFrom, date_to: dateTo });
+  const refreshJob = () => qc.invalidateQueries({ queryKey: ["room-scan-status"] });
+  const handleScan = async (force = false) => {
+    const r = await startRoomScan({ date_from: dateFrom, date_to: dateTo, force });
     if (r.already_running) message.info("已经有一批在后台扫了，看进度就行");
     else if (!r.started) message.info("这段日期没有要扫的");
-    else message.success(`开始扫 ${r.total} 段，一段几十秒，可以先干别的`);
-    qc.invalidateQueries({ queryKey: ["room-scan-status"] });
+    else message.success(`开始扫 ${r.total} 段，${job?.concurrency ?? 4} 路并行，可以先干别的`);
+    refreshJob();
+  };
+  const [scanningOne, setScanningOne] = useState<string | null>(null);
+  const handleScanOne = async (v: RoomVideo) => {
+    setScanningOne(v.file);
+    try {
+      const r = await scanRoomVideo({ sample_id: v.sample_id, slot: v.slot });
+      message.success(`扫完：${r.sampled} 个采样点，${r.frames_with_dog} 个有狗`);
+      qc.invalidateQueries({ queryKey: ["room-presence"] });
+    } finally {
+      setScanningOne(null);
+    }
   };
 
   // 每个单间在这段日期里的累计：录了多久、扫了多久、有狗多久
@@ -88,31 +111,51 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
           </>
         }
       />
-      {(anyUnscanned || running || job?.status === "error") && (
+      {(anyUnscanned || active || job?.status === "error" || job?.status === "cancelled") && (
         <Alert
           type={job?.status === "error" ? "error" : "warning"}
           showIcon
           message={
-            running
-              ? `正在扫：${job!.done + job!.failed} / ${job!.total} 段${job!.failed ? `，失败 ${job!.failed}` : ""}${job!.estimated_remaining_sec != null ? `，预计还要 ${Math.ceil(job!.estimated_remaining_sec / 60)} 分钟` : ""}`
+            active
+              ? `${paused ? "已暂停" : "正在扫"}：${job!.done + job!.failed} / ${job!.total} 段${job!.failed ? `，失败 ${job!.failed}` : ""}${running && job!.estimated_remaining_sec != null ? `，预计还要 ${Math.ceil(job!.estimated_remaining_sec / 60)} 分钟` : ""}`
               : job?.status === "error"
                 ? `上一批扫描出错：${job.error}`
-                : `有 ${nPending} 段还没扫过画面，它们的时间只算进「录了多久」，不算进「在单间里」`
+                : job?.status === "cancelled"
+                  ? `上一批已取消：扫了 ${job.done} 段，剩下的没扫。还有 ${nPending} 段没扫`
+                  : `有 ${nPending} 段还没扫过画面，它们的时间只算进「录了多久」，不算进「在单间里」`
           }
           description={
-            running ? (
+            active ? (
               <div>
-                <Progress percent={Math.round(((job!.done + job!.failed) / Math.max(1, job!.total)) * 100)} size="small" status="active" />
-                <Text type="secondary" style={{ fontSize: 12 }}>正在扫 {job!.current ?? ""}（{job!.date_from} ~ {job!.date_to}）。扫画面和 SAM 用同一张卡，串行跑，不并发</Text>
+                <Progress percent={Math.round(((job!.done + job!.failed) / Math.max(1, job!.total)) * 100)} size="small" status={paused ? "normal" : "active"} />
+                <Space wrap size={8}>
+                  {running ? (
+                    <Tooltip title="正在扫的那几段扫完就停，不再取下一段；随时可以继续">
+                      <Button size="small" onClick={async () => { await pauseRoomScan(); refreshJob(); }}>暂停</Button>
+                    </Tooltip>
+                  ) : (
+                    <Button size="small" type="primary" onClick={async () => { await resumeRoomScan(); refreshJob(); }}>继续</Button>
+                  )}
+                  <Tooltip title="剩下的不扫了；已经扫完的结果留着，下次只扫剩下的">
+                    <Button size="small" danger onClick={async () => { await cancelRoomScan(); refreshJob(); }}>取消</Button>
+                  </Tooltip>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {job!.concurrency} 路并行（{job!.date_from} ~ {job!.date_to}）
+                    {job!.current?.length ? `，正在扫：${job!.current.join("、")}` : ""}
+                  </Text>
+                </Space>
               </div>
             ) : (
               <Space wrap>
-                <Tooltip title="扫描不会自动跑：扫画面吃算法机的 GPU，一段几十秒，什么时候扫由人决定。只扫这段日期里没扫过的，扫过的不重扫；同一段画面挂在几份样本上也只扫一次">
-                  <Button type="primary" size="small" onClick={handleScan} disabled={nPending === 0 && job?.status !== "error"}>
+                <Tooltip title="扫描不会自动跑：扫画面吃算法机的 GPU，什么时候扫由人决定。只扫这段日期里没扫过的，扫过的不重扫；同一段画面挂在几份样本上也只扫一次。几路并行，一小时的视频几秒钟">
+                  <Button type="primary" size="small" onClick={() => handleScan(false)} disabled={nPending === 0}>
                     扫这段日期没扫的画面（{nPending} 段）
                   </Button>
                 </Tooltip>
-                <Text type="secondary" style={{ fontSize: 12 }}>先在「模型服务」页确认狗检测（YOLO）已加载。也可以在样本列表勾选样本单独扫</Text>
+                <Tooltip title="连扫过的也重扫一遍（换了检测权重、或者老结果没存框的时候用）">
+                  <Button size="small" onClick={() => handleScan(true)}>全部重扫</Button>
+                </Tooltip>
+                <Text type="secondary" style={{ fontSize: 12 }}>先在「模型服务」页确认狗检测（YOLO）已加载。展开某一行也可以单独扫一段</Text>
               </Space>
             )
           }
@@ -135,6 +178,11 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
           <b>
             这段日期累计：录了 {fmtH(grand.rec)}，扫过 {fmtH(grand.scanned)}，画面里有狗 {fmtH(grand.present)}
             {grand.scanned > 0 ? `（占扫过的 ${pct(grand.present, grand.scanned)}）` : ""}
+            {!anyUnscanned && !active && rows.length > 0 && (
+              <Tooltip title="连扫过的也重扫一遍（换了检测权重、或者老结果没存框的时候用）">
+                <Button size="small" type="link" onClick={() => handleScan(true)}>全部重扫</Button>
+              </Tooltip>
+            )}
           </b>
         )}
         dataSource={totals}
@@ -214,11 +262,20 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
                 },
                 {
                   title: "",
-                  width: 90,
+                  width: 170,
                   render: (_: unknown, v: RoomVideo) => (
-                    <Button size="small" type="link" onClick={() => setPreview(v)}>
-                      看画面
-                    </Button>
+                    <Space size={0}>
+                      <Tooltip title={v.scanned ? "看画面，扫描到的狗会用绿框叠在视频上" : "还没扫，看画面时没有框"}>
+                        <Button size="small" type="link" onClick={() => setPreview(v)}>
+                          看画面
+                        </Button>
+                      </Tooltip>
+                      <Tooltip title={v.scanned ? "重扫这一段（几秒钟）" : "单独扫这一段（几秒钟），不用等整批"}>
+                        <Button size="small" type="link" loading={scanningOne === v.file} disabled={!!scanningOne || running} onClick={() => handleScanOne(v)}>
+                          {v.scanned ? "重扫" : "扫这段"}
+                        </Button>
+                      </Tooltip>
+                    </Space>
                   ),
                 },
               ]}

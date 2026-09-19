@@ -68,6 +68,9 @@ export interface RoomVideo {
   /** 这段画面"自己的"样本（文件名里的项圈号跟样本一致的那份），点开看画面用它 */
   sample_id: number;
   sample_code: string;
+  /** 这段画面在自己的样本上占哪个槽位（cam1/cam2/cam3），单独扫时用 */
+  slot: string;
+  path: string;
   file: string;
   /** 录制起始时刻 HH:MM:SS，文件名里没有就是 null */
   start: string | null;
@@ -85,11 +88,13 @@ export const listRoomPresence = (p: { date_from: string; date_to: string }) =>
 
 /** 后台补扫这段日期没扫的单间画面：串行，一段几十秒 */
 export interface RoomScanJob {
-  status: "idle" | "running" | "done" | "error";
+  status: "idle" | "running" | "paused" | "done" | "cancelled" | "error";
   total: number;
   done: number;
   failed: number;
-  current: string | null;
+  /** 正在扫的那几段（并行几路就几个） */
+  current: string[] | null;
+  concurrency: number;
   date_from: string | null;
   date_to: string | null;
   error: string | null;
@@ -97,8 +102,19 @@ export interface RoomScanJob {
   estimated_remaining_sec: number | null;
 }
 
-export const startRoomScan = (p: { date_from: string; date_to: string }) =>
+export const startRoomScan = (p: { date_from: string; date_to: string; force?: boolean }) =>
   request.post<never, { started: boolean; already_running: boolean; total: number }>("/daily-stats/rooms/scan", undefined, { params: p });
+
+export const pauseRoomScan = () => request.post<never, RoomScanJob>("/daily-stats/rooms/scan/pause");
+export const resumeRoomScan = () => request.post<never, RoomScanJob>("/daily-stats/rooms/scan/resume");
+export const cancelRoomScan = () => request.post<never, RoomScanJob>("/daily-stats/rooms/scan/cancel");
+
+/** 单独扫一段（同步等结果，一小时的视频几秒钟） */
+export const scanRoomVideo = (p: { sample_id: number; slot: string }) =>
+  request.post<never, { verdict: string | null; sampled: number; frames_with_dog: number }>("/daily-stats/rooms/scan-one", undefined, {
+    params: p,
+    timeout: 300_000,
+  });
 
 export const getRoomScanStatus = () => request.get<never, RoomScanJob>("/daily-stats/rooms/scan/status");
 

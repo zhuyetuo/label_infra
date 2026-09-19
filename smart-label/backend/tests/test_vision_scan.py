@@ -125,14 +125,17 @@ def test_失败的那一路不参与投票():
 
 # ── 时间线：给第3/4步按时间对齐用 ───────────────────────────────────────
 
-def test_时间线只存时刻和只数不存框():
-    """一小时按 5 秒采样是 720 个点。只存 [t, n] 是几 KB，连框一起存是几百 KB，
-    几千份样本就是好几 G——而列表接口每次都要读。"""
+def test_时间线存时刻只数和紧凑的框():
+    """一小时按 5 秒采样是 720 个点。框只在有狗的点上带、存成 [x,y,w,h,conf] 数组
+    不带 key（复查画面要叠框；带 key 的 dict 会大三倍）。没狗的点还是 [t, n] 两项。"""
     frames = [{"t": 0.0, "n_dogs": 1, "boxes": [{"bbox": [0, 0, 1, 1], "conf": 0.9}]},
               {"t": 5.0, "n_dogs": 0, "boxes": []}]
     raw = vs.compact_timeline(frames)
-    assert json.loads(raw) == [[0.0, 1], [5.0, 0]]
+    assert json.loads(raw) == [[0.0, 1, [[0.0, 0.0, 1.0, 1.0, 0.9]]], [5.0, 0]]
     assert "bbox" not in raw and "conf" not in raw
+    # 一小时一只狗控制在几十 KB 以内
+    many = [{"t": i * 5.0, "n_dogs": 1, "boxes": [{"bbox": [0.1234, 0.2345, 0.3456, 0.4567], "conf": 0.876}]} for i in range(720)]
+    assert len(vs.compact_timeline(many)) < 40_000
 
 
 def test_时间线读得回来():

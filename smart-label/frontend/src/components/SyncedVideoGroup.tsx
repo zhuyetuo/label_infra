@@ -26,6 +26,12 @@ interface Props {
    * 外层容器却还占着原来一整份 flex:1 的高度，中间露一大块空白。
    */
   shrinkToFit?: boolean;
+  /**
+   * 每一路一个"这一刻画面里有哪些框"的函数（跟 videos 一一对应，没有就 null）：
+   * 返回 [x, y, w, h, conf]（归一化）的数组。画面扫描的狗框就是从这里叠上去的，
+   * 复查"这段到底有没有狗"不用再重扫。框跟着缩放/平移一起动。
+   */
+  overlays?: (((timeSec: number) => number[][] | null) | null)[];
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -55,7 +61,66 @@ interface ZoomState {
   ty: number;
 }
 
-export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit }: Props) {
+export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays }: Props) {
+  const overlayRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const overlaysRef = useRef(overlays);
+  overlaysRef.current = overlays;
+
+  // 叠框：每一路在 timeupdate / seeked 时重画一次。框是归一化坐标，要先算出画面在
+  // <video> 元素里实际占的那块（object-fit: contain 会留黑边），再把 video 的缩放/平移
+  // transform 原样抄给 canvas，放大拖动时框才跟得上
+  useEffect(() => {
+    const cleanups: (() => void)[] = [];
+    refs.current.forEach((video, i) => {
+      const canvas = overlayRefs.current[i];
+      if (!video || !canvas) return;
+      const draw = () => {
+        const fn = overlaysRef.current?.[i];
+        const w = video.clientWidth;
+        const h = video.clientHeight;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        canvas.style.transform = video.style.transform;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.clearRect(0, 0, w, h);
+        if (!fn || !video.videoWidth || !video.videoHeight) return;
+        const boxes = fn(video.currentTime);
+        if (!boxes || !boxes.length) return;
+        const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
+        const cw = video.videoWidth * scale;
+        const ch = video.videoHeight * scale;
+        const ox = (w - cw) / 2;
+        const oy = (h - ch) / 2;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#52c41a";
+        ctx.fillStyle = "#52c41a";
+        ctx.font = "12px sans-serif";
+        for (const b of boxes) {
+          const [x, y, bw, bh, conf] = b;
+          const px = ox + x * cw;
+          const py = oy + y * ch;
+          ctx.strokeRect(px, py, bw * cw, bh * ch);
+          if (conf != null) ctx.fillText(`狗 ${Math.round(conf * 100)}%`, px + 3, Math.max(12, py - 3));
+        }
+      };
+      video.addEventListener("timeupdate", draw);
+      video.addEventListener("seeked", draw);
+      video.addEventListener("loadedmetadata", draw);
+      const ro = new ResizeObserver(draw);
+      ro.observe(video);
+      draw();
+      cleanups.push(() => {
+        video.removeEventListener("timeupdate", draw);
+        video.removeEventListener("seeked", draw);
+        video.removeEventListener("loadedmetadata", draw);
+        ro.disconnect();
+      });
+    });
+    return () => cleanups.forEach((c) => c());
+  }, [videos]);
   const refs = useRef<(HTMLVideoElement | null)[]>([]);
   const wrapperRefs = useRef<(HTMLDivElement | null)[]>([]);
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -765,7 +830,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                     ? // overflow:hidden 是关键：放大后的画面只能在自己这一格里放大/拖动，
                       // 不能溢出去盖住旁边两路
                       { flex: 1, minWidth: 0, display: "flex", overflow: "hidden", position: "relative", background: "#000" }
-                    : { overflow: "hidden", maxHeight: "45vh", background: "#000" }
+                    : { overflow: "hidden", maxHeight: "45vh", background: "#000", position: "relative" }
                 }
               >
                 <video
@@ -783,6 +848,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                       ? { width: "100%", height: "100%", display: "block", transformOrigin: "center" }
                       : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
                   }
+                />
+                {/* 狗框叠层：不接鼠标，原生控制条照常能点 */}
+                <canvas
+                  ref={(el) => {
+                    overlayRefs.current[i] = el;
+                  }}
+                  style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", transformOrigin: "center" }}
                 />
               </div>
             </div>

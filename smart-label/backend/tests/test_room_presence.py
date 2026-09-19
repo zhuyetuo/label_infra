@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date
 
@@ -130,3 +131,78 @@ def test_补扫_只扫没扫的_每段一次_进度能看(db, run, monkeypatch):
     assert r5["n_scanned"] == 1 and r5["present_seconds"] == 10 and r5["videos"][0]["sample_id"] == c.id
     # 没有要扫的了
     assert asyncio.run(svc.start_scan(date(2026, 9, 1), date(2026, 9, 30)))["total"] == 0
+
+
+def test_并行扫_暂停_取消(db, run, monkeypatch):
+    """4 段并行扫；中途暂停就不再取下一段；取消后剩下的不扫、已扫的留着。"""
+    u = User(username="c", password_hash="x", display_name="c", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    samples = []
+    for i, cam in enumerate((1, 2, 3, 4, 5, 6)):
+        samples.append(_sample(db, run, u, f"20260917_gouchang_imu{10 + i}", f"{BASE}_cam{cam}_imu{10 + i}_raw.mp4"))
+    run(db.commit())
+
+    class Ctx:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(svc, "SessionLocal", lambda: Ctx())
+    monkeypatch.setattr(svc, "CONCURRENCY", 2)
+    inflight = {"now": 0, "peak": 0}
+    gate = asyncio.Event()
+
+    async def fake_scan(path, every_sec=5.0, conf=0.35):
+        inflight["now"] += 1
+        inflight["peak"] = max(inflight["peak"], inflight["now"])
+        await gate.wait()
+        inflight["now"] -= 1
+        return {"verdict": "has_dog", "no_dog_ratio": 0.0, "max_dogs": 1, "sampled": 1, "frames_with_dog": 1,
+                "duration_sec": 3600, "frames": [{"t": 0, "n_dogs": 1, "boxes": [{"bbox": [0.1, 0.2, 0.3, 0.4], "conf": 0.9}]}],
+                "every_sec": 5.0, "conf": conf}
+
+    async def fake_status():
+        return {"available": True, "weights": "w"}
+
+    monkeypatch.setattr(svc.vc, "scan_dog", fake_scan)
+    monkeypatch.setattr(svc.vc, "dog_status", fake_status)
+
+    async def go():
+        r = await svc.start_scan(date(2026, 9, 1), date(2026, 9, 30))
+        assert r["started"] and r["total"] == 6
+        await asyncio.sleep(0.02)
+        st = svc.scan_status()
+        assert st["status"] == "running" and inflight["peak"] == 2 and len(st["current"]) == 2
+        assert (await svc.start_scan(date(2026, 9, 1), date(2026, 9, 30)))["already_running"]
+        svc.pause_scan()
+        gate.set()                              # 正在扫的两段扫完
+        await asyncio.sleep(0.02)
+        st = svc.scan_status()
+        assert st["status"] == "paused" and st["done"] == 2 and inflight["now"] == 0
+        gate.clear()
+        svc.resume_scan()
+        await asyncio.sleep(0.02)
+        assert inflight["now"] == 2             # 又取了两段
+        svc.cancel_scan()
+        gate.set()
+        await asyncio.sleep(0.05)
+        return svc.scan_status()
+
+    st = asyncio.run(go())
+    assert st["status"] == "cancelled" and st["done"] == 4 and st["failed"] == 0
+    rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
+    assert sum(r["n_scanned"] for r in rows) == 4 and sum(r["n_unscanned"] for r in rows) == 2
+    # 框存下来了
+    from app.models.sample_vision_scan import SampleVisionScan as S
+    from sqlalchemy import select as sel
+    tl = run(db.execute(sel(S.timeline).where(S.state == "ok"))).scalars().first()
+    assert json.loads(tl) == [[0, 1, [[0.1, 0.2, 0.3, 0.4, 0.9]]]]
+    # 单段扫
+    left = next(v for r in rows for v in r["videos"] if not v["scanned"])
+    out = asyncio.run(svc.scan_one(db, left["sample_id"], left["slot"]))
+    assert out["verdict"] == "has_dog"
+    rows = run(svc.rooms(db, date(2026, 9, 1), date(2026, 9, 30)))
+    assert sum(r["n_unscanned"] for r in rows) == 1
