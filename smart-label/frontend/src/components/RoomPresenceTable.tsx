@@ -67,7 +67,7 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
   // 跑着的时候统计也跟着刷（每段扫完就写库了，不用等整批结束）
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(() => qc.invalidateQueries({ queryKey: ["room-presence"] }), 15_000);
+    const t = setInterval(() => qc.invalidateQueries({ queryKey: ["room-presence"] }), 5_000);
     return () => clearInterval(t);
   }, [running, qc]);
   const nPending = rows.reduce((a, r) => a + r.n_unscanned, 0);
@@ -149,13 +149,13 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
                 <Progress percent={Math.round(((job!.done + job!.failed) / Math.max(1, job!.total)) * 100)} size="small" status={paused ? "normal" : "active"} />
                 <Space wrap size={8}>
                   {running ? (
-                    <Tooltip title="正在扫的那几段扫完就停，不再取下一段；随时可以继续">
+                    <Tooltip title="立刻停：正在扫的那几段直接中断、回到队列，继续时先扫它们">
                       <Button size="small" onClick={async () => { await pauseRoomScan(); refreshJob(); }}>暂停</Button>
                     </Tooltip>
                   ) : (
                     <Button size="small" type="primary" onClick={async () => { await resumeRoomScan(); refreshJob(); }}>继续</Button>
                   )}
-                  <Tooltip title="剩下的不扫了；已经扫完的结果留着，下次只扫剩下的">
+                  <Tooltip title="立刻停，剩下的不扫了；已经扫完的结果留着，下次只扫剩下的">
                     <Button size="small" danger onClick={async () => { await cancelRoomScan(); refreshJob(); }}>取消</Button>
                   </Tooltip>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -274,7 +274,11 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
                   title: "有狗",
                   width: 130,
                   render: (_: unknown, v: RoomVideo) =>
-                    v.scanned && v.present_seconds != null ? (
+                    v.job === "scanning" ? (
+                      <Tag color="processing">扫描中</Tag>
+                    ) : v.job === "queued" ? (
+                      <Tag color="blue">排队中{v.scanned ? "（重扫）" : ""}</Tag>
+                    ) : v.scanned && v.present_seconds != null ? (
                       <span>
                         {fmtH(v.present_seconds)}
                         <Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>{pct(v.present_seconds, v.duration_seconds)}</Text>
@@ -374,8 +378,17 @@ export default function RoomPresenceTable({ dateFrom, dateTo }: { dateFrom: stri
           },
           {
             title: "没扫的段",
-            width: 90,
-            render: (_: unknown, r: RoomPresenceRow) => (r.n_unscanned ? <Tag color="orange">{r.n_unscanned}</Tag> : "0"),
+            width: 130,
+            render: (_: unknown, r: RoomPresenceRow) => (
+              <span>
+                {r.n_unscanned ? <Tag color="orange">{r.n_unscanned}</Tag> : "0"}
+                {r.n_in_job > 0 && (
+                  <Tooltip title="这批后台扫描里排队或正在扫的段数（全部重扫时已经扫过的段也会在这里）">
+                    <Tag color="processing" style={{ marginLeft: 4 }}>扫描中 {r.n_in_job}</Tag>
+                  </Tooltip>
+                )}
+              </span>
+            ),
           },
         ]}
       />
