@@ -19,7 +19,7 @@ from app.services import vision_sam_client as vc
 _logger = logging.getLogger("smart-label.local-model-stats")
 
 FIELDS = ("calls", "frames", "errors", "total_ms")
-NAMES = {"dog": "狗检测（YOLO）", "sam": "SAM 分割", "embed": "画面向量（SigLIP）", "pose": "姿态关键点（RTMPose）", "vllm": "本地大模型（vLLM）"}
+NAMES = {"dog": "狗检测（YOLO）", "sam": "SAM 分割", "embed": "画面向量（SigLIP）", "seg": "抠狗分割（YOLO-seg）", "pose": "姿态关键点（RTMPose）", "vllm": "本地大模型（vLLM）"}
 
 # 打开统计页时即时采一次，但同一进程 20 秒内不重复（几个人同时开着页面时别把视觉服务问烦）
 COLLECT_MIN_INTERVAL_S = 20.0
