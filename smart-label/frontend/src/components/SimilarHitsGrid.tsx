@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { Button, Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import { useEffect, useState } from "react";
+import { Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import { SIMILAR_VIEW_HELP, SIMILAR_VIEW_OPTIONS, similarThumbToken, similarThumbUrl, type SimilarHit, type SimilarThumbView } from "@/api/candidates";
-import { getMediaToken, mediaStreamUrl } from "@/api/media";
-import { getSampleMedia } from "@/api/samples";
+import { clipKeyOf, type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
 
 interface Props {
@@ -24,25 +23,15 @@ interface Props {
   /** 缩略图看哪种（跟样例大图共用一个开关，由外面管） */
   view: SimilarThumbView;
   onViewChange: (v: SimilarThumbView) => void;
-}
-
-/** 内嵌循环播放的那一段：前后各留几秒 */
-const LOOP_BEFORE_S = 2;
-const LOOP_AFTER_S = 4;
-
-interface Clip {
-  key: string;
-  title: string;
-  sampleId: number;
-  cam: string;
-  t: number;
-  hit: SimilarHit | null;
+  /** 点一张 → 左边的播放器循环播那几秒（播放器在外面，这里只报"要播哪段"） */
+  playing: Clip | null;
+  onPlay: (clip: Clip | null) => void;
 }
 
 // 「先看命中」：写候选之前，把样例那一块和命中的那一块并排摆出来，一眼看出检索靠不靠谱。
 // 缩略图是视觉服务现取的（每张要解一帧、跑一次狗检测），懒加载，滚到哪取到哪。
 // 点一张：下面内嵌一个小播放器循环播那几秒——不用关掉预览去主画面找，主画面被这个弹窗挡着也看不见。
-export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump, view, onViewChange }: Props) {
+export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump, view, onViewChange, playing, onPlay }: Props) {
   const [token, setToken] = useState<string | null>(null);
   // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
   const [scope, setScope] = useState<"all" | "own" | "other">("all");
@@ -64,79 +53,22 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
     };
   }, [taskId]);
 
-  // ── 内嵌循环播放 ──
-  const [clip, setClip] = useState<Clip | null>(null);
-  const [clipUrl, setClipUrl] = useState<string | null>(null);
-  const [clipErr, setClipErr] = useState<string | null>(null);
-  // 同一份样本的视频流地址缓存：token 换一次够用，点十几个命中不用十几次请求
-  const urlCache = useRef(new Map<string, Promise<string | null>>());
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const resolveUrl = (sampleId: number, cam: string): Promise<string | null> => {
-    const k = `${sampleId}:${cam}`;
-    let p = urlCache.current.get(k);
-    if (!p) {
-      p = (async () => {
-        const m = await getSampleMedia(sampleId);
-        const id = cam === "cam1" ? m.video1_id : cam === "cam2" ? m.video2_id : cam === "cam3" ? m.video3_id : null;
-        if (id == null) return null;
-        const { token: tk } = await getMediaToken(id);
-        return mediaStreamUrl(id, tk);
-      })();
-      urlCache.current.set(k, p);
-    }
-    return p;
-  };
-  useEffect(() => {
-    if (!clip) {
-      setClipUrl(null);
-      return;
-    }
-    let alive = true;
-    setClipUrl(null);
-    setClipErr(null);
-    resolveUrl(clip.sampleId, clip.cam)
-      .then((u) => {
-        if (!alive) return;
-        if (u) setClipUrl(u);
-        else setClipErr("这一路视频在媒体库里找不到（没传上 NAS 或还没扫到）");
-      })
-      .catch((e) => alive && setClipErr(`拿不到视频：${e?.message ?? e}`));
-    return () => {
-      alive = false;
-    };
-  }, [clip?.key]);
-  // 区间循环：播到 t+4 就跳回 t-2。用 timeupdate 不用 loop 属性——loop 是整段循环
-  const loopStart = clip ? Math.max(0, clip.t - LOOP_BEFORE_S) : 0;
-  const loopEnd = clip ? clip.t + LOOP_AFTER_S : 0;
-  const onTime = () => {
-    const v = videoRef.current;
-    if (!v || !clip) return;
-    if (v.currentTime >= loopEnd || v.currentTime < loopStart - 0.5) v.currentTime = loopStart;
-  };
-  const onLoaded = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = loopStart;
-    v.play().catch(() => undefined);
-  };
-
+  const clip = playing;
   const playHit = (h: SimilarHit) => {
     if (h.sample_id != null && h.cam) {
-      setClip({ key: `${h.path}@${h.t}`, title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h });
-    } else {
-      setClipErr("这个命中对不上样本，播不了");
+      onPlay({ key: clipKeyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h });
     }
     // 本任务的命中：主画面也一起跳过去循环，关掉预览就接着看
     if (h.task_id === taskId) onJump(h);
   };
   const playRef = () => {
     if (refPath == null || refT == null || refSampleId == null) return;
-    setClip({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null });
+    onPlay({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null });
   };
 
   const url = (path: string, t: number) => (token ? similarThumbUrl(taskId, path, t, token, view) : "");
   const scoreColor = (s: number) => (s >= 0.6 ? "#52c41a" : s >= 0.3 ? "#fa8c16" : "#999");
-  const isPlaying = (h: SimilarHit) => clip?.key === `${h.path}@${h.t}`;
+  const isPlaying = (h: SimilarHit) => clip?.key === clipKeyOf(h);
 
   return (
     <div>
@@ -154,13 +86,13 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {centered ? "已去共同背景（减掉所有帧的平均向量再比），分数是相对的，0.3 以上算像" : "没去背景，分数普遍 0.9+，看相对高低"}
           {poseUsed ? "；已混入姿态相似（悬停看姿态分）" : "；这次没用上姿态（算法机没装姿态模型，或样例 / 索引里没测到关键点）"}
-          。点一张：下面循环播那几秒；本任务的主画面也一起跳过去
+          。点一张：左边循环播那几秒；本任务的主画面也一起跳过去
         </Typography.Text>
       </Space>
       {!token ? (
         <Spin />
       ) : (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxHeight: clip ? 240 : 420, overflowY: "auto" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignContent: "flex-start" }}>
           {refPath != null && refT != null && (
             <div
               onClick={playRef}
@@ -199,42 +131,6 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
               </div>
             </div>
           ))}
-        </div>
-      )}
-      {clip && (
-        <div style={{ marginTop: 8, border: "1px solid #faad14", borderRadius: 6, padding: 6, background: "rgba(250,173,20,0.05)" }}>
-          <Space size={8} wrap style={{ marginBottom: 4 }}>
-            <Typography.Text strong>循环播放：{clip.title}</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {formatMs(loopStart * 1000)} ~ {formatMs(loopEnd * 1000)}（命中前 {LOOP_BEFORE_S} 秒到后 {LOOP_AFTER_S} 秒）
-            </Typography.Text>
-            {clip.hit && clip.hit.task_id != null && clip.hit.task_id !== taskId && (
-              <Tooltip title="新页打开那个任务：那一条候选置顶高亮，视频停在这一刻循环播">
-                <Button size="small" onClick={() => onJump(clip.hit!)}>在新页打开那个任务</Button>
-              </Tooltip>
-            )}
-            {clip.hit && clip.hit.task_id === taskId && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>主画面已跳到这一刻并循环，关掉预览就能看大图</Typography.Text>
-            )}
-            <Button size="small" onClick={() => setClip(null)}>收起</Button>
-          </Space>
-          {clipErr ? (
-            <Typography.Text type="danger">{clipErr}</Typography.Text>
-          ) : !clipUrl ? (
-            <Spin size="small" />
-          ) : (
-            <video
-              ref={videoRef}
-              key={clip.key}
-              src={clipUrl}
-              muted
-              playsInline
-              controls
-              onLoadedMetadata={onLoaded}
-              onTimeUpdate={onTime}
-              style={{ width: "100%", maxHeight: 360, background: "#000", borderRadius: 4 }}
-            />
-          )}
         </div>
       )}
     </div>
