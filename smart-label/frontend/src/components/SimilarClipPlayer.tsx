@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Space, Spin, Tooltip, Typography } from "antd";
+import { Button, Spin, Tag, Tooltip, Typography } from "antd";
 import type { SimilarHit } from "@/api/candidates";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleMedia } from "@/api/samples";
@@ -99,46 +99,49 @@ export default function SimilarClipPlayer({ taskId, clip, onOpenTask, onClose }:
 
   if (!clip) {
     return (
-      <div style={{ border: "1px dashed #d9d9d9", borderRadius: 6, padding: 16, textAlign: "center", color: "#999", fontSize: 12 }}>
+      <div style={{ flex: 1, border: "1px dashed #d9d9d9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 12 }}>
         右边点一张命中（或样例），这里循环播那几秒
       </div>
     );
   }
   const other = clip.hit && clip.hit.task_id != null && clip.hit.task_id !== taskId;
+  const own = clip.hit && clip.hit.task_id === taskId;
+  // 占满给它的高度：一行标题 + 视频撑满剩下的，不出滚动条
   return (
-    <div style={{ border: "1px solid #faad14", borderRadius: 6, padding: 6, background: "rgba(250,173,20,0.05)" }}>
-      <Space size={8} wrap style={{ marginBottom: 4 }}>
-        <Typography.Text strong>循环播放：{clip.title}</Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {formatMs(loopStart * 1000)} ~ {formatMs(loopEnd * 1000)}（命中前 {LOOP_BEFORE_S} 秒到后 {LOOP_AFTER_S} 秒）
-        </Typography.Text>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", border: "1px solid #faad14", borderRadius: 6, padding: 6, background: "rgba(250,173,20,0.05)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, whiteSpace: "nowrap", minWidth: 0 }}>
+        <Tooltip title={`${clip.title}；循环 ${formatMs(loopStart * 1000)} ~ ${formatMs(loopEnd * 1000)}（命中前 ${LOOP_BEFORE_S} 秒到后 ${LOOP_AFTER_S} 秒）${own ? "。主画面已跳到这一刻并循环，关掉预览就能看大图" : ""}`}>
+          <Typography.Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
+            循环 {formatMs(loopStart * 1000)} ~ {formatMs(loopEnd * 1000)} · {clip.title}
+          </Typography.Text>
+        </Tooltip>
+        {own && <Tag color="blue" style={{ marginRight: 0 }}>主画面已同步</Tag>}
         {other && onOpenTask && (
           <Tooltip title="新页打开那个任务：那一条候选置顶高亮，视频停在这一刻循环播">
-            <Button size="small" onClick={() => onOpenTask(clip.hit!)}>在新页打开那个任务</Button>
+            <Button size="small" onClick={() => onOpenTask(clip.hit!)}>打开那个任务</Button>
           </Tooltip>
         )}
-        {clip.hit && clip.hit.task_id === taskId && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>主画面已跳到这一刻并循环，关掉预览就能看大图</Typography.Text>
-        )}
         <Button size="small" onClick={onClose}>收起</Button>
-      </Space>
-      {err ? (
-        <Typography.Text type="danger">{err}</Typography.Text>
-      ) : !url ? (
-        <Spin size="small" />
-      ) : (
-        <video
-          ref={videoRef}
-          key={url}
-          src={url}
-          muted
-          playsInline
-          controls
-          onLoadedMetadata={onLoaded}
-          onTimeUpdate={onTime}
-          style={{ width: "100%", maxHeight: 420, background: "#000", borderRadius: 4 }}
-        />
-      )}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, background: "#000", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {err ? (
+          <Typography.Text type="danger">{err}</Typography.Text>
+        ) : !url ? (
+          <Spin size="small" />
+        ) : (
+          <video
+            ref={videoRef}
+            key={url}
+            src={url}
+            muted
+            playsInline
+            controls
+            onLoadedMetadata={onLoaded}
+            onTimeUpdate={onTime}
+            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+          />
+        )}
+      </div>
     </div>
   );
 }

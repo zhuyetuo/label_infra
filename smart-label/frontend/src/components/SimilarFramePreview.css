@@ -85,9 +85,10 @@
 
 /* 紧凑（左右分栏的左栏）：大图限高，宽度按比例缩，留出参数和播放器的位置 */
 .sfp--compact .sfp__frame {
-  max-height: 40vh;
+  max-height: 36vh;
   display: flex;
   justify-content: center;
+  background: #000;
 }
 .sfp--compact .sfp__stage {
   width: auto;
@@ -96,6 +97,6 @@
 .sfp--compact .sfp__img {
   width: auto;
   max-width: 100%;
-  max-height: 40vh;
+  max-height: 36vh;
   object-fit: contain;
 }

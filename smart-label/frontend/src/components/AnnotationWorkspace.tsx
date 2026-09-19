@@ -1203,7 +1203,7 @@ export default function AnnotationWorkspace({
           )}
         </div>
         {!similarUseText && taskId != null && (
-          <div style={{ flex: "0 1 auto", minHeight: 0, overflow: "hidden" }}>
+          <div style={{ flex: "0 0 auto" }}>
             <SimilarFramePreview taskId={taskId} tSec={similarAtSec} view={similarView} onViewChange={setSimilarView} compact />
           </div>
         )}
@@ -1244,7 +1244,7 @@ export default function AnnotationWorkspace({
           </Tooltip>
         </Space>
         {taskId != null && (
-          <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
+          <div style={{ flex: "1 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
             <SimilarClipPlayer
               taskId={taskId}
               clip={similarClip}
