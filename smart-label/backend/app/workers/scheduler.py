@@ -60,13 +60,27 @@ async def _auto_scan_samples() -> None:
         )
 
 
+async def _collect_local_model_stats() -> None:
+    """算法机上本地模型的调用计数在它进程内存里，拉一次快照按小时记差值（调用统计页按天看）。"""
+    from app.services import local_model_stats_service as lms
+
+    try:
+        async with SessionLocal() as db:
+            r = await lms.collect(db)
+        if r.get("skipped"):
+            logger.debug("本地模型计数采集跳过：%s", r["skipped"])
+    except Exception:  # noqa: BLE001 定时任务不能因为这个挂掉
+        logger.exception("本地模型计数采集失败")
+
+
 async def main() -> None:
     scheduler = AsyncIOScheduler()
+    scheduler.add_job(_collect_local_model_stats, "interval", minutes=5, id="local_model_stats", next_run_time=datetime.now())
     scheduler.add_job(_sweep_once, "interval", minutes=2, id="reclaim_expired_tasks")
     # 启动后立刻扫一次，不用等 10 分钟；之后每 10 分钟一次
     scheduler.add_job(_auto_scan_samples, "interval", minutes=10, id="auto_scan_samples", next_run_time=datetime.now())
     scheduler.start()
-    logger.info("定时任务已启动：超时回收(每2分钟) + NAS样本自动扫描(每10分钟)")
+    logger.info("定时任务已启动：超时回收(每2分钟) + NAS样本自动扫描(每10分钟) + 本地模型计数采集(每5分钟)")
     await asyncio.Event().wait()  # 常驻进程
 
 
