@@ -264,14 +264,18 @@ async def embed_preview(video_rel_path: str, t_s: float) -> dict:
     return await _post("/api/v1/embed/preview", {"path": video_rel_path, "t": t_s}, 30)
 
 
-async def embed_thumb(video_rel_path: str, t_s: float, crop: bool = True, max_side: int | None = None) -> bytes:
-    """某视频某一秒的缩略图 JPEG（狗框那一块 / 整帧带框）。给"先看命中"那一排图用。"""
+async def embed_thumb(video_rel_path: str, t_s: float, crop: bool = True, max_side: int | None = None,
+                      view: str | None = None) -> bytes:
+    """某视频某一秒的缩略图 JPEG。view = mask（抠掉背景的那块）/ raw（那块原图）/ pose（画骨架）/
+    box（整帧带框）；不给就按 crop 老规矩（True=mask，False=box）。给"先看命中"那一排图用。"""
     if not enabled():
         raise SamUnavailable(_off_reason())
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/embed/thumb"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             params = {"path": video_rel_path, "t": t_s, "crop": "true" if crop else "false"}
+            if view:
+                params["view"] = view
             if max_side:
                 params["max_side"] = max_side      # 划区域要整帧看得清，缩略图那种 320 不够
             resp = await client.get(url, params=params)

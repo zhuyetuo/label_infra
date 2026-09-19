@@ -392,8 +392,12 @@ async def similar_thumb_token(task_id: int, db: AsyncSession = Depends(get_db), 
 
 @router.get("/similar/thumb")
 async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: bool = True,
-                        db: AsyncSession = Depends(get_db)):
-    """命中那一帧的缩略图（狗框那一块）。path 必须是这个任务所在项目里某份样本的视频。"""
+                        view: str | None = None, db: AsyncSession = Depends(get_db)):
+    """命中那一帧的缩略图。view：mask 抠掉背景的那块（拿去比的就是它）/ raw 那块原图 /
+    pose 那块画上关键点骨架 / box 整帧带检测框；不给按 crop（True=mask，False=box）。
+    path 必须是库里登记的样本视频。"""
+    if view is not None and view not in ("mask", "raw", "pose", "box"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "view 只能是 mask / raw / pose / box")
     from fastapi.responses import Response
 
     from app.core.media_token import verify_media_token
@@ -410,7 +414,7 @@ async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: boo
     if known is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不是库里登记的样本视频")
     try:
-        data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop)
+        data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop, view=view)
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
