@@ -107,6 +107,10 @@ export default function Vision() {
     return v === "box" || v === "mask" ? v : "both";
   });
   useEffect(() => { localStorage.setItem("vision.showLayer", showLayer); }, [showLayer]);
+  // 标签文字（门齿 / 犬齿 103…）：一张图十几颗牙时标签会把相邻的牙盖住，核对轮廓时要能关掉。
+  // 关掉之后选中的那条还是显示（不然改类别时不知道自己选的是哪颗）。按 L 键也能切
+  const [showLabels, setShowLabels] = useState<boolean>(() => localStorage.getItem("vision.showLabels") !== "0");
+  useEffect(() => { localStorage.setItem("vision.showLabels", showLabels ? "1" : "0"); }, [showLabels]);
   // 只看打了「拿不准」的：攒一批给兽医一次看完，比标一张问一次高效
   const [onlyVet, setOnlyVet] = useState(false);
   // 左边清单：现在一屏是三天 x 六只狗 x 十几张，全摊开要滚很久才找得到一张。
@@ -436,6 +440,7 @@ export default function Vision() {
         // 右下角把手：拉大小
         ctx.fillRect((x + bw) * w - 5, (y + bh) * h - 5, 10, 10);
       }
+      if (!showLabels && !on) return;
       const name = labelOf(it.label_code)?.name ?? it.label_code;
       const code = it.attrs?.tooth_code;
       const text = code ? `${name} ${code}` : name;
@@ -455,7 +460,7 @@ export default function Vision() {
       ctx.strokeRect(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
       ctx.setLineDash([]);
     }
-  }, [items, selected, labelOf, brush, showLayer]);
+  }, [items, selected, labelOf, brush, showLayer, showLabels]);
 
   useEffect(() => { draw(); }, [draw]);
   // 盯着 <img> 的**实际**渲染尺寸重绘。
@@ -650,6 +655,10 @@ export default function Vision() {
       //
       // Shift+数字 在键盘上拿到的 e.key 是符号（! @ #…），所以按 e.code 找，
       // 不按 e.key——按 e.key 的话 Shift 组合永远匹配不上，这条会静默失效。
+      if (e.key.toLowerCase() === "l" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        setShowLabels((v) => !v);
+        return;
+      }
       const digit = e.code.startsWith("Digit") ? e.code.slice(5) : null;
       const hit = catalog?.labels.find((l) => l.hotkey === (e.shiftKey ? digit : e.key));
       if (hit) {
@@ -1013,6 +1022,11 @@ export default function Vision() {
                   ]}
                 />
               </Tooltip>
+              <Tooltip title="画不画每条标注上的类别文字（门齿 / 犬齿 103…）。十几颗牙挤在一起时标签会把相邻的牙盖住，核对轮廓时关掉；选中的那条照常显示。快捷键 L">
+                <Button size="small" type={showLabels ? "default" : "primary"} onClick={() => setShowLabels((v) => !v)}>
+                  {showLabels ? "隐藏标签" : "显示标签"}
+                </Button>
+              </Tooltip>
               <Tooltip title={samOk
                 ? "开着的时候：**拖一个粗框**，SAM 在框里收紧成贴合的轮廓（推荐）；点一下也行，但实测单点在牙齿上分不出「这颗」和「这排」。点已有的框还是选中它。"
                 : (sam?.error || "SAM 辅助没开")}>
@@ -1157,6 +1171,7 @@ export default function Vision() {
 
         <Typography.Title level={5}>显示：框 / 分割 / 都显示</Typography.Title>
         <Typography.Paragraph>
+          <b>隐藏标签（快捷键 L）</b>把每条标注上的类别文字收起来，十几颗牙挤在一起时标签会盖住相邻的牙；选中的那条照常显示。<br />
           工具栏上的 <b>框+分割 / 只看框 / 只看分割</b> 只改显示，<b>不改数据</b>——
           藏起来的那一层照样存着、照样导出。这个选择会记住。<br />
           <Typography.Text type="secondary">
