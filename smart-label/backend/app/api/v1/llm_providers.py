@@ -154,6 +154,22 @@ async def local_vllm_log(n: int = 300):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
 
 
+@router.get("/local-models/stats")
+async def local_models_stats(days: int = 30, db: AsyncSession = Depends(get_db)):
+    """本地模型最近 days 天的调用量，每个模型按天一行（平台每 5 分钟从视觉服务采一次计数）。"""
+    from app.services import local_model_stats_service as lms
+
+    return ok(await lms.stats(db, max(1, min(400, days))))
+
+
+@router.get("/imu-models/stats")
+async def imu_models_stats(days: int = 30, db: AsyncSession = Depends(get_db)):
+    """IMU 预测模型（AI 预标注）最近 days 天的使用量：每个模型 / 版本按天跑了几份样本、多少窗口。"""
+    from app.services import local_model_stats_service as lms
+
+    return ok(await lms.imu_stats(db, max(1, min(400, days))))
+
+
 @router.post("/local-models/meter/reset")
 async def local_models_meter_reset():
     try:

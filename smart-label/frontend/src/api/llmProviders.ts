@@ -158,3 +158,45 @@ export const resetLocalModelMeter = () => request.post<never, { ok: boolean }>("
 /** vLLM 这次启动的日志（最后 n 行）和挑出来的报错行 */
 export const getVllmLog = (n = 300) =>
   request.get<never, { lines: string[]; errors: string[] }>("/llm-providers/local-models/vllm/log", { params: { n } });
+
+/** 本地模型（算法机上）最近 N 天的调用量：平台每 5 分钟从视觉服务采一次计数按小时落表 */
+export interface LocalModelDay {
+  day: string;
+  calls: number;
+  frames: number;
+  errors: number;
+  total_ms: number;
+}
+export interface LocalModelStat {
+  key: string;
+  name: string;
+  calls: number;
+  frames: number;
+  errors: number;
+  total_ms: number;
+  avg_ms: number;
+  avg_ms_per_frame: number;
+  by_day: LocalModelDay[];
+}
+export const getLocalModelStats = (days: number) =>
+  request.get<never, { days: number; since: string; models: LocalModelStat[] }>("/llm-providers/local-models/stats", { params: { days } });
+
+/** IMU 预测模型（AI 预标注）的使用量：每个模型 / 版本按天跑了几份样本、多少窗口 */
+export interface ImuModelDay {
+  day: string;
+  samples: number;
+  windows: number;
+  segments: number;
+  candidates: number;
+}
+export interface ImuModelStat {
+  model_tag: string;
+  mode: string;
+  samples: number;
+  windows: number;
+  segments: number;
+  candidates: number;
+  by_day: ImuModelDay[];
+}
+export const getImuModelStats = (days: number) =>
+  request.get<never, { days: number; since: string; models: ImuModelStat[] }>("/llm-providers/imu-models/stats", { params: { days } });
