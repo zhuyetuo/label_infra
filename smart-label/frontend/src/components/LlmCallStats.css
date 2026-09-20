@@ -1,0 +1,220 @@
+/* 「调用统计」的配色与版式。
+ *
+ * 三块统计（本地视觉模型 / IMU 预测模型 / 大模型 API）各占一个主题色，一眼分得开是哪一块：
+ * 用的是验证过的分类色板前三槽（蓝 → 橙 → 青），CVD（色觉障碍）两两可分、对比度达标。
+ * 失败一律用状态色 critical，跟三个主题色都不冲突，红色只表示"出错"这一件事。
+ *
+ * 颜色只是辅助：每张卡、每个数都有文字标签，光看颜色分不出来也不影响读数。
+ */
+.llm-stats {
+  --viz-1: #2a78d6;              /* 槽1 蓝：本地模型（视觉服务） */
+  --viz-1-tint: rgba(42, 120, 214, 0.07);
+  --viz-2: #eb6834;              /* 槽2 橙：IMU 预测模型 */
+  --viz-2-tint: rgba(235, 104, 52, 0.07);
+  --viz-3: #1baf7a;              /* 槽3 青：大模型 API */
+  --viz-3-tint: rgba(27, 175, 122, 0.08);
+  --viz-crit: #d03b3b;           /* 状态色：失败 */
+  --viz-ink: #0b0b0b;
+  --viz-ink-2: #52514e;
+  --viz-muted: #898781;
+  --viz-surface: #fcfcfb;
+  --viz-baseline: #e1e0d9;
+  --viz-ring: rgba(11, 11, 11, 0.1);
+}
+
+/* 深色：同样的色相按深色底重新取步，不是把浅色翻过来。
+ * 媒体查询管系统设置，data-theme 管页面自己的开关，两边都要写 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .llm-stats {
+    --viz-1: #3987e5;
+    --viz-1-tint: rgba(57, 135, 229, 0.12);
+    --viz-2: #d95926;
+    --viz-2-tint: rgba(217, 89, 38, 0.12);
+    --viz-3: #199e70;
+    --viz-3-tint: rgba(25, 158, 112, 0.14);
+    --viz-ink: #ffffff;
+    --viz-ink-2: #c3c2b7;
+    --viz-muted: #898781;
+    --viz-surface: #1a1a19;
+    --viz-baseline: #383835;
+    --viz-ring: rgba(255, 255, 255, 0.1);
+  }
+}
+:root[data-theme="dark"] .llm-stats {
+  --viz-1: #3987e5;
+  --viz-1-tint: rgba(57, 135, 229, 0.12);
+  --viz-2: #d95926;
+  --viz-2-tint: rgba(217, 89, 38, 0.12);
+  --viz-3: #199e70;
+  --viz-3-tint: rgba(25, 158, 112, 0.14);
+  --viz-ink: #ffffff;
+  --viz-ink-2: #c3c2b7;
+  --viz-muted: #898781;
+  --viz-surface: #1a1a19;
+  --viz-baseline: #383835;
+  --viz-ring: rgba(255, 255, 255, 0.1);
+}
+
+.llm-stats__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── 一块统计 ───────────────────────────────────────────────────────── */
+.llm-sec {
+  border: 1px solid var(--viz-ring);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.llm-sec--1 { --sec: var(--viz-1); --sec-tint: var(--viz-1-tint); }
+.llm-sec--2 { --sec: var(--viz-2); --sec-tint: var(--viz-2-tint); }
+.llm-sec--3 { --sec: var(--viz-3); --sec-tint: var(--viz-3-tint); }
+
+/* 标题条：左边一道主题色的竖杠 + 淡一层的同色底，块与块之间一眼分开 */
+.llm-sec__hd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--sec-tint);
+  border-left: 4px solid var(--sec);
+  border-bottom: 1px solid var(--viz-ring);
+}
+.llm-sec__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--viz-ink);
+  letter-spacing: 0.2px;
+}
+/* 标题旁边的合计：几个模型、一共多少调用，不用挨张卡看 */
+.llm-sec__chips {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--viz-ink-2);
+}
+.llm-sec__chip b {
+  font-weight: 600;
+  color: var(--viz-ink);
+  font-variant-numeric: tabular-nums;
+}
+.llm-sec__bd {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+/* ── 一张模型卡 ─────────────────────────────────────────────────────── */
+.llm-card {
+  flex: 1 1 360px;
+  min-width: 320px;
+  background: var(--viz-surface);
+  border: 1px solid var(--viz-ring);
+  border-top: 3px solid var(--sec);
+  border-radius: 10px;
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+}
+.llm-card__hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.llm-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--viz-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 数字区：一格一个指标，标签单独一行——原来标签和数字挤成两排看不出谁对谁 */
+/* 一格 90px 起：窄了之后「$0.0000」和「963 ms」这种值会溢出挤到下一格，
+ * 看着像「$0.00005 ms」。宁可多占一行，也不要两个数串在一起 */
+.llm-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 12px 14px;
+  margin-bottom: 12px;
+}
+.llm-metric__k {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--viz-muted);
+  white-space: nowrap;
+}
+.llm-metric__v {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--viz-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.llm-metric__v--bad { color: var(--viz-crit); }
+.llm-metric--dashed { border-bottom: 1px dashed var(--viz-ring); }
+
+/* ── 按天柱图 ───────────────────────────────────────────────────────── */
+.llm-bars {
+  display: flex;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--viz-baseline);
+  margin-top: auto;
+}
+.llm-bars__col {
+  flex: 1 1 0;
+  min-width: 2px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+.llm-bars__bar {
+  background: var(--sec);
+  border-radius: 4px 4px 0 0;
+  position: relative;
+  /* 相邻柱子之间留一道底色缝，挨着的两天不会糊成一整块 */
+  margin: 0 1px;
+}
+.llm-bars__fail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--viz-crit);
+  border-radius: 4px 4px 0 0;
+}
+.llm-bars__ticks {
+  display: flex;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--viz-muted);
+  height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.llm-bars__tick {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+.llm-empty {
+  font-size: 12px;
+  color: var(--viz-muted);
+  padding: 12px 0;
+}
+.llm-cap {
+  font-size: 12px;
+  color: var(--viz-ink-2);
+  margin-bottom: 6px;
+}
