@@ -14,7 +14,7 @@ export const TRACKS: { key: string; name: string; hint: string }[] = [
   { key: "behavior", name: "行为", hint: "具体在干什么：抓挠 / 舔 / 啃 / 蹭 / 进食 / 饮水 / 嗅闻……一次一件" },
   { key: "motion", name: "运动", hint: "要么静要么动：静止休息（睡眠）/ 活动（行走、奔跑、跳跃……）" },
   { key: "posture", name: "姿态", hint: "任一时刻一种姿态：坐 / 卧 / 站 / 姿态转换" },
-  { key: "device", name: "设备", hint: "颈圈松动这类设备状态，跟什么都能同时发生，不进行为类别" },
+  { key: "device", name: "设备", hint: "颈圈松动 / 未佩戴这类设备状态，跟行为轨可以同时标，不进行为类别；两者之间互斥" },
 ];
 export const TRACK_NAME: Record<string, string> = Object.fromEntries(TRACKS.map((t) => [t.key, t.name]));
 
