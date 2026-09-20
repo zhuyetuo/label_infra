@@ -21,7 +21,7 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
-import CandidatePanel from "@/components/CandidatePanel";
+import CandidatePanel, { candFocus } from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
@@ -1528,7 +1528,11 @@ export default function AnnotationWorkspace({
               <span>
                 从「找相似」跳来：命中在 <b>{formatMs(initialSeekMs)}</b>
                 {loopRange ? `，正在循环播放 ${formatMs(loopRange.startMs)} ~ ${formatMs(loopRange.endMs)}` : "，已定位到这一刻"}
-                ；下面候选列表里这一条置顶高亮（还没写候选的话列表里没有，看画面就行）
+                {/* 「这一条置顶高亮」以前是写死的——列表里根本没有这一刻的候选时，
+                    人会以为是置顶坏了，在几十条里来回找一条不存在的。有没有，说清楚 */}
+                {candidates.some((c) => candFocus(c, initialSeekMs))
+                  ? "；下面候选列表里这一条已置顶高亮"
+                  : "；这一刻没有写成候选，所以下面列表里找不到（看画面就行）"}
               </span>
             }
             action={
