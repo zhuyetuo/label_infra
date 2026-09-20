@@ -5,6 +5,9 @@
  * 失败一律用状态色 critical，跟三个主题色都不冲突，红色只表示"出错"这一件事。
  *
  * 颜色只是辅助：每张卡、每个数都有文字标签，光看颜色分不出来也不影响读数。
+ *
+ * 只有浅色一套：平台整体是 antd 浅色主题，这里再跟着系统的深浅切换，同一页就会
+ * 一半浅一半深。
  */
 .llm-stats {
   --viz-1: #2a78d6;              /* 槽1 蓝：本地模型（视觉服务） */
@@ -20,39 +23,6 @@
   --viz-surface: #fcfcfb;
   --viz-baseline: #e1e0d9;
   --viz-ring: rgba(11, 11, 11, 0.1);
-}
-
-/* 深色：同样的色相按深色底重新取步，不是把浅色翻过来。
- * 媒体查询管系统设置，data-theme 管页面自己的开关，两边都要写 */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .llm-stats {
-    --viz-1: #3987e5;
-    --viz-1-tint: rgba(57, 135, 229, 0.12);
-    --viz-2: #d95926;
-    --viz-2-tint: rgba(217, 89, 38, 0.12);
-    --viz-3: #199e70;
-    --viz-3-tint: rgba(25, 158, 112, 0.14);
-    --viz-ink: #ffffff;
-    --viz-ink-2: #c3c2b7;
-    --viz-muted: #898781;
-    --viz-surface: #1a1a19;
-    --viz-baseline: #383835;
-    --viz-ring: rgba(255, 255, 255, 0.1);
-  }
-}
-:root[data-theme="dark"] .llm-stats {
-  --viz-1: #3987e5;
-  --viz-1-tint: rgba(57, 135, 229, 0.12);
-  --viz-2: #d95926;
-  --viz-2-tint: rgba(217, 89, 38, 0.12);
-  --viz-3: #199e70;
-  --viz-3-tint: rgba(25, 158, 112, 0.14);
-  --viz-ink: #ffffff;
-  --viz-ink-2: #c3c2b7;
-  --viz-muted: #898781;
-  --viz-surface: #1a1a19;
-  --viz-baseline: #383835;
-  --viz-ring: rgba(255, 255, 255, 0.1);
 }
 
 .llm-stats__sections {
