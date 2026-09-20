@@ -94,8 +94,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   margin-bottom: 12px;
+  min-width: 0;
+}
+/* 「最近 3 分钟前」：贴在卡片标题行右端，小一号、弱一点，不跟数字抢 */
+.llm-card__last {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--viz-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .llm-card__name {
   font-size: 14px;

@@ -39,6 +39,13 @@ async def stats(db: AsyncSession, days: int = 30, recent: int = 50) -> dict:
         select(LlmCall).where(LlmCall.created_at >= since).order_by(LlmCall.id)
     )).scalars().all()
 
+    def last_at(items: list[LlmCall]) -> str | None:
+        """这批里最近一次调用的时刻。列表是按 id 升序来的，最后一条就是最新的"""
+        for r in reversed(items):
+            if r.created_at:
+                return r.created_at.isoformat(timespec="seconds")
+        return None
+
     def summarize(items: list[LlmCall]) -> dict:
         n = len(items)
         inp = sum(r.input_tokens for r in items)
@@ -63,7 +70,7 @@ async def stats(db: AsyncSession, days: int = 30, recent: int = 50) -> dict:
     for r in rows:
         by_model.setdefault((r.provider, r.model), []).append(r)
         by_day.setdefault((r.created_at or datetime.now()).strftime("%Y-%m-%d"), []).append(r)
-    models = [{"provider": p, "model": m, **summarize(items)} for (p, m), items in by_model.items()]
+    models = [{"provider": p, "model": m, "last_at": last_at(items), **summarize(items)} for (p, m), items in by_model.items()]
     models.sort(key=lambda x: -x["calls"])
     days_out = [{"day": d, **summarize(items)} for d, items in sorted(by_day.items())]
     latest = [{
@@ -77,7 +84,7 @@ async def stats(db: AsyncSession, days: int = 30, recent: int = 50) -> dict:
                                         func.coalesce(func.sum(LlmCall.est_usd), 0.0)))).one()
     return {
         "days": days, "since": since.isoformat(),
-        "total": summarize(rows),
+        "total": summarize(rows), "last_at": last_at(rows),
         "all_time": {"calls": int(all_time[0] or 0), "total_tokens": int(all_time[1] or 0), "est_usd": round(float(all_time[2] or 0.0), 4)},
         "by_model": models, "by_day": days_out, "recent": latest,
     }

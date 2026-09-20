@@ -57,10 +57,15 @@ async def collect(db: AsyncSession, now: datetime | None = None) -> dict:
         if not key:
             continue
         cur = {f: meter.get(f) or 0 for f in FIELDS}
+        # 视觉服务报的"最近一次调用"（epoch 秒）。它重启会归零，所以只往后更新
+        last = meter.get("last_at")
+        last_dt = datetime.fromtimestamp(float(last)) if last else None
         snap = snaps.get(key)
         if snap is None:
-            db.add(LocalModelSnapshot(model_key=key, taken_at=now, **{f: cur[f] for f in FIELDS}))
+            db.add(LocalModelSnapshot(model_key=key, taken_at=now, last_call_at=last_dt, **{f: cur[f] for f in FIELDS}))
             continue
+        if last_dt is not None and (snap.last_call_at is None or last_dt > snap.last_call_at):
+            snap.last_call_at = last_dt
         d = delta({f: getattr(snap, f) for f in FIELDS}, cur)
         for f in FIELDS:
             setattr(snap, f, cur[f])
@@ -99,6 +104,8 @@ async def stats(db: AsyncSession, days: int = 30) -> dict:
     """最近 days 天，每个模型：总量 + 按天一行（画柱图）。"""
     since = (datetime.now() - timedelta(days=max(1, days))).replace(minute=0, second=0, microsecond=0)
     rows = (await db.execute(select(LocalModelStat).where(LocalModelStat.hour >= since).order_by(LocalModelStat.hour))).scalars().all()
+    # 最近一次调用：快照行上记着（不受所选时间范围影响——问的是"上次什么时候用的"）
+    last_at = {r.model_key: r.last_call_at for r in (await db.execute(select(LocalModelSnapshot))).scalars().all()}
     per: dict[str, dict] = {}
     for r in rows:
         m = per.setdefault(r.model_key, {"key": r.model_key, "name": NAMES.get(r.model_key, r.model_key), "calls": 0, "frames": 0, "errors": 0, "total_ms": 0.0, "by_day": {}})
@@ -107,8 +114,13 @@ async def stats(db: AsyncSession, days: int = 30) -> dict:
             v = getattr(r, f)
             m[f] += v
             d[f] += v
+    for key, t in last_at.items():
+        if key not in per and t is not None:
+            per[key] = {"key": key, "name": NAMES.get(key, key), "calls": 0, "frames": 0, "errors": 0, "total_ms": 0.0, "by_day": {}}
     out = []
     for m in per.values():
+        t = last_at.get(m["key"])
+        m["last_call_at"] = t.isoformat(timespec="seconds") if t else None
         m["avg_ms"] = round(m["total_ms"] / m["calls"]) if m["calls"] else 0
         m["avg_ms_per_frame"] = round(m["total_ms"] / m["frames"], 1) if m["frames"] else 0
         m["total_ms"] = round(m["total_ms"])
@@ -133,7 +145,9 @@ async def imu_stats(db: AsyncSession, days: int = 30) -> dict:
     per: dict[tuple[str, str], dict] = {}
     for r in rows:
         k = (r.model_tag, r.mode)
-        m = per.setdefault(k, {"model_tag": r.model_tag, "mode": r.mode, "samples": 0, "windows": 0, "segments": 0, "candidates": 0, "by_day": {}})
+        m = per.setdefault(k, {"model_tag": r.model_tag, "mode": r.mode, "samples": 0, "windows": 0, "segments": 0, "candidates": 0, "last_at": None, "by_day": {}})
+        if r.created_at and (m["last_at"] is None or r.created_at > m["last_at"]):
+            m["last_at"] = r.created_at
         day = (r.created_at or datetime.now()).strftime("%Y-%m-%d")
         d = m["by_day"].setdefault(day, {"day": day, "samples": 0, "windows": 0, "segments": 0, "candidates": 0})
         for f, v in (("samples", 1), ("windows", r.n_windows or 0), ("segments", r.n_segments or 0), ("candidates", r.n_candidates or 0)):
@@ -141,6 +155,7 @@ async def imu_stats(db: AsyncSession, days: int = 30) -> dict:
             d[f] += v
     out = []
     for m in per.values():
+        m["last_at"] = m["last_at"].isoformat(timespec="seconds") if m["last_at"] else None
         m["by_day"] = sorted(m["by_day"].values(), key=lambda x: x["day"])
         out.append(m)
     out.sort(key=lambda m: -m["samples"])

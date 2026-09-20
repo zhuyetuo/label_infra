@@ -80,8 +80,10 @@ export interface LlmCallStats {
   days: number;
   since: string;
   total: LlmCallSummary;
+  /** 这段日期里最近一次调用的时刻（ISO）；一次都没有是 null */
+  last_at: string | null;
   all_time: { calls: number; total_tokens: number; est_usd: number };
-  by_model: (LlmCallSummary & { provider: string; model: string })[];
+  by_model: (LlmCallSummary & { provider: string; model: string; last_at: string | null })[];
   by_day: (LlmCallSummary & { day: string })[];
   recent: LlmCallRow[];
 }
@@ -176,6 +178,8 @@ export interface LocalModelStat {
   total_ms: number;
   avg_ms: number;
   avg_ms_per_frame: number;
+  /** 最近一次调用的时刻（ISO）。不受所选时间范围影响——问的是"上次什么时候用的" */
+  last_call_at: string | null;
   by_day: LocalModelDay[];
 }
 export const getLocalModelStats = (days: number) =>
@@ -196,6 +200,8 @@ export interface ImuModelStat {
   windows: number;
   segments: number;
   candidates: number;
+  /** 这段日期里最近一次跑预标注的时刻（ISO） */
+  last_at: string | null;
   by_day: ImuModelDay[];
 }
 export const getImuModelStats = (days: number) =>

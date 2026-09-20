@@ -100,3 +100,34 @@ def test_即时采集_限流_出错不影响读数(db, run, monkeypatch):
     monkeypatch.setattr(lms.vc, "models_overview", boom)
     run(lms.collect_throttled(db))          # 不抛
     assert run(lms.stats(db, 30))["models"] == []
+
+
+def test_最近一次调用_只往后走_视觉服务重启不抹掉(db, run, monkeypatch):
+    """视觉服务的 last_at 在它自己内存里，重启归零。快照行上记的那个不能跟着退回去。"""
+    from app.models.local_model_stat import LocalModelSnapshot
+
+    t0 = datetime(2026, 9, 19, 10, 0).timestamp()
+    seq = iter([
+        {"available": True, "models": [{"key": "dog", "meter": {"calls": 5, "frames": 50, "errors": 0, "total_ms": 50.0, "last_at": t0}}]},
+        {"available": True, "models": [{"key": "dog", "meter": {"calls": 9, "frames": 90, "errors": 0, "total_ms": 90.0, "last_at": t0 + 3600}}]},
+        # 重启了：计数归零、last_at 也退回到更早
+        {"available": True, "models": [{"key": "dog", "meter": {"calls": 1, "frames": 10, "errors": 0, "total_ms": 10.0, "last_at": t0 - 99999}}]},
+        # 没 last_at（老版本视觉服务）：不动已经记下的
+        {"available": True, "models": [{"key": "dog", "meter": {"calls": 2, "frames": 20, "errors": 0, "total_ms": 20.0}}]},
+    ])
+
+    async def fake():
+        return next(seq)
+
+    monkeypatch.setattr(lms.vc, "models_overview", fake)
+    at = lambda: run(db.execute(select(LocalModelSnapshot))).scalars().one().last_call_at
+    run(lms.collect(db, datetime(2026, 9, 19, 10, 5)))
+    assert at() == datetime.fromtimestamp(t0)                  # 第一次就记上
+    run(lms.collect(db, datetime(2026, 9, 19, 11, 5)))
+    assert at() == datetime.fromtimestamp(t0 + 3600)
+    run(lms.collect(db, datetime(2026, 9, 19, 12, 5)))
+    assert at() == datetime.fromtimestamp(t0 + 3600)            # 重启不往回退
+    run(lms.collect(db, datetime(2026, 9, 19, 13, 5)))
+    assert at() == datetime.fromtimestamp(t0 + 3600)            # 老版本没这个字段也不动
+    dog = next(m for m in run(lms.stats(db, 30))["models"] if m["key"] == "dog")
+    assert dog["last_call_at"] == datetime.fromtimestamp(t0 + 3600).isoformat(timespec="seconds")
