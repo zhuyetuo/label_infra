@@ -209,7 +209,7 @@ def video_path_of(sample: Sample, cam: str) -> str | None:
 
 @dataclass
 class SeekProgress:
-    status: str = "idle"          # idle | running | done | cancelled | error
+    status: str = "idle"          # idle | running | paused | done | cancelled | error
     project_id: int = 0
     dry_run: bool = False
     total: int = 0
@@ -245,6 +245,11 @@ class SeekProgress:
 _progress: dict[int, SeekProgress] = {}
 _running: set[int] = set()
 _cancelled: set[int] = set()
+# 暂停：gate 没 set 的时候，每个任务开始前都停在 gate 上等。跟建索引那边同一套做法。
+# **这一步是花钱的**（每段要问一次大模型），能随时按住比建索引那边更要紧：
+# 看到前几条结果不对就该停下来改问法，而不是把钱花完再说
+_paused: set[int] = set()
+_gate: dict[int, asyncio.Event] = {}
 
 
 def get_progress(project_id: int) -> SeekProgress:
@@ -259,6 +264,38 @@ def cancel(project_id: int) -> bool:
     if project_id not in _running:
         return False
     _cancelled.add(project_id)
+    _paused.discard(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.set()             # 停在暂停上的也放出来，让它们看到取消
+    return True
+
+
+def pause(project_id: int) -> bool:
+    """正在问的那个视频问完就停，后面的不开始；「继续」接着跑。
+
+    停不到更细：一个任务里是一次 HTTP 调用（视觉服务那边再并发问几十段），
+    中途掐掉的话那几段的钱已经花了、结果却丢了。所以按任务边界停。
+    """
+    if project_id not in _running or project_id in _cancelled:
+        return False
+    _paused.add(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.clear()
+    p = _progress.get(project_id)
+    if p is not None:
+        p.status = "paused"
+    return True
+
+
+def resume(project_id: int) -> bool:
+    if project_id not in _running:
+        return False
+    _paused.discard(project_id)
+    if (g := _gate.get(project_id)) is not None:
+        g.set()
+    p = _progress.get(project_id)
+    if p is not None and p.status == "paused":
+        p.status = "running"
     return True
 
 
@@ -290,6 +327,10 @@ async def _run(project_id: int, task_ids: list[int] | None, params: SeekParams) 
     progress = SeekProgress(status="running", project_id=project_id, dry_run=params.dry_run,
                             started_at=time.time())
     _progress[project_id] = progress
+    gate = asyncio.Event()      # 每次跑新建：Event 绑当前事件循环
+    gate.set()
+    _gate[project_id] = gate
+    _paused.discard(project_id)
     try:
         async with SessionLocal() as db:
             await run_project(db, project_id, task_ids, params, progress)
@@ -304,6 +345,8 @@ async def _run(project_id: int, task_ids: list[int] | None, params: SeekParams) 
         progress.current_sample_code = None
         _running.discard(project_id)
         _cancelled.discard(project_id)
+        _paused.discard(project_id)
+        _gate.pop(project_id, None)
 
 
 async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | None,
@@ -336,7 +379,10 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
     tasks = (await db.execute(query.order_by(Task.id))).scalars().all()
     progress.total = len(tasks)
 
+    gate = _gate.get(project_id)
     for task in tasks:
+        if gate is not None:
+            await gate.wait()       # 暂停时停在这里；继续 / 停止都会放行
         if project_id in _cancelled:
             progress.log(f"已取消，剩下 {progress.total - progress.processed} 个没跑")
             break

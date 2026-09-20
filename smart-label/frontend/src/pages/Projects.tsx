@@ -91,6 +91,8 @@ import {
 } from "@/api/projects";
 import {
   cancelVisionSeek,
+  pauseVisionSeek,
+  resumeVisionSeek,
   getVisionSeekStatus,
   startVisionSeek,
   type VisionSeekProgress,
@@ -1366,21 +1368,37 @@ export default function Projects() {
                   {(() => {
                     const sp = seekProgress[p.id];
                     if (!sp || sp.status === "idle") return null;
-                    if (sp.status === "running") {
+                    // 暂停时这一整块照样要显示——不然按了暂停进度条就消失了，
+                    // 看着像任务没了
+                    if (sp.status === "running" || sp.status === "paused") {
+                      const seekPaused = sp.status === "paused";
                       return (
                         <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
                           <Progress
                             size="small"
-                            status="active"
-                            strokeColor="#eb2f96"
+                            status={seekPaused ? "normal" : "active"}
+                            strokeColor={seekPaused ? "#bfbfbf" : "#eb2f96"}
                             percent={sp.total ? Math.round((sp.processed / sp.total) * 100) : 0}
-                            format={() => `${sp.dry_run ? "预览" : "画面"} ${sp.processed}/${sp.total}`}
+                            format={() => `${sp.dry_run ? "预览" : "画面"} ${sp.processed}/${sp.total}${seekPaused ? " 已暂停" : ""}`}
                           />
                           <Space size={4}>
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选 · 约 $${sp.est_usd}`}
                               {" · "}已用 {fmtClock(sp.elapsed_sec)}
                             </Typography.Text>
+                            {/* 这一步是花钱的（每段问一次大模型），能随时按住比建索引那边更要紧：
+                                看到前几条结果不对就该停下来改问法，而不是把钱花完再说 */}
+                            {seekPaused ? (
+                              <Tooltip title="接着问没问的那些视频">
+                                <Button size="small" type="link" style={{ padding: 0 }}
+                                  onClick={async () => { await resumeVisionSeek(p.id); pollSeek([p.id]); }}>继续</Button>
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title="正在问的这个视频问完就停住，后面的不开始；点「继续」接着问。钱只花到停住那一刻">
+                                <Button size="small" type="link" style={{ padding: 0 }}
+                                  onClick={async () => { await pauseVisionSeek(p.id); pollSeek([p.id]); }}>暂停</Button>
+                              </Tooltip>
+                            )}
                             <Popconfirm
                               title="停止找片段？"
                               description="正在问的这个视频会跑完，之后的不再发；已写好的候选保留"
