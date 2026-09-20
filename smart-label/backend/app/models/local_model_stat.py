@@ -41,3 +41,6 @@ class LocalModelSnapshot(Base):
     errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     taken_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 这个模型最近一次真正被调用的时刻（视觉服务自己记的）。它重启会归零，所以这里
+    # 只往后更新：重启之前记下的那个时间不会被抹掉
+    last_call_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

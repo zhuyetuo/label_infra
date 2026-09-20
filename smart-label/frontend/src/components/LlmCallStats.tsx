@@ -13,6 +13,29 @@ const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${M
 const fmtN = (n: number) => n.toLocaleString("zh-CN");
 const fmtK = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : fmtN(n));
 
+/** 「3 分钟前」这种。给的是 ISO 字符串，没有就返回 null */
+function ago(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "刚刚";
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+
+/** 卡片右上角的「最近一次调用」。悬停看完整时刻 */
+function LastCall({ at }: { at: string | null | undefined }) {
+  const rel = ago(at);
+  if (!rel) return <span className="llm-card__last">没调过</span>;
+  return (
+    <Tooltip title={`最近一次调用：${at!.replace("T", " ")}`}>
+      <span className="llm-card__last">最近 {rel}</span>
+    </Tooltip>
+  );
+}
+
 const PERIODS = [
   { label: "今天", value: 1 }, { label: "7 天", value: 7 }, { label: "30 天", value: 30 }, { label: "90 天", value: 90 }, { label: "一年", value: 365 },
 ];
@@ -91,14 +114,16 @@ function Metrics({ items }: { items: Metric[] }) {
 }
 
 /** 一张模型卡：名字 + 几个数 + 按天柱图。顶边是所在板块的主题色 */
-function ModelCard({ title, tag, metrics, chart }: {
-  title: React.ReactNode; tag?: React.ReactNode; metrics: Metric[]; chart?: React.ReactNode;
+function ModelCard({ title, tag, lastAt, metrics, chart }: {
+  title: React.ReactNode; tag?: React.ReactNode; lastAt?: string | null;
+  metrics: Metric[]; chart?: React.ReactNode;
 }) {
   return (
     <div className="llm-card">
       <div className="llm-card__hd">
         <span className="llm-card__name">{title}</span>
         {tag}
+        {lastAt !== undefined && <LastCall at={lastAt} />}
       </div>
       <Metrics items={metrics} />
       {chart}
@@ -143,9 +168,18 @@ export default function LlmCallStats() {
   // 本地模型：没落过表的（比如从没调过）也列出来，名字用视觉服务给的
   const localModels = useMemo(() => {
     const seen = new Set((local.data?.models ?? []).map((m) => m.key));
-    const extra = (live.data?.models ?? []).filter((m) => !seen.has(m.key)).map((m) => ({ key: m.key, name: m.name, calls: 0, frames: 0, errors: 0, total_ms: 0, avg_ms: 0, avg_ms_per_frame: 0, by_day: [] }));
+    const extra = (live.data?.models ?? []).filter((m) => !seen.has(m.key)).map((m) => ({ key: m.key, name: m.name, calls: 0, frames: 0, errors: 0, total_ms: 0, avg_ms: 0, avg_ms_per_frame: 0, last_call_at: null as string | null, by_day: [] }));
     return [...(local.data?.models ?? []), ...extra];
   }, [local.data, live.data]);
+
+  /** 最近一次调用：库里记的（跨重启保留）和视觉服务内存里的（更实时），谁新用谁 */
+  const localLastAt = (key: string, fromDb: string | null): string | null => {
+    const ts = liveByKey.get(key)?.meter?.last_at;
+    const fromLive = ts ? new Date(ts * 1000).toISOString() : null;
+    if (!fromDb) return fromLive;
+    if (!fromLive) return fromDb;
+    return new Date(fromLive) > new Date(fromDb) ? fromLive : fromDb;
+  };
 
   const localSum = useMemo(() => localModels.reduce(
     (a, m) => ({ calls: a.calls + m.calls, frames: a.frames + m.frames, errors: a.errors + m.errors }),
@@ -186,6 +220,7 @@ export default function LlmCallStats() {
                 key={m.key}
                 title={m.name}
                 tag={lv ? (lv.available ? <Tag color="green">已加载</Tag> : <Tag>未加载</Tag>) : undefined}
+                lastAt={localLastAt(m.key, m.last_call_at)}
                 metrics={[
                   { label: "调用", value: fmtN(m.calls), tip: "这段日期里的推理次数" },
                   { label: "帧", value: fmtK(m.frames), tip: "处理过的图片数，批量检测一次几十张" },
@@ -217,6 +252,7 @@ export default function LlmCallStats() {
               key={`${m.model_tag}|${m.mode}`}
               title={m.model_tag}
               tag={<Tag>{m.mode}</Tag>}
+              lastAt={m.last_at}
               metrics={[
                 { label: "样本", value: fmtN(m.samples), tip: "跑过预标注的样本数" },
                 { label: "窗口", value: fmtK(m.windows), tip: "切出来送模型的窗口数（2 秒一个）" },
@@ -241,6 +277,7 @@ export default function LlmCallStats() {
         >
           <ModelCard
             title="这段日期合计"
+            lastAt={llm.data?.last_at}
             metrics={[
               { label: "调用", value: llm.isLoading ? "…" : fmtN(t?.calls ?? 0) },
               { label: "失败", value: fmtN(t?.errors ?? 0), bad: (t?.errors ?? 0) > 0 },
@@ -260,6 +297,7 @@ export default function LlmCallStats() {
               key={`${m.provider}:${m.model}`}
               title={<Tooltip title={m.model}>{m.model.split("/").pop()}</Tooltip>}
               tag={<Tag>{m.provider}</Tag>}
+              lastAt={m.last_at}
               metrics={[
                 { label: "调用", value: fmtN(m.calls) },
                 { label: "失败", value: fmtN(m.errors), bad: m.errors > 0 },
