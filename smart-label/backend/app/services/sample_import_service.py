@@ -413,11 +413,15 @@ def cams_for_imu(group: dict, imu_idx: int, shared_cams: dict[int, str],
     paired_site = bool(group.get("paired_site")) and bool(videos_by_imu)
     if not paired_site:
         return shared_cams
-    own = videos_by_imu.get(imu_idx)
-    if not own:
-        return shared_cams
     if shared_videos is None:
         shared_videos = genuinely_shared_cams(group)
+    own = videos_by_imu.get(imu_idx)
+    if not own:
+        # 配对站点里这只狗这一场没有自己那一路（摄像头挂了 / 没配上）。
+        # **不能退回 shared_cams**——那是 videos[1..3]，也就是别人房间的画面，
+        # 挂上去不报错、能播、能标，只是画面里的狗不是这只。宁可只给真公用那路
+        # （天花板），一路都没有就交空的，上面会跳过这个样本
+        return dict(shared_videos)
     # 自己那间的画面 + 真公用那路（天花板）。公用的 cam 编号跟自己那路撞了
     # 就不重复加。
     cams = dict(own)
@@ -435,20 +439,37 @@ def _plan_cam_path_fix(
     stored: tuple[str | None, str | None, str | None],
     cam_paths: dict[int, str],
     on_disk: set[str],
-) -> dict[int, str]:
+    exact: bool = False,
+) -> dict[int, str | None]:
     """
     一个样本上哪几路该改、改成什么。纯函数，不碰数据库/文件系统，好测。
+    值是 None 表示**清掉这一路**。
 
-    只动两种位置：存的那份在 NAS 上已经没了、或者这个位置本来就空着。
-    存的那份文件还在就一律不碰——影棚那种多只狗共用一组视频的，同一个 cam
-    位置具体落到哪个文件名取决于扫描顺序，碰了只会来回改。
+    两种模式：
+
+    exact=False（影棚、旧数据）：只动"存的那份在 NAS 上已经没了"和"本来就空着"
+    的位置。文件还在就一律不碰——那边多只狗共用一组视频，同一个 cam 位置具体
+    落到哪个文件名取决于扫描顺序，碰了只会来回改。
+
+    exact=True（狗场这类一间一狗的配对站点）：按算出来的那份**对齐**，多出来的
+    清掉。这边每一路挂给谁是文件名里写死的（_camN_imuM），不存在"哪个都行"。
+    只补不删的话，早先按老逻辑存进去的那一路空房间画面会一直留着——文件还在
+    NAS 上，上面那条规则永远碰不到它，界面上就是一只狗三个画面，其中一个是
+    隔壁的空房间。
     """
-    plan: dict[int, str] = {}
+    plan: dict[int, str | None] = {}
     for slot in (1, 2, 3):
         cur = stored[slot - 1]
+        want = cam_paths.get(slot)
+        if exact:
+            # cam1 必填（见迁移 b7d3f61a90c4），算不出来时宁可不动也不清空
+            if slot == 1 and not want:
+                continue
+            if (cur or None) != (want or None):
+                plan[slot] = want
+            continue
         if cur and cur in on_disk:
             continue
-        want = cam_paths.get(slot)
         if want and want != cur:
             plan[slot] = want
     return plan
@@ -463,7 +484,7 @@ async def _repair_sample_cam_paths(
 ) -> int:
     """
     已存在的样本：把指向"文件已经不在了"的那一路视频改回现在扫到的那一路，
-    空着的位置顺手补上。
+    空着的位置顺手补上；狗场那种一间一狗的配对站点还会把**多出来的那一路清掉**。
 
     为什么需要：扫描只建新样本，已存在的一律跳过，样本上的视频路径就是第一次
     扫到时写下的那几个，之后再也不动。狗场先扫了一次（那时天花板那路还是
@@ -497,13 +518,15 @@ async def _repair_sample_cam_paths(
     for sample in rows:
         columns = {1: "video_cam1_path", 2: "video_cam2_path", 3: "video_cam3_path"}
         stored = (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path)
-        plan = _plan_cam_path_fix(stored, candidates[sample.sample_code]["cam_paths"], on_disk)
+        info = candidates[sample.sample_code]
+        plan = _plan_cam_path_fix(stored, info["cam_paths"], on_disk, exact=bool(info.get("paired")))
         changed: list[str] = []
         for slot, want in sorted(plan.items()):
             cur = stored[slot - 1]
             setattr(sample, columns[slot], want)
-            changed.append(f"cam{slot}: {os.path.basename(cur) if cur else '(空)'} → {os.path.basename(want)}")
-            if want not in existing_media_paths:
+            changed.append(f"cam{slot}: {os.path.basename(cur) if cur else '(空)'} → "
+                           f"{os.path.basename(want) if want else '(清掉)'}")
+            if want and want not in existing_media_paths:
                 db.add(
                     MediaFile(
                         file_type=MediaFileType.raw_video,
@@ -839,6 +862,8 @@ async def _do_scan(db: AsyncSession, nas_root: str, admin: User) -> None:
                 "cam_paths": cam_paths,
                 "csv_rel": csv_rel,
                 "dog_code": csv_info["dog_code"],
+                # 配对站点的挂法是文件名定死的，修复时可以按算出来的那份对齐
+                "paired": paired_site,
             }
             all_candidate_paths.update(cam_paths.values())
             all_candidate_paths.add(csv_rel)
