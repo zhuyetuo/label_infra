@@ -118,6 +118,8 @@ export interface VisionSeekRequest {
   task_ids?: number[];
   /** 只找这几个父类（舔身体/啃身体/抓挠/蹭身体）；留空 = 项目里有的全找 */
   labels?: string[];
+  /** 部位送到第几层：0 不问部位 / 1 大区域 / 2 具体部位（默认）/ 3 连左右 */
+  part_depth?: number;
   cam?: "cam1" | "cam2" | "cam3";
   /** 每个视频最多送多少段去问模型——花费上限 */
   max_clips?: number;
