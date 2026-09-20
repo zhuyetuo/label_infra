@@ -482,3 +482,34 @@ def test_合段规则_相邻的合一段_前后各留一秒():
         ("a", 9.0, 13.0, 0.9, 2), ("a", 39.0, 41.0, 0.6, 1), ("b", 0.0, 1.2, 0.4, 1)}   # 起点不为负
     assert [s["score"] for s in segs] == sorted([s["score"] for s in segs], reverse=True)
     assert vi.group_hits([], gap_s=15.0) == []
+
+
+def test_逐帧标不同类别_按类别分段写(db, run):
+    """一次检索里常常混着别的动作（舔着舔着开始甩身体）。全按一个类别写进去，
+    等于把活儿推到后面让人一条条改——在「先看命中」里当场分开标，改的机会就在眼前。
+
+    挨着的两帧标成了不同类别就该是两段：合成一段就得替人选一个类别，
+    而那正是人刚刚分开标的东西。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    db.add(LabelDefinition(project_id=p.id, code="shake", display_name="甩身体", created_by=u.id))
+    run(db.commit())
+    hits = [{"path": "d/s1_cam1.mp4", "t": 200.0, "score": 0.9},
+            {"path": "d/s1_cam1.mp4", "t": 203.0, "score": 0.8},    # 紧挨着，但标成别的类别
+            {"path": "d/s1_cam1.mp4", "t": 400.0, "score": 0.7}]    # 没勾：不写
+    fn = _search({"hits": hits, "searched": 1, "missing": [], "segments": []})
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(
+        label_name="舔身体-后肢臀尾", t_s=42.0, pick=(
+            ("d/s1_cam1.mp4", 200.0, "舔身体-后肢臀尾"),
+            ("d/s1_cam1.mp4", 203.0, "甩身体"))), search_fn=fn))
+    assert r["written"] == 2 and r["dropped"] == 1
+    got = [(c.label_name, c.start_time_ms, c.end_time_ms) for c in _cands(db, run, t1.id)]
+    assert got == [("舔身体-后肢臀尾", 199000, 201000), ("甩身体", 202000, 204000)]
+
+
+def test_合段按视频和类别一起分(db, run):
+    hits = [{"path": "a", "t": 10.0, "score": 0.5, "label": "舔"},
+            {"path": "a", "t": 12.0, "score": 0.9, "label": "舔"},
+            {"path": "a", "t": 13.0, "score": 0.6, "label": "甩身体"}]     # 夹在中间但类别不同
+    segs = vi.group_hits(hits, gap_s=15.0)
+    assert {(s["label"], s["start_s"], s["end_s"], s["n"]) for s in segs} == {
+        ("舔", 9.0, 13.0, 2), ("甩身体", 12.0, 14.0, 1)}

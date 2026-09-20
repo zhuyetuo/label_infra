@@ -243,9 +243,10 @@ export default function AnnotationWorkspace({
   const [similarView, setSimilarView] = useState<SimilarThumbView>("mask");
   // 预览里正在循环播的那一段（左栏播放器）
   const [similarClip, setSimilarClip] = useState<Clip | null>(null);
-  // 「先看命中」里人勾掉的那几帧（`路径@秒`）：写候选时排除。检索总会混进几张一眼
-  // 就不对的，人点两下扔掉，比回头去调参数准——调参数常常把对的也一起调没了
-  const [similarDropped, setSimilarDropped] = useState<Set<string>>(new Set());
+  // 「先看命中」里人勾中的那几帧（`路径@秒` → 标成哪个类别）：只有勾中的写候选。
+  // 带上类别是因为一次检索常常混着别的动作（舔着舔着开始甩身体）——当场分开标，
+  // 比写完一堆错类别再回列表里一条条改省事得多
+  const [similarPicked, setSimilarPicked] = useState<Map<string, string>>(new Map());
   // 点命中：本任务的直接把主画面跳过去循环；别的任务开新页（cand=similar：那边候选置顶高亮、视频停在这一刻循环）
   const openSimilarHit = (h: SimilarHit) => {
     if (h.task_id === taskId) {
@@ -274,11 +275,11 @@ export default function AnnotationWorkspace({
         dry_run: true,
       });
       setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered, poseUsed: r.pose_used });
-      // **默认一张都不选**（dropped = 全部）。一开始默认全选，是想着"检索大部分时候
-      // 是对的"——实测不是：0.55 以下那一截基本全不对，全选等于让人去挑错的那些，
-      // 挑漏一张就多写一条脏候选。默认不选则挑漏只是少写一条，回头再搜一次就是。
+      // **默认一张都不选**。一开始默认全选，是想着"检索大部分时候是对的"——实测
+      // 不是：0.55 以下那一截基本全不对，全选等于让人去挑错的那些，挑漏一张就多
+      // 写一条脏候选。默认不选则挑漏只是少写一条，回头再搜一次就是。
       // 两种错都会犯，就选后果小的那种。
-      setSimilarDropped(new Set(r.hit_list.map((h) => `${h.path}@${h.t}`)));
+      setSimilarPicked(new Map());
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
     } finally {
       setSimilarPeeking(false);
@@ -300,10 +301,11 @@ export default function AnnotationWorkspace({
         center: similarCenter,
         pose_w: similarPoseW,
         part: similarPart || undefined,
-        // 「先看命中」里勾掉的那几帧不参与合段。没先看过命中（没预览直接找）时是空的
-        drop: [...similarDropped].map((k) => {
+        // 「先看命中」里勾中的那几帧，连同各自标成什么。没先看过命中（没预览直接找）
+        // 时是空的，那就照老样子整批按一个类别写
+        pick: [...similarPicked].map(([k, lab]) => {
           const i = k.lastIndexOf("@");
-          return [k.slice(0, i), Number(k.slice(i + 1))] as [string, number];
+          return [k.slice(0, i), Number(k.slice(i + 1)), lab] as [string, number, string];
         }),
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
@@ -1130,7 +1132,7 @@ export default function AnnotationWorkspace({
       style={{ top: 0, maxWidth: "100vw", paddingBottom: 0 }}
       styles={{ body: { height: "calc(100vh - 110px)", overflow: "hidden", padding: "8px 12px" }, content: { borderRadius: 0 } }}
       destroyOnClose
-      afterClose={() => { setSimilarPeek(null); setSimilarClip(null); setSimilarDropped(new Set()); }}
+      afterClose={() => { setSimilarPeek(null); setSimilarClip(null); setSimilarPicked(new Map()); }}
       footer={
         <Space>
           <Button onClick={() => setSimilarOpen(false)}>取消</Button>
@@ -1145,11 +1147,11 @@ export default function AnnotationWorkspace({
             type="primary"
             loading={similarRunning}
             disabled={!similarLabel || (similarUseText && !similarText.trim())
-              || (!!similarPeek && similarDropped.size >= similarPeek.hits.length && similarPeek.hits.length > 0)}
+              || (!!similarPeek && similarPicked.size === 0 && similarPeek.hits.length > 0)}
             onClick={runSimilar}
           >
             {similarPeek
-              ? `写入候选（要 ${Math.max(0, similarPeek.hits.length - similarDropped.size)} / ${similarPeek.hits.length} 帧）`
+              ? `写入候选（要 ${similarPicked.size} / ${similarPeek.hits.length} 帧）`
               : "找"}
           </Button>
         </Space>
@@ -1308,8 +1310,10 @@ export default function AnnotationWorkspace({
             playing={similarClip}
             onPlay={setSimilarClip}
             onJump={openSimilarHit}
-            dropped={similarDropped}
-            onDropped={setSimilarDropped}
+            picked={similarPicked}
+            onPicked={setSimilarPicked}
+            defaultLabel={similarLabel || null}
+            labelNames={labels.map((l) => ({ name: l.display_name, color: l.color }))}
           />
         ) : (
           <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13 }}>
