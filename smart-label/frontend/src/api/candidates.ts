@@ -78,6 +78,9 @@ export const findSimilarCandidates = (body: {
   dry_run?: boolean;
   /** 「先看命中」里勾掉的帧 [[路径, 秒], …]：不参与合段，整段都被勾掉的那段不写 */
   drop?: [string, number][];
+  /** 「先看命中」里勾中的帧 + 这一帧标成什么 [[路径, 秒, 类别名], …]：
+   *  给了就只写这些，各按各的类别（一次检索常常混着别的动作） */
+  pick?: [string, number, string][];
 }) =>
   request.post<
     never,

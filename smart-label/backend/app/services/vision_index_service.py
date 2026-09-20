@@ -295,6 +295,10 @@ class SimilarParams:
     # 挑出来扔掉，剩下的再写候选——检索总会混进几张明显不对的，为那几张去调参数
     # 常常把对的也一起调没了，人点两下比调参数准
     drop: tuple[tuple[str, float], ...] = ()
+    # 「先看命中」里人勾中的帧，连同**这一帧标成哪个类别**：((路径, 秒, 类别名), …)。
+    # 一次检索里常常混着别的动作——全按一个类别写进去，等于把活儿推到后面让人
+    # 一条条改；在这里当场分开标，改的机会就在眼前，不用回头找
+    pick: tuple[tuple[str, float, str], ...] = ()
 
 
 def overlaps(a0: int, a1: int, b0: int, b1: int) -> bool:
@@ -310,11 +314,13 @@ SEG_PAD_S = 1.0
 
 
 def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list[dict]:
-    by_path: dict[str, list[dict]] = {}
+    # 按（视频, 类别）分组，不只按视频：挨着的两帧标成了不同类别就该是两段，
+    # 合成一段就得替人选一个类别，而那正是人刚刚分开标的东西
+    by_path: dict[tuple[str, str | None], list[dict]] = {}
     for h in hits:
-        by_path.setdefault(h["path"], []).append(h)
+        by_path.setdefault((h["path"], h.get("label")), []).append(h)
     out: list[dict] = []
-    for rp, hs in by_path.items():
+    for (rp, lab), hs in by_path.items():
         hs = sorted(hs, key=lambda h: h["t"])
         cur: dict | None = None
         for h in hs:
@@ -325,10 +331,10 @@ def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list
                 continue
             if cur:
                 out.append(cur)
-            cur = {"path": rp, "_first": h["t"], "_last": h["t"], "score": h["score"], "n": 1}
+            cur = {"path": rp, "label": lab, "_first": h["t"], "_last": h["t"], "score": h["score"], "n": 1}
         if cur:
             out.append(cur)
-    segs = [{"path": s["path"], "start_s": round(max(0.0, s["_first"] - pad_s), 2),
+    segs = [{"path": s["path"], "label": s["label"], "start_s": round(max(0.0, s["_first"] - pad_s), 2),
              "end_s": round(s["_last"] + pad_s, 2), "score": s["score"], "n": s["n"]} for s in out]
     segs.sort(key=lambda s: -s["score"])
     return segs
@@ -337,7 +343,11 @@ def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list
 async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
                                  segs: list[dict]) -> int:
     """把命中的段写成候选。跟已有的（任何来源、任何状态）同标签且时间重叠的不重复写：
-    人已经判过的不该再冒出来，别的来源已经指出来的也没必要再加一条。"""
+    人已经判过的不该再冒出来，别的来源已经指出来的也没必要再加一条。
+
+    label_name 是缺省类别；段自己带了 label 就用它自己的——一次检索里常常混着
+    别的动作，人在「先看命中」里当场分开标的，不能到这里又被统一成一个。
+    """
     existing = (await db.execute(
         select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no)
     )).scalars().all()
@@ -346,9 +356,10 @@ async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
         s_ms, e_ms = int(round(s["start_s"] * 1000)), int(round(s["end_s"] * 1000))
         if e_ms <= s_ms:
             continue
-        if any(c.label_name == label_name and overlaps(s_ms, e_ms, c.start_time_ms, c.end_time_ms) for c in existing):
+        lab = s.get("label") or label_name
+        if any(c.label_name == lab and overlaps(s_ms, e_ms, c.start_time_ms, c.end_time_ms) for c in existing):
             continue
-        c = AiCandidate(task_id=task.id, round_no=task.round_no, label_name=label_name,
+        c = AiCandidate(task_id=task.id, round_no=task.round_no, label_name=lab,
                         start_time_ms=s_ms, end_time_ms=e_ms, confidence=float(s.get("score") or 0.0),
                         spec=None, reason=REASON, model=MODEL_TAG)
         db.add(c)
@@ -398,7 +409,19 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
                         min_score=params.min_score, gap_s=params.gap_s, center=params.center,
                         pose_w=params.pose_w, part=params.part)
     dropped = 0
-    if params.drop:
+    if params.pick:
+        # 人勾了哪几帧、每一帧标成什么，都在 pick 里。**只写勾中的**，而且各按
+        # 各的类别——一次检索里常常混着别的动作，统一标一个类别等于把活儿推到
+        # 后面让人一条条改
+        want = {(p_, int(round(t * 1000))): lab for p_, t, lab in params.pick}
+        kept = []
+        for h in r.get("hits", []):
+            lab = want.get((h.get("path"), int(round(h["t"] * 1000))))
+            if lab:
+                kept.append({**h, "label": lab})
+        dropped = len(r.get("hits", [])) - len(kept)
+        r = {**r, "hits": kept, "segments": group_hits(kept, params.gap_s)}
+    elif params.drop:
         # 时间按毫秒对齐再比：命中的 t 是两位小数，浮点直接相等靠不住
         gone = {(p, int(round(t * 1000))) for p, t in params.drop}
         kept = [h for h in r.get("hits", []) if (h.get("path"), int(round(h["t"] * 1000))) not in gone]

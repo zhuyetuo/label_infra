@@ -325,6 +325,9 @@ class SimilarIn(BaseModel):
     # 「先看命中」里人手动去掉的帧：[[路径, 秒], …]。一眼看出不是同一个动作的挑出来扔掉，
     # 剩下的再写候选。去掉的帧不进合段，整段都被去掉的那一段不写
     drop: list[tuple[str, float]] = Field(default_factory=list, max_length=2000)
+    # 「先看命中」里勾中的帧，连同这一帧标成哪个类别：[[路径, 秒, 类别名], …]。
+    # 给了就**只写这些**，而且各按各的类别写——检索出来的常常混着别的动作
+    pick: list[tuple[str, float, str]] = Field(default_factory=list, max_length=2000)
 
 
 @router.post("/similar")
@@ -362,11 +365,25 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
         db.add(LabelDefinition(project_id=task.project_id, code=name, display_name=name, sort_order=200, created_by=user.id))
         await db.commit()
         created_label = True
+    # 逐帧标的那些类别必须项目里都有：写进去之后再发现某个类别不存在，候选就成了
+    # 点不动的死行——确认时找不到标签，只能删掉重来
+    if body.pick and not body.dry_run:
+        want = {lab for _p, _t, lab in body.pick if lab and lab != body.label_name}
+        if want:
+            have = set((await db.execute(select(LabelDefinition.display_name).where(
+                LabelDefinition.project_id == task.project_id,
+                LabelDefinition.display_name.in_(want),
+                LabelDefinition.is_active.is_(True)))).scalars())
+            missing = sorted(want - have)
+            if missing:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    f"项目里没有这些标签：{'、'.join(missing)}（先去标签管理里加，或换成已有的类别）")
     params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score,
                                   gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center, dry_run=body.dry_run,
                                   pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
-                                  part=body.part, drop=tuple((p, float(t)) for p, t in body.drop))
+                                  part=body.part, drop=tuple((p, float(t)) for p, t in body.drop),
+                                  pick=tuple((p, float(t), lab) for p, t, lab in body.pick))
     try:
         r = await vindex.find_similar(db, task, params)
         r["created_label"] = created_label
