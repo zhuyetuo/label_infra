@@ -1,0 +1,96 @@
+"""同一段时间不该留下两行一模一样的片段。
+
+两行长得完全一样时，人根本分不出该删哪一条——而这些片段是原样送去算
+「今天抓了几次、共多久」的，同一次动作被算成两次，C 值跟着虚高。皮肤评估是
+拿来判断要不要干预的，数字虚高比没有数字更糟。
+
+这里守两条口子：
+1. 保存草稿时，一次里出现两条完全一样的（同标签同起止），只留库里已有的那条
+2. 从候选确认时，「同类别」按**名字**算——同名标签在一个项目里可能有两条
+   （停用的旧的 + 现在这条），按 label_id 比就漏了
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from sqlalchemy import select
+
+from app.models.annotation import AnnotationLabelItem, LabelItemSource
+from app.models.label import LabelDefinition
+from app.models.project import Project
+from app.models.sample import Sample
+from app.models.task import Task, TaskStatus, TaskType
+from app.models.user import User, UserRole
+from app.services import task_service
+
+
+def _world(db, run):
+    u = User(username="a", password_hash="x", display_name="a", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    p = Project(name="p", created_by=u.id)
+    db.add(p)
+    run(db.flush())
+    lab = LabelDefinition(project_id=p.id, code="lick", display_name="舔-后肢", created_by=u.id)
+    db.add(lab)
+    s = Sample(sample_code="s1", video_cam1_path="d/a.mp4", imu_csv_path="d/a.csv", created_by=u.id)
+    db.add(s)
+    run(db.flush())
+    t = Task(project_id=p.id, sample_id=s.id, task_type=TaskType.ai_assisted,
+             status=TaskStatus.IN_PROGRESS, locked_by=u.id, created_by=u.id)
+    db.add(t)
+    run(db.commit())
+    return u, p, lab, t
+
+
+def _incoming(label_id, start, end, origin=None):
+    return SimpleNamespace(label_id=label_id, start_time_ms=start, end_time_ms=end,
+                           origin_item_id=origin, source_type=LabelItemSource.human_added,
+                           ai_confidence=None, ai_confirmed=None, uncertain=None, uncertain_reason=None)
+
+
+def _items(db, run, record_id):
+    return run(db.execute(select(AnnotationLabelItem)
+                          .where(AnnotationLabelItem.annotation_record_id == record_id)
+                          .order_by(AnnotationLabelItem.id))).scalars().all()
+
+
+def test_保存时同标签同起止的重复只留一条(db, run):
+    u, p, lab, t = _world(db, run)
+    rec = run(task_service.save_draft(db, t.id, u, [
+        _incoming(lab.id, 100718, 107200),
+        _incoming(lab.id, 100718, 107200),          # 一模一样：不是有人故意标了两遍
+        _incoming(lab.id, 134409, 137452),          # 时间不同：照留
+    ]))
+    got = _items(db, run, rec.id)
+    assert [(i.start_time_ms, i.end_time_ms) for i in got] == [(100718, 107200), (134409, 137452)]
+
+
+def test_重复时留库里已有的那条_不留新加的(db, run):
+    """已有的那条身上挂着出处（点错了能退回候选）、改没改过、谁确认的。
+    反过来丢就把这些一起丢了，而且顺序一变结果就变。"""
+    u, p, lab, t = _world(db, run)
+    rec = run(task_service.save_draft(db, t.id, u, [_incoming(lab.id, 100718, 107200)]))
+    old = _items(db, run, rec.id)[0]
+    old.from_candidate_id = 42
+    run(db.commit())
+
+    # 新加的排在前面，已有的排在后面——顺序不该影响结果
+    rec = run(task_service.save_draft(db, t.id, u, [
+        _incoming(lab.id, 100718, 107200),
+        _incoming(lab.id, 100718, 107200, origin=old.id),
+    ]))
+    got = _items(db, run, rec.id)
+    assert len(got) == 1 and got[0].id == old.id and got[0].from_candidate_id == 42
+
+
+def test_起止差一毫秒的不算重复_照留(db, run):
+    """真有连着的两次动作。差一点就并，等于替人做了"这两次是同一次"的判断——
+    该并不该并只有人知道，这里只处理"完全一样"这种明显不是故意的。"""
+    u, p, lab, t = _world(db, run)
+    rec = run(task_service.save_draft(db, t.id, u, [
+        _incoming(lab.id, 100718, 107200),
+        _incoming(lab.id, 100718, 107201),
+    ]))
+    assert len(_items(db, run, rec.id)) == 2

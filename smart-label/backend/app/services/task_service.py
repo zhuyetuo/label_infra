@@ -254,7 +254,22 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     existing_by_id = {item.id: item for item in existing_result.scalars().all()}
 
     keep_ids: set[int] = set()
+    # 一次保存里出现两条**完全一样**的（同标签、同起、同止）：没有人是故意标两遍的，
+    # 那是前端追加了一条、库里又已经有一条（比如刚从候选确认过来）撞在一起。
+    # 两条都留下的后果不是"多一行"——这些片段是原样送去算「抓了几次、共多久」的，
+    # 同一次被算成两次，C 值跟着虚高，而界面上两行长得一模一样，人根本发现不了
+    #
+    # 只丢**新加的**那条，留库里已有的：已有的那条身上挂着出处（from_candidate_id）、
+    # 改没改过、是谁确认的。反过来丢就把这些一起丢了，而且顺序一变结果就变。
+    def _span(x) -> tuple[int, int, int]:
+        return (x.label_id, x.start_time_ms, x.end_time_ms)
+
+    seen_span = {_span(i) for i in items if i.origin_item_id}
     for incoming in items:
+        if not incoming.origin_item_id:
+            if _span(incoming) in seen_span:
+                continue
+            seen_span.add(_span(incoming))
         origin = existing_by_id.get(incoming.origin_item_id) if incoming.origin_item_id else None
         if origin is not None:
             keep_ids.add(origin.id)
