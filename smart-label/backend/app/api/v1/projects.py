@@ -167,8 +167,8 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
         st = await vision_sam_client.seek_status()
         if not st.get("available") and not body.dry_run:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
-    params = vseek.SeekParams(labels=body.labels, cam=body.cam, max_clips=body.max_clips,
-                              min_conf=body.min_conf, dry_run=body.dry_run,
+    params = vseek.SeekParams(labels=body.labels, part_depth=body.part_depth, cam=body.cam,
+                              max_clips=body.max_clips, min_conf=body.min_conf, dry_run=body.dry_run,
                               provider=body.provider, model=body.model)
     started = await vseek.start(project_id, body.task_ids, params)
     if not started:

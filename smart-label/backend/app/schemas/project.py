@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProjectOut(BaseModel):
@@ -55,6 +55,9 @@ class ProjectVisionSeekRequest(BaseModel):
     task_ids: list[int] | None = None
     # 只找这几个父类（舔身体/啃身体/抓挠/蹭身体）；留空 = 项目里有的全找
     labels: list[str] | None = None
+    # 部位送到第几层（相对父类）：0 = 不问部位，1 = 大区域（头颈耳），2 = 具体部位（耳/耳后），
+    # 3 = 连左右。层数深了选项几十个、几帧俯拍也分不出左右，反而把模型带偏
+    part_depth: int = Field(2, ge=0, le=3)
     cam: str = "cam1"
     # 每个视频最多送多少段去问模型——这是花费的上限
     max_clips: int = 120

@@ -177,6 +177,9 @@ export default function Projects() {
   const [seekTarget, setSeekTarget] = useState<Project | null>(null);
   const [seekProgress, setSeekProgress] = useState<Record<number, VisionSeekProgress>>({});
   const [seekLabels, setSeekLabels] = useState<string[]>([]);
+  // 部位问到多细。层级标签上线后「啃」底下有 37 条子孙，全送过去 prompt 又长、模型在几十个
+  // 选项里也挑不准（几帧俯拍根本分不出左右）。默认到「具体部位」这一层
+  const [seekPartDepth, setSeekPartDepth] = useState(2);
   const [seekCam, setSeekCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
   const [seekMaxClips, setSeekMaxClips] = useState(120);
   const [seekLimit, setSeekLimit] = useState<number | null>(null);
@@ -376,6 +379,7 @@ export default function Projects() {
       await startVisionSeek(seekTarget.id, {
         task_ids: seekLimit != null && seekLimit < eligible.length ? eligible.slice(0, seekLimit) : undefined,
         labels: seekLabels,
+        part_depth: seekPartDepth,
         cam: seekCam,
         max_clips: seekMaxClips,
         dry_run: seekDryRun,
@@ -1692,6 +1696,18 @@ export default function Projects() {
                   onChange={(v) => setSeekLabels(v)}
                   options={seekableLabels(seekTarget.id).map((n) => ({ value: n, label: n }))}
                 />
+                <Tooltip title="让模型顺便判断是身上哪一处。层级标签上线后「啃」底下有 37 条部位，全问一遍 prompt 会很长、模型在几十个选项里也挑不准（几帧俯拍分不出左右），选项越细越容易乱选。候选写进来是「抓挠-耳/耳后」这种，人在工作台里还能改细">
+                  <span style={{ marginLeft: 12 }}>
+                    部位问到：
+                    <Select size="small" value={seekPartDepth} onChange={(v) => setSeekPartDepth(v)} style={{ width: 130 }}
+                      options={[
+                        { value: 0, label: "不问部位" },
+                        { value: 1, label: "大区域" },
+                        { value: 2, label: "具体部位" },
+                        { value: 3, label: "连左右" },
+                      ]} />
+                  </span>
+                </Tooltip>
               </div>
             )}
             <div>

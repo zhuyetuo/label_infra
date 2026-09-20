@@ -56,16 +56,31 @@ DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None) -> list[dict]:
+# 一个类别最多送多少条部位给视觉服务。视觉服务那边也有同样的上限——超了整批 422
+# （2026-09-20 真实故障：套了解剖学层级模板之后「抓挠」有 24 条子孙，服务端卡 12，
+# 303 个任务一条没跑成）。这里先截断，宁可少送几条也不要整批失败
+MAX_PARTS = 60
+# 部位默认送到第几层（相对父标签）：1 = 大区域（头颈耳），2 = 具体部位（耳/耳后），
+# 3 = 连左右。几帧俯拍画面分不出左右，选项一多模型还容易乱选，默认到 2
+DEFAULT_PART_DEPTH = 2
+
+
+def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None,
+                part_depth: int = DEFAULT_PART_DEPTH) -> list[dict]:
     """项目标签 → 送给视觉服务的 [{name, description, parts}]。
 
     只送 GROUPS 里那四类（有描述、模型分得清），项目里没有的不送。父标签按 code
     或名字（新旧名都认：「舔」「舔身体」）找，送项目里实际的显示名；部位取它的
-    全部子孙标签（层级）加上按「父名-部位」命名的（老项目没挂父子关系也认）。
+    子孙标签加上按「父名-部位」命名的（老项目没挂父子关系也认）。
     wanted 传了就只送这几个父类（按显示名）。
+
+    part_depth：部位送到第几层（相对父标签）。0 = 不送部位，只问是不是这个动作；
+    1 = 只送大区域；2 = 送到具体部位；3 = 连左右一起送。老模板的部位本来就只有
+    一层，任何 ≥1 的值行为都跟以前一样。
     """
     active = [l for l in labels if l.is_active]
     names = {l.display_name for l in active}
+    by_id = {l.id: l for l in active}
     out = []
     for code, name, _color, _tpl, _parts in GROUPS:
         parent = next((l for l in active if l.code == code), None) or \
@@ -75,17 +90,32 @@ def label_specs(labels: list[LabelDefinition], wanted: list[str] | None = None) 
         if wanted is not None and parent.display_name not in wanted:
             continue
         pname = parent.display_name
-        # 子孙标签的部位名：去掉「父名-」前缀（舔-前左爪 → 前左爪）
-        desc_ids = label_tree.descendants(active, {parent.id}) - {parent.id}
         parts: list[str] = []
-        for l in sorted((l for l in active if l.id in desc_ids), key=lambda l: (l.sort_order, l.id)):
-            p = l.display_name[len(pname) + 1:] if l.display_name.startswith(pname + "-") else l.display_name
-            if p and p not in parts:
-                parts.append(p)
-        parts += sorted(n[len(pname) + 1:] for n in names
-                        if n.startswith(pname + "-") and n[len(pname) + 1:] not in parts)
-        out.append({"name": pname, "description": DESCRIPTIONS.get(code, ""), "parts": parts})
+        if part_depth > 0:
+            # 子孙标签的部位名：去掉「父名-」前缀（舔-前左爪 → 前左爪）
+            desc_ids = label_tree.descendants(active, {parent.id}) - {parent.id}
+            for l in sorted((l for l in active if l.id in desc_ids), key=lambda l: (l.sort_order, l.id)):
+                if _depth_under(by_id, l.id, parent.id) > part_depth:
+                    continue
+                p = l.display_name[len(pname) + 1:] if l.display_name.startswith(pname + "-") else l.display_name
+                if p and p not in parts:
+                    parts.append(p)
+            # 老项目：叫「父名-部位」但没挂父子关系的，按名字补上。**只补树上没有的**——
+            # 挂好了父子关系的已经在上面按层取过，从这里再补一遍等于绕开 part_depth
+            in_tree = {l.display_name for l in active if l.id in desc_ids}
+            parts += sorted(n[len(pname) + 1:] for n in names
+                            if n.startswith(pname + "-") and n not in in_tree
+                            and n[len(pname) + 1:] not in parts)
+        out.append({"name": pname, "description": DESCRIPTIONS.get(code, ""), "parts": parts[:MAX_PARTS]})
     return out
+
+
+def _depth_under(by_id: dict[int, LabelDefinition], label_id: int, root_id: int) -> int:
+    """label 在 root 底下第几层（root 的直接子标签 = 1）。不在 root 底下返回一个很大的数。"""
+    chain = label_tree.ancestors_chain(by_id, label_id)      # [祖, …, 自己]，断链/成环也安全
+    if root_id not in chain:
+        return 1 << 30
+    return len(chain) - 1 - chain.index(root_id)
 
 
 @dataclass
@@ -218,6 +248,7 @@ def cancel(project_id: int) -> bool:
 @dataclass
 class SeekParams:
     labels: list[str] | None = None   # 只找这几个父类；None = 项目里有的全找
+    part_depth: int = DEFAULT_PART_DEPTH   # 部位送到第几层，见 label_specs
     cam: str = "cam1"
     max_clips: int = 120
     min_conf: float = 0.5
@@ -266,7 +297,7 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
     labels = (await db.execute(
         select(LabelDefinition).where(LabelDefinition.project_id == project_id)
     )).scalars().all()
-    specs = label_specs(labels, params.labels)
+    specs = label_specs(labels, params.labels, params.part_depth)
     progress.labels = [s["name"] for s in specs]
     if not specs:
         raise RuntimeError("项目里没有可找的类别（舔/啃/抓挠/蹭），先套用「抓/舔/啃/蹭」模板")

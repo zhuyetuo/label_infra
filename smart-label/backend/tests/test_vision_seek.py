@@ -271,3 +271,27 @@ def test_选的那家没配_key_一个任务都不跑(db, run):
     with pytest.raises(ValueError, match="API key"):
         run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(provider="openai"), prog, seek_fn=_fake_seek(calls)))
     assert calls == [] and prog.total == 0
+
+
+def test_label_specs_部位分层_默认到具体部位_不送左右():
+    """2026-09-20 真实故障：套了解剖学层级模板后「抓挠」有 24 条子孙，全送过去撞上视觉服务
+    12 条的上限，整批 422，303 个任务一条没跑成。现在按层送，并且永远不超过 MAX_PARTS。"""
+    scratch = _L("抓挠", code="scratch")
+    head = _L("抓挠-头颈耳", parent=scratch)                     # 第 1 层：大区域
+    ear = _L("抓挠-耳/耳后", parent=head)                        # 第 2 层：具体部位
+    labels = [scratch, head, ear, _L("抓挠-左耳/耳后", parent=ear), _L("抓挠-右耳/耳后", parent=ear)]
+    parts = lambda d: vs.label_specs(labels, None, d)[0]["parts"]
+    assert parts(0) == []                                         # 不问部位
+    assert parts(1) == ["头颈耳"]                                 # 只问大区域
+    assert parts(2) == ["头颈耳", "耳/耳后"]                      # 默认：到具体部位，不含左右
+    assert parts(3) == ["头颈耳", "耳/耳后", "左耳/耳后", "右耳/耳后"]
+    assert vs.label_specs(labels)[0]["parts"] == parts(vs.DEFAULT_PART_DEPTH)
+    # 老项目（部位只有一层、靠名字前缀）行为不变
+    old = [_L("舔身体"), _L("舔身体-前肢爪"), _L("舔身体-躯干侧腹")]
+    assert vs.label_specs(old)[0]["parts"] == ["前肢爪", "躯干侧腹"]
+
+
+def test_label_specs_部位条数有硬上限():
+    lick = _L("舔", code="lick_body")
+    kids = [_L(f"舔-部位{i}", parent=lick) for i in range(vs.MAX_PARTS + 20)]
+    assert len(vs.label_specs([lick, *kids])[0]["parts"]) == vs.MAX_PARTS
