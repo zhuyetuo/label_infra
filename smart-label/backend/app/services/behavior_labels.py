@@ -12,7 +12,7 @@
   行为轨  CARE_* / ING_* / ACT_SNIFF / ELIM_POSSIBLE    具体在干什么，一次一件
   运动轨  ACT_REST(→ACT_SLEEP) / ACT_ACTIVITY(→WALK…)   要么静要么动
   姿态轨  POST_SIT / LIE / STAND / TRANS_POSTURE         任一时刻一种姿态
-  设备轨  LOOSE_COLLAR                                   随时可叠
+  设备轨  LOOSE_COLLAR / NOT_WORN                        随时可叠（两者之间互斥）
 跨轨可以同时标（卧着 + 静止 + 舔前爪）；训练导出时按 行为 > 运动 > 姿态 折叠成单标签。
 
 表里"少见"的部位保留、名字带「（少见）」、排在各区域末尾；"重点 / 瘙痒高发"这类备注放模板说明里。
@@ -32,7 +32,7 @@ from app.services.grooming_labels import pick_admin
 
 TEMPLATE_NAME = "犬行为全量（IMU 22 类）"
 TEMPLATE_DESC = (
-    "产品的 22 类行为表（顶层 code 就是模型类别：CARE_SCRATCH、ACT_SLEEP……）+ 抓/舔/啃/蹭按解剖学分的"
+    "产品的 22 类行为表（顶层 code 就是模型类别：CARE_SCRATCH、ACT_SLEEP……）+ 未佩戴 + 抓/舔/啃/蹭按解剖学分的"
     "区域 → 部位 → 左右。分四条互斥轨：行为 / 运动 / 姿态 / 设备，跨轨可以同时标（卧着 + 静止 + 舔前爪），"
     "导出训练集时按 行为 > 运动 > 姿态 折叠成一个时刻一个标签。"
     "重点部位：啃-前爪（趾间/爪垫）、啃-尾根（肛腺）、舔/啃-腹股沟（瘙痒高发）、啃-侧腹（腰胯皮炎高发）、"
@@ -102,6 +102,10 @@ ROOTS: list[tuple[str, str, str, str, list]] = [
         ("lie_up", "卧→站", []), ("sit_stand", "坐→站", []),
     ]),
     ("LOOSE_COLLAR", "颈圈松动", "device", "#95A5A6", []),
+    # 未佩戴：项圈没在狗身上（摘下来充电、放桌上）。跟松动同一轨、互斥；这段时间里的
+    # 行为轨 / 运动轨都不该标（没戴在狗身上的数据不是狗的行为）。线上四分类里它就是一类，
+    # 这里单独一条标签，导出时跟松动一样放 aux.device，不混进行为类别
+    ("NOT_WORN", "未佩戴", "device", "#7F8C8D", []),
 ]
 
 # 顶层从 200 起排（老「抓/舔/啃/蹭」模板占 100~180），每个根 60 个号：舔那组最多 40 多条

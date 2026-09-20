@@ -49,6 +49,8 @@ def test_定义本身_22类都在_四层以内_不重名_都有轨():
     assert len({r.display_name for r in rows}) == len(rows)
     assert all(r.track in ("behavior", "motion", "posture", "device") for r in rows)
     assert by["POST_LIE"].track == "posture" and by["ACT_SLEEP"].track == "motion" and by["LOOSE_COLLAR"].track == "device"
+    # 未佩戴：设备轨、顶层、跟松动互斥（同轨）
+    assert by["NOT_WORN"].track == "device" and by["NOT_WORN"].parent_code is None and by["NOT_WORN"].display_name == "未佩戴"
 
     def depth(code):
         d, cur = 0, code
