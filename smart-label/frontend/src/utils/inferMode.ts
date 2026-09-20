@@ -101,3 +101,34 @@ export const SRV_MODE_HINT =
   "同一台 AI 服务、同一份后处理，**只换了模型**。所以跟线上「稳定版 v2」"
   + "并排跑同一批样本时，差的只有模型本身。跑的是服务器上的 sklearn，"
   + "**不是**烧进项圈的那份 C——想知道板子会报什么，看端侧那几行。";
+
+/** 每个 IMU 预测模型是什么。统计页分组显示时用，说明只写"跟别的比差在哪"。
+ *  认不出来的按命名规律兜底（见 imuModelHint）——新模型不至于一行说明都没有。 */
+export const IMU_MODEL_HINT: Record<string, string> = {
+  ml_rf: "线上主力。随机森林，6 轴（加速度 + 陀螺仪），跑在服务器上",
+  acc3_rf: "跟 ml_rf 同一套做法，但**只用 3 轴加速度**（去掉陀螺仪）——验证端侧能不能省掉陀螺仪",
+  edge_rf_d10: "端侧随机森林，树深限到 10。按项圈的算力和内存裁过，推理是烧进固件那份 C",
+  edge_cnn_i8: "端侧小 CNN，int8 量化。跟 edge_rf_d10 比的是「同样上板，哪种模型更准」",
+};
+
+export function imuModelHint(tag: string): string {
+  const hit = IMU_MODEL_HINT[tag];
+  if (hit) return hit;
+  const parts: string[] = [];
+  if (tag.startsWith("edge")) parts.push("端侧尺寸的模型，推理跑的是固件那份 C");
+  if (/acc3|_acc/.test(tag)) parts.push("只用 3 轴加速度，没有陀螺仪");
+  if (/cnn/i.test(tag)) parts.push("小 CNN");
+  else if (/rf|forest/i.test(tag)) parts.push("随机森林");
+  if (/i8|int8/i.test(tag)) parts.push("int8 量化");
+  return parts.join("；") || "还没登记说明的模型";
+}
+
+/** 服务端 / 端侧这两组各是什么，差在哪。统计页分组标题下面那一句。 */
+export const IMU_KIND_HINT: Record<"server" | "edge", string> = {
+  server: "跑在服务器上的 sklearn（imu_train 的 label_service）。算力不受限，线上用的就是这一组",
+  edge: "跑的是烧进项圈的那份 C（algo_tinyml 的 edge_service），逐位跟固件一致。手里还没有板子，用它先回答「上板之后行不行」",
+};
+export const IMU_KIND_LABEL: Record<"server" | "edge", string> = {
+  server: "服务端模型",
+  edge: "端侧推理模型",
+};

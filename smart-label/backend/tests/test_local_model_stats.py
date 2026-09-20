@@ -131,3 +131,42 @@ def test_最近一次调用_只往后走_视觉服务重启不抹掉(db, run, mo
     assert at() == datetime.fromtimestamp(t0 + 3600)            # 老版本没这个字段也不动
     dog = next(m for m in run(lms.stats(db, 30))["models"] if m["key"] == "dog")
     assert dog["last_call_at"] == datetime.fromtimestamp(t0 + 3600).isoformat(timespec="seconds")
+
+
+def test_服务端和端侧分开_端侧服务没起时按命名兜底(db, run, monkeypatch):
+    """跑的是服务器上的 sklearn 还是烧进项圈的那份 C，这两类不能混在一张表里看。"""
+    from datetime import date
+
+    from app.models.inference_run import SampleInferenceRun
+    from app.models.sample import Sample
+    from app.models.user import User, UserRole
+
+    u = User(username="a", password_hash="x", display_name="a", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    s = Sample(sample_code="s1", video_cam1_path="d/s1.mp4", imu_csv_path="d/s1.csv",
+               session_date=date(2026, 9, 19), created_by=u.id)
+    db.add(s)
+    run(db.flush())
+    for tag, mode in (("ml_rf", "viterbi"), ("acc3_rf", "viterbi"), ("edge_rf_d10", "viterbi"), ("edge_cnn_i8", "board")):
+        db.add(SampleInferenceRun(sample_id=s.id, model_tag=tag, mode=mode, json_path=f"{tag}.json",
+                                  n_windows=10, n_segments=2, n_candidates=1))
+    run(db.commit())
+
+    async def no_edge_service():
+        return set()
+
+    monkeypatch.setattr(lms, "_edge_tags", no_edge_service)
+    got = {(m["model_tag"], m["mode"]): m["kind"] for m in run(lms.imu_stats(db, 30))["models"]}
+    assert got == {("ml_rf", "viterbi"): "server", ("acc3_rf", "viterbi"): "server",
+                   ("edge_rf_d10", "viterbi"): "edge", ("edge_cnn_i8", "board"): "edge"}
+    # 服务端排在前面
+    assert [m["kind"] for m in run(lms.imu_stats(db, 30))["models"]][:2] == ["server", "server"]
+
+    # 端侧服务起着：按它报的清单分，名字不带 edge_ 的也能认出来
+    async def with_edge_service():
+        return {"acc3_rf"}
+
+    monkeypatch.setattr(lms, "_edge_tags", with_edge_service)
+    got = {(m["model_tag"], m["mode"]): m["kind"] for m in run(lms.imu_stats(db, 30))["models"]}
+    assert got[("acc3_rf", "viterbi")] == "edge" and got[("ml_rf", "viterbi")] == "server"

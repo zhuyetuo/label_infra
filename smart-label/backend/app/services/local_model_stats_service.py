@@ -135,9 +135,37 @@ async def stats(db: AsyncSession, days: int = 30) -> dict:
 # 每次预标注在 sample_inference_runs 里一行（同一份样本同模型同模式重跑是更新同一行），
 # 按 created_at 的天汇总：跑了几份样本、切了多少窗口、出了多少段 / 候选。
 
+async def _edge_tags() -> set[str]:
+    """端侧服务现在挂着哪些模型。问服务不写死：新增一个端侧模型不用改这里。
+
+    端侧服务是可选的，没起就返回空集，下面按命名兜底（algo_tinyml 那边的标签
+    都是 edge_ 开头）。宁可兜底分错一个，也不要因为它没起就打不开统计页。
+    """
+    try:
+        from app.services import edge_client
+
+        return {str(m.get("tag")) for m in await edge_client.available() if m.get("tag")}
+    except Exception:  # noqa: BLE001
+        _logger.warning("问端侧服务要模型列表失败，按命名兜底分类", exc_info=True)
+        return set()
+
+
+def kind_of(model_tag: str, mode: str, edge_tags: set[str]) -> str:
+    """这一行是服务端模型还是端侧模型。
+
+    服务端 = imu_train/label_service，服务器上的 sklearn；
+    端侧   = algo_tinyml/edge_service，跑的是烧进项圈的那份 C。
+    mode=board 一定是端侧（板上那份后处理，服务端没有这个）。
+    """
+    if mode == "board" or model_tag in edge_tags:
+        return "edge"
+    return "edge" if model_tag.startswith("edge_") else "server"
+
+
 async def imu_stats(db: AsyncSession, days: int = 30) -> dict:
     from app.models.inference_run import SampleInferenceRun
 
+    edge_tags = await _edge_tags()
     since = datetime.now() - timedelta(days=max(1, days))
     rows = (await db.execute(
         select(SampleInferenceRun).where(SampleInferenceRun.created_at >= since).order_by(SampleInferenceRun.created_at)
@@ -145,7 +173,10 @@ async def imu_stats(db: AsyncSession, days: int = 30) -> dict:
     per: dict[tuple[str, str], dict] = {}
     for r in rows:
         k = (r.model_tag, r.mode)
-        m = per.setdefault(k, {"model_tag": r.model_tag, "mode": r.mode, "samples": 0, "windows": 0, "segments": 0, "candidates": 0, "last_at": None, "by_day": {}})
+        m = per.setdefault(k, {"model_tag": r.model_tag, "mode": r.mode,
+                               "kind": kind_of(r.model_tag, r.mode, edge_tags),
+                               "samples": 0, "windows": 0, "segments": 0, "candidates": 0,
+                               "last_at": None, "by_day": {}})
         if r.created_at and (m["last_at"] is None or r.created_at > m["last_at"]):
             m["last_at"] = r.created_at
         day = (r.created_at or datetime.now()).strftime("%Y-%m-%d")
@@ -158,5 +189,6 @@ async def imu_stats(db: AsyncSession, days: int = 30) -> dict:
         m["last_at"] = m["last_at"].isoformat(timespec="seconds") if m["last_at"] else None
         m["by_day"] = sorted(m["by_day"].values(), key=lambda x: x["day"])
         out.append(m)
-    out.sort(key=lambda m: -m["samples"])
+    # 服务端在前、端侧在后，组内按跑过的样本数排
+    out.sort(key=lambda m: (m["kind"] != "server", -m["samples"]))
     return {"days": days, "since": since.strftime("%Y-%m-%d"), "models": out}

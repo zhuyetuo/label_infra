@@ -78,10 +78,48 @@
   gap: 14px;
 }
 
+/* ── 板块里的分组（服务端 / 端侧）──────────────────────────────────── */
+/* 占满一整行，把下面的卡断开成两组；一句话说清这组跟另一组差在哪 */
+.llm-sub {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 -2px;
+}
+.llm-sub__t {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--viz-ink);
+}
+.llm-sub__t::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sec);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.llm-sub__n {
+  font-size: 11px;
+  color: var(--viz-muted);
+  font-variant-numeric: tabular-nums;
+}
+.llm-sub__d {
+  font-size: 12px;
+  color: var(--viz-ink-2);
+  line-height: 1.6;
+}
+
 /* ── 一张模型卡 ─────────────────────────────────────────────────────── */
 .llm-card {
   flex: 1 1 360px;
   min-width: 320px;
+  /* 一行只剩一张卡时别拉满整行：拉满了四个数字摊得老开，看着像四张卡 */
+  max-width: 560px;
   background: var(--viz-surface);
   border: 1px solid var(--viz-ring);
   border-top: 3px solid var(--sec);
@@ -113,6 +151,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 卡片标题下面那一句：这个模型是什么、跟同组别的差在哪 */
+.llm-card__desc {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--viz-ink-2);
+  margin: -6px 0 10px;
 }
 
 /* 数字区：一格一个指标，标签单独一行——原来标签和数字挤成两排看不出谁对谁 */
