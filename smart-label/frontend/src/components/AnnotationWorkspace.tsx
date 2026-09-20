@@ -274,9 +274,11 @@ export default function AnnotationWorkspace({
         dry_run: true,
       });
       setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered, poseUsed: r.pose_used });
-      // 重搜一次就是换了一批命中，上一批勾掉的那几帧在这一批里未必还在——留着只会
-      // 悄悄少写几条，而人以为自己面对的是干净的一屏
-      setSimilarDropped(new Set());
+      // **默认一张都不选**（dropped = 全部）。一开始默认全选，是想着"检索大部分时候
+      // 是对的"——实测不是：0.55 以下那一截基本全不对，全选等于让人去挑错的那些，
+      // 挑漏一张就多写一条脏候选。默认不选则挑漏只是少写一条，回头再搜一次就是。
+      // 两种错都会犯，就选后果小的那种。
+      setSimilarDropped(new Set(r.hit_list.map((h) => `${h.path}@${h.t}`)));
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
     } finally {
       setSimilarPeeking(false);
@@ -1147,9 +1149,7 @@ export default function AnnotationWorkspace({
             onClick={runSimilar}
           >
             {similarPeek
-              ? similarDropped.size > 0
-                ? `写入候选（要 ${Math.max(0, similarPeek.hits.length - similarDropped.size)} / ${similarPeek.hits.length} 帧）`
-                : "写入候选"
+              ? `写入候选（要 ${Math.max(0, similarPeek.hits.length - similarDropped.size)} / ${similarPeek.hits.length} 帧）`
               : "找"}
           </Button>
         </Space>

@@ -17,6 +17,9 @@ export interface Clip {
   t: number;
   /** 命中；样例是 null */
   hit: SimilarHit | null;
+  /** 封面：**检索命中的那一帧本身**。循环是从命中前 2 秒开始的，视频停着时
+   *  第一帧是那个起点，不是命中的那一刻——拿它当封面会让人以为"检索找的是这个" */
+  poster?: string;
 }
 
 export const clipKeyOf = (h: SimilarHit) => `${h.path}@${h.t}`;
@@ -133,6 +136,7 @@ export default function SimilarClipPlayer({ taskId, clip, onOpenTask, onClose }:
             ref={videoRef}
             key={url}
             src={url}
+            poster={clip.poster}
             muted
             playsInline
             controls
