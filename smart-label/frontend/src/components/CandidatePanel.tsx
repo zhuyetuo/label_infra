@@ -73,6 +73,19 @@ interface Props {
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
 // 跳过）、看不清的换个人/换个视角也许还能定（值得再看）、要细切的是已经确定
 // 是抓挠、只是起止要调，纯排期问题。每处都写明是哪一种，不然得逐条点开才知道
+/**
+ * 从「找相似」跳进来的那一刻，算不算命中这一条候选。
+ *
+ * 原来只比起点（|起点 - 这一刻| < 1.5 秒）——**候选是一段，不是一个点**。
+ * 找相似给的是段里的某一刻，而候选常常三五秒长，起点比那一刻早两三秒是常态：
+ * 于是明明有这一条，却不置顶也不高亮，横幅还在说"这一条置顶高亮"。
+ * 先按"这一刻落在这一段里"算（跟已标注片段那边一个口径），起点近的再兜一下——
+ * 导出挖过洞的段起止会差几十毫秒。
+ */
+export const candFocus = (c: AiCandidate, focusMs: number): boolean =>
+  (c.start_time_ms <= focusMs && focusMs < c.end_time_ms) ||
+  Math.abs(c.start_time_ms - focusMs) < 1500;
+
 const UNCERTAIN_KINDS = [
   { value: "no_view", short: "没画面", label: "画面里没拍到狗" },
   { value: "ambiguous", short: "看不清", label: "拍到了但看不准" },
@@ -145,12 +158,12 @@ export default function CandidatePanel({
     if (labelFilter.length) list = list.filter((c) => labelFilter.includes(c.label_name));
     // 从找相似/链接跳进来的那条排最前，人一眼就知道"是这段"
     if (focusMs != null) {
-      const hit = (c: AiCandidate) => Math.abs(c.start_time_ms - focusMs) < 1500;
+      const hit = (c: AiCandidate) => candFocus(c, focusMs);
       list = [...list.filter(hit), ...list.filter((c) => !hit(c))];
     }
     return list;
   }, [candidates, filter, labelFilter, justDecided, focusMs]);
-  const isFocus = (c: AiCandidate) => focusMs != null && Math.abs(c.start_time_ms - focusMs) < 1500;
+  const isFocus = (c: AiCandidate) => focusMs != null && candFocus(c, focusMs);
 
 
   const decide = async (
