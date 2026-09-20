@@ -76,12 +76,16 @@ export const findSimilarCandidates = (body: {
   part?: string;
   /** 只搜不写：先把命中摆出来看 */
   dry_run?: boolean;
+  /** 「先看命中」里勾掉的帧 [[路径, 秒], …]：不参与合段，整段都被勾掉的那段不写 */
+  drop?: [string, number][];
 }) =>
   request.post<
     never,
     {
       written: number;
       hits: number;
+      /** 人手动勾掉了几帧 */
+      dropped?: number;
       segments: number;
       searched: number;
       missing: number;

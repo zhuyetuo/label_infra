@@ -243,6 +243,9 @@ export default function AnnotationWorkspace({
   const [similarView, setSimilarView] = useState<SimilarThumbView>("mask");
   // 预览里正在循环播的那一段（左栏播放器）
   const [similarClip, setSimilarClip] = useState<Clip | null>(null);
+  // 「先看命中」里人勾掉的那几帧（`路径@秒`）：写候选时排除。检索总会混进几张一眼
+  // 就不对的，人点两下扔掉，比回头去调参数准——调参数常常把对的也一起调没了
+  const [similarDropped, setSimilarDropped] = useState<Set<string>>(new Set());
   // 点命中：本任务的直接把主画面跳过去循环；别的任务开新页（cand=similar：那边候选置顶高亮、视频停在这一刻循环）
   const openSimilarHit = (h: SimilarHit) => {
     if (h.task_id === taskId) {
@@ -271,6 +274,9 @@ export default function AnnotationWorkspace({
         dry_run: true,
       });
       setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered, poseUsed: r.pose_used });
+      // 重搜一次就是换了一批命中，上一批勾掉的那几帧在这一批里未必还在——留着只会
+      // 悄悄少写几条，而人以为自己面对的是干净的一屏
+      setSimilarDropped(new Set());
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
     } finally {
       setSimilarPeeking(false);
@@ -292,6 +298,11 @@ export default function AnnotationWorkspace({
         center: similarCenter,
         pose_w: similarPoseW,
         part: similarPart || undefined,
+        // 「先看命中」里勾掉的那几帧不参与合段。没先看过命中（没预览直接找）时是空的
+        drop: [...similarDropped].map((k) => {
+          const i = k.lastIndexOf("@");
+          return [k.slice(0, i), Number(k.slice(i + 1))] as [string, number];
+        }),
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
       if (r.multi_dog_candidates > 0) {
@@ -1117,7 +1128,7 @@ export default function AnnotationWorkspace({
       style={{ top: 0, maxWidth: "100vw", paddingBottom: 0 }}
       styles={{ body: { height: "calc(100vh - 110px)", overflow: "hidden", padding: "8px 12px" }, content: { borderRadius: 0 } }}
       destroyOnClose
-      afterClose={() => { setSimilarPeek(null); setSimilarClip(null); }}
+      afterClose={() => { setSimilarPeek(null); setSimilarClip(null); setSimilarDropped(new Set()); }}
       footer={
         <Space>
           <Button onClick={() => setSimilarOpen(false)}>取消</Button>
@@ -1126,8 +1137,20 @@ export default function AnnotationWorkspace({
               先看命中
             </Button>
           </Tooltip>
-          <Button type="primary" loading={similarRunning} disabled={!similarLabel || (similarUseText && !similarText.trim())} onClick={runSimilar}>
-            {similarPeek ? "写入候选" : "找"}
+          {/* 勾掉了几帧就写在按钮上：点下去写的是哪一批，不该还要人回去数格子。
+              一张都不要了就别让他点——那一下什么也不会发生，最费解 */}
+          <Button
+            type="primary"
+            loading={similarRunning}
+            disabled={!similarLabel || (similarUseText && !similarText.trim())
+              || (!!similarPeek && similarDropped.size >= similarPeek.hits.length && similarPeek.hits.length > 0)}
+            onClick={runSimilar}
+          >
+            {similarPeek
+              ? similarDropped.size > 0
+                ? `写入候选（要 ${Math.max(0, similarPeek.hits.length - similarDropped.size)} / ${similarPeek.hits.length} 帧）`
+                : "写入候选"
+              : "找"}
           </Button>
         </Space>
       }
@@ -1285,6 +1308,8 @@ export default function AnnotationWorkspace({
             playing={similarClip}
             onPlay={setSimilarClip}
             onJump={openSimilarHit}
+            dropped={similarDropped}
+            onDropped={setSimilarDropped}
           />
         ) : (
           <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13 }}>
@@ -1309,6 +1334,8 @@ export default function AnnotationWorkspace({
             找到 {similarResult.segments} 段（{similarResult.hits} 个命中，搜了 {similarResult.searched} 路视频
             {similarResult.missing ? `，${similarResult.missing} 路还没建索引` : ""}），新写入 <b>{similarResult.written}</b> 条候选。
             跟已有同标签重叠的没重复写。
+            {/* 勾掉的那几帧要在结果里留痕：过两天回头看"怎么比上次少"，答案得能找得回来 */}
+            {similarResult.dropped ? `你手动勾掉了 ${similarResult.dropped} 帧，这几帧没参与合段。` : ""}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             候选写在下面这些任务的「疑似片段」里，线索标着「画面相似」，面板上多了个「画面相似」筛选。

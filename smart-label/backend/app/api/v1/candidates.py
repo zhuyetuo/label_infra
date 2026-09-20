@@ -307,6 +307,9 @@ class SimilarIn(BaseModel):
     part: str | None = Field(None, max_length=40)
     # 只搜不写：先把命中摆出来看
     dry_run: bool = False
+    # 「先看命中」里人手动去掉的帧：[[路径, 秒], …]。一眼看出不是同一个动作的挑出来扔掉，
+    # 剩下的再写候选。去掉的帧不进合段，整段都被去掉的那一段不写
+    drop: list[tuple[str, float]] = Field(default_factory=list, max_length=2000)
 
 
 @router.post("/similar")
@@ -348,7 +351,7 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score,
                                   gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center, dry_run=body.dry_run,
                                   pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
-                                  part=body.part)
+                                  part=body.part, drop=tuple((p, float(t)) for p, t in body.drop))
     try:
         r = await vindex.find_similar(db, task, params)
         r["created_label"] = created_label

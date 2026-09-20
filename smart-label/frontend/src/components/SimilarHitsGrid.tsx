@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import { Button, Checkbox, Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import { SIMILAR_VIEW_HELP, SIMILAR_VIEW_OPTIONS, similarThumbToken, similarThumbUrl, type SimilarHit, type SimilarThumbView } from "@/api/candidates";
 import { clipKeyOf, type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
@@ -26,12 +26,17 @@ interface Props {
   /** 点一张 → 左边的播放器循环播那几秒（播放器在外面，这里只报"要播哪段"） */
   playing: Clip | null;
   onPlay: (clip: Clip | null) => void;
+  /** 人手动去掉的命中（`路径@秒`）。检索总会混进几张一眼就不对的，挑出来扔掉比调参数准 */
+  dropped: Set<string>;
+  onDropped: (next: Set<string>) => void;
 }
+
+export const hitKeyOf = (h: SimilarHit) => `${h.path}@${h.t}`;
 
 // 「先看命中」：写候选之前，把样例那一块和命中的那一块并排摆出来，一眼看出检索靠不靠谱。
 // 缩略图是视觉服务现取的（每张要解一帧、跑一次狗检测），懒加载，滚到哪取到哪。
 // 点一张：下面内嵌一个小播放器循环播那几秒——不用关掉预览去主画面找，主画面被这个弹窗挡着也看不见。
-export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump, view, onViewChange, playing, onPlay }: Props) {
+export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refSampleId, refCam, hits, centered, poseUsed, onJump, view, onViewChange, playing, onPlay, dropped, onDropped }: Props) {
   const [token, setToken] = useState<string | null>(null);
   // 本任务 / 其他任务分开看：跨任务的命中往往差得多（别的狗、别的天），分开才看得出问题在哪
   const [scope, setScope] = useState<"all" | "own" | "other">("all");
@@ -69,11 +74,41 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
   const url = (path: string, t: number) => (token ? similarThumbUrl(taskId, path, t, token, view) : "");
   const scoreColor = (s: number) => (s >= 0.6 ? "#52c41a" : s >= 0.3 ? "#fa8c16" : "#999");
   const isPlaying = (h: SimilarHit) => clip?.key === clipKeyOf(h);
+  // 勾掉的不写候选。默认全要——默认全不要的话，人得把对的一张张勾上，
+  // 而检索大部分时候是对的，那等于把省下来的功夫又赔回去
+  const isDropped = (h: SimilarHit) => dropped.has(hitKeyOf(h));
+  const keptN = hits.length - hits.filter(isDropped).length;
+  const toggle = (h: SimilarHit) => {
+    const next = new Set(dropped);
+    const k = hitKeyOf(h);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
+    onDropped(next);
+  };
+  // 批量只作用在**当前这一屏**（本任务 / 其他任务筛过之后的）：跨任务的命中常常整批不对，
+  // 切到「其他任务」一键全不要，比一张张点快得多
+  const bulk = (keep: boolean) => {
+    const next = new Set(dropped);
+    for (const h of shown) {
+      if (keep) next.delete(hitKeyOf(h));
+      else next.add(hitKeyOf(h));
+    }
+    onDropped(next);
+  };
 
   return (
     <div>
       <Space size={8} style={{ marginBottom: 6 }} wrap>
         <Typography.Text strong>命中 {hits.length} 帧</Typography.Text>
+        <Tooltip title="勾掉的不写候选。一眼看出不是同一个动作的挑出来扔掉——检索总会混进几张明显不对的，为那几张去调参数，常常把对的也一起调没了">
+          <Typography.Text type={keptN < hits.length ? "warning" : "secondary"} style={{ fontSize: 12 }}>
+            要 {keptN} / {hits.length}
+          </Typography.Text>
+        </Tooltip>
+        <Space size={4}>
+          <Button size="small" onClick={() => bulk(true)}>这一屏全要</Button>
+          <Button size="small" onClick={() => bulk(false)}>这一屏全不要</Button>
+        </Space>
         <Segmented size="small" value={scope} onChange={(v) => setScope(v as "all" | "own" | "other")}
                    options={[{ label: `全部 ${hits.length}`, value: "all" }, { label: `本任务 ${own.length}`, value: "own" }, { label: `其他任务 ${other.length}`, value: "other" }]} />
         <Tooltip title={SIMILAR_VIEW_HELP}>
@@ -107,12 +142,19 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
           )}
           {shown.map((h) => (
             <div
-              key={`${h.path}@${h.t}`}
+              key={hitKeyOf(h)}
               onClick={() => playHit(h)}
-              style={{ width: 150, border: isPlaying(h) ? "2px solid #faad14" : "1px solid #f0f0f0", borderRadius: 6, padding: 3, cursor: "pointer", background: isPlaying(h) ? "rgba(250,173,20,0.08)" : undefined }}
+              style={{ width: 150, border: isPlaying(h) ? "2px solid #faad14" : "1px solid #f0f0f0", borderRadius: 6, padding: 3, cursor: "pointer", background: isPlaying(h) ? "rgba(250,173,20,0.08)" : undefined, position: "relative", opacity: isDropped(h) ? 0.4 : 1 }}
               title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 综合 ${h.score.toFixed(3)}${h.vis_score != null ? ` · 画面 ${h.vis_score.toFixed(3)}` : ""}${h.pose_score != null ? ` · 姿态 ${h.pose_score.toFixed(3)}` : ""}`}
             >
-              <img src={url(h.path, h.t)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4 }} />
+              {/* 勾选框盖在图上：点它只管要不要，别顺带把这几秒放起来 */}
+              <Checkbox
+                checked={!isDropped(h)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => toggle(h)}
+                style={{ position: "absolute", top: 6, left: 6, zIndex: 2, background: "rgba(0,0,0,0.45)", borderRadius: 3, padding: "0 3px" }}
+              />
+              <img src={url(h.path, h.t)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4, filter: isDropped(h) ? "grayscale(1)" : undefined }} />
               <div style={{ fontSize: 12, lineHeight: 1.4, marginTop: 2, display: "flex", justifyContent: "space-between", gap: 4 }}>
                 <span style={{ color: "#999" }}>#{ordered.indexOf(h) + 1}</span>
                 <span style={{ color: scoreColor(keyOf(h)), fontWeight: 600 }}>{keyOf(h).toFixed(3)}</span>
