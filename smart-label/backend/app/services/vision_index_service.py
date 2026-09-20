@@ -279,10 +279,16 @@ class SimilarParams:
     # 相邻命中隔多久以内合成一段。舔一次往往持续几十秒、命中却断断续续，3 秒会拆成十几条
     # 看着像重复；默认 15 秒，一次舔合成一条
     gap_s: float = 15.0
-    # 减掉所有帧的平均向量再比：同狗同房同地板的共同背景把余弦顶到 0.95+，动作差别被淹没
+    # 去共同背景：每一帧减掉**它自己那一路**的平均向量（视觉服务 2026-09-20 起的做法）。
+    # 同狗同房同地板的共同背景把余弦顶到 0.95+，动作差别被淹没；减掉之后身份在两边
+    # 同时抵消，剩下的才是动作——这是"搜出来全是同一只狗"的解药
     center: bool = True
     # 姿态相似占多少（0 只看画面，1 只看姿态）；None 用视觉服务的默认
     pose_w: float | None = None
+    # 只要"鼻子够到了这个部位"的帧（几何硬条件，不是相似度）。SigLIP 看整体长相，
+    # 分不清左前爪和右前爪；这一条直接按关键点距离卡，而且天然跨狗（按体长归一化过）。
+    # 认不出的部位名（腰、腹股沟…）不筛，结果里 part_used 会如实说
+    part: str | None = None
     # 只搜不写：先把命中的画面摆出来看，看着对再写候选
     dry_run: bool = False
 
@@ -353,7 +359,7 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     ref = {"path": own_path, "t": params.t_s} if params.t_s is not None else None
     r = await search_fn(paths, text=params.text, ref=ref, top_k=params.top_k,
                         min_score=params.min_score, gap_s=params.gap_s, center=params.center,
-                        pose_w=params.pose_w)
+                        pose_w=params.pose_w, part=params.part)
     # 每个命中对应哪个任务（同一路视频可能有几个任务：整段的 + 短任务），给"先看命中"画图和跳转
     hits_out: list[dict] = []
     for h in r.get("hits", []):
@@ -402,6 +408,9 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
             "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),
+            # part_used=None 而 part 有值 = 这个部位判不了（腰、腹股沟…），**没筛**。
+            # 前端要照实说，不然人会把没筛的一堆当成筛过的结果
+            "part": r.get("part"), "part_used": r.get("part_used"),
             "dry_run": params.dry_run, "hit_list": hits_out,
             # 样例自己那一路的路径：前端拿它请求样例帧的缩略图，跟命中并排比
             "ref_path": own_path}

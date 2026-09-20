@@ -397,3 +397,52 @@ def test_日志里直接说慢在哪一步():
     note = vi._spent_note({"spent": {"scan": 12.0, "pose": 30.5, "seg": 0.2, "embed": 3.0}})
     assert note == "（姿态 30.5s，解码+检测 12.0s，向量 3.0s）"          # 0.2s 的抠狗不占地方
     assert vi._spent_note({}) == "" and vi._spent_note({"spent": {"pose": 0.0}}) == ""
+
+
+def test_部位条件透传_判不了的部位要如实说没筛(db, run):
+    """part 是**几何硬条件不是相似度**：只留「鼻子够到了这个部位」的帧。
+
+    part 有值而 part_used 是 null = 这个部位判不了（腰、腹股沟…鼻子到爪的距离
+    说明不了它们），**整条没筛**。这个必须如实带到前端——否则人会把没筛过的
+    一大堆当成筛过的结果，越看越糊涂。
+    """
+    from app.models.project import Project
+    from app.models.sample import Sample
+    from app.models.task import Task, TaskStatus, TaskType
+    from app.models.user import User, UserRole
+    from datetime import date
+
+    u = User(username="p1", password_hash="x", display_name="p", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    pj = Project(name="部位", created_by=u.id)
+    db.add(pj)
+    run(db.flush())
+    s = Sample(sample_code="sp1", video_cam1_path="d/sp1_cam1.mp4", imu_csv_path="d/sp1.csv",
+               session_date=date(2026, 9, 14), created_by=u.id)
+    db.add(s)
+    run(db.flush())
+    t = Task(project_id=pj.id, sample_id=s.id, task_type=TaskType.ai_assisted,
+             status=TaskStatus.IN_PROGRESS, round_no=1, created_by=u.id)
+    db.add(t)
+    run(db.commit())
+
+    base = {"hits": [], "segments": [], "searched": 1, "missing": [],
+            "centered": True, "pose_used": True, "pose_w": 0.5}
+    fn = _search({**base, "part": "后爪", "part_used": "后爪"})
+    r = run(vi.find_similar(db, t, vi.SimilarParams(label_name="舔身体", t_s=10.0,
+                                                    part="后爪", dry_run=True), search_fn=fn))
+    assert fn.calls[0]["part"] == "后爪"                      # 一路透传到视觉服务
+    assert r["part"] == "后爪" and r["part_used"] == "后爪"
+
+    # 判不了的：part_used 为 null，前端据此提示"没筛"
+    fn2 = _search({**base, "part": "腹股沟", "part_used": None})
+    r2 = run(vi.find_similar(db, t, vi.SimilarParams(label_name="舔身体", t_s=10.0,
+                                                     part="腹股沟", dry_run=True), search_fn=fn2))
+    assert r2["part"] == "腹股沟" and r2["part_used"] is None
+
+    # 不填部位：不传给视觉服务，回来也是空
+    fn3 = _search(base)
+    r3 = run(vi.find_similar(db, t, vi.SimilarParams(label_name="舔身体", t_s=10.0, dry_run=True),
+                             search_fn=fn3))
+    assert fn3.calls[0]["part"] is None and r3["part_used"] is None
