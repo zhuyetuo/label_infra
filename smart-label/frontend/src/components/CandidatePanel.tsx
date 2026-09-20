@@ -126,6 +126,14 @@ export default function CandidatePanel({
     if (pendingCount === 0 && candidates.length > 0) setFilter("all");
   }, [pendingCount, candidates.length]);
 
+  // 从找相似的链接进来带的是 ?cand=similar，但那个任务的候选可能一条「画面相似」
+  // 都没有（是 AI 预标注 / 画面找片段落下的）。这时「画面相似」那个档根本不渲染，
+  // 于是筛选框看着一个都没选中、表格空着，标题上却写着「4 待确认」——
+  // 只会让人以为是坏了。选不到的档就别停在那儿，退回「待确认」。
+  useEffect(() => {
+    if (filter === "similar" && similarCount === 0 && candidates.length > 0) setFilter("pending");
+  }, [filter, similarCount, candidates.length]);
+
   const rows = useMemo(() => {
     let list = candidates.filter((c) =>
       filter === "all"
@@ -319,7 +327,27 @@ export default function CandidatePanel({
         // 一页就十条，让它整个铺开，纵向交给外层那一条
         scroll={{ x: 720 }}
         locale={{
-          emptyText: candidates.length ? (
+          // 一条都不显示、标题上却写着「4 待确认」，人只会以为是坏了。
+          // 是被筛选挡住的就直说是哪一档挡的，并给一个当场取消的按钮——
+          // 让人自己去猜是哪个控件干的，等于把 bug 甩给用户
+          emptyText: candidates.length && (labelFilter.length || filter !== "all") ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                <span>
+                  这条数据有 {candidates.length} 条疑似片段，但
+                  {labelFilter.length ? `「只看类别：${labelFilter.join("、")}」` : ""}
+                  {labelFilter.length && filter === "similar" ? "和" : ""}
+                  {filter === "similar" ? "「画面相似」" : labelFilter.length ? "" : "当前这一档"}
+                  把它们全挡住了
+                </span>
+              }
+            >
+              <Button size="small" onClick={() => { setLabelFilter([]); setFilter("all"); }}>
+                看全部 {candidates.length} 条
+              </Button>
+            </Empty>
+          ) : candidates.length ? (
             <Empty description="没有待确认的候选" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (
             <Empty description="这条数据没有疑似片段（跑一次 AI 预标注才会生成）" image={Empty.PRESENTED_IMAGE_SIMPLE} />
