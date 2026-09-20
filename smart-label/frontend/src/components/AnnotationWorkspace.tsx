@@ -234,6 +234,8 @@ export default function AnnotationWorkspace({
   const [similarCenter, setSimilarCenter] = useState(true);
   // 姿态相似占多少：0 只看画面，1 只看姿态（鼻子够到了哪只爪）。没姿态模型时服务端自动只看画面
   const [similarPoseW, setSimilarPoseW] = useState(0.5);
+  // 只要「鼻子够到了这个部位」的帧。几何硬条件，跟相似度是两回事，所以单独一个控件
+  const [similarPart, setSimilarPart] = useState("");
   // 「先看命中」：只搜不写，把命中的画面摆出来看
   const [similarPeek, setSimilarPeek] = useState<{ hits: SimilarHit[]; refPath: string | null; refT: number | null; centered: boolean; poseUsed: boolean } | null>(null);
   const [similarPeeking, setSimilarPeeking] = useState(false);
@@ -265,6 +267,7 @@ export default function AnnotationWorkspace({
         gap_s: similarGap,
         center: similarCenter,
         pose_w: similarPoseW,
+        part: similarPart || undefined,
         dry_run: true,
       });
       setSimilarPeek({ hits: r.hit_list, refPath: r.ref_path, refT: similarUseText ? null : similarAtSec, centered: r.centered, poseUsed: r.pose_used });
@@ -288,6 +291,7 @@ export default function AnnotationWorkspace({
         create_label: true,
         center: similarCenter,
         pose_w: similarPoseW,
+        part: similarPart || undefined,
       });
       if (r.created_label) message.info(`项目里没有「${similarLabel}」，已经新建了这个标签`);
       if (r.multi_dog_candidates > 0) {
@@ -1232,14 +1236,24 @@ export default function AnnotationWorkspace({
               隔 <InputNumber size="small" min={0} max={120} value={similarGap} onChange={(v) => setSimilarGap(v ?? 15)} style={{ width: 60 }} /> 秒合段
             </span>
           </Tooltip>
-          <Tooltip title="同一只狗、同一间房、同一块地板，每一帧的向量里都带着这坨共同背景，原始相似度全在 0.95 以上分不开。减掉所有帧的平均向量再比，剩下的才是姿态和部位的差别。不勾就按原始相似度">
+          <Tooltip title="同一只狗、同一间房、同一块地板，每一帧的向量里都带着这坨共同背景，原始相似度全在 0.95 以上分不开。勾上之后每一帧减掉**它自己那一路**的平均向量（样例帧也减它自己那一路的），狗的身份、毛色、房间、机位在两边同时抵消，剩下的才是动作——这是「搜出来全是同一只狗」的解药。不勾就按原始相似度">
             <Checkbox checked={similarCenter} onChange={(e) => setSimilarCenter(e.target.checked)}>
               去背景
             </Checkbox>
           </Tooltip>
-          <Tooltip title="第二路信号：狗的姿态关键点（鼻子、脖子、尾根、四爪…）算出来的「鼻子够到了哪只爪」。0 只看画面，1 只看姿态。算法机上没装姿态模型时自动只看画面（先看命中的说明里会写）">
+          <Tooltip title={similarUseText
+            ? "一句话查询没有姿态向量可比（姿态是从样例那一帧的关键点算出来的），所以用一句话搜时这一项不起作用，只看画面"
+            : "第二路信号：狗的姿态关键点（鼻子、脖子、尾根、四爪…）算出来的「鼻子够到了哪只爪」。0 只看画面，1 只看姿态。算法机上没装姿态模型时自动只看画面（先看命中的说明里会写）"}>
+            <span style={{ opacity: similarUseText ? 0.45 : 1 }}>
+              姿态占 <InputNumber size="small" min={0} max={1} step={0.1} disabled={similarUseText} value={similarPoseW} onChange={(v) => setSimilarPoseW(Math.max(0, Math.min(1, v ?? 0.5)))} style={{ width: 60 }} />
+            </span>
+          </Tooltip>
+          <Tooltip title="几何硬条件，不是相似度：只留「鼻子够到了这个部位」的帧。画面向量看的是整体长相，分不清左前爪和右前爪；这一条直接按关键点距离卡，而且天然跨狗（按体长归一化过，跟毛色体型无关）。腰、腹股沟这类判不了的填了也不筛，结果说明里会写清楚">
             <span>
-              姿态占 <InputNumber size="small" min={0} max={1} step={0.1} value={similarPoseW} onChange={(v) => setSimilarPoseW(Math.max(0, Math.min(1, v ?? 0.5)))} style={{ width: 60 }} />
+              部位
+              <Select size="small" allowClear value={similarPart || undefined} onChange={(v) => setSimilarPart(v ?? "")}
+                placeholder="不限" style={{ width: 96, marginLeft: 4 }}
+                options={["前爪", "后爪", "前左爪", "前右爪", "后左爪", "后右爪", "尾根", "颈部"].map((v) => ({ value: v, label: v }))} />
             </span>
           </Tooltip>
         </Space>

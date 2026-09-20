@@ -247,11 +247,14 @@ async def embed_indexed(paths: list[str]) -> dict[str, bool]:
 
 async def embed_search(paths: list[str], *, text: str | None = None, ref: dict | None = None,
                        top_k: int = 50, min_score: float = 0.0, gap_s: float = 3.0,
-                       exclude_self_s: float = 10.0, center: bool = True, pose_w: float | None = None) -> dict:
+                       exclude_self_s: float = 10.0, center: bool = True, pose_w: float | None = None,
+                       part: str | None = None) -> dict:
     body = {"paths": paths, "top_k": top_k, "min_score": min_score, "gap_s": gap_s, "exclude_self_s": exclude_self_s,
             "center": center}
     if pose_w is not None:
         body["pose_w"] = pose_w
+    if part:
+        body["part"] = part
     if text is not None:
         body["text"] = text
     if ref is not None:

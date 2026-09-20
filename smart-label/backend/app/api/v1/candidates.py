@@ -10,7 +10,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -299,10 +299,12 @@ class SimilarIn(BaseModel):
     gap_s: float = 15.0
     # 标签项目里还没有：管理员可以顺手建（找相似的时候常常就是在攒一个新类别）
     create_label: bool = False
-    # 减掉所有帧的平均向量再比（去共同背景）。默认开
+    # 去共同背景：每一帧减掉它自己那一路的平均向量。默认开
     center: bool = True
     # 姿态相似占多少（0~1）；不传用视觉服务默认。没姿态模型时自动只看画面
     pose_w: float | None = None
+    # 只要"鼻子够到了这个部位"的帧（几何硬条件，不是相似度）。认不出的部位名不筛
+    part: str | None = Field(None, max_length=40)
     # 只搜不写：先把命中摆出来看
     dry_run: bool = False
 
@@ -345,7 +347,8 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
     params = vindex.SimilarParams(label_name=body.label_name, cam=body.cam, t_s=body.t_s, text=body.text,
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score,
                                   gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center, dry_run=body.dry_run,
-                                  pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None))
+                                  pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
+                                  part=body.part)
     try:
         r = await vindex.find_similar(db, task, params)
         r["created_label"] = created_label
