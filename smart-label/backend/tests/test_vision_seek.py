@@ -295,3 +295,24 @@ def test_label_specs_部位条数有硬上限():
     lick = _L("舔", code="lick_body")
     kids = [_L(f"舔-部位{i}", parent=lick) for i in range(vs.MAX_PARTS + 20)]
     assert len(vs.label_specs([lick, *kids])[0]["parts"]) == vs.MAX_PARTS
+
+
+def test_候选带上模型的依据_看到什么和为什么分开写():
+    """光给「舔身体 62%」，人复核时还得点开视频才知道对不对。模型本来就在回答里
+    写了依据，不存就白问了——这一轮部位检索栽的就是"只有结论没有依据"，反复猜了四轮。"""
+    from app.services import vision_seek_service as vs
+
+    segs = [{"start_s": 1.0, "end_s": 4.0, "label": "舔", "body_part": "后爪", "confidence": 0.7,
+             "desc": "侧卧，头转向身后，口鼻接触左后肢", "note": "四帧里口鼻位置有小幅往复"}]
+    c = vs.segments_to_candidates(segs, {"舔-后爪"}, model="anthropic:claude-opus-5")[0]
+    assert c.label_name == "舔-后爪" and c.evidence is not None
+    assert "侧卧" in c.evidence and "往复" in c.evidence          # desc 和 note 都在
+    assert c.evidence.index("侧卧") < c.evidence.index("往复")     # 先事实后结论
+
+    # 老版本视觉服务只给 note：那就只有 note，不要拼出个空的分号
+    only_note = vs.segments_to_candidates(
+        [{**segs[0], "desc": ""}], {"舔-后爪"})[0]
+    assert only_note.evidence == "四帧里口鼻位置有小幅往复"
+    # 两个都没有：空着而不是空字符串，前端好判断
+    none_ = vs.segments_to_candidates([{**segs[0], "desc": "", "note": ""}], {"舔-后爪"})[0]
+    assert none_.evidence is None

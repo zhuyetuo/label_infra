@@ -38,6 +38,10 @@ class AiCandidate(Base):
     # 画面候选（reason=vision）是哪家哪个模型给的，如 anthropic:claude-opus-5。
     # 同一批任务用两个模型各跑一遍，就能按这个对比谁更准。IMU 来的候选为空
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # 模型看到了什么 + 为什么这么判。人复核时的第一眼信息：不对的话不用点开视频
+    # 就能排掉。也是调试用的——「侧卧，头转向身后，口鼻接触左后肢」说明看懂了，
+    # 「一只狗趴在地毯上」说明根本没看清，这两种的解法完全不同。IMU 来的候选为空
+    evidence: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[CandidateStatus] = mapped_column(
         Enum(CandidateStatus), nullable=False, default=CandidateStatus.pending, server_default="pending"
     )

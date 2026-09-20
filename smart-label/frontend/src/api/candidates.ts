@@ -16,6 +16,8 @@ export interface AiCandidate {
   reason: "low_conf" | "spectral" | "grooming" | "vision" | "similar";
   /** 画面候选是哪家哪个模型给的，如 anthropic:claude-opus-5；IMU 来的为空 */
   model?: string | null;
+  /** 模型看到了什么 + 为什么这么判。只有画面候选（reason=vision）有 */
+  evidence?: string | null;
   status: "pending" | "confirmed" | "rejected" | "uncertain";
   /** 确认成了哪个类别；空 = 就是抓挠，有值 = 人看完判成别的动作 */
   decided_label_id: number | null;
