@@ -85,7 +85,7 @@ export const assignProject = (id: number, userId: number | null, includeClaimed 
 // ── 画面找片段（视觉大模型走 API） ───────────────────────────────────
 
 export interface VisionSeekProgress {
-  status: "idle" | "running" | "done" | "cancelled" | "error";
+  status: "idle" | "running" | "paused" | "done" | "cancelled" | "error";
   project_id: number;
   dry_run: boolean;
   total: number;
@@ -136,6 +136,12 @@ export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
 
 export const getVisionSeekStatus = (id: number) =>
   request.get<never, VisionSeekProgress>(`/projects/${id}/vision-seek/status`);
+
+export const pauseVisionSeek = (id: number) =>
+  request.post<never, { paused: boolean }>(`/projects/${id}/vision-seek/pause`);
+
+export const resumeVisionSeek = (id: number) =>
+  request.post<never, { resumed: boolean }>(`/projects/${id}/vision-seek/resume`);
 
 export const cancelVisionSeek = (id: number) =>
   request.post<never, { stopped: boolean }>(`/projects/${id}/vision-seek/cancel`);

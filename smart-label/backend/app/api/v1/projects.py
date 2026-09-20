@@ -189,6 +189,21 @@ async def cancel_vision_seek(project_id: int):
     return ok({"stopped": vseek.cancel(project_id)})
 
 
+@router.post("/{project_id}/vision-seek/pause", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def pause_vision_seek(project_id: int):
+    """暂停：正在问的那个视频问完就停，后面的不开始；「继续」接着跑。
+
+    这一步是花钱的（每段问一次大模型），能随时按住比建索引那边更要紧——
+    看到前几条结果不对就该停下来改问法，而不是把钱花完再说。
+    """
+    return ok({"paused": vseek.pause(project_id), **vseek.get_progress(project_id).to_dict()})
+
+
+@router.post("/{project_id}/vision-seek/resume", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def resume_vision_seek(project_id: int):
+    return ok({"resumed": vseek.resume(project_id), **vseek.get_progress(project_id).to_dict()})
+
+
 class VisionIndexIn(BaseModel):
     task_ids: list[int] | None = None
     # all = 样本有几路建几路。cam1/2/3 是**样本里的槽位**（该狗自己房间的机位 / 公共区机位），

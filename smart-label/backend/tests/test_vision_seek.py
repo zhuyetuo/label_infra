@@ -316,3 +316,39 @@ def test_候选带上模型的依据_看到什么和为什么分开写():
     # 两个都没有：空着而不是空字符串，前端好判断
     none_ = vs.segments_to_candidates([{**segs[0], "desc": "", "note": ""}], {"舔-后爪"})[0]
     assert none_.evidence is None
+
+
+def test_找片段能暂停和继续(db, run):
+    """这一步是**花钱的**（每段问一次大模型）——能随时按住比建索引那边更要紧：
+    看到前几条结果不对就该停下来改问法，而不是把钱花完再说。"""
+    import asyncio
+
+    from app.services import vision_seek_service as vs
+
+    pid = 4321
+    assert vs.pause(pid) is False and vs.resume(pid) is False     # 没在跑：按了不生效
+
+    vs._running.add(pid)
+    vs._progress[pid] = vs.SeekProgress(status="running", project_id=pid)
+    gate = asyncio.Event()
+    gate.set()
+    vs._gate[pid] = gate
+    try:
+        assert vs.pause(pid) is True
+        assert vs._progress[pid].status == "paused" and not gate.is_set()
+        assert vs.resume(pid) is True
+        assert vs._progress[pid].status == "running" and gate.is_set()
+
+        # 停止要把暂停里的也放出来，否则它永远停在 gate 上等
+        vs.pause(pid)
+        assert not gate.is_set()
+        assert vs.cancel(pid) is True
+        assert gate.is_set() and pid not in vs._paused
+        # 已经取消的不能再暂停——否则又停住，取消就落不了地
+        assert vs.pause(pid) is False
+    finally:
+        vs._running.discard(pid)
+        vs._cancelled.discard(pid)
+        vs._paused.discard(pid)
+        vs._gate.pop(pid, None)
+        vs._progress.pop(pid, None)
