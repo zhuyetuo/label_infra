@@ -15,6 +15,7 @@ import {
   Segmented,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
@@ -53,6 +54,7 @@ import { defaultTemplateId } from "@/utils/defaultTemplate";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
 import { listLabels } from "@/api/labels";
+import SeekReviewGrid from "@/components/SeekReviewGrid";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
@@ -95,6 +97,8 @@ import {
   resumeVisionSeek,
   getVisionSeekStatus,
   startVisionSeek,
+  getVisionSeekFound,
+  type SeekFound,
   type VisionSeekProgress,
 } from "@/api/projects";
 import { ROLE_META, TASK_STATUS_META, TASK_TYPE_LABEL, TaskStatusTag } from "@/utils/taskStatus";
@@ -186,6 +190,22 @@ export default function Projects() {
   const [seekMaxClips, setSeekMaxClips] = useState(120);
   const [seekLimit, setSeekLimit] = useState<number | null>(null);
   const [seekDryRun, setSeekDryRun] = useState(true);
+  // 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏让人勾。默认开——
+  // 模型一次能出几千段，错的直接进候选列表的话，人得跨几十个任务一条条排除
+  const [seekReview, setSeekReview] = useState(true);
+  // 筛选那一屏
+  const [reviewOpen, setReviewOpen] = useState<number | null>(null);
+  const [reviewFound, setReviewFound] = useState<SeekFound[]>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const openReview = async (pid: number) => {
+    setReviewOpen(pid);
+    setReviewLoading(true);
+    try {
+      setReviewFound((await getVisionSeekFound(pid)).found);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
   const [seekLlm, setSeekLlm] = useState<string>(() => getSavedText(SEEK_LLM_KEY, ""));
   const { data: llmProviders } = useQuery({ queryKey: ["llm-providers"], queryFn: listLlmProviders, enabled: isAdmin });
   const [seekStarting, setSeekStarting] = useState(false);
@@ -385,11 +405,16 @@ export default function Projects() {
         cam: seekCam,
         max_clips: seekMaxClips,
         dry_run: seekDryRun,
+        review: seekReview,
         provider: seekLlm ? seekLlm.split("|")[0] : undefined,
         model: seekLlm ? seekLlm.split("|")[1] : undefined,
       });
       saveText(SEEK_LLM_KEY, seekLlm);
-      message.info(seekDryRun ? "预览已开始（不问模型、不花钱），进度在项目行里看" : "已开始，进度在项目行里看");
+      message.info(seekDryRun
+        ? "预览已开始（不问模型、不花钱），进度在项目行里看"
+        : seekReview
+          ? "已开始，进度在项目行里看。跑完先不写候选，回来点「筛一筛」过一眼再写"
+          : "已开始，进度在项目行里看");
       await pollSeek([seekTarget.id]);
       setSeekTarget(null);
     } finally {
@@ -1422,6 +1447,13 @@ export default function Projects() {
                           {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选，约 $${sp.est_usd}`}
                           {sp.status === "cancelled" && "（已停止）"}
                           {sp.status === "error" && `（出错：${sp.error_message}）`}
+                          {/* 攒着等人筛的：不摆个按钮在这儿，跑完就没人知道它们在哪 */}
+                          {!!sp.found && (
+                            <Button size="small" type="link" style={{ padding: "0 4px" }}
+                              onClick={(e) => { e.stopPropagation(); openReview(p.id); }}>
+                              筛一筛（{sp.found} 段待处理）
+                            </Button>
+                          )}
                         </Typography.Text>
                       );
                     }
@@ -1770,6 +1802,12 @@ export default function Projects() {
             <Checkbox checked={seekDryRun} onChange={(e) => setSeekDryRun(e.target.checked)}>
               只预览：本地筛一遍，看会送多少段，<b>不问模型、不花钱、不写候选</b>
             </Checkbox>
+            <Tooltip title="模型一次能出几千段，里面混着的错的要是直接写进候选，人得跨几十个任务一条条排除。先摆成一屏缩略图过一眼，勾中的才写，类别不对还能当场改">
+              <Checkbox checked={seekReview} disabled={seekDryRun}
+                        onChange={(e) => setSeekReview(e.target.checked)}>
+                <b>先筛一遍再写</b>：跑完不直接写候选，把找到的段摆成一屏让你勾（跟「找相似」那一屏一样）
+              </Checkbox>
+            </Tooltip>
             <Typography.Text>
               本次将处理 <b>{Math.min(seekLimit ?? Infinity, seekEligible(seekTarget.id).length)}</b> 个待认领/标注中的任务。
               一小时视频本地筛选一两分钟，问模型每段一两秒、几段并行。
@@ -2222,6 +2260,33 @@ export default function Projects() {
           />
         </Space>
         {renderSamplePicker(bulkSelected, setBulkSelected, alreadyImportedIds)}
+      </Modal>
+
+      {/* 「画面找片段」跑完之后的筛选屏：跟「找相似」那一屏同一套操作 */}
+      <Modal
+        title={`筛一筛：画面找片段找到的段（项目 #${reviewOpen ?? ""}）`}
+        open={reviewOpen != null}
+        onCancel={() => { setReviewOpen(null); setReviewFound([]); }}
+        width="100vw"
+        style={{ top: 0, maxWidth: "100vw", paddingBottom: 0 }}
+        styles={{ body: { height: "calc(100vh - 110px)", overflow: "hidden", padding: "8px 12px" }, content: { borderRadius: 0 } }}
+        footer={null}
+        destroyOnClose
+      >
+        {reviewLoading ? (
+          <Spin />
+        ) : reviewOpen != null ? (
+          <SeekReviewGrid
+            projectId={reviewOpen}
+            found={reviewFound}
+            labelNames={labelsOf(reviewOpen).filter((l) => l.is_active).map((l) => ({ name: l.display_name, color: l.color }))}
+            onWritten={(_n, left) => {
+              pollSeek([reviewOpen]);
+              if (!left) { setReviewOpen(null); setReviewFound([]); }
+              else getVisionSeekFound(reviewOpen).then((r) => setReviewFound(r.found)).catch(() => undefined);
+            }}
+          />
+        ) : null}
       </Modal>
 
       <AnnotationWorkspace

@@ -110,6 +110,10 @@ export interface VisionSeekProgress {
   error_message: string | null;
   elapsed_sec: number;
   finished_at: number | null;
+  /** 这一轮是不是「先筛一遍再写」 */
+  review?: boolean;
+  /** 待筛的段有几条（列表走 /vision-seek/found 单独取，状态里只报个数） */
+  found?: number;
   /** 视觉服务那边找片段能不能用（没配 key / 没起服务）；providers 有值 = 新版，支持选模型 */
   service?: { available: boolean; error?: string | null; model?: string; providers?: string[] };
 }
@@ -129,7 +133,30 @@ export interface VisionSeekRequest {
   /** 用哪家的哪个模型（「大模型 API」页配的）；不传 = 视觉服务环境变量里那把 Claude key */
   provider?: string;
   model?: string;
+  /** 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏让人勾 */
+  review?: boolean;
 }
+
+/** review 模式跑完之后待人筛的一段 */
+export interface SeekFound {
+  task_id: number;
+  sample_code: string | null;
+  path: string;
+  label_name: string;
+  start_ms: number;
+  end_ms: number;
+  /** 这一段的中点（秒）：取缩略图用 */
+  t: number;
+  confidence: number | null;
+  evidence: string | null;
+}
+
+export const getVisionSeekFound = (id: number) =>
+  request.get<never, { found: SeekFound[]; total: number; review: boolean }>(`/projects/${id}/vision-seek/found`);
+
+/** 把人勾中的段写成候选（只加不删） */
+export const writeVisionSeekPicks = (id: number, picks: (SeekFound & { label_name: string })[]) =>
+  request.post<never, { written: number; left: number }>(`/projects/${id}/vision-seek/write`, { picks });
 
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-seek`, body);

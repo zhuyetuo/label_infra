@@ -352,3 +352,38 @@ def test_找片段能暂停和继续(db, run):
         vs._paused.discard(pid)
         vs._gate.pop(pid, None)
         vs._progress.pop(pid, None)
+
+
+def test_先筛一遍再写_跑完不写库_攒着等人筛(db, run):
+    """模型一次能出几千段，里面混着的错的要是直接写进候选，人得**跨几十个任务**
+    一条条排除（每条都要开任务、找到那一行、点排除）。攒着等人在一屏里筛完再写。"""
+    u, p, (s1, s2), (t1, t2, t3) = _world(db, run)
+    segs = {"d/s1_cam1.mp4": [{"start_s": 10, "end_s": 14, "label": "抓挠", "confidence": 0.9,
+                               "desc": "后腿蹬着肚子"}],
+            "d/s2_cam1.mp4": [{"start_s": 3, "end_s": 6, "label": "舔身体", "confidence": 0.7}]}
+    prog = vs.SeekProgress(status="running", project_id=p.id, review=True)
+    run(vs.run_project(db, p.id, None, vs.SeekParams(review=True), prog, seek_fn=_fake_seek([], segs)))
+    assert _cands(db, run, t1.id) == [] and _cands(db, run, t2.id) == []     # 一条都没写
+    assert prog.candidates == 0 and len(prog.found) == 2
+    f = sorted(prog.found, key=lambda x: x["task_id"])[0]
+    assert (f["task_id"], f["label_name"], f["start_ms"], f["end_ms"]) == (t1.id, "抓挠", 10000, 14000)
+    assert f["t"] == 12.0 and f["path"] == "d/s1_cam1.mp4"      # 中点那一帧：取缩略图用
+    # 状态里只报个数：几千条待筛的段，进度是一秒一轮询的，别每次都搬一遍
+    assert prog.to_dict()["found"] == 2
+
+
+def test_筛完写候选_只加不删_重叠的不重复写(db, run):
+    """跟重跑那条路不一样：重跑是"这一批把上一批没人判过的换掉"，
+    这里是人一条条挑出来的，谁也没说要把别的删掉。"""
+    u, p, (s1, _), (t1, _, _) = _world(db, run)
+    db.add(AiCandidate(task_id=t1.id, round_no=1, label_name="抓挠", start_time_ms=0, end_time_ms=1000,
+                       reason="vision"))
+    run(db.commit())
+    cands = [vs.VisionCandidate(label_name="舔身体", start_time_ms=10000, end_time_ms=14000,
+                                confidence=0.9, spec=None, reason="vision", model="m", evidence="后腿蹬肚子"),
+             vs.VisionCandidate(label_name="抓挠", start_time_ms=500, end_time_ms=1500,
+                                confidence=0.8, spec=None, reason="vision", model="m", evidence=None)]
+    assert run(vs.add_vision_candidates(db, t1, cands, model="m")) == 1      # 跟已有的抓挠重叠：不写
+    run(db.commit())
+    got = [(c.label_name, c.start_time_ms, c.evidence) for c in _cands(db, run, t1.id)]
+    assert got == [("抓挠", 0, None), ("舔身体", 10000, "后腿蹬肚子")]      # 老的那条还在
