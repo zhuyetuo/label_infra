@@ -176,6 +176,15 @@ export default function CandidatePanel({
   // 排除只是记一笔"不是抓挠"，标成甩身体则给了模型一个正例，同时天然成为抓挠
   // 的难负样本——正是最缺的那种训练数据
   const otherLabels = labels.filter((l) => !scratchLabelIds.includes(l.id));
+  /** 某个标签底下的直接子部位。按 parent_id 找，找不到再按「父名-」前缀兜底
+   *  （老项目里的标签可能没挂 parent_id，那时候层级只体现在名字上）。 */
+  const partsOf = (name: string) => {
+    const parent = labels.find((l) => l.display_name === name);
+    const kids = parent ? labels.filter((l) => l.parent_id === parent.id) : [];
+    if (kids.length) return kids;
+    return labels.filter((l) => l.display_name.startsWith(name + "-")
+                                && !l.display_name.slice(name.length + 1).includes("-"));
+  };
 
   // 点错了、或者看完视频改主意了，得能退回去重判——不然只能去「已标注片段」
   // 那边找到对应的条目再退回候选，绕一大圈；排除/待定的更是根本没有入口
@@ -444,6 +453,26 @@ export default function CandidatePanel({
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
                       确认是{c.label_name}
                     </Button>
+                    {/* 这一条候选那个标签底下的部位，直接摆出来一键点。
+                        「改成别的」是上百项的下拉（22 类各带部位），复核一条要在里面翻——
+                        而补部位数据集时要做的就是「看一眼视频 → 点部位 → 下一条」这一个动作，
+                        重复几百遍。2026-09-20：画面自动判部位这条路验完走不通（几何 1/6、
+                        人也有 45% 判不了），部位这一级确定要靠人，那就让人点得快。 */}
+                    {partsOf(c.label_name).map((l) => (
+                      <Tooltip key={l.id} title={`确认成「${l.display_name}」`}>
+                        <Tag
+                          color={l.color || "default"}
+                          style={{ cursor: busy === c.id ? "wait" : "pointer", marginRight: 2 }}
+                          onClick={() => busy !== c.id && decide(c, "confirmed", l.id, l.display_name)}
+                        >
+                          {/* 只显示部位那一截：标签名是「舔身体-后左爪」，前缀每条都一样，
+                              占地方又帮不上忙 */}
+                          {l.display_name.startsWith(c.label_name + "-")
+                            ? l.display_name.slice(c.label_name.length + 1)
+                            : l.display_name}
+                        </Tag>
+                      </Tooltip>
+                    ))}
                     {otherLabels.length > 0 && (
                       <Dropdown
                         menu={{
