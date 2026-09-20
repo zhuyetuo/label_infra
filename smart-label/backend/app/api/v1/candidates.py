@@ -432,6 +432,30 @@ async def similar_thumb_token(task_id: int, db: AsyncSession = Depends(get_db), 
     return ok({"token": issue_media_token(task.id)})
 
 
+class ThumbTokensIn(BaseModel):
+    task_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+@router.post("/similar/thumb-tokens")
+async def similar_thumb_tokens(body: ThumbTokensIn, db: AsyncSession = Depends(get_db),
+                               user: User = Depends(get_current_user)):
+    """一次换好几个任务的缩略图 token。
+
+    「画面找片段」筛选那一屏里，一屏的段横跨几十上百个任务，一个一个换 token
+    就是几十上百个请求——光是发请求就比取图还慢。看不到的任务直接不给，不报错。
+    """
+    from app.core.media_token import issue_media_token
+
+    out: dict[str, str] = {}
+    for tid in dict.fromkeys(body.task_ids):
+        try:
+            task = await _visible_task(db, tid, user)
+        except HTTPException:
+            continue
+        out[str(task.id)] = issue_media_token(task.id)
+    return ok({"tokens": out})
+
+
 @router.get("/similar/thumb")
 async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: bool = True,
                         view: str | None = None, max_side: int | None = None, db: AsyncSession = Depends(get_db)):

@@ -68,3 +68,6 @@ class ProjectVisionSeekRequest(BaseModel):
     # 留空 = 视觉服务环境变量里那把 Claude key（老方式）
     provider: str | None = None
     model: str | None = None
+    # 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏让人过一眼，勾中的才写。
+    # 模型一次能出几千段，错的直接进候选列表的话，人得跨几十个任务一条条排除
+    review: bool = False

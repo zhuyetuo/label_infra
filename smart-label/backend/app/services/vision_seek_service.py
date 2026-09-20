@@ -200,6 +200,30 @@ async def replace_vision_candidates(db: AsyncSession, task: Task, cands: list[Vi
     return len(cands)
 
 
+async def add_vision_candidates(db: AsyncSession, task: Task, cands: list[VisionCandidate],
+                                model: str | None = None) -> int:
+    """人筛完之后写：**只加不删**。
+
+    跟 replace_vision_candidates 的区别要紧：那个是"这一批重跑，把上一批没人判过的
+    换掉"；这个是人一条条挑出来的，谁也没说要把别的删掉。跟已有的同类别重叠的不重复写。
+    """
+    existing = (await db.execute(select(AiCandidate).where(
+        AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no))).scalars().all()
+    n = 0
+    for c in sorted(cands, key=lambda x: x.start_time_ms):
+        if any(o.label_name == c.label_name and o.start_time_ms < c.end_time_ms
+               and c.start_time_ms < o.end_time_ms for o in existing):
+            continue
+        obj = AiCandidate(task_id=task.id, round_no=task.round_no, label_name=c.label_name,
+                          start_time_ms=c.start_time_ms, end_time_ms=c.end_time_ms,
+                          confidence=c.confidence, spec=None, reason=REASON,
+                          model=c.model or model, evidence=c.evidence)
+        db.add(obj)
+        existing.append(obj)
+        n += 1
+    return n
+
+
 def video_path_of(sample: Sample, cam: str) -> str | None:
     return {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path,
             "cam3": sample.video_cam3_path}.get(cam) or None
@@ -224,6 +248,9 @@ class SeekProgress:
     current_task_id: int | None = None
     current_sample_code: str | None = None
     labels: list[str] = field(default_factory=list)
+    # review 模式：找到的段先存这儿，不写库。等人筛完再写
+    review: bool = False
+    found: list[dict] = field(default_factory=list)
     llm: str | None = None        # 用的哪家哪个模型，如 anthropic:claude-opus-5；空 = 视觉服务环境变量里那把
     detail: list[str] = field(default_factory=list)
     error_message: str | None = None
@@ -239,7 +266,11 @@ class SeekProgress:
     def to_dict(self) -> dict:
         if self.status == "running" and self.started_at is not None:
             self.elapsed_sec = time.time() - self.started_at
-        return asdict(self)
+        d = asdict(self)
+        # 待筛的段可能有几千条，状态是一秒一轮询的，别每次都把它整个搬一遍；
+        # 只报个数，列表走单独的接口取一次
+        d["found"] = len(self.found)
+        return d
 
 
 _progress: dict[int, SeekProgress] = {}
@@ -312,6 +343,10 @@ class SeekParams:
     motion_min: float = 0.02
     provider: str | None = None       # 用哪家；None = 视觉服务环境变量里的 Claude key（老方式）
     model: str | None = None          # 哪个模型；None = 那一家的默认模型
+    # 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏缩略图让人过一眼，
+    # 勾中的才写。模型一次能出几千段，里面混着的错的要是直接进了候选列表，
+    # 人得跨几十个任务一条条排除——在一屏里筛掉快得多，类别也能当场改
+    review: bool = False
 
 
 async def start(project_id: int, task_ids: list[int] | None, params: SeekParams) -> bool:
@@ -325,7 +360,7 @@ async def start(project_id: int, task_ids: list[int] | None, params: SeekParams)
 
 async def _run(project_id: int, task_ids: list[int] | None, params: SeekParams) -> None:
     progress = SeekProgress(status="running", project_id=project_id, dry_run=params.dry_run,
-                            started_at=time.time())
+                            review=params.review, started_at=time.time())
     _progress[project_id] = progress
     gate = asyncio.Event()      # 每次跑新建：Event 绑当前事件循环
     gate.set()
@@ -427,6 +462,19 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             progress.log(f"任务 #{task.id} {code}：会送 {st.get('clips_candidate', 0)} 段（预览，没问模型）")
             continue
         cands = segments_to_candidates(r.get("segments") or [], label_names, params.min_conf, model=model_tag)
+        if params.review:
+            # 不写库：攒起来等人筛。带上视频路径和中点秒数，前端拿它取缩略图
+            for c in cands:
+                progress.found.append({
+                    "task_id": task.id, "sample_code": code, "path": path,
+                    "label_name": c.label_name, "start_ms": c.start_time_ms, "end_ms": c.end_time_ms,
+                    "t": round((c.start_time_ms + c.end_time_ms) / 2000.0, 2),
+                    "confidence": c.confidence, "evidence": c.evidence,
+                })
+            progress.succeeded += 1
+            progress.processed += 1
+            progress.log(f"任务 #{task.id} {code}：送 {st.get('clips_sent', 0)} 段，找到 {len(cands)} 段（等人筛，还没写）")
+            continue
         n = await replace_vision_candidates(db, task, cands, model=model_tag)
         await db.commit()
         progress.candidates += n

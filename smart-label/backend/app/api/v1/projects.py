@@ -7,7 +7,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,7 +169,7 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
     params = vseek.SeekParams(labels=body.labels, part_depth=body.part_depth, cam=body.cam,
                               max_clips=body.max_clips, min_conf=body.min_conf, dry_run=body.dry_run,
-                              provider=body.provider, model=body.model)
+                              provider=body.provider, model=body.model, review=body.review)
     started = await vseek.start(project_id, body.task_ids, params)
     if not started:
         raise HTTPException(status.HTTP_409_CONFLICT, "这个项目正在找，等它跑完")
@@ -181,6 +181,56 @@ async def vision_seek_status(project_id: int):
     d = vseek.get_progress(project_id).to_dict()
     d["service"] = await vision_sam_client.seek_status()
     return ok(d)
+
+
+@router.get("/{project_id}/vision-seek/found")
+async def vision_seek_found(project_id: int, limit: int = 2000):
+    """review 模式跑完之后，待人筛的那些段。状态接口只报个数，列表走这儿取一次。"""
+    p = vseek.get_progress(project_id)
+    return ok({"found": p.found[: max(1, min(limit, 5000))], "total": len(p.found), "review": p.review})
+
+
+class SeekPickIn(BaseModel):
+    """人筛完，勾中的那些段。类别是这一屏上现场改过的，以这里带的为准。"""
+    picks: list[dict] = Field(default_factory=list, max_length=5000)
+
+
+@router.post("/{project_id}/vision-seek/write", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def write_vision_seek(project_id: int, body: SeekPickIn, db: AsyncSession = Depends(get_db)):
+    """把人勾中的段写成候选。**只加不删**——这是人一条条挑出来的，谁也没说要动别的。"""
+    from app.services.vision_seek_service import VisionCandidate, add_vision_candidates
+
+    prog = vseek.get_progress(project_id)
+    by_task: dict[int, list[VisionCandidate]] = {}
+    for p_ in body.picks:
+        try:
+            tid = int(p_["task_id"])
+            s_ms, e_ms = int(p_["start_ms"]), int(p_["end_ms"])
+            name = str(p_["label_name"]).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not name or e_ms <= s_ms:
+            continue
+        by_task.setdefault(tid, []).append(VisionCandidate(
+            label_name=name, start_time_ms=s_ms, end_time_ms=e_ms,
+            confidence=p_.get("confidence"), spec=None, reason="vision",
+            model=prog.llm, evidence=p_.get("evidence")))
+    written = 0
+    for tid, cands in by_task.items():
+        task = await db.get(Task, tid)
+        if task is None or task.project_id != project_id:
+            continue        # 不是这个项目的：跳过，别让一个乱传的 id 写到别处去
+        # 这个项目里没有的类别不写：写进去确认时找不到标签，成了点不动的死行
+        names = set((await db.execute(select(LabelDefinition.display_name).where(
+            LabelDefinition.project_id == project_id, LabelDefinition.is_active.is_(True)))).scalars())
+        cands = [c for c in cands if c.label_name in names]
+        written += await add_vision_candidates(db, task, cands, model=prog.llm)
+    await db.commit()
+    # 写过的从待筛列表里去掉：再点开这一屏时，剩的才是还没处理的
+    done = {(int(p_["task_id"]), int(p_["start_ms"])) for p_ in body.picks
+            if p_.get("task_id") is not None and p_.get("start_ms") is not None}
+    prog.found = [f for f in prog.found if (f["task_id"], f["start_ms"]) not in done]
+    return ok({"written": written, "left": len(prog.found)})
 
 
 @router.post("/{project_id}/vision-seek/cancel", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
