@@ -291,10 +291,47 @@ class SimilarParams:
     part: str | None = None
     # 只搜不写：先把命中的画面摆出来看，看着对再写候选
     dry_run: bool = False
+    # 「先看命中」里人手动去掉的那几帧（[(路径, 秒), …]）。一眼看出不是同一个动作的
+    # 挑出来扔掉，剩下的再写候选——检索总会混进几张明显不对的，为那几张去调参数
+    # 常常把对的也一起调没了，人点两下比调参数准
+    drop: tuple[tuple[str, float], ...] = ()
 
 
 def overlaps(a0: int, a1: int, b0: int, b1: int) -> bool:
     return a0 < b1 and b0 < a1
+
+
+# 命中合段：跟视觉服务 embed.group_hits 同一套规则（相邻 gap_s 内合一段，前后各留 1 秒）。
+# 人手动去掉几帧之后段要重算——被去掉那一帧如果正好是一段的边界，段的起止就得跟着缩；
+# 整段的帧都被去掉了，这一段就不该再写进候选。
+# 这段逻辑在算法那边也有一份：两个仓库是解耦的，宁可各留一份，也不为了省十几行
+# 让标注平台去 import 算法服务的内部函数
+SEG_PAD_S = 1.0
+
+
+def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list[dict]:
+    by_path: dict[str, list[dict]] = {}
+    for h in hits:
+        by_path.setdefault(h["path"], []).append(h)
+    out: list[dict] = []
+    for rp, hs in by_path.items():
+        hs = sorted(hs, key=lambda h: h["t"])
+        cur: dict | None = None
+        for h in hs:
+            if cur and h["t"] - cur["_last"] <= gap_s:
+                cur["_last"] = h["t"]
+                cur["score"] = max(cur["score"], h["score"])
+                cur["n"] += 1
+                continue
+            if cur:
+                out.append(cur)
+            cur = {"path": rp, "_first": h["t"], "_last": h["t"], "score": h["score"], "n": 1}
+        if cur:
+            out.append(cur)
+    segs = [{"path": s["path"], "start_s": round(max(0.0, s["_first"] - pad_s), 2),
+             "end_s": round(s["_last"] + pad_s, 2), "score": s["score"], "n": s["n"]} for s in out]
+    segs.sort(key=lambda s: -s["score"])
+    return segs
 
 
 async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
@@ -360,6 +397,13 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     r = await search_fn(paths, text=params.text, ref=ref, top_k=params.top_k,
                         min_score=params.min_score, gap_s=params.gap_s, center=params.center,
                         pose_w=params.pose_w, part=params.part)
+    dropped = 0
+    if params.drop:
+        # 时间按毫秒对齐再比：命中的 t 是两位小数，浮点直接相等靠不住
+        gone = {(p, int(round(t * 1000))) for p, t in params.drop}
+        kept = [h for h in r.get("hits", []) if (h.get("path"), int(round(h["t"] * 1000))) not in gone]
+        dropped = len(r.get("hits", [])) - len(kept)
+        r = {**r, "hits": kept, "segments": group_hits(kept, params.gap_s)}
     # 每个命中对应哪个任务（同一路视频可能有几个任务：整段的 + 短任务），给"先看命中"画图和跳转
     hits_out: list[dict] = []
     for h in r.get("hits", []):
@@ -405,6 +449,8 @@ async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, sear
     # 多狗同场（影棚 / 公共区）的命中要提醒：画面里那只不一定是这条 IMU 的狗
     multi = sum(pt["candidates"] for pt in per_task if _multi_of.get(pt["task_id"]))
     return {"written": written, "hits": len(r.get("hits", [])), "segments": len(r.get("segments", [])),
+            # 人手动去掉了几帧：写完要如实说，不然"命中 60 帧"跟实际写进去的对不上
+            "dropped": dropped,
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
             "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),

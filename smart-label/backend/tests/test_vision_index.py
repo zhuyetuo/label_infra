@@ -446,3 +446,39 @@ def test_部位条件透传_判不了的部位要如实说没筛(db, run):
     r3 = run(vi.find_similar(db, t, vi.SimilarParams(label_name="舔身体", t_s=10.0, dry_run=True),
                              search_fn=fn3))
     assert fn3.calls[0]["part"] is None and r3["part_used"] is None
+
+
+def test_勾掉的命中不写候选_段跟着重算(db, run):
+    """检索总会混进几张一眼就不对的。为那几张去调参数常常把对的也一起调没了——
+    人点两下扔掉更准。扔掉之后**段要重算**：被扔的那帧如果在段边界上，段就得缩；
+    整段的帧都被扔了，这段不该再写。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    hits = [{"path": "d/s1_cam1.mp4", "t": 200.0, "score": 0.9},
+            {"path": "d/s1_cam1.mp4", "t": 203.0, "score": 0.8},   # 跟上一帧同段（gap 15）
+            {"path": "d/s1_cam1.mp4", "t": 400.0, "score": 0.7}]   # 单独一段
+    result = {"hits": hits, "searched": 1, "missing": [],
+              "segments": [{"path": "d/s1_cam1.mp4", "start_s": 199, "end_s": 204, "score": 0.9, "n": 2},
+                           {"path": "d/s1_cam1.mp4", "start_s": 399, "end_s": 401, "score": 0.7, "n": 1}]}
+    fn = _search(result)
+    r = run(vi.find_similar(db, t1, vi.SimilarParams(
+        label_name="舔身体-后肢臀尾", t_s=42.0,
+        # 扔掉段尾那一帧 + 整个第二段
+        drop=(("d/s1_cam1.mp4", 203.0), ("d/s1_cam1.mp4", 400.0))), search_fn=fn))
+    assert r["dropped"] == 2 and r["hits"] == 1
+    # 只剩 200 那一帧：段缩成 199~201，400 那一段整个没了
+    assert [(c.start_time_ms, c.end_time_ms) for c in _cands(db, run, t1.id)] == [(199000, 201000)]
+
+    # 没勾掉任何一帧时，照旧用视觉服务给的段，不自己重算
+    r2 = run(vi.find_similar(db, t2, vi.SimilarParams(label_name="舔身体-后肢臀尾", t_s=42.0), search_fn=_search(result)))
+    assert r2["dropped"] == 0
+
+
+def test_合段规则_相邻的合一段_前后各留一秒():
+    """跟视觉服务那边同一套规则。两个仓库解耦，宁可各留一份，也不 import 对方的内部函数。"""
+    hits = [{"path": "a", "t": 10.0, "score": 0.5}, {"path": "a", "t": 12.0, "score": 0.9},
+            {"path": "a", "t": 40.0, "score": 0.6}, {"path": "b", "t": 0.2, "score": 0.4}]
+    segs = vi.group_hits(hits, gap_s=15.0)
+    assert {(s["path"], s["start_s"], s["end_s"], s["score"], s["n"]) for s in segs} == {
+        ("a", 9.0, 13.0, 0.9, 2), ("a", 39.0, 41.0, 0.6, 1), ("b", 0.0, 1.2, 0.4, 1)}   # 起点不为负
+    assert [s["score"] for s in segs] == sorted([s["score"] for s in segs], reverse=True)
+    assert vi.group_hits([], gap_s=15.0) == []
