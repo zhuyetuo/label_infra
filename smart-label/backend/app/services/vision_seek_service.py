@@ -121,6 +121,21 @@ def _depth_under(by_id: dict[int, LabelDefinition], label_id: int, root_id: int)
 @dataclass
 class VisionCandidate(CandidateItem):
     model: str | None = None
+    # 模型看到了什么 + 为什么这么判（视觉服务回的 desc / note）
+    evidence: str | None = None
+
+
+def _evidence(seg: dict) -> str | None:
+    """模型回的 desc（看到了什么）+ note（为什么这么判）拼成一句话。
+
+    两句都要：desc 是事实、note 是结论。只留结论的话，错了看不出是没看清还是
+    判错了——这一轮部位检索就是栽在"只有结论没有依据"上，反复猜了四轮。
+    老版本视觉服务只给 note，那就只有 note。
+    """
+    desc = str(seg.get("desc") or "").strip()
+    note = str(seg.get("note") or "").strip()
+    both = "；".join(x for x in (desc, note) if x)
+    return both[:300] or None
 
 
 def segments_to_candidates(segments: list[dict], label_names: set[str],
@@ -153,7 +168,8 @@ def segments_to_candidates(segments: list[dict], label_names: set[str],
         part = s.get("body_part")
         name = f"{label}-{part}" if part and f"{label}-{part}" in label_names else label
         out.append(VisionCandidate(label_name=name, start_time_ms=max(0, s_ms), end_time_ms=e_ms,
-                                   confidence=conf, spec=None, reason=REASON, model=model))
+                                   confidence=conf, spec=None, reason=REASON, model=model,
+                                   evidence=_evidence(s)))
     out.sort(key=lambda c: c.start_time_ms)
     return out
 
@@ -179,7 +195,8 @@ async def replace_vision_candidates(db: AsyncSession, task: Task, cands: list[Vi
     for c in cands:
         db.add(AiCandidate(task_id=task.id, round_no=task.round_no, label_name=c.label_name,
                            start_time_ms=c.start_time_ms, end_time_ms=c.end_time_ms,
-                           confidence=c.confidence, spec=None, reason=REASON, model=c.model))
+                           confidence=c.confidence, spec=None, reason=REASON, model=c.model,
+                           evidence=c.evidence))
     return len(cands)
 
 

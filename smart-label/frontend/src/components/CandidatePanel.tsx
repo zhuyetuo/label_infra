@@ -353,6 +353,24 @@ export default function CandidatePanel({
             render: (_, c: AiCandidate) => (c.confidence != null ? `${Math.round(c.confidence * 100)}%` : "—"),
           },
           {
+            // 画面候选的「依据」：模型看到了什么 + 为什么这么判。
+            // 光看「舔身体 62%」还得点开视频才知道对不对；有了这一句，
+            // 「一只狗趴在地毯上」这种一眼就能排掉，不用播。IMU 来的候选没有这一列的值
+            title: "模型看到了什么",
+            width: 200,
+            render: (_, c: AiCandidate) =>
+              c.evidence ? (
+                <Tooltip title={c.evidence}>
+                  <span style={{ fontSize: 12, color: "#595959", display: "block",
+                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {c.evidence}
+                  </span>
+                </Tooltip>
+              ) : (
+                <span style={{ color: "#bfbfbf" }}>—</span>
+              ),
+          },
+          {
             title: "频谱",
             width: 80,
             sorter: (a: AiCandidate, b: AiCandidate) => (a.spec ?? 0) - (b.spec ?? 0),
