@@ -389,3 +389,11 @@ def test_建索引_暂停继续_停止立刻掐掉正在建的(db, run, monkeypa
 
     run(go())
     assert vi.pause(p.id) is False and vi.resume(p.id) is False and vi.cancel(p.id) is False   # 没在跑
+
+
+def test_日志里直接说慢在哪一步():
+    """建索引慢的时候要能一眼看出是解码/检测慢还是某个模型慢，不用去算法机翻日志。
+    只列 0.5 秒以上的，按耗时从大到小；老版本视觉服务不报 spent 就什么都不加。"""
+    note = vi._spent_note({"spent": {"scan": 12.0, "pose": 30.5, "seg": 0.2, "embed": 3.0}})
+    assert note == "（姿态 30.5s，解码+检测 12.0s，向量 3.0s）"          # 0.2s 的抠狗不占地方
+    assert vi._spent_note({}) == "" and vi._spent_note({"spent": {"pose": 0.0}}) == ""

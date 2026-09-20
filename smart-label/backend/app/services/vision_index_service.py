@@ -203,6 +203,18 @@ async def project_videos(db: AsyncSession, project_id: int | None, cam: str,
     return out
 
 
+_SPENT_NAME = {"scan": "解码+检测", "pose": "姿态", "seg": "抠狗", "embed": "向量"}
+
+
+def _spent_note(r: dict) -> str:
+    """建索引慢的时候，这一行直接说是慢在哪一步，不用去翻视觉服务的日志。
+    老版本视觉服务不报 spent，那就什么都不加。"""
+    spent = r.get("spent") or {}
+    parts = [f"{_SPENT_NAME.get(k, k)} {v}s" for k, v in
+             sorted(spent.items(), key=lambda kv: -float(kv[1] or 0)) if float(v or 0) >= 0.5]
+    return f"（{'，'.join(parts)}）" if parts else ""
+
+
 async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | None, cam: str,
                       force: bool, progress: IndexProgress, build_fn=None) -> None:
     """同一路视频只建一次（几个任务共用一个样本时）。cam="all" = 样本有几路建几路。"""
@@ -243,7 +255,7 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
                 progress.log(f"{code}：已有索引（{r.get('n', 0)} 帧）")
             else:
                 progress.built += 1
-                progress.log(f"{code}：建好 {r.get('n', 0)} 帧，{r.get('seconds', 0)} 秒")
+                progress.log(f"{code}：建好 {r.get('n', 0)} 帧，{r.get('seconds', 0)} 秒{_spent_note(r)}")
 
     # 每一路一个 Task，停止时能挨个 cancel；被 cancel 的那一路在 one() 里自己收尾，不往外抛
     tasks = [asyncio.ensure_future(one(code, path)) for code, path in paths]
