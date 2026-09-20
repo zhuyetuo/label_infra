@@ -61,19 +61,26 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
   const clip = playing;
   const playHit = (h: SimilarHit) => {
     if (h.sample_id != null && h.cam) {
-      // 封面用**命中那一帧的整帧图**：循环是从命中前 2 秒开始播的，视频停着时
-      // 第一帧是那个起点、不是命中的那一刻，拿它当封面等于指错了地方
-      onPlay({ key: clipKeyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h, poster: token ? similarThumbUrl(taskId, h.path, h.t, token, "box") : undefined });
+      // 大图就是**命中那一帧**本身，而且跟这一屏看的是同一种（抠图/原图/姿态/整帧）——
+      // 拿抠图跟整帧比大小形状，比出来的差别是裁剪造成的，不是动作
+      onPlay({ key: clipKeyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h, poster: url(h.path, h.t) || undefined });
     }
     // 本任务的命中：主画面也一起跳过去循环，关掉预览就接着看
     if (h.task_id === taskId) onJump(h);
   };
   const playRef = () => {
     if (refPath == null || refT == null || refSampleId == null) return;
-    onPlay({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null, poster: token ? similarThumbUrl(taskId, refPath, refT, token, "box") : undefined });
+    onPlay({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null, poster: url(refPath, refT) || undefined });
   };
 
   const url = (path: string, t: number) => (token ? similarThumbUrl(taskId, path, t, token, view) : "");
+  // 换了看法（抠图/原图/姿态/整帧）或者 token 刚拿到：左边那张大图跟着换，
+  // 不然它还停在上一种看法上，跟这一屏和样例大图对不上，比出来的差别是假的
+  useEffect(() => {
+    if (!clip || !token) return;
+    const next = clip.hit ? url(clip.hit.path, clip.hit.t) : refPath != null && refT != null ? url(refPath, refT) : "";
+    if (next && next !== clip.poster) onPlay({ ...clip, poster: next });
+  }, [view, token, clip?.key, clip?.poster]);
   const scoreColor = (s: number) => (s >= 0.6 ? "#52c41a" : s >= 0.3 ? "#fa8c16" : "#999");
   const isPlaying = (h: SimilarHit) => clip?.key === clipKeyOf(h);
   // 勾上的才写候选，**默认一张都不勾**：低分那一截基本全不对，默认全勾的话
@@ -123,7 +130,7 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {centered ? "已去共同背景（减掉所有帧的平均向量再比），分数是相对的，0.3 以上算像" : "没去背景，分数普遍 0.9+，看相对高低"}
           {poseUsed ? "；已混入姿态相似（悬停看姿态分）" : "；这次没用上姿态（算法机没装姿态模型，或样例 / 索引里没测到关键点）"}
-          。点一张：左边循环播那几秒；本任务的主画面也一起跳过去
+          。点一张：左边看那一帧的大图（要看动作再点「循环播放」）；本任务的主画面也一起跳过去
         </Typography.Text>
       </Space>
       {!token ? (
