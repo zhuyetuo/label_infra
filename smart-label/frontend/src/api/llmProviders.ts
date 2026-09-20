@@ -196,6 +196,8 @@ export interface ImuModelDay {
 export interface ImuModelStat {
   model_tag: string;
   mode: string;
+  /** server = 服务器上的 sklearn；edge = 烧进项圈那份 C（端侧服务跑的） */
+  kind: "server" | "edge";
   samples: number;
   windows: number;
   segments: number;

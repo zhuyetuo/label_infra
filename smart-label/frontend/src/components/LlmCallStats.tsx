@@ -5,6 +5,7 @@ import {
   getImuModelStats, getLlmCallStats, getLocalModelStats, listLocalModels, resetLocalModelMeter,
   type LlmCallRow, type LlmCallSummary,
 } from "@/api/llmProviders";
+import { IMU_KIND_HINT, IMU_KIND_LABEL, INFER_MODE_LABEL, hintOf, imuModelHint } from "@/utils/inferMode";
 import "./LlmCallStats.css";
 
 const { Text } = Typography;
@@ -23,6 +24,12 @@ function ago(iso: string | null | undefined): string | null {
   if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
   if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
   return `${Math.floor(s / 86400)} 天前`;
+}
+
+/** 说明文案里的 **重点** 渲染成粗体。这些文案是跟别处共用的（inferMode.ts），
+ *  那边都在 Tooltip 里、星号看不太出来；这里是常驻可见的一行，不处理就露星号 */
+function Rich({ text }: { text: string }) {
+  return <>{text.split("**").map((part, i) => (i % 2 ? <b key={i}>{part}</b> : <span key={i}>{part}</span>))}</>;
 }
 
 /** 卡片右上角的「最近一次调用」。悬停看完整时刻 */
@@ -114,9 +121,9 @@ function Metrics({ items }: { items: Metric[] }) {
 }
 
 /** 一张模型卡：名字 + 几个数 + 按天柱图。顶边是所在板块的主题色 */
-function ModelCard({ title, tag, lastAt, metrics, chart }: {
+function ModelCard({ title, tag, lastAt, desc, metrics, chart }: {
   title: React.ReactNode; tag?: React.ReactNode; lastAt?: string | null;
-  metrics: Metric[]; chart?: React.ReactNode;
+  desc?: React.ReactNode; metrics: Metric[]; chart?: React.ReactNode;
 }) {
   return (
     <div className="llm-card">
@@ -125,8 +132,20 @@ function ModelCard({ title, tag, lastAt, metrics, chart }: {
         {tag}
         {lastAt !== undefined && <LastCall at={lastAt} />}
       </div>
+      {desc && <div className="llm-card__desc">{desc}</div>}
       <Metrics items={metrics} />
       {chart}
+    </div>
+  );
+}
+
+/** 板块里再分一组（服务端 / 端侧）：一行小标题 + 一句"这组是什么、跟另一组差在哪" */
+function SubGroup({ title, hint, count }: { title: string; hint: string; count: number }) {
+  return (
+    <div className="llm-sub">
+      <span className="llm-sub__t">{title}</span>
+      <span className="llm-sub__n">{count} 个</span>
+      <span className="llm-sub__d"><Rich text={hint} /></span>
     </div>
   );
 }
@@ -185,6 +204,12 @@ export default function LlmCallStats() {
     (a, m) => ({ calls: a.calls + m.calls, frames: a.frames + m.frames, errors: a.errors + m.errors }),
     { calls: 0, frames: 0, errors: 0 }), [localModels]);
   const imuModels = imu.data?.models ?? [];
+  // 服务端（服务器上的 sklearn）和端侧（烧进项圈那份 C）分开看：两组跑的根本不是
+  // 同一份东西，混在一排卡里比样本数没有意义
+  const imuByKind = useMemo(() => ({
+    server: imuModels.filter((m) => m.kind !== "edge"),
+    edge: imuModels.filter((m) => m.kind === "edge"),
+  }), [imuModels]);
   const imuSum = useMemo(() => imuModels.reduce(
     (a, m) => ({ samples: a.samples + m.samples, segments: a.segments + m.segments, candidates: a.candidates + m.candidates }),
     { samples: 0, segments: 0, candidates: 0 }), [imuModels]);
@@ -239,29 +264,44 @@ export default function LlmCallStats() {
         <Section
           tone={2}
           title="IMU 预测模型（AI 预标注）"
-          tip="IMU 行为预测模型（AI 预标注）。每次给一份样本跑预标注记一行：跑了几份样本、切了多少个窗口、出了多少段 / 多少个候选。同一份样本同一个模型重跑算同一次"
+          tip={`IMU 行为预测模型（AI 预标注）。分两组：${IMU_KIND_LABEL.server}——${IMU_KIND_HINT.server}；${IMU_KIND_LABEL.edge}——${IMU_KIND_HINT.edge}。同一个模型换一套后处理算两张卡（卡上那个标签），这样才能并排比。每次给一份样本跑预标注记一行，同一份样本同模型同后处理重跑算同一次`}
           chips={imuModels.length ? [
-            { k: "模型", v: imuModels.length },
+            { k: "服务端", v: `${imuByKind.server.length} 个` },
+            { k: "端侧", v: `${imuByKind.edge.length} 个` },
             { k: "样本", v: fmtN(imuSum.samples) },
             { k: "片段", v: fmtK(imuSum.segments) },
             { k: "候选", v: fmtK(imuSum.candidates) },
           ] : undefined}
         >
-          {imuModels.map((m) => (
-            <ModelCard
-              key={`${m.model_tag}|${m.mode}`}
-              title={m.model_tag}
-              tag={<Tag>{m.mode}</Tag>}
-              lastAt={m.last_at}
-              metrics={[
-                { label: "样本", value: fmtN(m.samples), tip: "跑过预标注的样本数" },
-                { label: "窗口", value: fmtK(m.windows), tip: "切出来送模型的窗口数（2 秒一个）" },
-                { label: "片段", value: fmtK(m.segments), tip: "预标出来的行为片段数" },
-                { label: "候选", value: fmtK(m.candidates), tip: "送去人工确认的疑似片段数" },
-              ]}
-              chart={<DayBars days={days} rows={m.by_day} value={(r) => (r as { samples?: number } | null)?.samples ?? 0} unit="份样本" />}
-            />
-          ))}
+          {(["server", "edge"] as const).flatMap((kind) => {
+            const list = imuByKind[kind];
+            if (list.length === 0) return [];
+            return [
+              <SubGroup key={`sub-${kind}`} title={IMU_KIND_LABEL[kind]} hint={IMU_KIND_HINT[kind]} count={list.length} />,
+              ...list.map((m) => (
+                <ModelCard
+                  key={`${m.model_tag}|${m.mode}`}
+                  title={m.model_tag}
+                  // 后处理（稳定版 v2 / 调试版 / 板上整条链…）：同一个模型换后处理是两张卡，
+                  // 悬停说明这一档跟别的差在哪
+                  tag={
+                    <Tooltip title={hintOf(kind === "edge" ? `edge:${m.model_tag}@${m.mode}` : m.mode)}>
+                      <Tag style={{ cursor: "help" }}>{INFER_MODE_LABEL[m.mode] ?? m.mode}</Tag>
+                    </Tooltip>
+                  }
+                  lastAt={m.last_at}
+                  desc={<Rich text={imuModelHint(m.model_tag)} />}
+                  metrics={[
+                    { label: "样本", value: fmtN(m.samples), tip: "跑过预标注的样本数" },
+                    { label: "窗口", value: fmtK(m.windows), tip: "切出来送模型的窗口数（2 秒一个）" },
+                    { label: "片段", value: fmtK(m.segments), tip: "预标出来的行为片段数" },
+                    { label: "候选", value: fmtK(m.candidates), tip: "送去人工确认的疑似片段数" },
+                  ]}
+                  chart={<DayBars days={days} rows={m.by_day} value={(r) => (r as { samples?: number } | null)?.samples ?? 0} unit="份样本" />}
+                />
+              )),
+            ];
+          })}
           {imuModels.length === 0 && <Empty description="这段日期没跑过 AI 预标注" />}
         </Section>
 
