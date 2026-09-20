@@ -394,3 +394,67 @@ def test_gouchang_session_without_cam1_still_counts(nas):
     # 影棚（非配对站点）没有 cam1 仍然不算
     assert session_has_video({"videos": {2: "x"}, "paired_site": False}) is False
     assert session_has_video({"videos": {}, "paired_site": True}) is False
+
+
+# ── 老数据里多挂的那一路要能清掉 ─────────────────────────────────────────
+
+
+def test_配对站点_修复时把多出来的那一路清掉(nas):
+    """真实故障（2026-09-20）：imu10 在界面上是**三个画面**，第二个是隔壁的空房间。
+
+    按老逻辑（公用只看单场）存进去时，那一场 6 号单间的狗没戴项圈、cam6 没配对，
+    cam6 就被当成"公用"挂给了当场所有的狗。站点级判断修好之后算出来是两路了，
+    可修复脚本只补空位和补"文件没了"的位置——cam6 的文件还在 NAS 上，
+    那条规则永远碰不到它，于是库里一直是三路。
+    """
+    from app.services.sample_import_service import _plan_cam_path_fix, _scan_filesystem, cams_for_imu, genuinely_shared_cams
+
+    d = nas / "2026_9_14_gouchang"
+    d.mkdir()
+    # 中午那场 cam6 配着 imu20
+    for cam, imu in ((1, 10), (2, 12), (3, 14), (4, 16), (5, 18), (6, 20)):
+        _touch(d, f"multicam_20260914_130021408_cam{cam}_imu{imu}_raw.mp4")
+        _touch(d, f"multicam_20260914_130021408_cam{cam}_imu{imu}_raw.csv")
+    _touch(d, "multicam_20260914_130021408_cam7_raw.mp4")
+    # 晚上那场 6 号那只没戴：cam6 没配对，只有 cam6_raw
+    for cam, imu in ((1, 10), (2, 12), (3, 14), (4, 16), (5, 18)):
+        _touch(d, f"multicam_20260914_220014301_cam{cam}_imu{imu}_raw.mp4")
+        _touch(d, f"multicam_20260914_220014301_cam{cam}_imu{imu}_raw.csv")
+    _touch(d, "multicam_20260914_220014301_cam6_raw.mp4")
+    _touch(d, "multicam_20260914_220014301_cam7_raw.mp4")
+
+    g = _scan_filesystem(str(nas), str(nas))["multicam_20260914_220014301"]
+    shared = genuinely_shared_cams(g)
+    assert sorted(shared) == [7], "cam6 全天配对过，不是公用"
+    cams = cams_for_imu(g, 10, {}, shared)
+    assert len(cams) == 2 and [os.path.basename(p) for p in cams.values()] == [
+        "multicam_20260914_220014301_cam1_imu10_raw.mp4",
+        "multicam_20260914_220014301_cam7_raw.mp4",
+    ]
+
+    base = "2026_9_14_gouchang/multicam_20260914_220014301"
+    stored = (f"{base}_cam1_imu10_raw.mp4", f"{base}_cam6_raw.mp4", f"{base}_cam7_raw.mp4")
+    on_disk = set(stored)          # 三个文件都还在
+    # 老行为：什么都不改，空房间那一路留着
+    assert _plan_cam_path_fix(stored, cams, on_disk) == {}
+    # 配对站点按算出来的对齐：cam7 挪到槽2，槽3 清掉
+    plan = _plan_cam_path_fix(stored, cams, on_disk, exact=True)
+    assert plan == {2: f"{base}_cam7_raw.mp4", 3: None}
+
+
+def test_配对站点_没有自己那一路时_不拿别人房间顶上(nas):
+    """摄像头挂了但项圈还戴着：宁可只给天花板那一路，也不能挂上别人房间的画面。
+    挂上去不报错、能播、能标，只是画面里的狗不是这只——这种错没人会发现。"""
+    from app.services.sample_import_service import _scan_filesystem, cams_for_imu, genuinely_shared_cams
+
+    d = nas / "2026_9_15_gouchang"      # fixture 已经建好了这个目录
+    for cam, imu in ((1, 9), (2, 11)):
+        _touch(d, f"multicam_20260915_000000000_cam{cam}_imu{imu}_raw.mp4")
+        _touch(d, f"multicam_20260915_000000000_cam{cam}_imu{imu}_raw.csv")
+    _touch(d, "multicam_20260915_000000000_cam3_imu13_raw.csv")   # 13 号戴着，但 cam3 没录上
+    _touch(d, "multicam_20260915_000000000_cam7_raw.mp4")
+
+    g = _scan_filesystem(str(nas), str(nas))["multicam_20260915_000000000"]
+    shared_cams = {c: g["videos"][c] for c in (1, 2, 3) if c in g["videos"]}
+    cams = cams_for_imu(g, 13, shared_cams, genuinely_shared_cams(g))
+    assert [os.path.basename(p) for p in cams.values()] == ["multicam_20260915_000000000_cam7_raw.mp4"]
