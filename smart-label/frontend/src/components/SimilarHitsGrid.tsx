@@ -61,21 +61,23 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
   const clip = playing;
   const playHit = (h: SimilarHit) => {
     if (h.sample_id != null && h.cam) {
-      onPlay({ key: clipKeyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h });
+      // 封面用**命中那一帧的整帧图**：循环是从命中前 2 秒开始播的，视频停着时
+      // 第一帧是那个起点、不是命中的那一刻，拿它当封面等于指错了地方
+      onPlay({ key: clipKeyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`, sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h, poster: token ? similarThumbUrl(taskId, h.path, h.t, token, "box") : undefined });
     }
     // 本任务的命中：主画面也一起跳过去循环，关掉预览就接着看
     if (h.task_id === taskId) onJump(h);
   };
   const playRef = () => {
     if (refPath == null || refT == null || refSampleId == null) return;
-    onPlay({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null });
+    onPlay({ key: `ref@${refT}`, title: `样例 · ${formatMs(refT * 1000)}`, sampleId: refSampleId, cam: refCam || "cam1", t: refT, hit: null, poster: token ? similarThumbUrl(taskId, refPath, refT, token, "box") : undefined });
   };
 
   const url = (path: string, t: number) => (token ? similarThumbUrl(taskId, path, t, token, view) : "");
   const scoreColor = (s: number) => (s >= 0.6 ? "#52c41a" : s >= 0.3 ? "#fa8c16" : "#999");
   const isPlaying = (h: SimilarHit) => clip?.key === clipKeyOf(h);
-  // 勾掉的不写候选。默认全要——默认全不要的话，人得把对的一张张勾上，
-  // 而检索大部分时候是对的，那等于把省下来的功夫又赔回去
+  // 勾上的才写候选，**默认一张都不勾**：低分那一截基本全不对，默认全勾的话
+  // 人要去挑错的那些，挑漏一张就多写一条脏候选；默认不勾，挑漏只是少写一条
   const isDropped = (h: SimilarHit) => dropped.has(hitKeyOf(h));
   const keptN = hits.length - hits.filter(isDropped).length;
   const toggle = (h: SimilarHit) => {
@@ -100,8 +102,8 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
     <div>
       <Space size={8} style={{ marginBottom: 6 }} wrap>
         <Typography.Text strong>命中 {hits.length} 帧</Typography.Text>
-        <Tooltip title="勾掉的不写候选。一眼看出不是同一个动作的挑出来扔掉——检索总会混进几张明显不对的，为那几张去调参数，常常把对的也一起调没了">
-          <Typography.Text type={keptN < hits.length ? "warning" : "secondary"} style={{ fontSize: 12 }}>
+        <Tooltip title="勾上的才写候选，默认一张都不勾。分高的那一截往往是对的，可以「这一屏全要」再把不对的点掉；低分那一截基本全不对，一张都别勾">
+          <Typography.Text type={keptN ? "success" : "secondary"} style={{ fontSize: 12 }}>
             要 {keptN} / {hits.length}
           </Typography.Text>
         </Tooltip>
