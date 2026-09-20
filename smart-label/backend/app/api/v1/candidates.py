@@ -198,12 +198,15 @@ async def decide(
     if body.decision == "confirmed":
         label_id = body.label_id
         if label_id is None:
+            # 同名标签在一个项目里可能不止一条（停用的旧的 + 现在这条）。
+            # 不加顺序的话 limit(1) 挑哪条看数据库心情——两次确认挑中不同的 id，
+            # 下面按 label_id 找重叠就找不着，于是同一段时间会出现两行一模一样的
             label_id = (
                 await db.execute(
                     select(LabelDefinition.id).where(
                         LabelDefinition.project_id == task.project_id,
                         (LabelDefinition.display_name.in_(alias_names(cand.label_name))) | (LabelDefinition.code == cand.label_name),
-                    ).limit(1)
+                    ).order_by(LabelDefinition.is_active.desc(), LabelDefinition.id).limit(1)
                 )
             ).scalar_one_or_none()
         if label_id is None:
@@ -228,11 +231,23 @@ async def decide(
         #
         # 只在**真正重叠**时并（严格 < ，不含紧挨着的）：22:00:05 结束、
         # 22:00:05 开始的两条很可能就是分开的两次，并了反而少算。
+        # 「同类别」按**名字**算，不是按 label_id：一个项目里同名的标签可能有两条
+        # （停用的旧的 + 现在这条），按 id 比的话，挂在另一条 id 上的那行就看不见，
+        # 于是同一段时间留下两行一模一样的——界面上完全分不出差别，人只会以为是 bug
+        same_name = [label_id, *(
+            await db.execute(
+                select(LabelDefinition.id).where(
+                    LabelDefinition.project_id == task.project_id,
+                    LabelDefinition.display_name.in_(
+                        select(LabelDefinition.display_name).where(LabelDefinition.id == label_id)),
+                )
+            )
+        ).scalars()]
         dup = (
             await db.execute(
                 select(AnnotationLabelItem).where(
                     AnnotationLabelItem.annotation_record_id == record.id,
-                    AnnotationLabelItem.label_id == label_id,
+                    AnnotationLabelItem.label_id.in_(set(same_name)),
                     AnnotationLabelItem.start_time_ms < cand.end_time_ms,
                     AnnotationLabelItem.end_time_ms > cand.start_time_ms,
                 )

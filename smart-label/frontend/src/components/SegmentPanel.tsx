@@ -218,6 +218,19 @@ export default function SegmentPanel({
   // 不然人得在几十上百条里自己找刚才点的是哪一条——而这一步恰恰是"就地改"这件事
   // 唯一的意义。命中的定义放宽到"包含这一刻"，导出时被挖过洞的片段起点会有几十
   // 毫秒偏差，严格相等匹配不上。
+  // 完全重复的那几条（同类别 + 同起 + 同止）：第一条不标，后面的标出来。
+  // 只认"完全一样"——差一毫秒也可能真是连着的两次动作，该不该并只有人知道
+  const exactDupIds = useMemo(() => {
+    const seen = new Set<string>();
+    const out = new Set<number>();
+    for (const i of [...items].sort((a, b) => a.id - b.id)) {
+      const k = `${i.label_id}@${i.start_time_ms}-${i.end_time_ms}`;
+      if (seen.has(k)) out.add(i.id);
+      else seen.add(k);
+    }
+    return out;
+  }, [items]);
+
   const sorted = useMemo(() => {
     const base = [...items].sort((a, b) => a.start_time_ms - b.start_time_ms);
     if (focusMs == null) return base;
@@ -624,20 +637,31 @@ export default function SegmentPanel({
           {
             title: "标签",
             width: 150,
-            render: (_, i: LabelItem) =>
-              readOnly ? (
-                <Tag color={colorOf(i.label_id)}>{nameOf(i.label_id)}</Tag>
-              ) : (
-                <Select
-                  size="small"
-                  variant="borderless"
-                  value={i.label_id}
-                  style={{ width: 140 }}
-                  options={labelOptions}
-                  onChange={(v) => update([i.id], { label_id: v })}
-                  title="改类别"
-                />
-              ),
+            render: (_, i: LabelItem) => (
+              <>
+                {/* 同类别、起止一模一样的两行：界面上分毫不差，人根本不知道该删哪条。
+                    而这些片段是原样送去算「抓了几次、共多久」的，同一次会被算成两次。
+                    新的重复已经在保存时挡掉了，库里的老数据挡不住——至少让它显出来 */}
+                {exactDupIds.has(i.id) && (
+                  <Tooltip title="跟另一条完全重复（同类别、起止一模一样）。统计会把同一次动作算成两次，删掉其中一条就行，留哪条都一样">
+                    <Tag color="red" style={{ marginRight: 4 }}>重复</Tag>
+                  </Tooltip>
+                )}
+                {readOnly ? (
+                  <Tag color={colorOf(i.label_id)}>{nameOf(i.label_id)}</Tag>
+                ) : (
+                  <Select
+                    size="small"
+                    variant="borderless"
+                    value={i.label_id}
+                    style={{ width: 140 }}
+                    options={labelOptions}
+                    onChange={(v) => update([i.id], { label_id: v })}
+                    title="改类别"
+                  />
+                )}
+              </>
+            ),
           },
           {
             title: "开始",
