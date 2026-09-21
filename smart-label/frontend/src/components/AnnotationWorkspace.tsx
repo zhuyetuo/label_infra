@@ -26,7 +26,7 @@ import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
-import { ACTION_QUERIES } from "@/utils/actionQueries";
+import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
@@ -1242,6 +1242,17 @@ export default function AnnotationWorkspace({
                 options={ACTION_QUERIES.map((q) => ({ value: q.query, label: q.label }))}
               />
               <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" style={{ flex: 1, minWidth: 160 }} />
+              {/* 按「标成」那个类别自动填一句：中文标签 → 英文描述那张表。
+                  分不到那么细的（左右、更细的部位）会退到上一级，按钮上写明用的是哪一条 */}
+              {similarLabel && queryFor(similarLabel) && (
+                <Tooltip title={queryFor(similarLabel)!.exact
+                  ? `按「${similarLabel}」填一句英文描述`
+                  : `检索分不到这么细，会用「${queryFor(similarLabel)!.from}」那一句——命中里左右和更细的部位要人自己看`}>
+                  <Button size="small" onClick={() => setSimilarText(queryFor(similarLabel)!.query)}>
+                    按「{queryFor(similarLabel)!.from}」填
+                  </Button>
+                </Tooltip>
+              )}
             </>
           ) : (
             <>

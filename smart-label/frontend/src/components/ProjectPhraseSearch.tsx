@@ -4,7 +4,7 @@ import { SIMILAR_VIEW_HELP, SIMILAR_VIEW_OPTIONS, similarThumbTokens, similarThu
 import { projectSimilarSearch, projectSimilarWrite } from "@/api/projects";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
-import { ACTION_QUERIES } from "@/utils/actionQueries";
+import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
 
 /**
  * 项目级「一句话找画面」：第一阶段的落点。
@@ -39,6 +39,10 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
   const [picked, setPicked] = useState<Map<string, string>>(new Map());
   const [cur, setCur] = useState<SimilarHit | null>(null);
+  // 自动填进去的那一句是从哪个标签拿的、是不是这一条本身。不是本身就得写明——
+  // SigLIP 分不出左右、也分不出大腿内侧和大腿，装作分得出的话，人会拿着
+  // 「左耳」的结果去标左耳
+  const [auto, setAuto] = useState<{ from: string; exact: boolean } | null>(null);
   const [clip, setClip] = useState<Clip | null>(null);
 
   const hits = res?.hits ?? [];
@@ -125,7 +129,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
         <Space.Compact style={{ width: "100%" }}>
           <Input
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => { setText(e.target.value); setAuto(null); }}
             onPressEnter={search}
             placeholder="a dog biting its own tail"
           />
@@ -152,6 +156,13 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             <span>姿态占 <InputNumber size="small" min={0} max={1} step={0.1} value={poseW} onChange={(v) => setPoseW(v ?? 0.5)} style={{ width: 66 }} /></span>
           </Tooltip>
         </Space>
+        {auto && (
+          <Typography.Text type={auto.exact ? "secondary" : "warning"} style={{ fontSize: 12 }}>
+            {auto.exact
+              ? `已按「${auto.from}」填好描述，可以接着改`
+              : `检索分不到这么细，用的是「${auto.from}」那一句——命中里左右和更细的部位要人自己看`}
+          </Typography.Text>
+        )}
         <Space size={6} wrap>
           <Typography.Text>标成：</Typography.Text>
           <Select
@@ -161,7 +172,16 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             placeholder="勾之前先选类别"
             style={{ minWidth: 200 }}
             value={label ?? undefined}
-            onChange={(v) => setLabel(v ?? null)}
+            onChange={(v) => {
+              setLabel(v ?? null);
+              // 选了类别就把对应那一句填进去：这就是「中文标签自动映射英文描述」。
+              // 只在输入框还空着、或上一句也是自动填的时候覆盖——人手打的不能被冲掉
+              const q = v ? queryFor(v) : null;
+              if (q && (!text.trim() || auto)) {
+                setText(q.query);
+                setAuto({ from: q.from, exact: q.exact });
+              } else if (!v) setAuto(null);
+            }}
             optionFilterProp="value"
             options={labelNames.map((l) => ({ value: l.name, label: <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.name}</Tag> }))}
           />
