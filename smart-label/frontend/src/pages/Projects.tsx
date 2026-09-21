@@ -411,7 +411,7 @@ export default function Projects() {
       });
       saveText(SEEK_LLM_KEY, seekLlm);
       message.info(seekDryRun
-        ? "预览已开始（不问模型、不花钱），进度在项目行里看"
+        ? "开始试算（只数会送多少段，不问模型、不花钱、没有结果），进度在项目行里看"
         : seekReview
           ? "已开始，进度在项目行里看。跑完先不写候选，回来点「筛一筛」过一眼再写"
           : "已开始，进度在项目行里看");
@@ -1703,7 +1703,7 @@ export default function Projects() {
         open={seekTarget != null}
         onCancel={() => setSeekTarget(null)}
         onOk={handleStartSeek}
-        okText={seekDryRun ? "预览（不花钱）" : "开始找"}
+        okText={seekDryRun ? "试算（不花钱）" : seekReview ? "开始找（跑完再筛）" : "开始找"}
         confirmLoading={seekStarting}
         okButtonProps={{
           disabled:
@@ -1799,9 +1799,13 @@ export default function Projects() {
                   placeholder="全部" onChange={(v) => setSeekLimit(v ?? null)} style={{ width: 90 }} /> 个任务
               </span>
             </Space>
-            <Checkbox checked={seekDryRun} onChange={(e) => setSeekDryRun(e.target.checked)}>
-              只预览：本地筛一遍，看会送多少段，<b>不问模型、不花钱、不写候选</b>
-            </Checkbox>
+            {/* 原来叫「只预览」——「预览」听着像"看结果"，可它根本没问模型，
+                什么结果都没有，只是数一数会送多少段。名字要说的是它回答的那个问题 */}
+            <Tooltip title="它回答的是「这一批要花多少钱」，不是「找到了什么」——根本没问模型，所以没有结果可看。想要能筛的结果，取消这个，勾下面那个">
+              <Checkbox checked={seekDryRun} onChange={(e) => setSeekDryRun(e.target.checked)}>
+                <b>只数会送多少段</b>（试算花费）：本地筛一遍就停，<b>不问模型、不花钱、没有结果</b>
+              </Checkbox>
+            </Tooltip>
             <Tooltip title="模型一次能出几千段，里面混着的错的要是直接写进候选，人得跨几十个任务一条条排除。先摆成一屏缩略图过一眼，勾中的才写，类别不对还能当场改">
               <Checkbox checked={seekReview} disabled={seekDryRun}
                         onChange={(e) => setSeekReview(e.target.checked)}>

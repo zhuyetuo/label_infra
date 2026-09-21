@@ -142,6 +142,9 @@ export interface SeekFound {
   task_id: number;
   sample_code: string | null;
   path: string;
+  /** 这一段在哪份样本的哪一路：左边循环播这几秒用 */
+  sample_id?: number | null;
+  cam?: string | null;
   label_name: string;
   start_ms: number;
   end_ms: number;
