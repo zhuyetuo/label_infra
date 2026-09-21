@@ -467,6 +467,8 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             for c in cands:
                 progress.found.append({
                     "task_id": task.id, "sample_code": code, "path": path,
+                    # 样本和机位：筛选那一屏左边要在这儿循环播这几秒，得拿它换视频流
+                    "sample_id": task.sample_id, "cam": params.cam,
                     "label_name": c.label_name, "start_ms": c.start_time_ms, "end_ms": c.end_time_ms,
                     "t": round((c.start_time_ms + c.end_time_ms) / 2000.0, 2),
                     "confidence": c.confidence, "evidence": c.evidence,
