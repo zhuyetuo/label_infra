@@ -347,12 +347,17 @@ def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list
 
 
 async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
-                                 segs: list[dict]) -> int:
+                                 segs: list[dict], blocked: list[dict] | None = None) -> int:
     """把命中的段写成候选。跟已有的（任何来源、任何状态）同标签且时间重叠的不重复写：
     人已经判过的不该再冒出来，别的来源已经指出来的也没必要再加一条。
 
     label_name 是缺省类别；段自己带了 label 就用它自己的——一次检索里常常混着
     别的动作，人在「先看命中」里当场分开标的，不能到这里又被统一成一个。
+
+    blocked 给了的话，**每一段被挡下来时把挡它的那条候选记进去**（任务、时间、
+    类别、状态）。只报一句「之前已经写过了」是不够的：人删掉的是「片段」，挡路的
+    却是那条还留着的「候选」——他去任务里翻，看到的是「待确认 1」，那一条不在
+    待确认里（多半已确认/已排除），于是只会觉得系统在撒谎。得把挡路的那条指出来。
     """
     existing = (await db.execute(
         select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no)
@@ -363,7 +368,17 @@ async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
         if e_ms <= s_ms:
             continue
         lab = s.get("label") or label_name
-        if any(c.label_name == lab and overlaps(s_ms, e_ms, c.start_time_ms, c.end_time_ms) for c in existing):
+        hit_by = next((c for c in existing
+                       if c.label_name == lab and overlaps(s_ms, e_ms, c.start_time_ms, c.end_time_ms)), None)
+        if hit_by is not None:
+            if blocked is not None:
+                blocked.append({
+                    "task_id": task.id, "label_name": lab,
+                    "start_time_ms": hit_by.start_time_ms, "end_time_ms": hit_by.end_time_ms,
+                    "status": getattr(hit_by.status, "value", str(hit_by.status)) if hit_by.status else "pending",
+                    "reason": hit_by.reason,
+                    "want_start_ms": s_ms, "want_end_ms": e_ms,
+                })
             continue
         c = AiCandidate(task_id=task.id, round_no=task.round_no, label_name=lab,
                         start_time_ms=s_ms, end_time_ms=e_ms, confidence=float(s.get("score") or 0.0),

@@ -333,6 +333,7 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
     written = 0
     segments = 0
     per_task: list[dict] = []
+    blocked: list[dict] = []
     gap = max(0.0, min(120.0, body.gap_s))
     for tid, hits in by_task.items():
         task = await db.get(Task, tid)
@@ -340,7 +341,7 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
             continue        # 不是这个项目的：跳过，别让一个乱传的 id 写到别处去
         segs = vindex.group_hits(hits, gap)
         segments += len(segs)
-        n = await vindex.add_similar_candidates(db, task, "", segs)
+        n = await vindex.add_similar_candidates(db, task, "", segs, blocked=blocked)
         written += n
         if n:
             per_task.append({"task_id": tid, "n": n})
@@ -350,8 +351,12 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
     per_task.sort(key=lambda x: -x["n"])
     # 合出来几段、真写了几条：差额就是"跟已有候选重叠、没重复写"的那些。
     # 不报这个差额的话，人看到「写了 0 条」只会以为是坏了——其实是早就写过了
+    # 被挡下来的那几段，挡路的候选是哪一条：任务、时间、状态。
+    # 「已经写过了」而人在任务里找不到，十有八九是那条候选已经确认/排除了
+    # （片段可以被删掉，候选不会跟着走）。把它指出来，人才知道该去撤回哪一条
     return ok({"written": written, "segments": segments,
-               "skipped_existing": max(0, segments - written), "tasks": per_task})
+               "skipped_existing": max(0, segments - written), "tasks": per_task,
+               "blocked": blocked[:20]})
 
 
 @router.post("/{project_id}/vision-index", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])

@@ -557,3 +557,24 @@ def test_项目级一句话搜_管理员能搜_别人只能搜自己有任务的
     with pytest.raises(HTTPException) as e:
         run(api.project_similar_search(p.id, body, db=db, user=other))
     assert e.value.status_code == 404
+
+
+def test_被挡下来时要说清是哪条候选挡的_包括已确认的(db, run):
+    """人删掉的是「片段」，挡路的是那条还留着的「候选」——而且多半已经不在
+    「待确认」里。只回一句「之前已经写过了」，人点进任务只会看到「待确认 1」里
+    没有这一段，然后觉得系统在乱讲。所以挡路的那条要点名：任务、时间、状态。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    db.add(AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔身体-后肢臀尾",
+                       start_time_ms=199000, end_time_ms=201000, confidence=0.5,
+                       reason="similar", status=CandidateStatus.confirmed))
+    run(db.commit())
+    blocked: list[dict] = []
+    n = run(vi.add_similar_candidates(
+        db, t1, "舔身体-后肢臀尾",
+        [{"start_s": 199.5, "end_s": 200.5, "score": 0.9}], blocked=blocked))
+    assert n == 0
+    assert len(blocked) == 1
+    b = blocked[0]
+    assert b["task_id"] == t1.id and b["status"] == "confirmed"
+    assert (b["start_time_ms"], b["end_time_ms"]) == (199000, 201000)
+    assert (b["want_start_ms"], b["want_end_ms"]) == (199500, 200500)
