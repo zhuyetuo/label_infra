@@ -1172,13 +1172,21 @@ export default function Projects() {
                         size="small"
                         mode="multiple"
                         allowClear
-                        maxTagCount="responsive"
+                        // 不要 maxTagCount="responsive"：它靠量宽度决定收不收，
+                        // 而这一行的宽度是弹的——标签全文显示就撑爆 → 收成「+1...」→
+                        // 收完又放得下 → 再展开，一帧一个样地闪。固定宽度 + 固定收几个，
+                        // 不量宽度就不会打架
+                        maxTagCount={1}
                         placeholder="候选类别…"
-                        style={{ minWidth: 170, maxWidth: 340 }}
+                        style={{ width: 190 }}
                         value={f.candLabels}
                         onChange={(v) => setFilter(p.id, { candLabels: v })}
+                        // 选中后标签里只留类别名：条数写进去就会撑长标签，
+                        // 而条数是给人挑的时候看的，挑完了不用一直占着地方
+                        optionLabelProp="title"
                         options={candLabelTotals.map(([name, c]) => ({
                           value: name,
+                          title: currentName(name),
                           label: (
                             <span>
                               {currentName(name)}{" "}
