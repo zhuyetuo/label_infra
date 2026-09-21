@@ -52,6 +52,9 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   // 「左耳」的结果去标左耳
   const [auto, setAuto] = useState<{ from: string; exact: boolean } | null>(null);
   const [clip, setClip] = useState<Clip | null>(null);
+  // 选了一条现成描述，但项目里没有同名标签（「咬尾巴」这种表里有、标签树里没有的）。
+  // 不说的话人会以为「标成」坏了——它只是没得填
+  const [noLabel, setNoLabel] = useState<string | null>(null);
 
   const hits = res?.hits ?? [];
   useEffect(() => {
@@ -190,7 +193,21 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
           placeholder="选个现成的描述（选完还能改）"
           style={{ width: "100%" }}
           optionFilterProp="label"
-          onChange={(v?: string) => v && setText(v)}
+          onChange={(v?: string) => {
+            if (!v) return;
+            const q = ACTION_QUERIES.find((x) => x.query === v);
+            setText(v);
+            setAuto(null);
+            // **选了哪一条，「标成」就跟着填成同一个类别。** 这两个框本来说的就是
+            // 同一件事（我要找的是哪个动作），让人再选一遍纯属重复，而且忘了选
+            // 就勾不动——不对的话人自己改一下就是，比每次都手动选强
+            if (q && labelNames.some((l) => l.name === q.label)) {
+              setLabel(q.label);
+              setNoLabel(null);
+            } else if (q) {
+              setNoLabel(q.label);
+            }
+          }}
           options={ACTION_QUERIES.map((q) => ({ value: q.query, label: q.label }))}
         />
         <Space size={6} wrap>
@@ -211,6 +228,11 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             上一次：{prev.center ? "去背景" : "不去背景"} · {prev.n} 帧 · 最高分 {prev.top.toFixed(3)}
             {res?.hits.length ? `｜这一次最高分 ${Math.max(...res.hits.map((h) => h.score)).toFixed(3)}` : ""}
+          </Typography.Text>
+        )}
+        {noLabel && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            项目里没有「{noLabel}」这个标签，所以「标成」没自动填——自己选一个，或者去标签管理里加
           </Typography.Text>
         )}
         {auto && (
