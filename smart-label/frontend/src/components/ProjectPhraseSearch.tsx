@@ -95,11 +95,11 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
       setCur(null);
       setClip(null);
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
-      // 老索引没有「没抠背景」那一列：一句话搜跳过了它们。不说的话人只会看到
-      // "搜到的少"，还以为是这一句不行
+      // 退回抠图那一列的那几路：照搜，只是列不同。**这不是警告**——实测两列
+      // 打出来的分没有可分辨的差别，所以这几路的名次是能跟别的放一起看的
       if (r.old_index) {
-        message.warning(`${r.old_index} 路索引是旧版（没有「没抠背景」的向量），一句话搜这次跳过了它们。`
-          + "重建这几路的索引就能一起搜——以图搜图不受影响", 8);
+        message.info(`${r.old_index} 路索引是旧版（没有「没抠背景」那一列），这次用抠图那一列搜的，一样算在结果里。`
+          + "实测两列分数没有可分辨的差别；想统一的话重建这几路的索引即可", 6);
       }
       if (!r.hits.length) message.info("一条都没搜到。换个说法再试，或者先去「建画面索引」");
     } finally {
@@ -427,7 +427,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               </Tooltip>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 搜了 {res.searched} 路{res.missing ? `，${res.missing} 路还没建索引` : ""}
-                {res.old_index ? `，${res.old_index} 路索引是旧版被跳过` : ""}
+                {res.old_index ? `，${res.old_index} 路索引是旧版、用抠图那一列搜的` : ""}
                 {res.coarse ? `，其中 ${res.coarse} 路是快档（约 12 秒一帧，短动作可能漏）` : ""}
                 {res.text_space ? `；比的是${res.text_space}那一列` : ""}
                 {res.centered ? "；已去共同背景，分数是相对的（0.3 以上算像）" : "；没去背景，分数普遍偏高，看相对高低"}
