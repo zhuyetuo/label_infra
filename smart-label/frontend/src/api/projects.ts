@@ -125,7 +125,9 @@ export interface VisionSeekRequest {
   labels?: string[];
   /** 部位送到第几层：0 不问部位 / 1 大区域 / 2 具体部位（默认）/ 3 连左右 */
   part_depth?: number;
-  cam?: "cam1" | "cam2" | "cam3";
+  /** 样本表的三个**槽位**之一，或 "all"（能对上 IMU 的那几路都跑）。
+   *  注意这不是机位号：狗场的 cam2 往往是天花板公共区 */
+  cam?: "cam1" | "cam2" | "cam3" | "all";
   /** 每个视频最多送多少段去问模型——花费上限 */
   max_clips?: number;
   min_conf?: number;
@@ -208,6 +210,16 @@ export const projectSimilarWrite = (id: number, picks: [number, string, number, 
       want_start_ms: number; want_end_ms: number;
     }[];
   }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
+
+/** cam1/cam2/cam3 这三个**槽位**各装了什么。
+ *  那不是机位号：导入时是把这只狗该看的几路按机位号从小到大塞进三个槽位的，
+ *  所以狗场的「cam2」往往是天花板公共区，影棚的「cam2」只是另一个角度 */
+export const getCamSlots = (id: number) =>
+  request.get<never, {
+    slots: { slot: string; videos: number; own: number; public: number;
+             cams: { label: string; videos: number }[] }[];
+    samples: number;
+  }>(`/projects/${id}/cam-slots`);
 
 /** 画面来源的候选各有多少条、其中多少还没判过。
  *  similar_old = 两个入口还没分开时写的，认不出是哪一边，所以单独一档 */

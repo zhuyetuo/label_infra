@@ -387,3 +387,33 @@ def test_筛完写候选_只加不删_重叠的不重复写(db, run):
     run(db.commit())
     got = [(c.label_name, c.start_time_ms, c.evidence) for c in _cands(db, run, t1.id)]
     assert got == [("抓挠", 0, None), ("舔身体", 10000, "后腿蹬肚子")]      # 老的那条还在
+
+
+def test_跑全部机位_一个任务几路都问_候选合到一起只替换一次(db, run):
+    """界面上的 cam1/cam2/cam3 是**样本表的槽位**，不是机位号；一只狗往往两三路都有。
+    「全部机位」一次把能对上 IMU 的那几路都问一遍。
+
+    两条要守住：
+      1. replace_vision_candidates 是「替换」——一路写一次的话，第二路会把第一路
+         的结果洗掉。所以要攒到一起最后写一次。
+      2. review 模式里每一段带的 cam 必须是**这一段所在的那一路**，不是请求里那个
+         参数。带错了人点开筛选屏，左边循环播的是另一路的画面。
+    """
+    u, p, (s1, s2), (t1, t2, t3) = _world(db, run)
+    calls = []
+    segs = {"d/s1_cam1.mp4": [{"start_s": 10, "end_s": 16, "label": "舔身体", "confidence": 0.9}],
+            "d/s1_cam2.mp4": [{"start_s": 30, "end_s": 36, "label": "蹭身体", "confidence": 0.8}]}
+    prog = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(cam="all"), prog, seek_fn=_fake_seek(calls, segs)))
+    assert sorted(c["path"] for c in calls) == ["d/s1_cam1.mp4", "d/s1_cam2.mp4"]
+    # 两路的候选都在：后一路没有把前一路洗掉
+    got = [(c.label_name, c.start_time_ms) for c in _cands(db, run, t1.id)]
+    assert got == [("舔身体", 10000), ("蹭身体", 30000)]
+    assert prog.candidates == 2 and prog.succeeded == 1
+
+    # review 模式：每一段记的是它自己那一路
+    calls.clear()
+    prog2 = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(cam="all", review=True), prog2,
+                       seek_fn=_fake_seek(calls, segs)))
+    assert {(f["label_name"], f["cam"]) for f in prog2.found} == {("舔身体", "cam1"), ("蹭身体", "cam2")}
