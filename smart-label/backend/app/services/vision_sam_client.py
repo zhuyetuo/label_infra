@@ -234,9 +234,13 @@ async def _post(path: str, body: dict, timeout: float) -> dict:
     return resp.json()
 
 
-async def embed_build(video_rel_path: str, every_sec: float = 1.0, force: bool = False) -> dict:
-    return await _post("/api/v1/embed/build", {"path": video_rel_path, "every_sec": every_sec, "force": force},
-                       _EMBED_BUILD_TIMEOUT)
+async def embed_build(video_rel_path: str, every_sec: float = 1.0, force: bool = False,
+                      mode: str | None = None) -> dict:
+    """mode: fine = 每秒一帧（慢、全）/ fast = 只解关键帧（快、稀）。None = 用算法服务的默认。"""
+    body: dict = {"path": video_rel_path, "every_sec": every_sec, "force": force}
+    if mode:
+        body["mode"] = mode
+    return await _post("/api/v1/embed/build", body, _EMBED_BUILD_TIMEOUT)
 
 
 async def embed_indexed(paths: list[str]) -> dict[str, bool]:
