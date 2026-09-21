@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
+import { currentName, findLabel } from "@/utils/labelTree";
 import {
   Alert,
   Button,
@@ -148,11 +149,13 @@ export default function Projects() {
   // noCsv：只看 IMU CSV 是空的任务（打开就报"CSV 没有数据行"），管理员筛出来一键删掉，别分给别人
   // cand：只看还有「疑似抓挠」待判断的任务。它跟 labels 是两回事——候选不在片段里，
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; imu: string; noCsv: boolean };
+  // candLabels：「疑似抓挠」里的二级筛选——只看某几类候选。选项只列**这批候选里
+  // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, imu: "ALL", noCsv: false };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -939,11 +942,29 @@ export default function Projects() {
             };
             const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
             const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
+            // 候选存的是类别名，片段那边用的是 label_id：按名字对回项目标签，
+            // 顺带认旧名（舔身体 → 舔），不然旧候选一律对不上、永远筛不到
+            const candLabelIds = (t: Task) => {
+              const m = new Map<number, number>();
+              for (const [name, c] of Object.entries(t.cand_labels ?? {})) {
+                const id = findLabel(labelsOf(p.id), name)?.id;
+                if (id != null) m.set(id, (m.get(id) ?? 0) + (c.n ?? 0));
+              }
+              return m;
+            };
             const matchLabels = (t: Task) => {
               const lc = t.label_counts ?? {};
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
-              if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
+              // 「含类别」原来只认片段。一句话找画面刚给这个任务写了一条「舔-后爪」
+              // 候选，回到项目页按「舔」筛却找不着——它确实还没有舔的片段，有的是
+              // 一条等着判的候选。候选也算「含这一类」，不然人只会以为写失败了
+              if (f.labels.length) {
+                const byItem = f.labels.some((id) => (lc[id]?.n ?? 0) > 0);
+                const byCand = f.labels.some((id) => (candLabelIds(t).get(id) ?? 0) > 0);
+                if (!byItem && !byCand) return false;
+              }
+              if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
               return true;
             };
             // imu 目录：按样本编号的 _imu{N} 后缀分，一个 imu 对应一只狗，先选目录再看任务
@@ -981,6 +1002,19 @@ export default function Projects() {
             const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
             const candPending = all.reduce((s, t) => s + (t.cand_pending ?? 0), 0);
             const candTasksN = all.filter((t) => (t.cand_count ?? 0) > 0).length;
+            // 候选里实有哪些类别、各多少条：二级筛选的选项就是它，条数多的排前面
+            const candLabelTotals = (() => {
+              const m = new Map<string, { n: number; pending: number }>();
+              for (const t of all) {
+                for (const [name, c] of Object.entries(t.cand_labels ?? {})) {
+                  const e = m.get(name) ?? { n: 0, pending: 0 };
+                  e.n += c.n ?? 0;
+                  e.pending += c.pending ?? 0;
+                  m.set(name, e);
+                }
+              }
+              return [...m.entries()].sort((a, b) => b[1].n - a[1].n);
+            })();
             return (
               <>
               {imuCounts.size > 1 && (
@@ -1128,6 +1162,34 @@ export default function Projects() {
                         {candPending ? <span style={{ opacity: 0.75 }}>（待判断 {candPending}）</span> : null}
                         <span style={{ opacity: 0.6 }}> · {candTasksN} 任务</span>
                       </Tag>
+                    </Tooltip>
+                  )}
+                  {/* 疑似抓挠的二级筛选。选项**只列这批候选里实有的类别**——项目全量
+                      标签里大半一条候选都没有，摆出来只能让人一个个试 */}
+                  {candLabelTotals.length > 1 && (
+                    <Tooltip title="只看含某几类候选的任务。列出来的就是「疑似抓挠」里实有的类别和条数，加起来等于候选总数">
+                      <Select
+                        size="small"
+                        mode="multiple"
+                        allowClear
+                        maxTagCount="responsive"
+                        placeholder="候选类别…"
+                        style={{ minWidth: 170, maxWidth: 340 }}
+                        value={f.candLabels}
+                        onChange={(v) => setFilter(p.id, { candLabels: v })}
+                        options={candLabelTotals.map(([name, c]) => ({
+                          value: name,
+                          label: (
+                            <span>
+                              {currentName(name)}{" "}
+                              <span style={{ color: "#999", fontSize: 12 }}>
+                                {c.n}
+                                {c.pending ? ` / 待判断 ${c.pending}` : ""}
+                              </span>
+                            </span>
+                          ),
+                        }))}
+                      />
                     </Tooltip>
                   )}
                 </Space>

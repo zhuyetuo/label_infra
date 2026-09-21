@@ -285,20 +285,30 @@ async def list_tasks(
     # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，
     # 其实底下压着十几条待判断的候选。两个数一起给：待确认多少、总共多少。
     cand_counts: dict[int, dict[str, int]] = {}
+    # 候选是按哪个类别提的，也要一并给出来。项目列表的「含类别」原来只认片段：
+    # 用一句话找画面给某个任务写了一条「舔-后爪」候选，回到项目页按「舔」筛，
+    # 那个任务**找不着**——它确实还没有舔的片段，有的是一条等着判的候选。
+    # 候选存的是 label_name（字符串），前端按名字对回项目标签
+    cand_labels: dict[int, dict[str, dict[str, int]]] = {}
     if task_ids:
         rows = await db.execute(
             select(
                 AiCandidate.task_id,
+                AiCandidate.label_name,
                 func.count(AiCandidate.id),
                 func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)),
             )
             .join(Task, Task.id == AiCandidate.task_id)
             .join(scope, scope.c.id == Task.id)
             .where(AiCandidate.round_no == Task.round_no)
-            .group_by(AiCandidate.task_id)
+            .group_by(AiCandidate.task_id, AiCandidate.label_name)
         )
-        for task_id, n, n_pending in rows.all():
-            cand_counts[task_id] = {"n": int(n), "pending": int(n_pending or 0)}
+        for task_id, label_name, n, n_pending in rows.all():
+            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0})
+            c["n"] += int(n)
+            c["pending"] += int(n_pending or 0)
+            cand_labels.setdefault(task_id, {})[label_name] = {
+                "n": int(n), "pending": int(n_pending or 0)}
 
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
@@ -353,6 +363,9 @@ async def list_tasks(
                 "label_counts": label_counts.get(t.id, {}),
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
+                # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出
+                # 「疑似抓挠里实有哪些类别」——项目全量标签列表里大半是没有的
+                "cand_labels": cand_labels.get(t.id, {}),
                 "review_comment": review_comments.get(t.id),
                 **briefs.get(t.sample_id, {}),
                 "assigned_to_name": user_names.get(t.assigned_to) if t.assigned_to is not None else None,
