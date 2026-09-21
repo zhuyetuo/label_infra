@@ -98,15 +98,14 @@ class Settings(BaseSettings):
     # 加锁串行的，并发再高照样排队）。
     #
     # **这个数跟算法服务的 DECODE_CPU_SHARE 是配套的，改一个必须想另一个：**
-    #   share=0.667（现在）→ 6 路 NVDEC + 12 路软解，并发 18
-    #   share=0.5          → 一半一半，并发 12（实测 11.9 s/路）
-    #   share=0            → 全走 NVDEC，并发 8（最简单）
+    #   share=0.5（现在）→ 6 路 NVDEC + 6 路软解，并发 12（实测 11.9 s/路，最好）
+    #   share=0          → 全走 NVDEC，并发 8（最简单，12.6 s/路）
     # 只改一边是这一串里最容易踩的坑，已经踩过两次。
     #
     # 显存不是约束了：建完一路会把缓存还回去（vision_service 的 gpumem.trim），
     # 实测整卡才用 6.9/31.8 GiB。软解那几路不占显存，占内存（每路两三百 MB，
     # 18 路约 4 GB，这台机器 64 GB）。
-    vision_index_concurrency: int = 18
+    vision_index_concurrency: int = 12
     # /infer 是同步推理，AI 服务那边还加了锁排队，一次几十秒很正常，单独放宽。
     # 前端 axios 给这个请求 180s、nginx proxy_read_timeout 300s，这里要比前端略短，
     # 这样超时是后端报出清楚的 502 而不是前端先断掉。
