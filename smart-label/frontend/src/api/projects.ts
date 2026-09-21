@@ -190,6 +190,15 @@ export const projectSimilarWrite = (id: number, picks: [number, string, number, 
     skipped_existing?: number;
     /** 写进了哪几个任务、各几条。只说「写了 N 条」人不知道去哪找 */
     tasks?: { task_id: number; n: number }[];
+    /** 被挡下来的段，挡它的那条候选是哪一条（任务、时间、状态）。
+     *  只说「之前已经写过了」没用：人删掉的是片段，挡路的是留着的候选，
+     *  而且多半已经不在「待确认」里，他照着提示去找只会找不到 */
+    blocked?: {
+      task_id: number; label_name: string;
+      start_time_ms: number; end_time_ms: number;
+      status: string; reason?: string | null;
+      want_start_ms: number; want_end_ms: number;
+    }[];
   }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
 
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>

@@ -17,6 +17,11 @@ import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
  */
 
 const keyOf = (h: SimilarHit) => `${h.path}@${h.t}`;
+// 挡路的候选处在哪一档。「已确认」最要紧：它对应的片段可能早被人删了，
+// 片段没了候选还在，于是这一段写不回来——不写出状态，人无从判断该怎么办
+const STATUS_CN: Record<string, string> = {
+  pending: "待确认", confirmed: "已确认", rejected: "已排除", uncertain: "待定",
+};
 
 interface Props {
   projectId: number;
@@ -153,14 +158,38 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
         </>
       );
       if (!r.written) {
+        // **挡路的到底是哪一条，必须点名。** 「之前已经写过了」是从候选表得出的，
+        // 而人删掉的往往是那条候选确认出来的「片段」——候选本身还在，而且状态多半
+        // 已经不是「待确认」。只给一个任务号，人点进去看到「待确认 1」里没有这一段，
+        // 只会觉得系统在乱讲。所以直接给「几分几秒 + 状态」，链接开到「全部」那一档
+        const bl = r.blocked ?? [];
         message.warning(
           <span>
             {r.skipped_existing
               ? `一条都没写：这 ${r.skipped_existing} 段之前已经写过候选了（同类别时间重叠的不重复写）。`
               : "一条都没写（合出来的段是空的，换几帧再试）。"}
-            {r.skipped_existing ? <>它们在这些任务里：{links}（点开就是「画面相似」那一档）</> : null}
+            {bl.length ? (
+              <>
+                挡路的是这几条候选（<b>不在「待确认」里也算</b>，要重新写得先把它「撤回」或「排除」）：
+                {bl.slice(0, 5).map((b, i) => (
+                  <span key={`${b.task_id}-${b.start_time_ms}`}>
+                    {i > 0 && "、"}
+                    <a
+                      href={`/tasks?task=${b.task_id}&seek=${b.start_time_ms}&cand=all`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{b.task_id} {formatMs(b.start_time_ms)}~{formatMs(b.end_time_ms)} · {b.label_name} · {STATUS_CN[b.status] ?? b.status}
+                    </a>
+                  </span>
+                ))}
+                {bl.length > 5 && ` 等 ${bl.length} 条`}
+              </>
+            ) : r.skipped_existing ? (
+              <>它们在这些任务里：{links}（点开就是「画面相似」那一档）</>
+            ) : null}
           </span>,
-          12,
+          15,
         );
         setPicked(new Map());
         return;

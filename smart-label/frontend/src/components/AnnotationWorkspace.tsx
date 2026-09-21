@@ -79,7 +79,7 @@ interface Props {
   /** 打开就跳到这个时刻（相对 CSV 起点的毫秒）。从别处点「去修」进来时用 */
   initialSeekMs?: number | null;
   /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
-  initialCandFilter?: "similar" | null;
+  initialCandFilter?: "similar" | "all" | null;
   /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
   initialSimilar?: boolean;
   /** 跳过来时「标成」预选哪个类别：第一阶段已经判断过是什么动作了，不该再让人选一遍 */
@@ -407,8 +407,11 @@ export default function AnnotationWorkspace({
           setCandidates(cs);
           // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找。
           // 「先看命中」跳来的还没写候选，那就循环命中前 2 秒到后 4 秒
-          if (initialSeekMs != null && initialCandFilter === "similar") {
-            const hit = cs.find((c) => c.reason === "similar" && Math.abs(c.start_time_ms - initialSeekMs) < 1500);
+          if (initialSeekMs != null && initialCandFilter != null) {
+            // cand=all 是「这一段被挡住了」的链接：挡路的那条不一定是画面相似来的，
+            // 所以先按包含关系找任意来源的候选，找不到再退回原来的「只认画面相似」
+            const hit = cs.find((c) => c.start_time_ms <= initialSeekMs && initialSeekMs < c.end_time_ms)
+              ?? cs.find((c) => c.reason === "similar" && Math.abs(c.start_time_ms - initialSeekMs) < 1500);
             setLoop(hit ? { startMs: hit.start_time_ms, endMs: hit.end_time_ms } : { startMs: Math.max(0, initialSeekMs - 2000), endMs: initialSeekMs + 4000 });
           }
         })
@@ -1592,7 +1595,7 @@ export default function AnnotationWorkspace({
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
             「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
-        {initialSeekMs != null && initialCandFilter === "similar" && (
+        {initialSeekMs != null && initialCandFilter != null && (
           // 从找相似跳来的：说清楚定位到了哪一刻、正在循环哪几秒——不然人不知道该看哪一条
           <Alert
             type="info"

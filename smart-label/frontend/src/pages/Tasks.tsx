@@ -49,7 +49,10 @@ export default function Tasks() {
   const focusLabelName = searchParams.get("seg");
   // ?seek=毫秒：打开就停在这一刻（找相似的结果链接带的）；?cand=similar：候选面板只看「画面相似」
   const urlSeekMs = searchParams.get("seek") != null && !Number.isNaN(Number(searchParams.get("seek"))) ? Number(searchParams.get("seek")) : null;
-  const urlCandFilter = searchParams.get("cand") === "similar" ? ("similar" as const) : null;
+  // cand=all 是给「这一段被挡住了」那种链接用的：挡路的候选多半已经确认/排除，
+  // 只看「待确认」或只看「画面相似」都看不到它，人照着提示点过去会扑空
+  const urlCandFilter = searchParams.get("cand") === "similar" ? ("similar" as const)
+    : searchParams.get("cand") === "all" ? ("all" as const) : null;
   // ?similar=1：开进来直接打开「找相似」，样例就是 ?seek 那一刻，类别用 ?slabel。
   // 这是第一阶段（找到第一张）和第二阶段（拿它去扩）之间的那根线——没有它，
   // 人得记住"刚才那段在几分几秒"，再自己开任务、拖进度条、点找相似
