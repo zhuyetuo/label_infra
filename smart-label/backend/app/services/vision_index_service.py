@@ -185,16 +185,15 @@ def scope_of(path: str, day_dir: str | None) -> tuple[str, str]:
     cam, _imu = site_layout.parse_cam_imu(path)
     m = _SITE_TAIL.search(day_dir or "")
     site = (m.group(1).lower() if m else "")
-    cn = ""
-    for k, v in _SITE_CN.items():
-        if site.startswith(k):
-            cn = v + site[len(k):]          # gouchang2 → 狗场2
-            break
-    if not cn:
-        cn = site or "其他"
+    # 一个布局键底下还分几处场地（狗场1 / 狗场2），按机位号分——日期目录里只写了
+    # gouchang。分不出来就退回目录里那个字样，不硬凑
+    base = next((k for k in _SITE_CN if site.startswith(k)), "")
+    part = site_layout.site_part(base, cam) if base else None
+    cn = part or (_SITE_CN.get(base, "") + site[len(base):] if base else "") or site or "其他"
+    key = part or site
     if cam is None:
-        return f"{site}/", f"{cn}·未知机位"
-    return f"{site}/cam{cam}", f"{cn}·cam{cam}"
+        return f"{key}/", f"{cn}·未知机位"
+    return f"{key}/cam{cam}", f"{cn}·cam{cam}"
 
 
 def usable_cams(sample: Sample) -> list[str]:
