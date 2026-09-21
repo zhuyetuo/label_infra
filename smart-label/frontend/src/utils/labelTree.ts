@@ -108,3 +108,33 @@ export function flatten<T extends TreeLabel>(labels: T[]): { label: T; depth: nu
   walk(null, 0);
   return out;
 }
+
+
+/**
+ * 标签的旧名 → 现在叫什么。
+ *
+ * 候选行上的 label_name 是**写进去那一刻**的名字：IMU 那边送上来的、以及老数据里
+ * 的，都还叫「舔身体」；而项目标签早就改叫「舔」了。后果不是"名字不好看"——
+ * 按 display_name 去找颜色、找子部位全都落空：下拉里那一条是灰的、
+ * 「确认是舔身体」底下一个部位按钮都没有，而旁边的「抓挠」（没改过名）一切正常。
+ *
+ * 跟后端 grooming_labels.NAME_ALIASES 是同一张表。两个仓库解耦，各留一份；
+ * 这张表只有三条，而且不会再长——新标签一开始就用新名。
+ */
+const NAME_ALIASES: Record<string, string> = {
+  舔身体: "舔",
+  啃身体: "啃",
+  蹭身体: "蹭",
+};
+
+/** 一个（可能是旧名的）标签名对应项目里的哪条标签。找不到返回 undefined */
+export function findLabel<T extends { display_name: string }>(
+  labels: T[],
+  name: string,
+): T | undefined {
+  return labels.find((l) => l.display_name === name)
+    ?? (NAME_ALIASES[name] ? labels.find((l) => l.display_name === NAME_ALIASES[name]) : undefined);
+}
+
+/** 这个名字现在该显示成什么（旧名换成新名，其余原样） */
+export const currentName = (name: string): string => NAME_ALIASES[name] ?? name;
