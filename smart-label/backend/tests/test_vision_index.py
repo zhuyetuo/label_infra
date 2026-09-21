@@ -529,3 +529,31 @@ def test_一句话搜不需要当前任务(db, run):
     # 以图搜图仍然要有任务：没有任务就没有"样例在哪一路的第几秒"
     with pytest.raises(ValueError, match="样例帧"):
         run(vi.find_similar(db, None, vi.SimilarParams(label_name="x", t_s=1.0), search_fn=fn, project_id=p.id))
+
+
+def test_项目级一句话搜_管理员能搜_别人只能搜自己有任务的项目(db, run, monkeypatch):
+    """这两处都写错过一次，一进来就 500：
+    visible_project_ids 的参数顺序是 (db, user)；管理员那一档返回的是
+    **None（不受限）**，不是空集合——`project_id not in None` 直接 TypeError。
+    """
+    from fastapi import HTTPException
+
+    from app.api.v1 import projects as api
+    from app.services import vision_index_service as vi_
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    fn = _search({"hits": [{"path": "d/s1_cam1.mp4", "t": 5.0, "score": 0.8}],
+                  "segments": [], "searched": 3, "missing": []})
+    monkeypatch.setattr(vi_.vc, "embed_search", fn)
+    body = api.ProjectSearchIn(text="a dog biting its own tail")
+    r = run(api.project_similar_search(p.id, body, db=db, user=u))["data"]
+    assert r["hits"][0]["task_id"] == t1.id and r["searched"] == 3
+
+    # 标注员：没有这个项目的任务就看不到（返回的是集合，不是 None）
+    from app.models.user import User as _U
+    other = _U(username="b", password_hash="x", display_name="b", role=UserRole.annotator)
+    db.add(other)
+    run(db.commit())
+    with pytest.raises(HTTPException) as e:
+        run(api.project_similar_search(p.id, body, db=db, user=other))
+    assert e.value.status_code == 404
