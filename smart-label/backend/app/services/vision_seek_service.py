@@ -425,8 +425,17 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
         code = sample.sample_code if sample else f"sample#{task.sample_id}"
         progress.current_task_id = task.id
         progress.current_sample_code = code
-        path = video_path_of(sample, params.cam) if sample else None
-        if not path:
+        # cam="all"：这份样本**能对上 IMU 的那几路**全跑（usable_cams 会把狗场的
+        # 公共区排掉——那一路里六只狗同框，找到的对不上这条 IMU，写进去全是错的）。
+        # 一路一路问，候选攒到一起最后统一写：replace_vision_candidates 是"替换"，
+        # 一路写一次的话第二路会把第一路的结果洗掉
+        # 函数里 import：vision_index_service 反过来要用这个模块的 video_path_of，
+        # 模块级 import 会循环
+        from app.services.vision_index_service import usable_cams
+        cams = (usable_cams(sample) if (params.cam == "all" and sample) else [params.cam])
+        paths = [(c, video_path_of(sample, c)) for c in cams] if sample else []
+        paths = [(c, p_) for c, p_ in paths if p_]
+        if not paths:
             progress.skipped += 1
             progress.processed += 1
             progress.log(f"任务 #{task.id} {code}：跳过（没有 {params.cam} 视频）")
@@ -438,46 +447,61 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
         if task.segment_start_ms is not None and task.segment_end_ms is not None:
             kw["start_s"] = task.segment_start_ms / 1000.0
             kw["end_s"] = task.segment_end_ms / 1000.0
-        try:
-            r = await seek_fn(path, specs, **kw)
-        except Exception as e:  # noqa: BLE001 一个任务挂了不该带倒整批
+        cands = []
+        n_sent = n_cand_clips = 0
+        failed_all = True
+        for cam_slot, path in paths:
+            try:
+                r = await seek_fn(path, specs, **kw)
+            except Exception as e:  # noqa: BLE001 一路挂了不该带倒这个任务的别的路
+                progress.log(f"任务 #{task.id} {code} {cam_slot}：失败 {type(e).__name__}: {e}")
+                continue
+            failed_all = False
+            st = r.get("stats") or {}
+            n_cand_clips += int(st.get("clips_candidate") or 0)
+            n_sent += int(st.get("clips_sent") or 0)
+            progress.clips_candidate += int(st.get("clips_candidate") or 0)
+            progress.clips_sent += int(st.get("clips_sent") or 0)
+            progress.est_usd = round(progress.est_usd + float((st.get("usage") or {}).get("est_usd") or 0.0), 4)
+            # 每一次问模型都落一行（次数 / token / 耗时），「大模型 API」页的统计从这里算
+            used = st.get("llm") or {}
+            prov = (llm or {}).get("provider") or used.get("provider")
+            mdl = (llm or {}).get("model") or used.get("model")
+            if st.get("calls") and prov and mdl:
+                llm_call_service.record_calls(db, prov, mdl, st["calls"], purpose="seek",
+                                              project_id=project_id, task_id=task.id)
+                await db.commit()
+            if params.dry_run:
+                continue
+            for c in segments_to_candidates(r.get("segments") or [], label_names, params.min_conf,
+                                            model=model_tag):
+                cands.append((cam_slot, path, c))
+        if failed_all:
             progress.failed += 1
             progress.processed += 1
-            progress.log(f"任务 #{task.id} {code}：失败 {type(e).__name__}: {e}")
             continue
-        st = r.get("stats") or {}
-        progress.clips_candidate += int(st.get("clips_candidate") or 0)
-        progress.clips_sent += int(st.get("clips_sent") or 0)
-        progress.est_usd = round(progress.est_usd + float((st.get("usage") or {}).get("est_usd") or 0.0), 4)
-        # 每一次问模型都落一行（次数 / token / 耗时），「大模型 API」页的统计从这里算
-        used = st.get("llm") or {}
-        prov = (llm or {}).get("provider") or used.get("provider")
-        mdl = (llm or {}).get("model") or used.get("model")
-        if st.get("calls") and prov and mdl:
-            llm_call_service.record_calls(db, prov, mdl, st["calls"], purpose="seek", project_id=project_id, task_id=task.id)
-            await db.commit()
         if params.dry_run:
             progress.succeeded += 1
             progress.processed += 1
-            progress.log(f"任务 #{task.id} {code}：会送 {st.get('clips_candidate', 0)} 段（预览，没问模型）")
+            progress.log(f"任务 #{task.id} {code}：会送 {n_cand_clips} 段（预览，没问模型）")
             continue
-        cands = segments_to_candidates(r.get("segments") or [], label_names, params.min_conf, model=model_tag)
         if params.review:
             # 不写库：攒起来等人筛。带上视频路径和中点秒数，前端拿它取缩略图
-            for c in cands:
+            for cam_slot, path, c in cands:
                 progress.found.append({
                     "task_id": task.id, "sample_code": code, "path": path,
-                    # 样本和机位：筛选那一屏左边要在这儿循环播这几秒，得拿它换视频流
-                    "sample_id": task.sample_id, "cam": params.cam,
+                    # 样本和机位：筛选那一屏左边要在这儿循环播这几秒，得拿它换视频流。
+                    # 跑多路时这里必须是**这一段所在的那一路**，不能是 params.cam
+                    "sample_id": task.sample_id, "cam": cam_slot,
                     "label_name": c.label_name, "start_ms": c.start_time_ms, "end_ms": c.end_time_ms,
                     "t": round((c.start_time_ms + c.end_time_ms) / 2000.0, 2),
                     "confidence": c.confidence, "evidence": c.evidence,
                 })
             progress.succeeded += 1
             progress.processed += 1
-            progress.log(f"任务 #{task.id} {code}：送 {st.get('clips_sent', 0)} 段，找到 {len(cands)} 段（等人筛，还没写）")
+            progress.log(f"任务 #{task.id} {code}：送 {n_sent} 段，找到 {len(cands)} 段（等人筛，还没写）")
             continue
-        n = await replace_vision_candidates(db, task, cands, model=model_tag)
+        n = await replace_vision_candidates(db, task, [c for _s, _p, c in cands], model=model_tag)
         await db.commit()
         progress.candidates += n
         progress.succeeded += 1

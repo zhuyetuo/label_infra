@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.label import LabelDefinition
 from app.models.project import Project
+from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
@@ -150,8 +151,10 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
-    if body.cam not in ("cam1", "cam2", "cam3"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3")
+    # all = 这份样本能对上 IMU 的那几路全跑（狗场的公共区会被排掉：那一路六只狗
+    # 同框，找到的对不上这条 IMU）
+    if body.cam not in ("cam1", "cam2", "cam3", "all"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "cam 只能是 cam1 / cam2 / cam3 / all")
     if not (1 <= body.max_clips <= 2000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "max_clips 要在 1~2000 之间")
     if body.provider:
@@ -380,6 +383,56 @@ _CAND_SOURCES: dict[str, tuple[str, str | None]] = {
 def _source_where(source: str):
     reason, model = _CAND_SOURCES[source]
     return [AiCandidate.reason == reason, AiCandidate.model == model]
+
+
+@router.get("/{project_id}/cam-slots")
+async def project_cam_slots(project_id: int, db: AsyncSession = Depends(get_db),
+                            user: User = Depends(get_current_user)):
+    """项目里 cam1/cam2/cam3 这三个**槽位**各自装的到底是什么。
+
+    界面上那个「看哪一路 cam1/cam2/cam3」一直被当成机位号读，其实不是：导入时
+    （sample_import_service.cams_for_imu）是把这只狗该看的几路**按机位号从小到大
+    塞进三个槽位**的。于是
+
+        狗场   槽位1 = 这只狗自己单间那路（机位号可能是 cam1~cam6）
+               槽位2 = 天花板公共区（cam7，六间同框）
+        影棚   槽位1/2/3 = 机位 cam1/2/3，三路全公共
+
+    同一个下拉在两个场地含义完全不同。选错的代价不是"换个角度"，是**在公共区
+    找到的狗对不上这条 IMU**，写出来的候选全是错的。所以这里按真实路径数一遍，
+    让界面照实写：这个槽位实际是哪些机位、其中多少路是自己单间、多少路是公共区。
+
+    数出来的东西以**文件名和布局表**为准，不猜——布局表（site_layout）是人照着
+    采集端配置抄的，跟现场对不上时这一屏会直接露出来（比如某个槽位混着两种）。
+    """
+    allowed = await visible_project_ids(db, user)
+    if allowed is not None and project_id not in allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在或无权访问")
+    rows = (await db.execute(
+        select(Sample).join(Task, Task.sample_id == Sample.id)
+        .where(Task.project_id == project_id).distinct()
+    )).scalars().all()
+    out = []
+    for slot in ("cam1", "cam2", "cam3"):
+        cams: dict[str, int] = {}
+        own = public = 0
+        n = 0
+        for s_ in rows:
+            path = vseek.video_path_of(s_, slot)
+            if not path:
+                continue
+            n += 1
+            _key, label = vindex.scope_of(path, vindex.day_dir_of(s_))
+            cams[label] = cams.get(label, 0) + 1
+            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_)) == "public":
+                public += 1
+            else:
+                own += 1
+        out.append({"slot": slot, "videos": n, "own": own, "public": public,
+                    # 条数多的机位排前面：界面只显示前两个，够说明这个槽位是什么
+                    "cams": [{"label": k, "videos": v}
+                             for k, v in sorted(cams.items(), key=lambda kv: -kv[1])]})
+    return ok({"slots": out, "samples": len(rows)})
 
 
 @router.get("/{project_id}/candidate-sources",

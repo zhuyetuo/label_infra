@@ -32,6 +32,7 @@ import {
   getProjectPrelabelHistory,
   cancelProjectPrelabel,
   getProjectPrelabelStatus,
+  getCamSlots,
   getCandidateSources,
   purgeCandidates,
   listProjects,
@@ -192,7 +193,9 @@ export default function Projects() {
   // 部位问到多细。层级标签上线后「啃」底下有 37 条子孙，全送过去 prompt 又长、模型在几十个
   // 选项里也挑不准（几帧俯拍根本分不出左右）。默认到「具体部位」这一层
   const [seekPartDepth, setSeekPartDepth] = useState(2);
-  const [seekCam, setSeekCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
+  // 默认跑「全部机位」：一只狗常常两三路都有，只跑一个槽位等于凭空扔掉别的角度，
+  // 而槽位编号本身又不是机位号（见 camSlots），让人去猜该选哪个是不合理的
+  const [seekCam, setSeekCam] = useState<"cam1" | "cam2" | "cam3" | "all">("all");
   const [seekMaxClips, setSeekMaxClips] = useState(120);
   const [seekLimit, setSeekLimit] = useState<number | null>(null);
   // 默认**直接跑**，不是先试算。试算只回答"这一批要花多少钱"，它没有结果可看，
@@ -206,6 +209,10 @@ export default function Projects() {
   const [reviewOpen, setReviewOpen] = useState<number | null>(null);
   const [phraseTarget, setPhraseTarget] = useState<Project | null>(null);
   // 按来源清理画面候选：一轮搜坏了，不用为它删掉整个项目
+  // cam1/cam2/cam3 这三个槽位各装了什么（按真实路径数出来的）。
+  // 那不是机位号——狗场的「cam2」往往是天花板公共区，影棚的「cam2」只是另一个角度，
+  // 光写 cam1/cam2/cam3 让人以为是同一回事，选错了找到的狗对不上这条 IMU
+  const [camSlots, setCamSlots] = useState<Awaited<ReturnType<typeof getCamSlots>> | null>(null);
   const [purgeTarget, setPurgeTarget] = useState<Project | null>(null);
   const [purgeSrc, setPurgeSrc] = useState<Awaited<ReturnType<typeof getCandidateSources>> | null>(null);
   const [purgeBusy, setPurgeBusy] = useState(false);
@@ -420,6 +427,10 @@ export default function Projects() {
     setSeekLabels(seekableLabels(p.id));
     setSeekLimit(null);
     setSeekTarget(p);
+    // 三个槽位各装了什么，要按这个项目的真实路径数出来才知道——写死 cam1/cam2/cam3
+    // 只会让人以为那是机位号。数不出来就保持原样，别把整个对话框卡住
+    setCamSlots(null);
+    getCamSlots(p.id).then(setCamSlots).catch(() => setCamSlots(null));
     pollSeek([p.id]);
   };
   const handleStartSeek = async () => {
@@ -1925,9 +1936,44 @@ export default function Projects() {
             <Space wrap>
               <span>
                 看哪一路：
-                <Select size="small" value={seekCam} onChange={(v) => setSeekCam(v)} style={{ width: 90 }}
-                  options={[{ value: "cam1", label: "cam1" }, { value: "cam2", label: "cam2" }, { value: "cam3", label: "cam3" }]} />
+                <Select size="small" value={seekCam} onChange={(v) => setSeekCam(v)} style={{ width: 300 }}
+                  options={[
+                    // 全部 = 这份样本**能对上 IMU 的那几路**都跑。狗场的公共区会被
+                    // 排掉（六只狗同框，找到的对不上这条 IMU），不是"字面全部"
+                    { value: "all", label: "全部机位（能对上 IMU 的那几路）" },
+                    ...(camSlots?.slots ?? [{ slot: "cam1" }, { slot: "cam2" }, { slot: "cam3" }] as never[])
+                      .map((x: { slot: string; videos?: number; public?: number;
+                                 cams?: { label: string; videos: number }[] }) => ({
+                        value: x.slot,
+                        disabled: x.videos === 0,
+                        label: (
+                          <span>
+                            {x.slot}
+                            {x.cams?.length ? (
+                              <span style={{ color: "#999", fontSize: 12 }}>
+                                {" · "}{x.cams.slice(0, 2).map((c) => c.label).join("、")}
+                                {x.cams.length > 2 ? " 等" : ""}
+                                {" · "}{x.videos} 路
+                              </span>
+                            ) : x.videos === 0 ? (
+                              <span style={{ color: "#999", fontSize: 12 }}> · 这个项目里没有</span>
+                            ) : null}
+                          </span>
+                        ),
+                      })),
+                  ]} />
               </span>
+              {/* 选中的槽位里有多少路是公共区：那一路六只狗同框，找到的对不上这条 IMU。
+                  这句不说，人只会看到一批"看着对、其实是别的狗"的候选 */}
+              {(() => {
+                const cur = camSlots?.slots?.find((x) => x.slot === seekCam);
+                if (!cur || !cur.public) return null;
+                return (
+                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                    这一路里有 {cur.public} 路是公共区（几只狗同框），找到的狗不一定是这条 IMU 的
+                  </Typography.Text>
+                );
+              })()}
               <span>
                 每个视频最多送：
                 <InputNumber size="small" min={1} max={2000} value={seekMaxClips} onChange={(v) => setSeekMaxClips(v ?? 120)} style={{ width: 90 }} /> 段
