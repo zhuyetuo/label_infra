@@ -286,9 +286,12 @@ export default function CandidatePanel({
             size="small"
             mode="multiple"
             allowClear
-            maxTagCount="responsive"
+            // 不用 maxTagCount="responsive"：它靠量宽度决定收不收标签，容器宽度
+            // 是弹的时候会自己跟自己打架（展开→撑爆→收起→放得下→再展开），一帧
+            // 一个样地闪。固定宽度 + 固定收几个，不量宽度就不会打架
+            maxTagCount={1}
             placeholder="只看类别"
-            style={{ minWidth: 150, maxWidth: 320 }}
+            style={{ width: 170 }}
             value={labelFilter}
             onChange={setLabelFilter}
             options={labelCounts.map(([name, n]) => ({
@@ -313,9 +316,9 @@ export default function CandidatePanel({
             size="small"
             mode="multiple"
             allowClear
-            maxTagCount="responsive"
+            maxTagCount={1}
             placeholder="只看来源"
-            style={{ minWidth: 140, maxWidth: 280 }}
+            style={{ width: 160 }}
             value={srcFilter}
             onChange={setSrcFilter}
             options={srcCounts.map(([k, n]) => ({
