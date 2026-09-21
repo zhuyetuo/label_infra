@@ -59,6 +59,9 @@ class ProjectVisionSeekRequest(BaseModel):
     # 3 = 连左右。层数深了选项几十个、几帧俯拍也分不出左右，反而把模型带偏
     part_depth: int = Field(2, ge=0, le=3)
     cam: str = "cam1"
+    # 只跑这几个「场地·机位」（如「狗场2/cam4」）。空 = 不限。
+    # 跟 cam 正交：cam 是配对规则，这个是范围
+    scopes: list[str] = Field(default_factory=list, max_length=100)
     # 每个视频最多送多少段去问模型——这是花费的上限
     max_clips: int = 120
     min_conf: float = 0.5

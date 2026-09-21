@@ -233,6 +233,10 @@ export default function Projects() {
   // 那不是机位号——狗场的「cam2」往往是天花板公共区，影棚的「cam2」只是另一个角度，
   // 光写 cam1/cam2/cam3 让人以为是同一回事，选错了找到的狗对不上这条 IMU
   const [camSlots, setCamSlots] = useState<Awaited<ReturnType<typeof getCamSlots>> | null>(null);
+  // 只跑这几处「场地·机位」。空 = 不限。
+  // **人脑子里的单位是「影棚」「狗场2 的 cam4」，不是"第几个槽位"**——槽位是导入时
+  // 的装箱顺序，影棚和狗场恰好都被塞进第 1 个，于是"选 cam1"等于两处一起跑
+  const [seekScopes, setSeekScopes] = useState<string[]>([]);
   const [purgeTarget, setPurgeTarget] = useState<Project | null>(null);
   const [purgeSrc, setPurgeSrc] = useState<Awaited<ReturnType<typeof getCandidateSources>> | null>(null);
   const [purgeBusy, setPurgeBusy] = useState(false);
@@ -450,6 +454,7 @@ export default function Projects() {
     // 三个槽位各装了什么，要按这个项目的真实路径数出来才知道——写死 cam1/cam2/cam3
     // 只会让人以为那是机位号。数不出来就保持原样，别把整个对话框卡住
     setCamSlots(null);
+    setSeekScopes([]);
     getCamSlots(p.id).then(setCamSlots).catch(() => setCamSlots(null));
     pollSeek([p.id]);
   };
@@ -463,6 +468,7 @@ export default function Projects() {
         labels: seekLabels,
         part_depth: seekPartDepth,
         cam: seekCam,
+        scopes: seekScopes,
         max_clips: seekMaxClips,
         dry_run: seekDryRun,
         review: seekReview,
@@ -1526,13 +1532,32 @@ export default function Projects() {
                       const seekPaused = sp.status === "paused";
                       return (
                         <div style={{ marginBottom: 4 }} onClick={(e) => e.stopPropagation()}>
-                          <Progress
-                            size="small"
-                            status={seekPaused ? "normal" : "active"}
-                            strokeColor={seekPaused ? "#bfbfbf" : "#eb2f96"}
-                            percent={sp.total ? Math.round((sp.processed / sp.total) * 100) : 0}
-                            format={() => `${sp.dry_run ? "预览" : "画面"} ${sp.processed}/${sp.total}${seekPaused ? " 已暂停" : ""}`}
-                          />
+                          {/* 跑起来之后**最要紧的是能随时看见它在答什么**。
+                              一批跑一两个小时，最后得 0 条候选才发现不对，那是白等；
+                              而每一行日志里已经写着「判 none 4、看不清 3、…」，
+                              早看一眼就知道该不该停下来改参数。鼠标放上去就出，
+                              不用点开弹窗（弹窗一开，项目列表就看不见了） */}
+                          <Tooltip
+                            placement="bottomLeft"
+                            overlayStyle={{ maxWidth: 720 }}
+                            title={
+                              sp.detail?.length ? (
+                                <div style={{ fontSize: 12, lineHeight: 1.7, maxHeight: 320, overflow: "auto" }}>
+                                  {sp.detail.slice(-14).map((d, i) => (
+                                    <div key={`${i}-${d.slice(0, 12)}`}>{d}</div>
+                                  ))}
+                                </div>
+                              ) : "刚开始，还没有日志"
+                            }
+                          >
+                            <Progress
+                              size="small"
+                              status={seekPaused ? "normal" : "active"}
+                              strokeColor={seekPaused ? "#bfbfbf" : "#eb2f96"}
+                              percent={sp.total ? Math.round((sp.processed / sp.total) * 100) : 0}
+                              format={() => `${sp.dry_run ? "预览" : "画面"} ${sp.processed}/${sp.total}${seekPaused ? " 已暂停" : ""}`}
+                            />
+                          </Tooltip>
                           <Space size={4}>
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选${answerNote(sp)} · 约 $${sp.est_usd}`}
@@ -1699,14 +1724,41 @@ export default function Projects() {
                   >
                     AI预标注
                   </Button>
-                  <Button
-                    size="small"
-                    type="link"
-                    loading={seekProgress[p.id]?.status === "running"}
-                    onClick={() => openSeek(p)}
+                  {/* 跑起来之后鼠标放到这个按钮上就出实时日志。一批跑一两个小时，
+                      最后得 0 条候选才发现不对是白等——而日志里每一行都写着模型
+                      在答什么（判 none / 看不清 / 没过置信度线），早看一眼就能决定
+                      停不停。放在按钮上是因为**人跑起来之后还会来点它**，那一刻
+                      正是他想知道"现在怎么样了" */}
+                  <Tooltip
+                    placement="bottomRight"
+                    overlayStyle={{ maxWidth: 720 }}
+                    title={(() => {
+                      const sp = seekProgress[p.id];
+                      if (!sp || !["running", "paused"].includes(sp.status)) {
+                        return "视觉大模型通看整段视频，把像舔/啃/抓挠/蹭的几秒挑出来";
+                      }
+                      return (
+                        <div style={{ fontSize: 12, lineHeight: 1.7, maxHeight: 320, overflow: "auto" }}>
+                          <div style={{ marginBottom: 4 }}>
+                            {sp.processed}/{sp.total} · 已送 {sp.clips_sent} 段 · {sp.candidates} 条候选
+                            {answerNote(sp)}
+                          </div>
+                          {sp.detail?.length
+                            ? sp.detail.slice(-14).map((d, i) => <div key={`${i}-${d.slice(0, 12)}`}>{d}</div>)
+                            : <div>刚开始，还没有日志</div>}
+                        </div>
+                      );
+                    })()}
                   >
-                    大模型看视频找动作
-                  </Button>
+                    <Button
+                      size="small"
+                      type="link"
+                      loading={seekProgress[p.id]?.status === "running"}
+                      onClick={() => openSeek(p)}
+                    >
+                      大模型看视频找动作
+                    </Button>
+                  </Tooltip>
                   <Button
                     size="small"
                     type="link"
@@ -1997,6 +2049,32 @@ export default function Projects() {
                   </Typography.Text>
                 );
               })()}
+              <span>
+                只跑这几处：
+                <Tooltip title="按场地和机位挑，不是按「第几个槽位」——槽位是导入时的装箱顺序，影棚和狗场恰好都被塞进第 1 个，选它等于两处一起跑。留空 = 不限">
+                  <Select
+                    size="small"
+                    mode="multiple"
+                    allowClear
+                    maxTagCount={1}
+                    placeholder="不限（全跑）"
+                    style={{ width: 260 }}
+                    value={seekScopes}
+                    onChange={setSeekScopes}
+                    options={(camSlots?.scopes ?? []).map((x) => ({
+                      value: x.key,
+                      label: (
+                        <span>
+                          {x.label}{" "}
+                          <span style={{ color: "#999", fontSize: 12 }}>
+                            {x.videos} 路{x.public ? `・公共区` : ""}
+                          </span>
+                        </span>
+                      ),
+                    }))}
+                  />
+                </Tooltip>
+              </span>
               {seekCam === "all" && (
                 <Tooltip title="按视频文件名里的 _imuM 和现场布局表配对（site_layout）。狗场一间一狗一摄像头，配得上；影棚 4 只狗共处、3 路全公共，配不上——那里的候选会带「多狗同场」标记，画面里哪只是这条 IMU 的只能人看">
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>

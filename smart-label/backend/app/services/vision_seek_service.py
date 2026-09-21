@@ -370,6 +370,12 @@ class SeekParams:
     labels: list[str] | None = None   # 只找这几个父类；None = 项目里有的全找
     part_depth: int = DEFAULT_PART_DEPTH   # 部位送到第几层，见 label_specs
     cam: str = "cam1"
+    # 只跑这几个「场地·机位」（vision_index_service.scope_of 给的 key，如「狗场2/cam4」）。
+    # 空 = 不限。**这跟 cam 是两件正交的事**：cam 决定配对规则（按 IMU 配对 / 手动指定
+    # 某个槽位），scopes 决定范围（只跑影棚、只跑狗场1…）。
+    # 原来只能按槽位选，而槽位是导入时的装箱顺序——影棚和狗场恰好都被塞进第 1 个槽位，
+    # 于是"选 cam1"等于"影棚和狗场一起跑"，人没有任何办法只跑其中一处
+    scopes: tuple[str, ...] = ()
     max_clips: int = 120
     min_conf: float = 0.5
     dry_run: bool = False
@@ -470,10 +476,16 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
         cams = (usable_cams(sample) if (params.cam == "all" and sample) else [params.cam])
         paths = [(c, video_path_of(sample, c)) for c in cams] if sample else []
         paths = [(c, p_) for c, p_ in paths if p_]
+        if params.scopes and sample is not None:
+            from app.services.vision_index_service import day_dir_of, scope_of
+            day = day_dir_of(sample)
+            paths = [(c, p_) for c, p_ in paths if scope_of(p_, day)[0] in params.scopes]
         if not paths:
             progress.skipped += 1
             progress.processed += 1
-            progress.log(f"任务 #{task.id} {code}：跳过（没有 {params.cam} 视频）")
+            progress.log(f"任务 #{task.id} {code}："
+                         + ("跳过（不在选中的场地·机位里）" if params.scopes
+                            else f"跳过（没有 {params.cam} 视频）"))
             continue
         kw = {"max_clips": params.max_clips, "min_conf": params.min_conf, "dry_run": params.dry_run,
               "clip_s": params.clip_s, "stride_s": params.stride_s, "motion_min": params.motion_min}

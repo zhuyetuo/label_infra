@@ -438,3 +438,24 @@ def test_零条候选要说清是哪一种零(db, run):
     # 判 none = 送出去的减掉「判了类别的」「看不清的」「失败的」= 10-2-3-1 = 4
     assert "判 none 4" in line and "看不清 3" in line
     assert "判出来但没过置信度线 2" in line and "失败 1" in line
+
+
+def test_按场地机位限定范围_跟配对规则是两件事(db, run):
+    """界面上原来只能按「槽位」选，而槽位是导入时的装箱顺序——影棚和狗场恰好都被
+    塞进第 1 个槽位，于是"选 cam1"等于两处一起跑，人没有任何办法只跑其中一处。
+
+    scopes 按「场地·机位」限定范围，跟 cam（配对规则）正交：cam=all 照样按 IMU
+    配对，只是限定在选中的那几处里。
+    """
+    u, p, (s1, s2), (t1, t2, t3) = _world(db, run)
+    s1.video_cam1_path = "d/2026_9_16_gouchang/x_cam1_imu9_raw.mp4"     # 狗场1
+    s2.video_cam1_path = "d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"    # 狗场2
+    run(db.commit())
+    calls = []
+    prog = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, None, vs.SeekParams(cam="all", scopes=("狗场2/cam5",)), prog,
+                       seek_fn=_fake_seek(calls)))
+    assert [c["path"] for c in calls] == ["d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"]
+    # 被范围挡掉的要说是"不在选中的场地·机位里"，不能说成"没有视频"——
+    # 后者会让人去查文件是不是丢了
+    assert any("不在选中的场地·机位里" in d for d in prog.detail)
