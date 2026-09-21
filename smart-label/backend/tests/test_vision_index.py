@@ -651,3 +651,32 @@ def test_按来源清点和清理候选_不碰别的来源也不碰人工判断(
         p.id, api.CandidatePurgeIn(source="text", include_decided=True), db=db))["data"]
     assert r["deleted"] == 1
     assert run(api.project_candidate_sources(p.id, db=db))["data"]["sources"]["text"]["total"] == 0
+
+
+def test_任务列表带出候选的类别分布_项目页才筛得到(db, run):
+    """一句话找画面给某个任务写了一条「舔-后爪」候选，回到项目页按类别筛却找不着——
+    因为「含类别」只认片段，而这个任务确实还没有舔的片段，有的是一条等着判的候选。
+    列表接口把候选按类别分出来，项目页才能把它算进「含这一类」，也才能在
+    「疑似抓挠」底下只列**实有的**那几个类别（项目全量标签里大半一条都没有）。"""
+    from app.api.v1 import tasks as api
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    for c in (AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔-后爪",
+                          start_time_ms=1000, end_time_ms=2000, reason=vi.REASON,
+                          model=vi.MODEL_TEXT, status=CandidateStatus.pending),
+              AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔-后爪",
+                          start_time_ms=5000, end_time_ms=6000, reason=vi.REASON,
+                          model=vi.MODEL_TEXT, status=CandidateStatus.rejected),
+              AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="抓挠",
+                          start_time_ms=9000, end_time_ms=9500, reason="low_conf")):
+        db.add(c)
+    run(db.commit())
+
+    rows = run(api.list_tasks(project_id=p.id, db=db, user=u))["data"]
+    got = next(r for r in rows if r["id"] == t1.id)
+    assert got["cand_labels"] == {"舔-后爪": {"n": 2, "pending": 1},
+                                  "抓挠": {"n": 1, "pending": 1}}
+    # 总数还是原来那两个数：按类别拆开之后不能把合计算错
+    assert got["cand_count"] == 3 and got["cand_pending"] == 2
+    # 没有候选的任务给空字典，不是 None——前端直接 Object.entries
+    assert next(r for r in rows if r["id"] == t2.id)["cand_labels"] == {}
