@@ -812,11 +812,37 @@ export default function SegmentPanel({
                       </Button>
                     </Popconfirm>
                   )}
-                  {!readOnly && (
-                    <Button size="small" danger type="link" onClick={() => onDelete(i.id)}>
-                      删除
-                    </Button>
-                  )}
+                  {/* 直接删是个坑：片段没了，生它的那条候选还留在「已确认」里。
+                      「找相似 / 一句话找画面」再碰到同一段时间，会以为早写过了而跳过，
+                      于是这一段**再也写不回来**。所以从候选来的行，删之前先说清楚，
+                      并把人推到上面那个「退回候选」——那个会把候选也一起还原。 */}
+                  {!readOnly &&
+                    (i.from_candidate_id != null ? (
+                      <Popconfirm
+                        title="确定直接删？"
+                        description={
+                          <div style={{ maxWidth: 320 }}>
+                            这条是从候选确认上来的。直接删只删片段，那条候选仍留在「已确认」，
+                            之后「找相似 / 一句话找画面」再找到同一段会当成写过了而跳过，
+                            这一段就写不回来了。
+                            <br />
+                            想重新判断的话，用左边的「退回候选」。
+                          </div>
+                        }
+                        okText="还是直接删"
+                        cancelText="算了"
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() => onDelete(i.id)}
+                      >
+                        <Button size="small" danger type="link">
+                          删除
+                        </Button>
+                      </Popconfirm>
+                    ) : (
+                      <Button size="small" danger type="link" onClick={() => onDelete(i.id)}>
+                        删除
+                      </Button>
+                    ))}
                 </Space>
               );
             },
