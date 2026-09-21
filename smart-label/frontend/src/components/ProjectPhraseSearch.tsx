@@ -132,7 +132,26 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
     setBusy(true);
     try {
       const r = await projectSimilarWrite(projectId, picks, gapS);
-      message.success(`写了 ${r.written} 条候选（相邻的合成了一段）。去工作台「疑似片段」里逐条确认`);
+      // **写到哪几个任务去了，必须说出来。** 候选是按帧所属的任务散着写的，
+      // 只报一句"写了 N 条"，人关掉这一屏就再也找不到它们在哪
+      const ts = r.tasks ?? [];
+      const where = ts.length
+        ? `写进了${ts.length > 1 ? ` ${ts.length} 个任务：` : "任务 "}${ts.slice(0, 5).map((t) => `#${t.task_id}（${t.n} 条）`).join("、")}${ts.length > 5 ? " 等" : ""}`
+        : "";
+      message.success(
+        <span>
+          写了 {r.written} 条候选（相邻的合成了一段）。{where}
+          {ts.length > 0 && (
+            <>
+              {" "}
+              <a href={`/tasks?task=${ts[0].task_id}&cand=similar`} target="_blank" rel="noreferrer">
+                打开第一个任务
+              </a>
+            </>
+          )}
+        </span>,
+        10,
+      );
       setPicked(new Map());
     } finally {
       setBusy(false);
@@ -244,6 +263,14 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
                       `/tasks?task=${cur.task_id}&seek=${Math.round(cur.t * 1000)}&similar=1${label ? `&slabel=${encodeURIComponent(label)}` : ""}`,
                       "_blank")}>
                     用这一张去扩
+                  </Button>
+                </Tooltip>
+              )}
+              {cur.task_id != null && (
+                <Tooltip title="新页打开那个任务：这一刻会定位好，候选面板只看「画面相似」">
+                  <Button size="small" onClick={() => window.open(
+                    `/tasks?task=${cur.task_id}&seek=${Math.round(cur.t * 1000)}&cand=similar`, "_blank")}>
+                    打开那个任务
                   </Button>
                 </Tooltip>
               )}
