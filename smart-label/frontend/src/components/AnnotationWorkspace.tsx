@@ -26,6 +26,7 @@ import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
+import { ACTION_QUERIES } from "@/utils/actionQueries";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, saveDraft, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
@@ -79,6 +80,10 @@ interface Props {
   initialSeekMs?: number | null;
   /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
   initialCandFilter?: "similar" | null;
+  /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
+  initialSimilar?: boolean;
+  /** 跳过来时「标成」预选哪个类别：第一阶段已经判断过是什么动作了，不该再让人选一遍 */
+  initialSimilarLabel?: string | null;
   /** 只读状态下想动手改：认领这个任务，转成可编辑。给了才显示这个按钮 */
   onClaim?: () => void | Promise<void>;
   /** 已通过的任务想再改：退回重标（轮次+1，上一轮内容原样带过去） */
@@ -132,6 +137,8 @@ export default function AnnotationWorkspace({
   onClaim,
   initialSeekMs,
   initialCandFilter,
+  initialSimilar,
+  initialSimilarLabel,
   onReopen,
   onConfirmScratch,
   confirmScratchText,
@@ -378,6 +385,13 @@ export default function AnnotationWorkspace({
       setFps(media.video_fps);
       // 从别处点「去修」进来的：直接停在出问题的那一刻，不用自己拖进度条找
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
+      // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
+      // 类别也带过来了。人在那边已经判断过一次了，不该到这儿再选一遍
+      if (initialSimilar && initialSeekMs != null) {
+        setSimilarAtSec(Math.round(initialSeekMs / 100) / 10);
+        if (initialSimilarLabel) setSimilarLabel(initialSimilarLabel);
+        setSimilarOpen(true);
+      }
       if (media.csv_id != null) {
         getImuMeta(sampleId)
           .then((m) => setDurationMs(m.duration_ms))
@@ -1045,8 +1059,11 @@ export default function AnnotationWorkspace({
         onFindSimilar={
           readOnly
             ? undefined
-            : () => {
-                setSimilarAtSec(Math.round(curSecRef.current * 10) / 10);
+            : (atSec?: number, labelName?: string) => {
+                // 某一条候选点过来的：样例取那一条自己的中点，别用"视频当前播到哪"——
+                // 人得先跳转、等它播到对的地方、再点，中间任何一步错了样例就取错了
+                setSimilarAtSec(atSec ?? Math.round(curSecRef.current * 10) / 10);
+                if (labelName) setSimilarLabel(labelName);
                 setSimilarOpen(true);
               }
         }
@@ -1210,7 +1227,22 @@ export default function AnnotationWorkspace({
             用一句英文描述搜
           </Checkbox>
           {similarUseText ? (
-            <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" style={{ flex: 1, minWidth: 160 }} />
+            <>
+              {/* 现成的一句：SigLIP 文本端是英文训练的，中文标签名直接送进去命中会差
+                  一大截，而且差得不明显——它照样给你 60 个命中，只是那些命中不对。
+                  这张表是人写一次全项目复用的，选完还能接着改（措辞对检索影响很大） */}
+              <Select
+                size="small"
+                showSearch
+                allowClear
+                placeholder="选个现成的描述"
+                style={{ width: 190 }}
+                optionFilterProp="label"
+                onChange={(v?: string) => v && setSimilarText(v)}
+                options={ACTION_QUERIES.map((q) => ({ value: q.query, label: q.label }))}
+              />
+              <Input size="small" value={similarText} onChange={(e) => setSimilarText(e.target.value)} placeholder="dog licking its tail" style={{ flex: 1, minWidth: 160 }} />
+            </>
           ) : (
             <>
               <Typography.Text>样例：视角1 第</Typography.Text>

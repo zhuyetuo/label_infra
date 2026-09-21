@@ -61,7 +61,7 @@ interface Props {
    */
   controlsPortalTarget?: HTMLElement | null;
   /** 「找相似」：拿当前画面（或一句话）在项目里找长得像的几秒。没建索引时不给 */
-  onFindSimilar?: () => void;
+  onFindSimilar?: (atSec?: number, labelName?: string) => void;
   /** 从找相似的结果/链接跳进来：起点是这个毫秒的那条排最前并高亮 */
   focusMs?: number | null;
   /** 打开时先筛哪一档（从找相似的链接进来默认只看「画面相似」） */
@@ -265,7 +265,7 @@ export default function CandidatePanel({
       )}
       {onFindSimilar && (
         <Tooltip title="拿视频当前这一帧（比如正在舔尾巴）在整个项目里找长得像的几秒，写成候选。靠画面向量索引，不问大模型、不花钱">
-          <Button size="small" icon={<SearchOutlined />} onClick={onFindSimilar}>
+          <Button size="small" icon={<SearchOutlined />} onClick={() => onFindSimilar()}>
             找相似
           </Button>
         </Tooltip>
@@ -463,6 +463,17 @@ export default function CandidatePanel({
                 <Button size="small" type="link" onClick={() => onSeek(c.start_time_ms)}>
                   跳转
                 </Button>
+                {/* 第一阶段找到一条之后，扩样本的入口就该在这一条身上。
+                    原来只有顶上一个「找相似」，用的是**视频当前播到哪**——人得先跳转、
+                    再等它播到对的地方、再点，中间任何一步错了样例就取错了 */}
+                {onFindSimilar && (
+                  <Tooltip title="拿这一条中间那一帧当样例，在整个项目里找长得像的几秒。类别也一起带过去">
+                    <Button size="small" type="link" icon={<SearchOutlined />}
+                      onClick={() => onFindSimilar(Math.round((c.start_time_ms + c.end_time_ms) / 200) / 10, c.label_name)}>
+                      用它去扩
+                    </Button>
+                  </Tooltip>
+                )}
                 {onLoop &&
                   (isLooping(c) ? (
                     <>
