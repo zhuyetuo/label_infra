@@ -143,6 +143,16 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
     <div style={{ display: "flex", gap: 12, height: "100%", minHeight: 0 }}>
       {/* 左：操作台 */}
       <div style={{ width: 380, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, gap: 8 }}>
+        {/* 2026-09-21 实测：同一句话试了三个变量（措辞 / 抠图还是原图 / 去不去背景），
+            最高分一直在 0.13~0.21，命中基本不对。SigLIP-base 在俯拍监控画面上对
+            "动作类"文字没有分辨力。把这句话摆在输入框上面，是为了不让人对着它
+            反复调措辞——那条路已经走死了，调不出东西来 */}
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          实测这批素材上它<b>对动作类的词不灵</b>（舔/啃/抓挠，分一直在 0.2 上下、命中多半不对）。
+          场景和大致姿态还行（趴卧、翻滚、进食、坐地拖屁股）。
+          <br />
+          当成「碰运气找到<b>一张</b>能用的样例」来用——找到了就点「用这一张去扩」，以图搜图准得多。
+        </Typography.Text>
         <Space.Compact style={{ width: "100%" }}>
           <Input
             value={text}
