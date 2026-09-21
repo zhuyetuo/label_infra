@@ -282,7 +282,10 @@ async def project_similar_search(project_id: int, body: ProjectSearchIn,
     为什么要项目级这个入口：想找「一张狗咬尾巴的图」的时候，人手上还没有任何
     样例，本来也不该先随便挑个任务、打开工作台、再去里面找这个功能。
     """
-    if project_id not in await visible_project_ids(user, db):
+    # 参数顺序是 (db, user)；而且管理员那一档返回的是 None（= 不受限），
+    # 不是"一个空集合"——两件事都写错过一次，直接 500
+    allowed = await visible_project_ids(db, user)
+    if allowed is not None and project_id not in allowed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在或无权访问")
     params = vindex.SimilarParams(
         label_name="", text=body.text.strip(), scope="project",
