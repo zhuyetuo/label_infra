@@ -31,6 +31,11 @@ _logger = logging.getLogger("smart-label.vision_index")
 
 REASON = "similar"
 MODEL_TAG = "siglip"
+# 「一句话找画面」跟「用这一张去扩」写出来的候选，reason 都是 similar——分不开的话，
+# 想把某一次试错的结果整批删掉就只能连坐，或者干脆删项目重建。model 上带一截来源，
+# 旧数据仍是光秃秃的 "siglip"（前端按前缀认，认不出就当「画面相似」）
+MODEL_TEXT = f"{MODEL_TAG}:text"      # 一句话找画面
+MODEL_IMAGE = f"{MODEL_TAG}:img"      # 以图搜图（用这一张去扩）
 # 两端都在这个误差内就算「同一段」。同一次命中换个部位重写一遍，合出来的段两端
 # 完全一致；真挨着的两个动作之间隔着的是秒级，不会被这 0.25 秒并掉
 SAME_SPAN_MS = 250
@@ -350,7 +355,8 @@ def group_hits(hits: list[dict], gap_s: float, pad_s: float = SEG_PAD_S) -> list
 
 
 async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
-                                 segs: list[dict], blocked: list[dict] | None = None) -> int:
+                                 segs: list[dict], blocked: list[dict] | None = None,
+                                 model_tag: str = MODEL_TAG) -> int:
     """把命中的段写成候选。跟已有的（任何来源、任何状态）同标签且时间重叠的不重复写：
     人已经判过的不该再冒出来，别的来源已经指出来的也没必要再加一条。
 
@@ -395,7 +401,7 @@ async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
             continue
         c = AiCandidate(task_id=task.id, round_no=task.round_no, label_name=lab,
                         start_time_ms=s_ms, end_time_ms=e_ms, confidence=float(s.get("score") or 0.0),
-                        spec=None, reason=REASON, model=MODEL_TAG)
+                        spec=None, reason=REASON, model=model_tag)
         db.add(c)
         existing.append(c)
         n += 1
@@ -503,7 +509,9 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
                                                       t.segment_start_ms, t.segment_end_ms)]
             else:
                 segs_t = segs
-            n = 0 if params.dry_run else await add_similar_candidates(db, t, params.label_name, segs_t)
+            n = 0 if params.dry_run else await add_similar_candidates(
+                db, t, params.label_name, segs_t,
+                model_tag=MODEL_TEXT if params.text is not None else MODEL_IMAGE)
             written += n
             per_task.append({"task_id": t.id, "project_id": t.project_id, "candidates": n, "segments": len(segs_t),
                              "sample_code": _code_of.get(t.id), "multi_dog": bool(_multi_of.get(t.id)),

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.task import Task, TaskStatus
@@ -341,7 +342,10 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
             continue        # 不是这个项目的：跳过，别让一个乱传的 id 写到别处去
         segs = vindex.group_hits(hits, gap)
         segments += len(segs)
-        n = await vindex.add_similar_candidates(db, task, "", segs, blocked=blocked)
+        # 这个入口只有「一句话找画面」在用：来源记成 text，以后想把某一次试错的
+        # 结果整批删掉才不用连坐到「用这一张去扩」写的那些
+        n = await vindex.add_similar_candidates(db, task, "", segs, blocked=blocked,
+                                                model_tag=vindex.MODEL_TEXT)
         written += n
         if n:
             per_task.append({"task_id": tid, "n": n})
@@ -357,6 +361,79 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
     return ok({"written": written, "segments": segments,
                "skipped_existing": max(0, segments - written), "tasks": per_task,
                "blocked": blocked[:20]})
+
+
+# 候选来源怎么认：reason=similar 的再按 model 前缀分「一句话」和「以图」。
+# 旧数据 model 就是光秃秃的 "siglip"（那时两个入口还没分开），归到 similar_old，
+# **不混进任何一档**——把分不清来源的老数据算到某一档里，人按那一档删就会误删
+_CAND_SOURCES: dict[str, tuple[str, str | None]] = {
+    "text": ("similar", vindex.MODEL_TEXT),
+    "image": ("similar", vindex.MODEL_IMAGE),
+    "similar_old": ("similar", vindex.MODEL_TAG),
+}
+
+
+def _source_where(source: str):
+    reason, model = _CAND_SOURCES[source]
+    return [AiCandidate.reason == reason, AiCandidate.model == model]
+
+
+@router.get("/{project_id}/candidate-sources",
+            dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def project_candidate_sources(project_id: int, db: AsyncSession = Depends(get_db)):
+    """项目里画面来源的候选各有多少条、其中多少还没判过。
+
+    为什么要有这一屏：一句话找画面 / 用这一张去扩 都是试出来的，试错的那几轮
+    会在几百个任务里留下候选。没法按来源看、按来源删的话，人唯一的退路是
+    **删掉整个项目重建**——那会连人工标的片段一起没了。
+    """
+    rows = (await db.execute(
+        select(AiCandidate.reason, AiCandidate.model, AiCandidate.status, func.count())
+        .join(Task, Task.id == AiCandidate.task_id)
+        .where(Task.project_id == project_id)
+        .group_by(AiCandidate.reason, AiCandidate.model, AiCandidate.status)
+    )).all()
+    out: dict[str, dict] = {k: {"total": 0, "pending": 0} for k in _CAND_SOURCES}
+    other = {"total": 0, "pending": 0}
+    for reason, model, st, n in rows:
+        key = next((k for k, (r, m) in _CAND_SOURCES.items() if r == reason and m == model), None)
+        bucket = out[key] if key else other
+        bucket["total"] += n
+        if st == CandidateStatus.pending:
+            bucket["pending"] += n
+    # other = AI 预标注 / 频谱 / 大模型看视频 那些，这个接口不碰，只报个数
+    return ok({"sources": out, "other": other})
+
+
+class CandidatePurgeIn(BaseModel):
+    source: str = Field(description="text（一句话找画面）/ image（用这一张去扩）/ similar_old（分不清来源的旧数据）")
+    # 默认只删还没判过的：已确认/已排除/待定是人的判断，删掉就白判了。
+    # 真要推倒重来（「这一批全是试错的」）才开这个
+    include_decided: bool = False
+
+
+@router.post("/{project_id}/candidates/purge",
+             dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def purge_project_candidates(project_id: int, body: CandidatePurgeIn,
+                                   db: AsyncSession = Depends(get_db)):
+    """按来源整批删掉项目里的画面候选。返回删了几条。
+
+    **已确认的候选删掉不会动它确认出来的片段**——片段是人工成果，归人工管。
+    反过来也一样（删片段不会带走候选），那一头在工作台里有提示。
+    """
+    if body.source not in _CAND_SOURCES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"来源只能是 {'、'.join(_CAND_SOURCES)}")
+    if await db.get(Project, project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    task_ids = select(Task.id).where(Task.project_id == project_id)
+    conds = [AiCandidate.task_id.in_(task_ids), *_source_where(body.source)]
+    if not body.include_decided:
+        conds.append(AiCandidate.status == CandidateStatus.pending)
+    n = (await db.execute(select(func.count()).select_from(AiCandidate).where(*conds))).scalar_one()
+    await db.execute(delete(AiCandidate).where(*conds))
+    await db.commit()
+    return ok({"deleted": int(n)})
 
 
 @router.post("/{project_id}/vision-index", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])

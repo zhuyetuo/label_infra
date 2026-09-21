@@ -106,7 +106,7 @@ def test_找相似_命中落到对应任务_短任务只收自己区间_重叠�
     assert sorted(call["paths"]) == ["d/s1_cam1.mp4", "d/s2_cam1.mp4", "d/s2_cam2.mp4"]
     assert call["ref"] == {"path": "d/s1_cam1.mp4", "t": 42.0} and call["text"] is None and call["top_k"] == 30
     assert r["written"] == 3 and r["searched"] == 2
-    assert [(c.start_time_ms, c.end_time_ms, c.reason, c.model) for c in _cands(db, run, t1.id)] == [(200000, 203000, "similar", "siglip")]
+    assert [(c.start_time_ms, c.end_time_ms, c.reason, c.model) for c in _cands(db, run, t1.id)] == [(200000, 203000, "similar", "siglip:img")]   # 以图搜图：来源记成 img
     # t2 整段：12-16 跟已确认的 10-14 重叠 → 不写；70-75 写
     assert [(c.start_time_ms, c.status.value) for c in _cands(db, run, t2.id)] == [(10000, "confirmed"), (70000, "pending")]
     # t3 只收 60-120 秒里的
@@ -606,3 +606,48 @@ def test_真挨着的两个动作不会被同段去重并掉(db, run):
     n = run(vi.add_similar_candidates(
         db, t1, "甩身体", [{"start_s": 423.0, "end_s": 428.0, "score": 0.3}]))
     assert n == 1
+
+
+def test_按来源清点和清理候选_不碰别的来源也不碰人工判断(db, run):
+    """试错的那几轮会在几百个任务里留下候选。不能按来源删的话，人唯一的退路是
+    删掉整个项目重建——那会把人工标的片段一起带走。
+
+    三条线要守住：分不清来源的旧数据（model='siglip'）单独一档，不混进任何一边；
+    默认不删人已经判过的；别的来源（AI 预标注等）一条都不能碰。"""
+    from app.api.v1 import projects as api
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+
+    def cand(task, ms, reason, model, status=CandidateStatus.pending):
+        return AiCandidate(task_id=task.id, round_no=task.round_no, label_name="舔身体-后肢臀尾",
+                           start_time_ms=ms, end_time_ms=ms + 1000, confidence=0.1,
+                           reason=reason, model=model, status=status)
+
+    for c in (cand(t1, 1000, vi.REASON, vi.MODEL_TEXT),
+              cand(t1, 3000, vi.REASON, vi.MODEL_TEXT, CandidateStatus.rejected),
+              cand(t2, 5000, vi.REASON, vi.MODEL_IMAGE),
+              cand(t1, 7000, vi.REASON, vi.MODEL_TAG),      # 旧数据：分不清来源
+              cand(t1, 9000, "low_conf", None)):            # 别的来源：不许碰
+        db.add(c)
+    run(db.commit())
+
+    got = run(api.project_candidate_sources(p.id, db=db))["data"]
+    assert got["sources"]["text"] == {"total": 2, "pending": 1}
+    assert got["sources"]["image"] == {"total": 1, "pending": 1}
+    assert got["sources"]["similar_old"] == {"total": 1, "pending": 1}
+    assert got["other"] == {"total": 1, "pending": 1}
+
+    # 默认只删没判过的：已排除那条是人的判断，留着
+    r = run(api.purge_project_candidates(p.id, api.CandidatePurgeIn(source="text"), db=db))["data"]
+    assert r["deleted"] == 1
+    left = run(api.project_candidate_sources(p.id, db=db))["data"]
+    assert left["sources"]["text"] == {"total": 1, "pending": 0}
+    # 别的来源、别的档一条都没少
+    assert left["sources"]["image"]["total"] == 1 and left["sources"]["similar_old"]["total"] == 1
+    assert left["other"]["total"] == 1
+
+    # 推倒重来：连判过的一起删
+    r = run(api.purge_project_candidates(
+        p.id, api.CandidatePurgeIn(source="text", include_decided=True), db=db))["data"]
+    assert r["deleted"] == 1
+    assert run(api.project_candidate_sources(p.id, db=db))["data"]["sources"]["text"]["total"] == 0
