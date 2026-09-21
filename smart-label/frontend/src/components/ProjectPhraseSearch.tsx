@@ -5,6 +5,7 @@ import { projectSimilarSearch, projectSimilarWrite } from "@/api/projects";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
+import { nearestName } from "@/utils/labelTree";
 
 /**
  * 项目级「一句话找画面」：第一阶段的落点。
@@ -271,10 +272,15 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             // **选了哪一条，「标成」就跟着填成同一个类别。** 这两个框本来说的就是
             // 同一件事（我要找的是哪个动作），让人再选一遍纯属重复，而且忘了选
             // 就勾不动——不对的话人自己改一下就是，比每次都手动选强
-            if (q && labelNames.some((l) => l.name === q.label)) {
-              setLabel(q.label);
-              setNoLabel(null);
+            // 项目里没有这个部位的标签时**退到最近的上级**（舔-后爪 → 舔），
+            // 而不是空着。空着的话勾不动、写不进去，人只会以为「标成」坏了；
+            // 退上一级最多是部位粗了一点，回头在候选行上改一条就行
+            const near = q ? nearestName(labelNames.map((l) => l.name), q.label) : null;
+            if (near) {
+              setLabel(near.name);
+              setNoLabel(near.exact ? null : q!.label);
             } else if (q) {
+              setLabel(null);
               setNoLabel(q.label);
             }
           }}
@@ -301,8 +307,10 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
           </Typography.Text>
         )}
         {noLabel && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            项目里没有「{noLabel}」这个标签，所以「标成」没自动填——自己选一个，或者去标签管理里加
+          <Typography.Text type="warning" style={{ fontSize: 12 }}>
+            {label
+              ? `项目里没有「${noLabel}」这个标签，先按最近的上级「${label}」填上了。要标到这个部位，去标签管理里把它加进这个项目`
+              : `项目里没有「${noLabel}」这个标签，上级也没有——自己选一个，或者去标签管理里加`}
           </Typography.Text>
         )}
         {auto && (

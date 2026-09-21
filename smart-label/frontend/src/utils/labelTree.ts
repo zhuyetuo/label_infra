@@ -138,3 +138,43 @@ export function findLabel<T extends { display_name: string }>(
 
 /** 这个名字现在该显示成什么（旧名换成新名，其余原样） */
 export const currentName = (name: string): string => NAME_ALIASES[name] ?? name;
+
+/**
+ * 想标成 want，但项目里不一定有这个标签——往上找最近的一个真有的。
+ *
+ * 为什么要有这个：搜的那个下拉列的是**所有已知动作名**（那张中文标签→英文描述的表，
+ * 跨项目通用），而「标成」只能用**这个项目里真有的标签**。项目 A 建过「舔-后爪」，
+ * 项目 B 没有，于是在 B 里选了描述之后「标成」就空着，人还以为是坏了。
+ *
+ * 找法跟 queryFor 一套：原名 → 去掉左/右 → 一级级往上（舔-左后爪 → 舔-后爪 → 舔）。
+ * 退到父级不是凑合：部位标错了要改一条，而整批写不进去是一个都拿不到。
+ * 退了必须说出来（返回 exact=false），不然人会以为自己选的就是那个部位。
+ */
+export function nearestName(names: string[], want: string): { name: string; exact: boolean } | null {
+  // 旧名新名两头都要认：项目里存的可能还是「舔身体」，想标的是「舔」，反过来也有
+  const has = (s: string) =>
+    names.find((n) => n === s || NAME_ALIASES[s] === n || NAME_ALIASES[n] === s);
+  const tries: string[] = [];
+  const push = (s: string) => {
+    if (s && !tries.includes(s)) tries.push(s);
+  };
+  push(want);
+  const noLR = want
+    .replace(/-([左右])/, "-")
+    .replace(/-(前|后)([左右])/, "-$1")
+    .replace(/^([左右])/, "");
+  push(noLR);
+  for (const base of [noLR, want]) {
+    // 一级一级往上：舔-左后爪 → 舔-后爪 → 舔
+    let i = base.lastIndexOf("-");
+    while (i > 0) {
+      push(base.slice(0, i));
+      i = base.lastIndexOf("-", i - 1);
+    }
+  }
+  for (const k of tries) {
+    const hit = has(k);
+    if (hit) return { name: hit, exact: k === want };
+  }
+  return null;
+}
