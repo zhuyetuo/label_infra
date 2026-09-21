@@ -172,6 +172,10 @@ export const projectSimilarSearch = (id: number, body: {
 }) =>
   request.post<never, {
     hits: SimilarHit[]; searched: number; missing: number; centered: boolean; pose_used: boolean;
+    /** 有几路索引是旧版（没有「没抠背景」那一列），这次没搜它们 */
+    old_index?: number;
+    /** 这次一句话搜比的是哪一列：原图 / 抠图 */
+    text_space?: string | null;
   }>(`/projects/${id}/similar-search`, body, { timeout: 120000 });
 
 /** 勾中的帧 → 候选。[[任务号, 路径, 秒, 类别名], …]，类别各按各的 */

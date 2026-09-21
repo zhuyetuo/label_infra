@@ -38,7 +38,8 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   const [view, setView] = useState<SimilarThumbView>("box");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<{ hits: SimilarHit[]; searched: number; missing: number; centered: boolean } | null>(null);
+  const [res, setRes] = useState<{ hits: SimilarHit[]; searched: number; missing: number; centered: boolean;
+                                   old_index?: number; text_space?: string | null } | null>(null);
   const [tokens, setTokens] = useState<Record<string, string>>({});
   // 勾中的 → 标成哪个类别。默认一张都不勾：一句话搜的命中里不对的不少，
   // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
@@ -85,6 +86,12 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
       setCur(null);
       setClip(null);
       if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
+      // 老索引没有「没抠背景」那一列：一句话搜跳过了它们。不说的话人只会看到
+      // "搜到的少"，还以为是这一句不行
+      if (r.old_index) {
+        message.warning(`${r.old_index} 路索引是旧版（没有「没抠背景」的向量），一句话搜这次跳过了它们。`
+          + "重建这几路的索引就能一起搜——以图搜图不受影响", 8);
+      }
       if (!r.hits.length) message.info("一条都没搜到。换个说法再试，或者先去「建画面索引」");
     } finally {
       setLoading(false);
@@ -274,6 +281,8 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               </Tooltip>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 搜了 {res.searched} 路{res.missing ? `，${res.missing} 路还没建索引` : ""}
+                {res.old_index ? `，${res.old_index} 路索引是旧版被跳过` : ""}
+                {res.text_space ? `；比的是${res.text_space}那一列` : ""}
                 {res.centered ? "；已去共同背景，分数是相对的（0.3 以上算像）" : "；没去背景，分数普遍偏高，看相对高低"}
               </Typography.Text>
             </Space>
