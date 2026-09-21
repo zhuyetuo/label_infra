@@ -100,6 +100,14 @@ export interface VisionSeekProgress {
   clips_candidate: number;
   /** 真送去问模型的段数 */
   clips_sent: number;
+  /** 模型这 N 段是怎么答的。**没有这几个数，「0 条候选」没法解释**：
+   *  判 none（模型看了，觉得不是）／看不清（画面太小太暗，该修裁图那层）／
+   *  判出来了但没过置信度线（调 min_conf 就能看到）／调用失败（服务问题）——
+   *  四种的解法完全不同，混成一个 0 全白搭 */
+  ans_label?: number;
+  ans_unclear?: number;
+  ans_lowconf?: number;
+  ans_error?: number;
   /** 估算花了多少美元（数量级，账以 Anthropic 后台为准） */
   est_usd: number;
   current_task_id: number | null;

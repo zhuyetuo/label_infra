@@ -417,3 +417,24 @@ def test_跑全部机位_一个任务几路都问_候选合到一起只替换一
     run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(cam="all", review=True), prog2,
                        seek_fn=_fake_seek(calls, segs)))
     assert {(f["label_name"], f["cam"]) for f in prog2.found} == {("舔身体", "cam1"), ("蹭身体", "cam2")}
+
+
+def test_零条候选要说清是哪一种零(db, run):
+    """送了 574 段、得 0 条候选——这个 0 有四种完全不同的原因：模型判 none、
+    看不清、判出来了但没过置信度线、调用失败。四条路的解法互相排斥，
+    只报一个 0 等于让人挨个猜。视觉服务本来就算了这几个数，平台这层原来把它扔了。"""
+    u, p, (s1, s2), (t1, t2, t3) = _world(db, run)
+
+    async def seek(path, specs, **kw):
+        return {"segments": [],
+                "stats": {"clips_candidate": 10, "clips_sent": 10,
+                          "hits": 2, "unclear": 3, "low_conf": 2, "errors": 1,
+                          "usage": {"est_usd": 0.0}}}
+
+    prog = vs.SeekProgress(status="running", project_id=p.id)
+    run(vs.run_project(db, p.id, [t1.id], vs.SeekParams(), prog, seek_fn=seek))
+    assert (prog.ans_label, prog.ans_unclear, prog.ans_lowconf, prog.ans_error) == (2, 3, 2, 1)
+    line = next(d for d in prog.detail if "得 0 条候选" in d)
+    # 判 none = 送出去的减掉「判了类别的」「看不清的」「失败的」= 10-2-3-1 = 4
+    assert "判 none 4" in line and "看不清 3" in line
+    assert "判出来但没过置信度线 2" in line and "失败 1" in line

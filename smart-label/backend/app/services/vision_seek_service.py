@@ -224,6 +224,33 @@ async def add_vision_candidates(db: AsyncSession, task: Task, cands: list[Vision
     return n
 
 
+def _answer_note(sent: int, label: int, unclear: int, low: int, err: int) -> str:
+    """模型这一批是怎么答的，写成一句人话跟在日志后面。
+
+    **0 条候选有四种完全不同的原因**，不写出来的话它们长得一模一样：
+
+      判 none    模型看了，认为不是这些行为 → 它在这批画面上没有分辨力，调提示词没用
+      看不清     画面太小/太暗/狗被挡 → 该回头修裁图那一层，不是模型的问题
+      没过线     判出来了但置信度低 → 把 min_conf 调低就能看到东西
+      失败       调用或解析出错 → 服务的问题，跟模型判断无关
+
+    只报一个"得 0 条"，人只能挨个猜，而这四条路互相排斥。
+    """
+    if not sent:
+        return ""
+    none_n = max(0, sent - label - unclear - err)
+    bits = []
+    if none_n:
+        bits.append(f"判 none {none_n}")
+    if unclear:
+        bits.append(f"看不清 {unclear}")
+    if low:
+        bits.append(f"判出来但没过置信度线 {low}")
+    if err:
+        bits.append(f"失败 {err}")
+    return f"（{('、'.join(bits))}）" if bits else ""
+
+
 def video_path_of(sample: Sample, cam: str) -> str | None:
     return {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path,
             "cam3": sample.video_cam3_path}.get(cam) or None
@@ -244,6 +271,14 @@ class SeekProgress:
     candidates: int = 0           # 写进去的候选条数
     clips_candidate: int = 0      # 本地筛出来的段数（dry_run 看这个）
     clips_sent: int = 0           # 真送去问模型的段数
+    # 模型这 N 段是怎么答的。**没有这几个数，「0 条候选」是没法解释的**——
+    # 模型每段都判 none（它看不出来）、每段都说看不清（送进去的画面太小太暗，
+    # 该回头修裁图那一层）、判出来了但置信度没过线（调 min_conf 就能看到）、
+    # 调用直接失败（服务/解析的问题），四种的解法完全不同，混成一个 0 全白搭
+    ans_label: int = 0            # 判出了某个类别的段数
+    ans_unclear: int = 0          # 答"看不清"的段数
+    ans_lowconf: int = 0          # 判出来了但置信度 < min_conf，被扔掉的
+    ans_error: int = 0            # 调用/解析失败的
     est_usd: float = 0.0
     current_task_id: int | None = None
     current_sample_code: str | None = None
@@ -448,6 +483,9 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             kw["start_s"] = task.segment_start_ms / 1000.0
             kw["end_s"] = task.segment_end_ms / 1000.0
         cands = []
+        # 这一个任务里模型是怎么答的：累计到 progress 的同时也要留一份本任务的，
+        # 日志那一行报的是这个任务，拿累计值写就全错了
+        a_label = a_unclear = a_low = a_err = 0
         n_sent = n_cand_clips = 0
         failed_all = True
         for cam_slot, path in paths:
@@ -460,6 +498,14 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
             st = r.get("stats") or {}
             n_cand_clips += int(st.get("clips_candidate") or 0)
             n_sent += int(st.get("clips_sent") or 0)
+            a_label += int(st.get("hits") or 0)
+            a_unclear += int(st.get("unclear") or 0)
+            a_low += int(st.get("low_conf") or 0)
+            a_err += int(st.get("errors") or 0)
+            progress.ans_label += int(st.get("hits") or 0)
+            progress.ans_unclear += int(st.get("unclear") or 0)
+            progress.ans_lowconf += int(st.get("low_conf") or 0)
+            progress.ans_error += int(st.get("errors") or 0)
             progress.clips_candidate += int(st.get("clips_candidate") or 0)
             progress.clips_sent += int(st.get("clips_sent") or 0)
             progress.est_usd = round(progress.est_usd + float((st.get("usage") or {}).get("est_usd") or 0.0), 4)
@@ -499,11 +545,13 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
                 })
             progress.succeeded += 1
             progress.processed += 1
-            progress.log(f"任务 #{task.id} {code}：送 {n_sent} 段，找到 {len(cands)} 段（等人筛，还没写）")
+            progress.log(f"任务 #{task.id} {code}：送 {n_sent} 段，找到 {len(cands)} 段（等人筛，还没写）"
+                         + _answer_note(n_sent, a_label, a_unclear, a_low, a_err))
             continue
         n = await replace_vision_candidates(db, task, [c for _s, _p, c in cands], model=model_tag)
         await db.commit()
         progress.candidates += n
         progress.succeeded += 1
         progress.processed += 1
-        progress.log(f"任务 #{task.id} {code}：送 {st.get('clips_sent', 0)} 段，得 {n} 条候选")
+        progress.log(f"任务 #{task.id} {code}：送 {n_sent} 段，得 {n} 条候选"
+                     + _answer_note(n_sent, a_label, a_unclear, a_low, a_err))
