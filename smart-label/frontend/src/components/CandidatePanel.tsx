@@ -4,7 +4,7 @@ import { Button, Dropdown, Empty, Popconfirm, Radio, Select, Space, Table, Tag, 
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
-import { flatten } from "@/utils/labelTree";
+import { currentName, findLabel, flatten } from "@/utils/labelTree";
 
 /**
  * 疑似抓挠候选面板：正式片段（稳定版）为了准会滤掉一部分真抓挠，这里是低门槛
@@ -199,8 +199,12 @@ export default function CandidatePanel({
   const otherLabels = labels.filter((l) => !scratchLabelIds.includes(l.id));
   /** 某个标签底下的直接子部位。按 parent_id 找，找不到再按「父名-」前缀兜底
    *  （老项目里的标签可能没挂 parent_id，那时候层级只体现在名字上）。 */
-  const partsOf = (name: string) => {
-    const parent = labels.find((l) => l.display_name === name);
+  const partsOf = (rawName: string) => {
+    // 候选里存的可能是旧名（舔身体），项目标签叫「舔」——按旧名找，父标签找不到、
+    // 前缀也对不上，结果是「确认是舔身体」底下一个部位按钮都没有，
+    // 而旁边没改过名的「抓挠」一切正常。看着像"这一类就是没有部位"
+    const name = currentName(rawName);
+    const parent = findLabel(labels, name);
     const kids = parent ? labels.filter((l) => l.parent_id === parent.id) : [];
     if (kids.length) return kids;
     return labels.filter((l) => l.display_name.startsWith(name + "-")
@@ -241,7 +245,7 @@ export default function CandidatePanel({
         ]}
       />
       {labelCounts.length > 1 && (
-        <Tooltip title="只看某几类。找相似 / 找片段一次会落好几个类别，混在一起没法逐类核对">
+        <Tooltip title="只看某几类。列出来的**就是这批候选里实有的类别**和各自的条数（不是项目的全量标签），所以数字加起来等于「全部」。找相似 / 找片段一次会落好几个类别，混在一起没法逐类核对">
           <Select
             size="small"
             mode="multiple"
@@ -255,7 +259,11 @@ export default function CandidatePanel({
               value: name,
               label: (
                 <span>
-                  <Tag color={labels.find((l) => l.display_name === name)?.color || undefined} style={{ marginRight: 4 }}>{name}</Tag>
+                  {/* 按新名找颜色：候选里存的可能是旧名（舔身体），项目标签叫「舔」，
+                      直接按 display_name 找会落空，这一条就成了没颜色的灰标签 */}
+                  <Tag color={findLabel(labels, name)?.color || undefined} style={{ marginRight: 4 }}>
+                    {currentName(name)}
+                  </Tag>
                   <span style={{ color: "#999", fontSize: 12 }}>{n}</span>
                 </span>
               ),
@@ -349,7 +357,7 @@ export default function CandidatePanel({
               description={
                 <span>
                   这条数据有 {candidates.length} 条疑似片段，但
-                  {labelFilter.length ? `「只看类别：${labelFilter.join("、")}」` : ""}
+                  {labelFilter.length ? `「只看类别：${labelFilter.map(currentName).join("、")}」` : ""}
                   {labelFilter.length && filter === "similar" ? "和" : ""}
                   {filter === "similar" ? "「画面相似」" : labelFilter.length ? "" : "当前这一档"}
                   把它们全挡住了
@@ -386,7 +394,9 @@ export default function CandidatePanel({
               <Space size={2}>
                 <Tag color={REASON_COLOR[c.reason] ?? "orange"}>{REASON_LABEL[c.reason] ?? c.reason}</Tag>
                 {/* 不是抓挠的候选要看得出是哪类——列表里混着两种，光看时间分不出 */}
-                {c.label_name !== "抓挠" && <Tag>{c.label_name}</Tag>}
+                {c.label_name !== "抓挠" && (
+                  <Tag color={findLabel(labels, c.label_name)?.color || undefined}>{currentName(c.label_name)}</Tag>
+                )}
                 {/* 两个模型各跑一遍时并排放着，得看得出哪条是谁给的 */}
                 {c.model && (
                   <Tag style={{ marginRight: 0, fontSize: 11 }} title={c.model}>
@@ -503,7 +513,7 @@ export default function CandidatePanel({
                 {!readOnly && c.status === "pending" && (
                   <>
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
-                      确认是{c.label_name}
+                      确认是{currentName(c.label_name)}
                     </Button>
                     {/* 这一条候选那个标签底下的部位，直接摆出来一键点。
                         「改成别的」是上百项的下拉（22 类各带部位），复核一条要在里面翻——
@@ -519,8 +529,8 @@ export default function CandidatePanel({
                         >
                           {/* 只显示部位那一截：标签名是「舔身体-后左爪」，前缀每条都一样，
                               占地方又帮不上忙 */}
-                          {l.display_name.startsWith(c.label_name + "-")
-                            ? l.display_name.slice(c.label_name.length + 1)
+                          {l.display_name.startsWith(currentName(c.label_name) + "-")
+                            ? l.display_name.slice(currentName(c.label_name).length + 1)
                             : l.display_name}
                         </Tag>
                       </Tooltip>
