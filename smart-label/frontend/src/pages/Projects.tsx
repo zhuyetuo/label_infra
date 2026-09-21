@@ -55,6 +55,7 @@ import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
 import { listLabels } from "@/api/labels";
 import SeekReviewGrid from "@/components/SeekReviewGrid";
+import ProjectPhraseSearch from "@/components/ProjectPhraseSearch";
 import { applyLabelTemplate, listLabelTemplates } from "@/api/labelTemplates";
 import { listSamples } from "@/api/samples";
 import { listUsers } from "@/api/users";
@@ -198,6 +199,7 @@ export default function Projects() {
   const [seekReview, setSeekReview] = useState(true);
   // 筛选那一屏
   const [reviewOpen, setReviewOpen] = useState<number | null>(null);
+  const [phraseTarget, setPhraseTarget] = useState<Project | null>(null);
   const [reviewFound, setReviewFound] = useState<SeekFound[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
   const openReview = async (pid: number) => {
@@ -1594,6 +1596,14 @@ export default function Projects() {
                   >
                     建画面索引
                   </Button>
+                  {/* 第一阶段的落点：「我想要一张狗咬尾巴的图」。不挑任务、不要样例帧，
+                      一句话搜整个项目——原来这个功能藏在某个任务的工作台里，
+                      而想找第一张的时候，人手上恰恰还没有任何一条样例 */}
+                  <Tooltip title="一句英文搜整个项目已建索引的画面（免费、秒出）。找到第一张之后，就能拿它去「找相似」扩一批">
+                    <Button size="small" type="link" onClick={() => setPhraseTarget(p)}>
+                      一句话找画面
+                    </Button>
+                  </Tooltip>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -2272,6 +2282,25 @@ export default function Projects() {
           />
         </Space>
         {renderSamplePicker(bulkSelected, setBulkSelected, alreadyImportedIds)}
+      </Modal>
+
+      {/* 项目级「一句话找画面」：第一阶段的落点 */}
+      <Modal
+        title={`一句话找画面 - ${phraseTarget?.name ?? ""}`}
+        open={phraseTarget != null}
+        onCancel={() => setPhraseTarget(null)}
+        width="100vw"
+        style={{ top: 0, maxWidth: "100vw", paddingBottom: 0 }}
+        styles={{ body: { height: "calc(100vh - 110px)", overflow: "hidden", padding: "8px 12px" }, content: { borderRadius: 0 } }}
+        footer={null}
+        destroyOnClose
+      >
+        {phraseTarget && (
+          <ProjectPhraseSearch
+            projectId={phraseTarget.id}
+            labelNames={labelsOf(phraseTarget.id).filter((l) => l.is_active).map((l) => ({ name: l.display_name, color: l.color }))}
+          />
+        )}
       </Modal>
 
       {/* 「大模型看视频找动作」跑完之后的筛选屏：跟「找相似」那一屏同一套操作 */}

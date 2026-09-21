@@ -513,3 +513,19 @@ def test_合段按视频和类别一起分(db, run):
     segs = vi.group_hits(hits, gap_s=15.0)
     assert {(s["label"], s["start_s"], s["end_s"], s["n"]) for s in segs} == {
         ("舔", 9.0, 13.0, 2), ("甩身体", 12.0, 14.0, 1)}
+
+
+def test_一句话搜不需要当前任务(db, run):
+    """想找「一张狗咬尾巴的图」时，人手上还没有任何样例，本来也不该先随便挑个
+    任务、打开工作台、再去里面找这个功能。所以 task 可以是 None。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    fn = _search({"hits": [{"path": "d/s1_cam1.mp4", "t": 5.0, "score": 0.8}],
+                  "segments": [], "searched": 3, "missing": []})
+    r = run(vi.find_similar(db, None, vi.SimilarParams(
+        label_name="", text="a dog biting its own tail", dry_run=True), search_fn=fn, project_id=p.id))
+    assert r["hits"] == 1 and r["hit_list"][0]["task_id"] == t1.id
+    assert sorted(fn.calls[0]["paths"]) == ["d/s1_cam1.mp4", "d/s2_cam1.mp4", "d/s2_cam2.mp4"]
+    assert fn.calls[0]["ref"] is None                    # 一句话搜没有样例帧
+    # 以图搜图仍然要有任务：没有任务就没有"样例在哪一路的第几秒"
+    with pytest.raises(ValueError, match="样例帧"):
+        run(vi.find_similar(db, None, vi.SimilarParams(label_name="x", t_s=1.0), search_fn=fn, project_id=p.id))

@@ -1,4 +1,5 @@
 import request from "@/utils/request";
+import type { SimilarHit } from "@/api/candidates";
 import type { Project } from "@/types";
 
 export const listProjects = () => request.get<never, Project[]>("/projects");
@@ -160,6 +161,22 @@ export const getVisionSeekFound = (id: number) =>
 /** 把人勾中的段写成候选（只加不删） */
 export const writeVisionSeekPicks = (id: number, picks: (SeekFound & { label_name: string })[]) =>
   request.post<never, { written: number; left: number }>(`/projects/${id}/vision-seek/write`, { picks });
+
+// ── 项目级「一句话找画面」 ─────────────────────────────────────────
+// 想找「一张狗咬尾巴的图」时，人手上还没有任何样例，也不该先随便挑个任务
+// 打开工作台再去里面找这个功能。这里不挑任务、不要样例帧，直接搜整个项目。
+
+export const projectSimilarSearch = (id: number, body: {
+  text: string; top_k?: number; min_score?: number; gap_s?: number;
+  center?: boolean; pose_w?: number; part?: string;
+}) =>
+  request.post<never, {
+    hits: SimilarHit[]; searched: number; missing: number; centered: boolean; pose_used: boolean;
+  }>(`/projects/${id}/similar-search`, body, { timeout: 120000 });
+
+/** 勾中的帧 → 候选。[[任务号, 路径, 秒, 类别名], …]，类别各按各的 */
+export const projectSimilarWrite = (id: number, picks: [number, string, number, string][], gapS?: number) =>
+  request.post<never, { written: number }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
 
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-seek`, body);

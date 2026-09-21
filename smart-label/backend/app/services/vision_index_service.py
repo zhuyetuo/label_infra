@@ -368,21 +368,30 @@ async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
     return n
 
 
-async def find_similar(db: AsyncSession, task: Task, params: SimilarParams, search_fn=None) -> dict:
-    """在项目（或本任务）已建索引的视频里找像的，写成候选。返回汇总。"""
+async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParams, search_fn=None,
+                       project_id: int | None = None) -> dict:
+    """在项目（或本任务）已建索引的视频里找像的，写成候选。返回汇总。
+
+    task 可以是 None：**一句话搜不需要样例帧，也就不需要一个"当前任务"**。
+    项目页那个入口就是这么进来的——想找「一张狗咬尾巴的图」时，人手上还没有
+    任何一条样例，本来也不该先随便挑个任务打开工作台。那时用 project_id 说明搜哪个项目。
+    """
     search_fn = search_fn or vc.embed_search
     if (params.t_s is None) == (params.text is None):
         raise ValueError("给一帧的时间或一句描述，二选一")
-    sample = await db.get(Sample, task.sample_id)
+    if task is None and params.t_s is not None:
+        raise ValueError("以图搜图要有样例帧所在的任务")
+    sample = await db.get(Sample, task.sample_id) if task is not None else None
     own_path = video_path_of(sample, params.cam) if sample else None
     if params.t_s is not None and not own_path:
         raise ValueError(f"这个任务的样本没有 {params.cam} 视频")
 
     if params.scope == "task":
-        rows = [(task, sample, own_path)] if own_path else []
+        rows = [(task, sample, own_path)] if (task is not None and own_path) else []
     else:
         # 整个项目 / 所有项目：每份样本只搜能对上 IMU 的那几路（一间一狗的场地只搜自己房间那一路）
-        rows = await project_videos(db, None if params.scope == "all" else task.project_id, "all")
+        pid = None if params.scope == "all" else (task.project_id if task is not None else project_id)
+        rows = await project_videos(db, pid, "all")
     by_path: dict[str, list[Task]] = {}
     _multi_of: dict[int, bool] = {}
     _code_of: dict[int, str | None] = {}
