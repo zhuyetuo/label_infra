@@ -184,6 +184,10 @@ export const projectSimilarSearch = (id: number, body: {
 export const projectSimilarWrite = (id: number, picks: [number, string, number, string][], gapS?: number) =>
   request.post<never, {
     written: number;
+    /** 合出来几段 */
+    segments?: number;
+    /** 其中几段因为跟已有候选重叠而没重复写。写了 0 条时就靠它解释 */
+    skipped_existing?: number;
     /** 写进了哪几个任务、各几条。只说「写了 N 条」人不知道去哪找 */
     tasks?: { task_id: number; n: number }[];
   }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });

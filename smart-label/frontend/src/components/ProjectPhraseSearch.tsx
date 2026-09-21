@@ -135,25 +135,60 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
     setBusy(true);
     try {
       const r = await projectSimilarWrite(projectId, picks, gapS);
+      // **写了 0 条不是成功。** 这种情况几乎都是"这几段之前已经写过了"
+      // （同类别时间重叠的不重复写），不说清楚的话人只看到一个绿对勾，
+      // 然后去候选列表里找不到新东西，以为坏了
+      // 勾中的那些帧各属于哪个任务：**写没写成都要给链接**。
+      // 「已经写过了」跟「没写」对人来说是一样的困境——他要的是"那东西在哪"
+      const pickedTasks = [...new Set(picks.map((p) => p[0]))];
+      const links = (
+        <>
+          {pickedTasks.slice(0, 5).map((tid, i) => (
+            <span key={tid}>
+              {i > 0 && "、"}
+              <a href={`/tasks?task=${tid}&cand=similar`} target="_blank" rel="noreferrer">#{tid}</a>
+            </span>
+          ))}
+          {pickedTasks.length > 5 && ` 等 ${pickedTasks.length} 个`}
+        </>
+      );
+      if (!r.written) {
+        message.warning(
+          <span>
+            {r.skipped_existing
+              ? `一条都没写：这 ${r.skipped_existing} 段之前已经写过候选了（同类别时间重叠的不重复写）。`
+              : "一条都没写（合出来的段是空的，换几帧再试）。"}
+            {r.skipped_existing ? <>它们在这些任务里：{links}（点开就是「画面相似」那一档）</> : null}
+          </span>,
+          12,
+        );
+        setPicked(new Map());
+        return;
+      }
       // **写到哪几个任务去了，必须说出来。** 候选是按帧所属的任务散着写的，
       // 只报一句"写了 N 条"，人关掉这一屏就再也找不到它们在哪
       const ts = r.tasks ?? [];
-      const where = ts.length
-        ? `写进了${ts.length > 1 ? ` ${ts.length} 个任务：` : "任务 "}${ts.slice(0, 5).map((t) => `#${t.task_id}（${t.n} 条）`).join("、")}${ts.length > 5 ? " 等" : ""}`
-        : "";
       message.success(
         <span>
-          写了 {r.written} 条候选（相邻的合成了一段）。{where}
-          {ts.length > 0 && (
+          写了 {r.written} 条候选（相邻的合成了一段）。在这些任务里：
+          {ts.length ? (
             <>
-              {" "}
-              <a href={`/tasks?task=${ts[0].task_id}&cand=similar`} target="_blank" rel="noreferrer">
-                打开第一个任务
-              </a>
+              {ts.slice(0, 5).map((t, i) => (
+                <span key={t.task_id}>
+                  {i > 0 && "、"}
+                  <a href={`/tasks?task=${t.task_id}&cand=similar`} target="_blank" rel="noreferrer">
+                    #{t.task_id}（{t.n} 条）
+                  </a>
+                </span>
+              ))}
+              {ts.length > 5 && ` 等 ${ts.length} 个`}
             </>
+          ) : (
+            links
           )}
+          （点开就是「画面相似」那一档）
         </span>,
-        10,
+        12,
       );
       setPicked(new Map());
     } finally {
@@ -335,6 +370,9 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               </Tooltip>
               <Button size="small" disabled={!label} onClick={() => bulk(true)}>全要</Button>
               <Button size="small" onClick={() => bulk(false)}>全不要</Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                点图 = 看大图；<b>勾左上角的「要这张」才算选中</b>
+              </Typography.Text>
               <Tooltip title={SIMILAR_VIEW_HELP}>
                 <Segmented size="small" value={view} onChange={(v) => setView(v as SimilarThumbView)} options={SIMILAR_VIEW_OPTIONS} />
               </Tooltip>
@@ -358,14 +396,23 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
                     style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "#f0f0f0"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
                     title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 分 ${h.score.toFixed(3)}`}
                   >
-                    <Tooltip title={label ? undefined : "先在左边选「标成」哪个类别"}>
+                    {/* **勾选框要大、要有字。** 原来是个 16px 的深色描边方框压在深色图上，
+                        基本看不见；而点图是"看大图"不是"选中"，于是人点了一圈图，
+                        写入按钮还是「要 0 / 60」，只会以为坏了 */}
+                    <Tooltip title={label ? "勾上 = 写成候选。点图只是看大图，不算选中" : "先在左边选「标成」哪个类别"}>
                       <Checkbox
                         checked={on}
                         disabled={!label}
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => toggle(h)}
-                        style={{ position: "absolute", top: 6, left: 6, zIndex: 2, background: "rgba(0,0,0,0.45)", borderRadius: 3, padding: "0 3px" }}
-                      />
+                        style={{
+                          position: "absolute", top: 4, left: 4, zIndex: 2,
+                          background: on ? "#52c41a" : "rgba(0,0,0,0.65)",
+                          color: "#fff", borderRadius: 4, padding: "2px 8px 2px 6px",
+                        }}
+                      >
+                        <span style={{ color: "#fff", fontSize: 12 }}>{on ? "已选" : "要这张"}</span>
+                      </Checkbox>
                     </Tooltip>
                     {urlOf(h) ? (
                       <img src={urlOf(h)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4 }} />
