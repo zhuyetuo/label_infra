@@ -136,6 +136,9 @@ export interface VisionSeekRequest {
   /** 样本表的三个**槽位**之一，或 "all"（能对上 IMU 的那几路都跑）。
    *  注意这不是机位号：狗场的 cam2 往往是天花板公共区 */
   cam?: "cam1" | "cam2" | "cam3" | "all";
+  /** 只跑这几个「场地·机位」（如「狗场2/cam4」）。空 = 不限。
+   *  跟 cam 正交：cam 是配对规则，这个是范围 */
+  scopes?: string[];
   /** 每个视频最多送多少段去问模型——花费上限 */
   max_clips?: number;
   min_conf?: number;
@@ -226,6 +229,10 @@ export const getCamSlots = (id: number) =>
   request.get<never, {
     slots: { slot: string; videos: number; own: number; public: number;
              cams: { label: string; videos: number }[] }[];
+    /** 扁平的「场地·机位」清单：界面按这个给人选。
+     *  **槽位不该出现在人眼前**——它是导入时的装箱顺序（影棚和狗场恰好都被塞进
+     *  第 1 个槽位），跟现场没有对应关系 */
+    scopes?: { key: string; label: string; videos: number; public: number }[];
     samples: number;
   }>(`/projects/${id}/cam-slots`);
 

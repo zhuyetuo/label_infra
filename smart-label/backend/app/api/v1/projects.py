@@ -172,6 +172,7 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
         if not st.get("available") and not body.dry_run:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "大模型看视频找动作不可用")
     params = vseek.SeekParams(labels=body.labels, part_depth=body.part_depth, cam=body.cam,
+                              scopes=tuple(body.scopes[:100]),
                               max_clips=body.max_clips, min_conf=body.min_conf, dry_run=body.dry_run,
                               provider=body.provider, model=body.model, review=body.review)
     started = await vseek.start(project_id, body.task_ids, params)
@@ -432,7 +433,22 @@ async def project_cam_slots(project_id: int, db: AsyncSession = Depends(get_db),
                     # 条数多的机位排前面：界面只显示前两个，够说明这个槽位是什么
                     "cams": [{"label": k, "videos": v}
                              for k, v in sorted(cams.items(), key=lambda kv: -kv[1])]})
-    return ok({"slots": out, "samples": len(rows)})
+    # 扁平的「场地·机位」清单：界面按这个给人选。
+    # **槽位不该出现在人眼前**——它是导入时的装箱顺序（影棚和狗场恰好都被塞进
+    # 第 1 个槽位），跟现场没有对应关系；人脑子里的单位是"影棚"、"狗场2 的 cam4"
+    flat: dict[str, dict] = {}
+    for s_ in rows:
+        for slot in ("cam1", "cam2", "cam3"):
+            path = vseek.video_path_of(s_, slot)
+            if not path:
+                continue
+            key, label = vindex.scope_of(path, vindex.day_dir_of(s_))
+            e = flat.setdefault(key, {"key": key, "label": label, "videos": 0, "public": 0})
+            e["videos"] += 1
+            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_)) == "public":
+                e["public"] += 1
+    return ok({"slots": out, "samples": len(rows),
+               "scopes": sorted(flat.values(), key=lambda x: x["key"])})
 
 
 @router.get("/{project_id}/candidate-sources",
