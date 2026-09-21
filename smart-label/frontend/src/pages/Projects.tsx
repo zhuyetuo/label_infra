@@ -31,6 +31,8 @@ import {
   getProjectPrelabelHistory,
   cancelProjectPrelabel,
   getProjectPrelabelStatus,
+  getCandidateSources,
+  purgeCandidates,
   listProjects,
   startProjectPrelabel,
   updateProject,
@@ -200,6 +202,21 @@ export default function Projects() {
   // 筛选那一屏
   const [reviewOpen, setReviewOpen] = useState<number | null>(null);
   const [phraseTarget, setPhraseTarget] = useState<Project | null>(null);
+  // 按来源清理画面候选：一轮搜坏了，不用为它删掉整个项目
+  const [purgeTarget, setPurgeTarget] = useState<Project | null>(null);
+  const [purgeSrc, setPurgeSrc] = useState<Awaited<ReturnType<typeof getCandidateSources>> | null>(null);
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  // 默认不碰人已经判过的：已确认/已排除/待定是人的判断，删了就白判了
+  const [purgeDecided, setPurgeDecided] = useState(false);
+  const loadPurge = async (id: number) => {
+    setPurgeSrc(null);
+    setPurgeSrc(await getCandidateSources(id));
+  };
+  const openPurge = (p: Project) => {
+    setPurgeTarget(p);
+    setPurgeDecided(false);
+    loadPurge(p.id);
+  };
   const [reviewFound, setReviewFound] = useState<SeekFound[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
   const openReview = async (pid: number) => {
@@ -1608,6 +1625,13 @@ export default function Projects() {
                       一句话找画面
                     </Button>
                   </Tooltip>
+                  {/* 试错留下的候选散在几百个任务里。没有这一处，想推倒重来
+                      只能删掉整个项目重建——那会把人工标的片段一起带走 */}
+                  <Tooltip title="按来源清点 / 整批删掉画面候选（一句话找画面、用这一张去扩）。不用为了清一轮试错去删项目">
+                    <Button size="small" type="link" onClick={() => openPurge(p)}>
+                      清理候选
+                    </Button>
+                  </Tooltip>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>
@@ -2309,6 +2333,86 @@ export default function Projects() {
           />
         </Space>
         {renderSamplePicker(bulkSelected, setBulkSelected, alreadyImportedIds)}
+      </Modal>
+
+      {/* 按来源清理画面候选。**只删候选，不动片段**——片段是人工成果，
+          归人工管；候选是机器的提议，试坏了就该能整批扔掉 */}
+      <Modal
+        title={`清理画面候选 - ${purgeTarget?.name ?? ""}`}
+        open={purgeTarget != null}
+        onCancel={() => setPurgeTarget(null)}
+        footer={null}
+        width={620}
+        destroyOnClose
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="删候选不会动片段"
+          description="已确认的候选生成过正式片段，那是人工成果，删候选不会带走它。反过来也一样：删片段不会带走候选——留着的候选会挡住同一段以后再被写进来。"
+        />
+        {purgeSrc == null ? (
+          <Spin />
+        ) : (
+          <>
+            <Checkbox
+              checked={purgeDecided}
+              onChange={(e) => setPurgeDecided(e.target.checked)}
+              style={{ marginBottom: 10 }}
+            >
+              连<b>已经判过的</b>一起删（已确认 / 已排除 / 待定）
+              <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
+                不勾就只删「待确认」的。推倒重来才勾
+              </Typography.Text>
+            </Checkbox>
+            <Space direction="vertical" style={{ width: "100%" }} size={8}>
+              {([
+                ["text", "一句话找画面", "项目页那个入口写的"],
+                ["image", "用这一张去扩", "工作台里拿一帧去找相似写的"],
+                ["similar_old", "画面相似（旧）", "两个入口还没分开时写的，认不出是哪一边"],
+              ] as const).map(([key, name, why]) => {
+                const s = purgeSrc.sources[key] ?? { total: 0, pending: 0 };
+                const n = purgeDecided ? s.total : s.pending;
+                return (
+                  <Space key={key} style={{ width: "100%", justifyContent: "space-between" }}>
+                    <span>
+                      <b>{name}</b>{" "}
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        共 {s.total} 条，其中待确认 {s.pending} · {why}
+                      </Typography.Text>
+                    </span>
+                    <Popconfirm
+                      title={`删掉 ${n} 条「${name}」候选？`}
+                      description="删掉之后这些段可以被重新搜出来、重新写。已确认的那些对应的片段不受影响"
+                      okText="删"
+                      okButtonProps={{ danger: true }}
+                      disabled={n === 0}
+                      onConfirm={async () => {
+                        setPurgeBusy(true);
+                        try {
+                          const r = await purgeCandidates(purgeTarget!.id, key, purgeDecided);
+                          message.success(`删了 ${r.deleted} 条`);
+                          await loadPurge(purgeTarget!.id);
+                          refresh();
+                        } finally {
+                          setPurgeBusy(false);
+                        }
+                      }}
+                    >
+                      <Button size="small" danger disabled={n === 0} loading={purgeBusy}>
+                        删 {n} 条
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                );
+              })}
+            </Space>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+              别的来源（AI 预标注、频谱、大模型看视频）共 {purgeSrc.other.total} 条，这里不碰。
+            </Typography.Paragraph>
+          </>
+        )}
       </Modal>
 
       {/* 项目级「一句话找画面」：第一阶段的落点 */}

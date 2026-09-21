@@ -203,6 +203,20 @@ export const projectSimilarWrite = (id: number, picks: [number, string, number, 
     }[];
   }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
 
+/** 画面来源的候选各有多少条、其中多少还没判过。
+ *  similar_old = 两个入口还没分开时写的，认不出是哪一边，所以单独一档 */
+export const getCandidateSources = (id: number) =>
+  request.get<never, {
+    sources: Record<"text" | "image" | "similar_old", { total: number; pending: number }>;
+    other: { total: number; pending: number };
+  }>(`/projects/${id}/candidate-sources`);
+
+/** 按来源整批删掉画面候选。默认只删没判过的——已确认/已排除/待定是人的判断。
+ *  删候选**不会动**它确认出来的片段：那是人工成果 */
+export const purgeCandidates = (id: number, source: string, includeDecided: boolean) =>
+  request.post<never, { deleted: number }>(`/projects/${id}/candidates/purge`,
+    { source, include_decided: includeDecided });
+
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-seek`, body);
 

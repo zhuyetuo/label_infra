@@ -86,6 +86,33 @@ export const candFocus = (c: AiCandidate, focusMs: number): boolean =>
   (c.start_time_ms <= focusMs && focusMs < c.end_time_ms) ||
   Math.abs(c.start_time_ms - focusMs) < 1500;
 
+/**
+ * 这条候选是哪来的。
+ *
+ * reason 只分到「画面相似」就到头了——一句话找画面 和 用这一张去扩 写出来的是同一个
+ * reason，而这两件事人是分开做的：某一次一句话搜得一塌糊涂，想整批清掉，不能把
+ * 以图搜图辛苦扩出来的一起带走。所以再看一眼 model 上带的那一截来源。
+ *
+ * 旧数据的 model 就是光秃秃的 "siglip"（那时两个入口还没分开）：单独一档，
+ * **不并进任何一边**——分不清来源却猜一个，人按那一档删就会误删。
+ */
+export const srcOf = (c: AiCandidate): string => {
+  if (c.reason !== "similar") return c.reason;
+  if (c.model === "siglip:text") return "text";
+  if (c.model === "siglip:img") return "image";
+  return "similar_old";
+};
+
+export const SRC_CN: Record<string, string> = {
+  text: "一句话找画面",
+  image: "用这一张去扩",
+  similar_old: "画面相似（旧）",
+  low_conf: "AI 低置信",
+  spectral: "频谱像抓挠",
+  grooming: "姿态像舔/啃",
+  vision: "大模型看视频",
+};
+
 const UNCERTAIN_KINDS = [
   { value: "no_view", short: "没画面", label: "画面里没拍到狗" },
   { value: "ambiguous", short: "看不清", label: "拍到了但看不准" },
@@ -122,6 +149,14 @@ export default function CandidatePanel({
     for (const c of candidates) m.set(c.label_name, (m.get(c.label_name) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [candidates]);
+  // 只看某个来源：一句话找画面 / 用这一张去扩 / AI 低置信…混在一起时，
+  // 想核对"刚才那一轮搜出来的到底对不对"根本挑不出来
+  const [srcFilter, setSrcFilter] = useState<string[]>([]);
+  const srcCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of candidates) m.set(srcOf(c), (m.get(srcOf(c)) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [candidates]);
   const [clearing, setClearing] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
   // 刚在这一屏处理过的候选。一确认/改类别它就不是"待确认"了，直接从列表消失的话
@@ -156,13 +191,14 @@ export default function CandidatePanel({
           : c.status === "pending" || justDecided.has(c.id)
     );
     if (labelFilter.length) list = list.filter((c) => labelFilter.includes(c.label_name));
+    if (srcFilter.length) list = list.filter((c) => srcFilter.includes(srcOf(c)));
     // 从找相似/链接跳进来的那条排最前，人一眼就知道"是这段"
     if (focusMs != null) {
       const hit = (c: AiCandidate) => candFocus(c, focusMs);
       list = [...list.filter(hit), ...list.filter((c) => !hit(c))];
     }
     return list;
-  }, [candidates, filter, labelFilter, justDecided, focusMs]);
+  }, [candidates, filter, labelFilter, srcFilter, justDecided, focusMs]);
   const isFocus = (c: AiCandidate) => focusMs != null && candFocus(c, focusMs);
 
 
@@ -265,6 +301,28 @@ export default function CandidatePanel({
                     {currentName(name)}
                   </Tag>
                   <span style={{ color: "#999", fontSize: 12 }}>{n}</span>
+                </span>
+              ),
+            }))}
+          />
+        </Tooltip>
+      )}
+      {srcCounts.length > 1 && (
+        <Tooltip title="只看某个来源。一句话找画面 和 用这一张去扩 写出来的都是「画面相似」，但人是分开做的：某一轮一句话搜得不好想整批清掉，不该把以图搜图扩出来的一起带走。「画面相似（旧）」是两个入口还没分开时写的，认不出是哪一边">
+          <Select
+            size="small"
+            mode="multiple"
+            allowClear
+            maxTagCount="responsive"
+            placeholder="只看来源"
+            style={{ minWidth: 140, maxWidth: 280 }}
+            value={srcFilter}
+            onChange={setSrcFilter}
+            options={srcCounts.map(([k, n]) => ({
+              value: k,
+              label: (
+                <span>
+                  {SRC_CN[k] ?? k} <span style={{ color: "#999", fontSize: 12 }}>{n}</span>
                 </span>
               ),
             }))}
@@ -392,7 +450,11 @@ export default function CandidatePanel({
             width: 150,
             render: (_, c: AiCandidate) => (
               <Space size={2}>
-                <Tag color={REASON_COLOR[c.reason] ?? "orange"}>{REASON_LABEL[c.reason] ?? c.reason}</Tag>
+                {/* 画面相似那一档直接写清是哪个入口写的：两行时间一样、类别不同的
+                    候选，多半是同一段在两个入口各写了一遍，看不出来源就只能猜 */}
+                <Tag color={REASON_COLOR[c.reason] ?? "orange"}>
+                  {c.reason === "similar" ? SRC_CN[srcOf(c)] ?? REASON_LABEL.similar : REASON_LABEL[c.reason] ?? c.reason}
+                </Tag>
                 {/* 不是抓挠的候选要看得出是哪类——列表里混着两种，光看时间分不出 */}
                 {c.label_name !== "抓挠" && (
                   <Tag color={findLabel(labels, c.label_name)?.color || undefined}>{currentName(c.label_name)}</Tag>
