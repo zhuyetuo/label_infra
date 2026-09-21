@@ -182,7 +182,11 @@ export const projectSimilarSearch = (id: number, body: {
 
 /** 勾中的帧 → 候选。[[任务号, 路径, 秒, 类别名], …]，类别各按各的 */
 export const projectSimilarWrite = (id: number, picks: [number, string, number, string][], gapS?: number) =>
-  request.post<never, { written: number }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
+  request.post<never, {
+    written: number;
+    /** 写进了哪几个任务、各几条。只说「写了 N 条」人不知道去哪找 */
+    tasks?: { task_id: number; n: number }[];
+  }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
 
 export const startVisionSeek = (id: number, body: VisionSeekRequest) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-seek`, body);

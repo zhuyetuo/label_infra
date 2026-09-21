@@ -331,15 +331,22 @@ async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
     for tid, path, t, lab in body.picks:
         by_task.setdefault(int(tid), []).append({"path": path, "t": float(t), "score": 0.0, "label": lab})
     written = 0
+    per_task: list[dict] = []
     gap = max(0.0, min(120.0, body.gap_s))
     for tid, hits in by_task.items():
         task = await db.get(Task, tid)
         if task is None or task.project_id != project_id:
             continue        # 不是这个项目的：跳过，别让一个乱传的 id 写到别处去
         segs = vindex.group_hits(hits, gap)
-        written += await vindex.add_similar_candidates(db, task, "", segs)
+        n = await vindex.add_similar_candidates(db, task, "", segs)
+        written += n
+        if n:
+            per_task.append({"task_id": tid, "n": n})
     await db.commit()
-    return ok({"written": written})
+    # **写到哪几个任务去了**：只说"写了 N 条"等于没说——候选散在别的任务里，
+    # 人根本不知道去哪找。带上任务号，界面才能给出链接
+    per_task.sort(key=lambda x: -x["n"])
+    return ok({"written": written, "tasks": per_task})
 
 
 @router.post("/{project_id}/vision-index", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
