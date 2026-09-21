@@ -5,7 +5,7 @@ import { projectSimilarSearch, projectSimilarWrite } from "@/api/projects";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
-import { nearestName } from "@/utils/labelTree";
+import { currentName, nearestName } from "@/utils/labelTree";
 
 /**
  * 项目级「一句话找画面」：第一阶段的落点。
@@ -309,7 +309,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
         {noLabel && (
           <Typography.Text type="warning" style={{ fontSize: 12 }}>
             {label
-              ? `项目里没有「${noLabel}」这个标签，先按最近的上级「${label}」填上了。要标到这个部位，去标签管理里把它加进这个项目`
+              ? `项目里没有「${noLabel}」这个标签，先按最近的上级「${currentName(label)}」填上了。要标到这个部位，去标签管理里把它加进这个项目`
               : `项目里没有「${noLabel}」这个标签，上级也没有——自己选一个，或者去标签管理里加`}
           </Typography.Text>
         )}
@@ -340,7 +340,13 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               } else if (!v) setAuto(null);
             }}
             optionFilterProp="value"
-            options={labelNames.map((l) => ({ value: l.name, label: <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.name}</Tag> }))}
+            // 显示用新名、值用项目里存的那个名。有的项目建得早，标签名还是「舔身体」，
+            // 别处一律显示成「舔」——只有这里露出旧名，看着就像自动填错了。
+            // 值不能跟着换：写候选时后端是拿这个名字去项目标签里对的，换了就 422
+            options={labelNames.map((l) => ({
+              value: l.name,
+              label: <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{currentName(l.name)}</Tag>,
+            }))}
           />
         </Space>
         {cur ? (
