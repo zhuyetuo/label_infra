@@ -142,6 +142,17 @@ export default function SeekReviewGrid({ projectId, found, labelNames = [], onWr
                   options={labelNames.map((l) => ({ value: l.name, label: <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.name}</Tag> }))}
                 />
               )}
+              {/* 第一阶段（大模型找到第一张）→ 第二阶段（拿它去扩）的那根线。
+                  没有它，人得记住"刚才那段在几分几秒"，再自己开任务、拖进度条、
+                  点找相似——而那正是这一套工具最该省掉的那几步 */}
+              <Tooltip title="拿这一段中点那一帧当样例，去整个项目里找长得像的几秒。类别和时刻都带过去，开新页">
+                <Button size="small" type="primary" ghost
+                  onClick={() => window.open(
+                    `/tasks?task=${cur.task_id}&seek=${Math.round(cur.t * 1000)}&similar=1&slabel=${encodeURIComponent(picked.get(curKey!) ?? cur.label_name)}`,
+                    "_blank")}>
+                  用这一张去扩
+                </Button>
+              </Tooltip>
               <Button size="small" onClick={() => window.open(`/tasks?task=${cur.task_id}&seek=${cur.start_ms}`, "_blank")}>
                 打开那个任务
               </Button>
