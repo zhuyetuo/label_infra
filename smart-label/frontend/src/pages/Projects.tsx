@@ -115,6 +115,24 @@ interface FormValues {
   templateId?: number;
 }
 
+/** 模型这一批是怎么答的，写成一句人话。
+ *  只报「得 0 条候选」的话，四种完全不同的原因长得一模一样（见 ans_* 的注释）。 */
+const answerNote = (sp: { clips_sent: number; ans_label?: number; ans_unclear?: number;
+                          ans_lowconf?: number; ans_error?: number }): string => {
+  const sent = sp.clips_sent || 0;
+  if (!sent) return "";
+  const label = sp.ans_label ?? 0, unclear = sp.ans_unclear ?? 0;
+  const low = sp.ans_lowconf ?? 0, err = sp.ans_error ?? 0;
+  if (!label && !unclear && !low && !err) return "";      // 老数据没有这几个数
+  const none = Math.max(0, sent - label - unclear - err);
+  const bits: string[] = [];
+  if (none) bits.push(`判 none ${none}`);
+  if (unclear) bits.push(`看不清 ${unclear}`);
+  if (low) bits.push(`判出来但没过置信度线 ${low}`);
+  if (err) bits.push(`失败 ${err}`);
+  return bits.length ? `（${bits.join("、")}）` : "";
+};
+
 export default function Projects() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
@@ -201,7 +219,9 @@ export default function Projects() {
   // 默认**直接跑**，不是先试算。试算只回答"这一批要花多少钱"，它没有结果可看，
   // 而默认勾着它的后果是：人点了「开始」，等半天，回来发现什么都没有。
   // 想知道花费的时候再勾——跑完有「先筛一遍再写」兜着，写不写还是人说了算
-  const [seekDryRun, setSeekDryRun] = useState(false);
+  // 界面上不再有这个勾（本地模型不花钱，试算没意义，跑完还没结果）。
+  // 常量 false：请求体那一项保持原样，接口不用改
+  const seekDryRun = false;
   // 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏让人勾。默认开——
   // 模型一次能出几千段，错的直接进候选列表的话，人得跨几十个任务一条条排除
   const [seekReview, setSeekReview] = useState(true);
@@ -350,7 +370,7 @@ export default function Projects() {
           message.success(
             p.dry_run
               ? `预览完成：${p.succeeded} 个任务，本地筛出 ${p.clips_candidate} 段会送去问模型（没花钱）`
-              : `大模型看视频找动作完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选，约 $${p.est_usd}`,
+              : `大模型看视频找动作完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选${answerNote(p)}，约 $${p.est_usd}`,
             8
           );
         } else if (p.status === "error") {
@@ -1515,7 +1535,7 @@ export default function Projects() {
                           />
                           <Space size={4}>
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选 · 约 $${sp.est_usd}`}
+                              {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选${answerNote(sp)} · 约 $${sp.est_usd}`}
                               {" · "}已用 {fmtClock(sp.elapsed_sec)}
                             </Typography.Text>
                             {/* 这一步是花钱的（每段问一次大模型），能随时按住比建索引那边更要紧：
@@ -1551,7 +1571,7 @@ export default function Projects() {
                       return (
                         <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
                           上次大模型看视频找动作{sp.dry_run ? "（预览）" : ""}：{sp.succeeded} 个任务，
-                          {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选，约 $${sp.est_usd}`}
+                          {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选${answerNote(sp)}，约 $${sp.est_usd}`}
                           {sp.status === "cancelled" && "（已停止）"}
                           {sp.status === "error" && `（出错：${sp.error_message}）`}
                           {/* 攒着等人筛的：不摆个按钮在这儿，跑完就没人知道它们在哪 */}
@@ -1873,7 +1893,7 @@ export default function Projects() {
             </Typography.Paragraph>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               流程：本地先筛「画面里有狗且在动」的几秒窗（不花钱）→ 裁出狗那一块、抽几帧问大模型（走 API，按段计费）
-              → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限；先用「只数会送多少段」试算。
+              → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限（本地模型不花钱，这个数只影响耗时）。
               <b>先「建画面索引」再来</b>：建过索引的视频这里不用再解码检测，预览秒出；没建的每路要一两分钟。
             </Typography.Text>
             {seekProgress[seekTarget.id]?.service?.available === false && (
@@ -1984,15 +2004,11 @@ export default function Projects() {
                   placeholder="全部" onChange={(v) => setSeekLimit(v ?? null)} style={{ width: 90 }} /> 个任务
               </span>
             </Space>
-            {/* 原来叫「只预览」——「预览」听着像"看结果"，可它根本没问模型，
-                什么结果都没有，只是数一数会送多少段。名字要说的是它回答的那个问题 */}
-            <Tooltip title="它回答的是「这一批要花多少钱」，不是「找到了什么」——根本没问模型，所以没有结果可看。想要能筛的结果，取消这个，勾下面那个">
-              <Checkbox checked={seekDryRun} onChange={(e) => setSeekDryRun(e.target.checked)}>
-                <b>只数会送多少段</b>（试算花费）：本地筛一遍就停，<b>不问模型、不花钱、没有结果</b>
-              </Checkbox>
-            </Tooltip>
+            {/* 「只数会送多少段」那个勾去掉了：它回答的是"这一批要花多少钱"，
+                而本地模型不花钱；跑完又什么结果都没有，占一行还得让人读一遍才知道
+                不该勾。接口上的 dry_run 留着（别的调用方和测试在用），界面不给入口 */}
             <Tooltip title="模型一次能出几千段，里面混着的错的要是直接写进候选，人得跨几十个任务一条条排除。先摆成一屏缩略图过一眼，勾中的才写，类别不对还能当场改">
-              <Checkbox checked={seekReview} disabled={seekDryRun}
+              <Checkbox checked={seekReview}
                         onChange={(e) => setSeekReview(e.target.checked)}>
                 <b>先筛一遍再写</b>：跑完不直接写候选，把找到的段摆成一屏让你勾（跟「找相似」那一屏一样）
               </Checkbox>
