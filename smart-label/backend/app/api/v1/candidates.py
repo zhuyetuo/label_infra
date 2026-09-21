@@ -320,6 +320,9 @@ class SimilarIn(BaseModel):
     pose_w: float | None = None
     # 只要"鼻子够到了这个部位"的帧（几何硬条件，不是相似度）。认不出的部位名不筛
     part: str | None = Field(None, max_length=40)
+    # 只搜这几个「场地·机位」（gouchang2/cam1 这样的 key）。空 = 全搜。
+    # 命中常常挤在某一个机位上（那个角度的画面互相最像），人想单看某一路时用它
+    scopes: list[str] = Field(default_factory=list, max_length=50)
     # 只搜不写：先把命中摆出来看
     dry_run: bool = False
     # 「先看命中」里人手动去掉的帧：[[路径, 秒], …]。一眼看出不是同一个动作的挑出来扔掉，
@@ -382,7 +385,8 @@ async def find_similar(body: SimilarIn, db: AsyncSession = Depends(get_db), user
                                   scope=body.scope, top_k=body.top_k, min_score=body.min_score,
                                   gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center, dry_run=body.dry_run,
                                   pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
-                                  part=body.part, drop=tuple((p, float(t)) for p, t in body.drop),
+                                  part=body.part, scopes=tuple(body.scopes[:50]),
+                                  drop=tuple((p, float(t)) for p, t in body.drop),
                                   pick=tuple((p, float(t), lab) for p, t, lab in body.pick))
     try:
         r = await vindex.find_similar(db, task, params)

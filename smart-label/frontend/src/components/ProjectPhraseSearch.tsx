@@ -45,7 +45,8 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ hits: SimilarHit[]; searched: number; missing: number; centered: boolean;
-                                   old_index?: number; text_space?: string | null; coarse?: number } | null>(null);
+                                   old_index?: number; text_space?: string | null; coarse?: number;
+                                   scopes?: { key: string; label: string; videos: number }[] } | null>(null);
   const [tokens, setTokens] = useState<Record<string, string>>({});
   // 勾中的 → 标成哪个类别。默认一张都不勾：一句话搜的命中里不对的不少，
   // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
@@ -61,6 +62,10 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   // 选了一条现成描述，但项目里没有同名标签（「咬尾巴」这种表里有、标签树里没有的）。
   // 不说的话人会以为「标成」坏了——它只是没得填
   const [noLabel, setNoLabel] = useState<string | null>(null);
+  // 只搜某几个「场地·机位」。一次搜整个项目会把两百多路一起搜，命中常常挤在
+  // 某一个机位上（那个角度的画面互相最像），人想单看「狗场2 的 cam1」时用它。
+  // 选项要等第一次搜完才知道（后端按这个项目实有的路给），所以不搜也不筛
+  const [scopes, setScopes] = useState<string[]>([]);
 
   const hits = res?.hits ?? [];
   useEffect(() => {
@@ -85,6 +90,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
     try {
       const r = await projectSimilarSearch(projectId, {
         text: text.trim(), top_k: topK, gap_s: gapS, pose_w: poseW, center,
+        scopes,
       });
       if (res && hits.length) {
         setPrev({ text, center, top: Math.max(...hits.map((h) => h.score)), n: hits.length });
@@ -300,6 +306,36 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             去共同背景<Typography.Text type="secondary" style={{ fontSize: 12 }}>（一句话搜时值得关掉对比一次）</Typography.Text>
           </Checkbox>
         </Tooltip>
+        {/* 只搜某几个机位。选项是后端按这个项目实有的路给的（全量，跟这次筛没筛无关），
+            所以第一次搜完才出现——列一堆这个项目里没有的机位，人只会挨个试空 */}
+        {(res?.scopes?.length ?? 0) > 1 && (
+          <Space size={6} wrap>
+            <Typography.Text style={{ fontSize: 12 }}>只搜机位：</Typography.Text>
+            <Tooltip title="一次搜整个项目会把两百多路一起搜，命中常常挤在某一个机位上——那个角度的画面互相最像。想单看「狗场2 的 cam1」就在这儿挑。改完要再点一次「搜」">
+              <Select
+                size="small"
+                mode="multiple"
+                allowClear
+                maxTagCount={1}
+                placeholder="全部机位"
+                style={{ width: 230 }}
+                value={scopes}
+                onChange={setScopes}
+                options={(res?.scopes ?? []).map((x) => ({
+                  value: x.key,
+                  label: (
+                    <span>
+                      {x.label} <span style={{ color: "#999", fontSize: 12 }}>{x.videos} 路</span>
+                    </span>
+                  ),
+                }))}
+              />
+            </Tooltip>
+            {scopes.length > 0 && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>改完要再搜一次</Typography.Text>
+            )}
+          </Space>
+        )}
         {prev && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             上一次：{prev.center ? "去背景" : "不去背景"} · {prev.n} 帧 · 最高分 {prev.top.toFixed(3)}

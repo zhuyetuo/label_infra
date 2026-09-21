@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -167,6 +168,35 @@ def day_dir_of(sample: Sample) -> str | None:
     return p.split("/")[-2] if "/" in p else None
 
 
+# 日期目录尾巴上的场地字样（2026_9_16_gouchang2 → gouchang2）
+_SITE_TAIL = re.compile(r"_([a-z]+\d*)$", re.IGNORECASE)
+_SITE_CN = {"gouchang": "狗场", "yingpeng": "影棚"}
+
+
+def scope_of(path: str, day_dir: str | None) -> tuple[str, str]:
+    """这一路视频属于「哪个场地的哪个机位」。返回 (筛选用的 key, 给人看的名字)。
+
+    为什么要有这个：一次搜整个项目会把 200 多路一起搜，命中常常挤在某一个机位上
+    （那个角度的画面互相最像）。人真正想问的是「狗场2 的 cam1 里有没有」——
+    没有这一层，他只能一张张往下翻，翻到的还都是同一个摄像头。
+
+    认不出来的照实归到「其他」，不猜：猜错了人按机位筛就会漏掉素材。
+    """
+    cam, _imu = site_layout.parse_cam_imu(path)
+    m = _SITE_TAIL.search(day_dir or "")
+    site = (m.group(1).lower() if m else "")
+    cn = ""
+    for k, v in _SITE_CN.items():
+        if site.startswith(k):
+            cn = v + site[len(k):]          # gouchang2 → 狗场2
+            break
+    if not cn:
+        cn = site or "其他"
+    if cam is None:
+        return f"{site}/", f"{cn}·未知机位"
+    return f"{site}/cam{cam}", f"{cn}·cam{cam}"
+
+
 def usable_cams(sample: Sample) -> list[str]:
     """这份样本哪几路能拿来当 IMU 的候选：按现场布局表（site_layout，抄自采集端配置）
     看每一路视频是这只狗自己单间的摄像头还是公共区。
@@ -303,6 +333,10 @@ class SimilarParams:
     # 分不清左前爪和右前爪；这一条直接按关键点距离卡，而且天然跨狗（按体长归一化过）。
     # 认不出的部位名（腰、腹股沟…）不筛，结果里 part_used 会如实说
     part: str | None = None
+    # 只搜这几个「场地·机位」（scope_of 给的 key，如 gouchang2/cam1）。空 = 全搜。
+    # 一次搜整个项目会把 200 多路一起搜，命中常常挤在某一个机位上——那个角度的画面
+    # 互相最像。人真正想问的是「狗场2 的 cam1 里有没有」，没有这一层只能一张张翻
+    scopes: tuple[str, ...] = ()
     # 只搜不写：先把命中的画面摆出来看，看着对再写候选
     dry_run: bool = False
     # 「先看命中」里人手动去掉的那几帧（[(路径, 秒), …]）。一眼看出不是同一个动作的
@@ -449,7 +483,26 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
         if s_ is not None:
             kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
             _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
+    # 有哪些「场地·机位」可挑，各有几路：**不管这次筛没筛，都按全量算**，
+    # 不然筛过一次之后下拉里就只剩选中的那一个，人再也切不回去
+    _day_of: dict[str, str | None] = {}
+    for t, s_, path in rows:
+        if path not in _day_of:
+            _day_of[path] = day_dir_of(s_) if s_ is not None else None
+    scope_list: dict[str, dict] = {}
+    for path in by_path:
+        key, label = scope_of(path, _day_of.get(path))
+        e = scope_list.setdefault(key, {"key": key, "label": label, "videos": 0})
+        e["videos"] += 1
+    scopes_out = sorted(scope_list.values(), key=lambda x: x["key"])
+
     paths = list(by_path)
+    if params.scopes:
+        want = set(params.scopes)
+        paths = [p_ for p_ in paths if scope_of(p_, _day_of.get(p_))[0] in want]
+        if not paths:
+            # 挑了个这个项目里根本没有的机位：说清楚，别让人对着 0 条结果猜
+            raise ValueError(f"选中的机位在这个范围里没有视频（有的是：{'、'.join(x['label'] for x in scopes_out)}）")
     if not paths:
         raise ValueError("这个范围里没有可搜的视频")
 
@@ -532,6 +585,9 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
             # 搜过的里面有几路是快档（约 12 秒一帧）：搜不到不等于素材里没有
             "coarse": r.get("coarse", 0),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
+            # 这个范围里有哪些「场地·机位」、各几路：前端的机位筛选就用它当选项。
+            # 全量给（不受本次筛选影响），不然筛过一次就切不回去
+            "scopes": scopes_out, "scope_used": list(params.scopes),
             "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),
             # part_used=None 而 part 有值 = 这个部位判不了（腰、腹股沟…），**没筛**。
             # 前端要照实说，不然人会把没筛的一堆当成筛过的结果

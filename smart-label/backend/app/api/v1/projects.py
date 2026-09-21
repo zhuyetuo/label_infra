@@ -276,6 +276,8 @@ class ProjectSearchIn(BaseModel):
     center: bool = True
     pose_w: float | None = None
     part: str | None = Field(None, max_length=40)
+    # 只搜这几个「场地·机位」（gouchang2/cam1 这样的 key）。空 = 全搜
+    scopes: list[str] = Field(default_factory=list)
 
 
 @router.post("/{project_id}/similar-search")
@@ -297,7 +299,7 @@ async def project_similar_search(project_id: int, body: ProjectSearchIn,
         top_k=max(1, min(500, body.top_k)), min_score=body.min_score,
         gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center,
         pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
-        part=body.part, dry_run=True)
+        part=body.part, scopes=tuple(body.scopes[:50]), dry_run=True)
     try:
         r = await vindex.find_similar(db, None, params, project_id=project_id)
     except ValueError as e:
@@ -308,6 +310,8 @@ async def project_similar_search(project_id: int, body: ProjectSearchIn,
                "centered": r["centered"], "pose_used": r["pose_used"],
                # 有几路索引是旧版（没有"没抠背景"那一列），这次没搜它们
                "old_index": r.get("old_index", 0), "text_space": r.get("text_space"),
+               # 这个项目里有哪些「场地·机位」可挑、各几路，以及这次挑了哪几个
+               "scopes": r.get("scopes", []), "scope_used": r.get("scope_used", []),
                "coarse": r.get("coarse", 0)})
 
 
