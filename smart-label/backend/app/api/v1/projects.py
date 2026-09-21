@@ -262,6 +262,76 @@ class VisionIndexIn(BaseModel):
     force: bool = False
 
 
+class ProjectSearchIn(BaseModel):
+    """项目级「一句话找画面」：不挑任务、不要样例帧，直接一句英文搜整个项目。"""
+    text: str = Field(min_length=1, max_length=300)
+    top_k: int = 60
+    min_score: float = 0.0
+    gap_s: float = 15.0
+    center: bool = True
+    pose_w: float | None = None
+    part: str | None = Field(None, max_length=40)
+
+
+@router.post("/{project_id}/similar-search")
+async def project_similar_search(project_id: int, body: ProjectSearchIn,
+                                 db: AsyncSession = Depends(get_db),
+                                 user: User = Depends(get_current_user)):
+    """一句话在整个项目里找画面。**只搜不写**——写哪几张由人在结果里勾。
+
+    为什么要项目级这个入口：想找「一张狗咬尾巴的图」的时候，人手上还没有任何
+    样例，本来也不该先随便挑个任务、打开工作台、再去里面找这个功能。
+    """
+    if project_id not in await visible_project_ids(user, db):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在或无权访问")
+    params = vindex.SimilarParams(
+        label_name="", text=body.text.strip(), scope="project",
+        top_k=max(1, min(500, body.top_k)), min_score=body.min_score,
+        gap_s=max(0.0, min(120.0, body.gap_s)), center=body.center,
+        pose_w=(max(0.0, min(1.0, body.pose_w)) if body.pose_w is not None else None),
+        part=body.part, dry_run=True)
+    try:
+        r = await vindex.find_similar(db, None, params, project_id=project_id)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    return ok({"hits": r["hit_list"], "searched": r["searched"], "missing": r["missing"],
+               "centered": r["centered"], "pose_used": r["pose_used"]})
+
+
+class ProjectSearchWriteIn(BaseModel):
+    """人在结果里勾中的帧：[[任务号, 路径, 秒, 类别名], …]。类别各按各的。"""
+    picks: list[tuple[int, str, float, str]] = Field(default_factory=list, max_length=2000)
+    gap_s: float = 15.0
+
+
+@router.post("/{project_id}/similar-write", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def project_similar_write(project_id: int, body: ProjectSearchWriteIn,
+                                db: AsyncSession = Depends(get_db)):
+    """把勾中的帧合成段写成候选。按（任务, 类别）分组合段，跟工作台那边同一套规则。"""
+    names = set((await db.execute(select(LabelDefinition.display_name).where(
+        LabelDefinition.project_id == project_id, LabelDefinition.is_active.is_(True)))).scalars())
+    missing = sorted({lab for _t, _p, _s, lab in body.picks if lab not in names})
+    if missing:
+        # 写进去确认时找不到标签，那条候选就成了点不动的死行——宁可整批不写并说清楚
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"项目里没有这些标签：{'、'.join(missing)}（先去标签管理里加）")
+    by_task: dict[int, list[dict]] = {}
+    for tid, path, t, lab in body.picks:
+        by_task.setdefault(int(tid), []).append({"path": path, "t": float(t), "score": 0.0, "label": lab})
+    written = 0
+    gap = max(0.0, min(120.0, body.gap_s))
+    for tid, hits in by_task.items():
+        task = await db.get(Task, tid)
+        if task is None or task.project_id != project_id:
+            continue        # 不是这个项目的：跳过，别让一个乱传的 id 写到别处去
+        segs = vindex.group_hits(hits, gap)
+        written += await vindex.add_similar_candidates(db, task, "", segs)
+    await db.commit()
+    return ok({"written": written})
+
+
 @router.post("/{project_id}/vision-index", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def start_vision_index(project_id: int, body: VisionIndexIn, db: AsyncSession = Depends(get_db)):
     """给项目里的视频建画面向量索引（后台）。建好之后工作台里能「找相似」，免费、瞬间。"""

@@ -1,0 +1,283 @@
+import { useEffect, useMemo, useState } from "react";
+import { Button, Checkbox, Empty, Input, InputNumber, Segmented, Select, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
+import { SIMILAR_VIEW_HELP, SIMILAR_VIEW_OPTIONS, similarThumbTokens, similarThumbUrl, type SimilarHit, type SimilarThumbView } from "@/api/candidates";
+import { projectSimilarSearch, projectSimilarWrite } from "@/api/projects";
+import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
+import { formatMs } from "@/components/SegmentPanel";
+import { ACTION_QUERIES } from "@/utils/actionQueries";
+
+/**
+ * 项目级「一句话找画面」：第一阶段的落点。
+ *
+ * 「我想要一张狗咬尾巴的图」——这时人手上还没有任何样例，本来也不该先随便挑个
+ * 任务、打开工作台、再去里面翻这个功能。这里不挑任务、不要样例帧，一句话搜整个项目，
+ * 勾中的写成候选；每一张还能直接「用这一张去扩」进第二阶段。
+ *
+ * 布局跟「找相似」「筛一筛」一致：左边操作台，右边结果。别让人学三遍。
+ */
+
+const keyOf = (h: SimilarHit) => `${h.path}@${h.t}`;
+
+interface Props {
+  projectId: number;
+  /** 项目里可选的类别：勾中的那张标成什么 */
+  labelNames?: { name: string; color?: string | null }[];
+}
+
+export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Props) {
+  const [text, setText] = useState("");
+  const [topK, setTopK] = useState(60);
+  const [poseW, setPoseW] = useState(0.5);
+  const [gapS, setGapS] = useState(15);
+  const [label, setLabel] = useState<string | null>(null);
+  const [view, setView] = useState<SimilarThumbView>("box");
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ hits: SimilarHit[]; searched: number; missing: number; centered: boolean } | null>(null);
+  const [tokens, setTokens] = useState<Record<string, string>>({});
+  // 勾中的 → 标成哪个类别。默认一张都不勾：一句话搜的命中里不对的不少，
+  // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
+  const [picked, setPicked] = useState<Map<string, string>>(new Map());
+  const [cur, setCur] = useState<SimilarHit | null>(null);
+  const [clip, setClip] = useState<Clip | null>(null);
+
+  const hits = res?.hits ?? [];
+  useEffect(() => {
+    const ids = [...new Set(hits.map((h) => h.task_id).filter((x): x is number => x != null))].slice(0, 500);
+    if (!ids.length) return;
+    let alive = true;
+    similarThumbTokens(ids).then((r) => alive && setTokens(r.tokens)).catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [res]);
+
+  const urlOf = (h: SimilarHit) => {
+    const tk = h.task_id != null ? tokens[String(h.task_id)] : null;
+    return tk && h.task_id != null ? similarThumbUrl(h.task_id, h.path, h.t, tk, view) : "";
+  };
+  const ordered = useMemo(() => [...hits].sort((a, b) => b.score - a.score), [hits]);
+
+  const search = async () => {
+    if (!text.trim()) return;
+    setLoading(true);
+    try {
+      const r = await projectSimilarSearch(projectId, {
+        text: text.trim(), top_k: topK, gap_s: gapS, pose_w: poseW,
+      });
+      setRes(r);
+      // 换了一批命中，上一批勾的那些在这一批里未必还在——留着只会悄悄少写几条
+      setPicked(new Map());
+      setCur(null);
+      setClip(null);
+      if (r.missing) message.info(`${r.missing} 路视频还没建索引，搜不到`);
+      if (!r.hits.length) message.info("一条都没搜到。换个说法再试，或者先去「建画面索引」");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = (h: SimilarHit) => {
+    if (!label) return;         // 还没选「标成」哪个类别：勾了也不知道标成什么
+    const next = new Map(picked);
+    const k = keyOf(h);
+    if (next.has(k)) next.delete(k);
+    else next.set(k, label);
+    setPicked(next);
+  };
+  const bulk = (keep: boolean) => {
+    const next = new Map(picked);
+    for (const h of ordered) {
+      if (keep) { if (label) next.set(keyOf(h), next.get(keyOf(h)) ?? label); }
+      else next.delete(keyOf(h));
+    }
+    setPicked(next);
+  };
+  const select = (h: SimilarHit) => {
+    setCur(h);
+    setClip(h.sample_id != null && h.cam
+      ? { key: keyOf(h), title: `${h.sample_code ?? h.path.split("/").pop()} · ${formatMs(h.t * 1000)}`,
+          sampleId: h.sample_id, cam: h.cam, t: h.t, hit: h, poster: urlOf(h) || undefined }
+      : null);
+  };
+  useEffect(() => {
+    if (cur) setClip((c) => (c ? { ...c, poster: urlOf(cur) || undefined } : c));
+  }, [view, tokens]);
+
+  const write = async () => {
+    const picks = ordered.filter((h) => h.task_id != null && picked.has(keyOf(h)))
+      .map((h) => [h.task_id as number, h.path, h.t, picked.get(keyOf(h))!] as [number, string, number, string]);
+    if (!picks.length) return;
+    setBusy(true);
+    try {
+      const r = await projectSimilarWrite(projectId, picks, gapS);
+      message.success(`写了 ${r.written} 条候选（相邻的合成了一段）。去工作台「疑似片段」里逐条确认`);
+      setPicked(new Map());
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 12, height: "100%", minHeight: 0 }}>
+      {/* 左：操作台 */}
+      <div style={{ width: 380, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, gap: 8 }}>
+        <Space.Compact style={{ width: "100%" }}>
+          <Input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onPressEnter={search}
+            placeholder="a dog biting its own tail"
+          />
+          <Button type="primary" loading={loading} onClick={search} disabled={!text.trim()}>搜</Button>
+        </Space.Compact>
+        {/* 现成的一句：SigLIP 文本端是英文训练的，中文直接送进去命中会差一大截，
+            而且**差得不明显**——它照样给你 60 个命中，只是那些命中不对 */}
+        <Select
+          size="small"
+          showSearch
+          allowClear
+          placeholder="选个现成的描述（选完还能改）"
+          style={{ width: "100%" }}
+          optionFilterProp="label"
+          onChange={(v?: string) => v && setText(v)}
+          options={ACTION_QUERIES.map((q) => ({ value: q.query, label: q.label }))}
+        />
+        <Space size={6} wrap>
+          <span>取 <InputNumber size="small" min={10} max={300} value={topK} onChange={(v) => setTopK(v ?? 60)} style={{ width: 70 }} /> 个</span>
+          <Tooltip title="相邻命中隔多久以内合成一段。舔一次往往持续几十秒、命中断断续续，小了会拆成十几条">
+            <span>隔 <InputNumber size="small" min={0} max={120} value={gapS} onChange={(v) => setGapS(v ?? 15)} style={{ width: 66 }} /> 秒合段</span>
+          </Tooltip>
+          <Tooltip title="姿态相似占多少（0 只看画面，1 只看姿态）。一句话搜时姿态那一路用不上，这里主要影响排序">
+            <span>姿态占 <InputNumber size="small" min={0} max={1} step={0.1} value={poseW} onChange={(v) => setPoseW(v ?? 0.5)} style={{ width: 66 }} /></span>
+          </Tooltip>
+        </Space>
+        <Space size={6} wrap>
+          <Typography.Text>标成：</Typography.Text>
+          <Select
+            size="small"
+            showSearch
+            allowClear
+            placeholder="勾之前先选类别"
+            style={{ minWidth: 200 }}
+            value={label ?? undefined}
+            onChange={(v) => setLabel(v ?? null)}
+            optionFilterProp="value"
+            options={labelNames.map((l) => ({ value: l.name, label: <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.name}</Tag> }))}
+          />
+        </Space>
+        {cur ? (
+          <>
+            <div>
+              <Typography.Text strong>{formatMs(cur.t * 1000)}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                任务 #{cur.task_id} · {cur.sample_code ?? cur.path.split("/").pop()} · 分 {cur.score.toFixed(3)}
+              </Typography.Text>
+            </div>
+            <Space size={4} wrap>
+              <Checkbox checked={picked.has(keyOf(cur))} disabled={!label} onChange={() => toggle(cur)}>
+                <b>要这一张</b>
+              </Checkbox>
+              {/* 第一阶段 → 第二阶段的那根线：找到第一张之后，拿它去扩 */}
+              {cur.task_id != null && (
+                <Tooltip title="拿这一帧当样例，在整个项目里找长得像的几秒（以图搜图比一句话准得多）。开新页，时刻和类别一起带过去">
+                  <Button size="small" type="primary" ghost
+                    onClick={() => window.open(
+                      `/tasks?task=${cur.task_id}&seek=${Math.round(cur.t * 1000)}&similar=1${label ? `&slabel=${encodeURIComponent(label)}` : ""}`,
+                      "_blank")}>
+                    用这一张去扩
+                  </Button>
+                </Tooltip>
+              )}
+              {cur.multi_dog && (
+                <Tooltip title="多狗同场（影棚 / 公共区）：画面里那只不一定是这条 IMU 的狗">
+                  <Tag color="orange">多狗</Tag>
+                </Tooltip>
+              )}
+            </Space>
+            {clip ? (
+              <SimilarClipPlayer taskId={cur.task_id!} clip={clip} onClose={() => setClip(null)} />
+            ) : (
+              <div style={{ flex: 1, minHeight: 0, background: "#000", borderRadius: 4 }}>
+                {urlOf(cur) && <img src={urlOf(cur)} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ flex: 1, border: "1px dashed #d9d9d9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13, padding: 12, textAlign: "center" }}>
+            打一句英文（或选个现成的）→ 搜 → 右边点一张在这儿看大图。
+            <br />看准了勾上写成候选，或者「用这一张去扩」接着找更多
+          </div>
+        )}
+      </div>
+
+      {/* 右：结果 */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {loading ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}><Spin tip="在索引里找…" /></div>
+        ) : !res ? (
+          <Empty description="还没搜。左边打一句英文，或者选一条现成的描述" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <>
+            <Space size={8} style={{ marginBottom: 6 }} wrap>
+              <Typography.Text strong>命中 {hits.length} 帧</Typography.Text>
+              <Tooltip title={label ? "勾上的才写成候选，默认一张都不勾" : "先在左边选「标成」哪个类别，再勾"}>
+                <Typography.Text type={picked.size ? "success" : "secondary"} style={{ fontSize: 12 }}>
+                  要 {picked.size} / {hits.length}
+                </Typography.Text>
+              </Tooltip>
+              <Button size="small" disabled={!label} onClick={() => bulk(true)}>全要</Button>
+              <Button size="small" onClick={() => bulk(false)}>全不要</Button>
+              <Tooltip title={SIMILAR_VIEW_HELP}>
+                <Segmented size="small" value={view} onChange={(v) => setView(v as SimilarThumbView)} options={SIMILAR_VIEW_OPTIONS} />
+              </Tooltip>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                搜了 {res.searched} 路{res.missing ? `，${res.missing} 路还没建索引` : ""}
+                {res.centered ? "；已去共同背景，分数是相对的" : ""}
+              </Typography.Text>
+            </Space>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexWrap: "wrap", gap: 8, alignContent: "flex-start" }}>
+              {ordered.map((h) => {
+                const k = keyOf(h);
+                const on = picked.has(k);
+                const now = cur ? k === keyOf(cur) : false;
+                return (
+                  <div
+                    key={k}
+                    onClick={() => select(h)}
+                    style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "#f0f0f0"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
+                    title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 分 ${h.score.toFixed(3)}`}
+                  >
+                    <Tooltip title={label ? undefined : "先在左边选「标成」哪个类别"}>
+                      <Checkbox
+                        checked={on}
+                        disabled={!label}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggle(h)}
+                        style={{ position: "absolute", top: 6, left: 6, zIndex: 2, background: "rgba(0,0,0,0.45)", borderRadius: 3, padding: "0 3px" }}
+                      />
+                    </Tooltip>
+                    {urlOf(h) ? (
+                      <img src={urlOf(h)} alt="" loading="lazy" style={{ width: "100%", height: 110, objectFit: "contain", background: "#000", borderRadius: 4 }} />
+                    ) : (
+                      <div style={{ height: 110, display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: 4 }}><Spin size="small" /></div>
+                    )}
+                    <div style={{ fontSize: 11, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ color: h.score >= 0.6 ? "#52c41a" : h.score >= 0.3 ? "#fa8c16" : "#999", fontWeight: 600 }}>{h.score.toFixed(3)}</span>
+                      {" · "}{formatMs(h.t * 1000)} · #{h.task_id} {h.sample_code ?? ""}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 8, textAlign: "right" }}>
+              <Button type="primary" loading={busy} disabled={!picked.size} onClick={write}>
+                写入候选（要 {picked.size} / {hits.length} 帧）
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
