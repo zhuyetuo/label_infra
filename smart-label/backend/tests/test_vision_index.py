@@ -682,20 +682,24 @@ def test_任务列表带出候选的类别分布_项目页才筛得到(db, run):
     assert next(r for r in rows if r["id"] == t2.id)["cand_labels"] == {}
 
 
-def test_按场地机位筛_选项按全量给_筛掉别的路(db, run):
+def test_按场地机位筛_狗场按机位号分成两处_选项按全量给(db, run):
     """一次搜整个项目会把两百多路一起搜，命中常常挤在某一个机位上——那个角度的
-    画面互相最像。人想问的是「狗场2 的 cam1 里有没有」。
+    画面互相最像。人想问的是「狗场2 的 cam4 里有没有」。
 
-    两条要守住：选项**按全量算**（筛过一次之后下拉里还得有别的机位，不然切不回去）；
+    场地要分成三处：日期目录里只写了 gouchang，狗场 1/2 的分界靠机位号——
+    两台采集机各录一半房间（cam1~3 / cam4~7），cam7 是狗场2 那台接的公共区。
+
+    还有两条：选项**按全量算**（筛过一次之后下拉里还得有别的机位，不然切不回去）；
     筛中的机位在这个范围里没视频时要报人话，别让人对着 0 条结果猜。
     """
     import pytest as _pytest
 
     u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
     # s1 只有 cam1，s2 有 cam1/cam2；路径里没有 _camN 后缀，所以先补成真实文件名
-    s1.video_cam1_path = "d/2026_9_16_gouchang2/x_cam1_imu9_raw.mp4"
-    s2.video_cam1_path = "d/2026_9_16_gouchang2/y_cam3_imu13_raw.mp4"
-    s2.video_cam2_path = "d/2026_9_16_gouchang2/y_cam1_imu13_raw.mp4"
+    # cam1/cam3 在 1~3 号房 → 狗场1；cam5 在 4~6 号房 → 狗场2
+    s1.video_cam1_path = "d/2026_9_16_gouchang/x_cam1_imu9_raw.mp4"
+    s2.video_cam1_path = "d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"
+    s2.video_cam2_path = "d/2026_9_16_gouchang/y_cam1_imu13_raw.mp4"
     run(db.commit())
 
     seen: dict = {}
@@ -706,18 +710,19 @@ def test_按场地机位筛_选项按全量给_筛掉别的路(db, run):
 
     r = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True),
                             search_fn=fn, project_id=p.id))
-    assert {x["key"] for x in r["scopes"]} == {"gouchang2/cam1", "gouchang2/cam3"}
-    assert [x["label"] for x in r["scopes"] if x["key"] == "gouchang2/cam1"] == ["狗场2·cam1"]
+    # 同一个日期目录，按机位号分成了两处场地
+    assert {x["key"] for x in r["scopes"]} == {"狗场1/cam1", "狗场2/cam5"}
+    assert [x["label"] for x in r["scopes"] if x["key"] == "狗场2/cam5"] == ["狗场2·cam5"]
 
     r2 = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,
-                                                        scopes=("gouchang2/cam3",)),
+                                                        scopes=("狗场2/cam5",)),
                              search_fn=fn, project_id=p.id))
-    assert seen["paths"] == ["d/2026_9_16_gouchang2/y_cam3_imu13_raw.mp4"]
+    assert seen["paths"] == ["d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"]
     # 选项还是全量：筛过一次也要能切回别的机位
-    assert {x["key"] for x in r2["scopes"]} == {"gouchang2/cam1", "gouchang2/cam3"}
-    assert r2["scope_used"] == ["gouchang2/cam3"]
+    assert {x["key"] for x in r2["scopes"]} == {"狗场1/cam1", "狗场2/cam5"}
+    assert r2["scope_used"] == ["狗场2/cam5"]
 
     with _pytest.raises(ValueError, match="没有视频"):
         run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,
-                                                       scopes=("gouchang9/cam1",)),
+                                                       scopes=("狗场9/cam1",)),
                             search_fn=fn, project_id=p.id))

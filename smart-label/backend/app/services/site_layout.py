@@ -49,6 +49,31 @@ LAYOUT: dict[str, dict] = {
     },
 }
 
+# 一个布局键底下还分几处场地：日期目录里只写了 gouchang，没写是 1 号还是 2 号，
+# 分界只能靠机位号。而这件事代码里早就记着两处：
+#
+#   「狗场是两台采集机各录一半房间（cam1~3 + cam4~7）」 sample_import_service
+#   「cam7 公共区俯拍（狗场2 那台电脑接的）」            本文件开头
+#
+# 所以 狗场1 = cam1~3（1~3 号单间），狗场2 = cam4~6（4~6 号单间）+ cam7（公共，
+# 一台俯拍看六个单间）。影棚只有一处。
+#
+# 这张表只用来**给人看和按场地筛**，不参与"能不能对上 IMU"的判断（那个看
+# public_cams）。分错了的代价是筛选里少几路，不是把公共区的狗错认成这条 IMU 的。
+SITE_PARTS: dict[str, list[tuple[str, set[int]]]] = {
+    "gouchang": [("狗场1", {1, 2, 3}), ("狗场2", {4, 5, 6, 7})],
+    "yingpeng": [("影棚", {1, 2, 3})],
+}
+
+
+def site_part(site: str | None, cam: int | None) -> str | None:
+    """这一路属于哪一处场地（狗场1 / 狗场2 / 影棚）。认不出来 None，不猜。"""
+    for name, cams in SITE_PARTS.get(site or "", []):
+        if cam in cams:
+            return name
+    return None
+
+
 _CAM_IMU_RE = re.compile(r"_cam(\d+)(?:_imu(\d+))?", re.IGNORECASE)
 _IMU_RE = re.compile(r"_imu(\d+)", re.IGNORECASE)
 
