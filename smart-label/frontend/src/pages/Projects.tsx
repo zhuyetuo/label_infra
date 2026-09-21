@@ -1956,11 +1956,14 @@ export default function Projects() {
             <Space wrap>
               <span>
                 看哪一路：
-                <Select size="small" value={seekCam} onChange={(v) => setSeekCam(v)} style={{ width: 300 }}
+                <Select size="small" value={seekCam} onChange={(v) => setSeekCam(v)} style={{ width: 320 }}
                   options={[
-                    // 全部 = 这份样本**能对上 IMU 的那几路**都跑。狗场的公共区会被
-                    // 排掉（六只狗同框，找到的对不上这条 IMU），不是"字面全部"
-                    { value: "all", label: "全部机位（能对上 IMU 的那几路）" },
+                    // 「全部」不是字面全部，是 usable_cams：按文件名里的 _imuM 和布局表，
+                    // **只跑这只狗自己单间那一路**，狗场的 cam7 公共区自动排掉。
+                    // 这就是"按 imu 对应 cam 来跑"，正常情况下人根本不用碰下面那几项——
+                    // 它们是手动指定某个槽位的后路，而槽位编号不是机位号（见 camSlots），
+                    // 选错了就会去公共区找，找到的狗对不上这条 IMU
+                    { value: "all", label: "按 IMU 配对的那一路（推荐，默认）" },
                     ...(camSlots?.slots ?? [{ slot: "cam1" }, { slot: "cam2" }, { slot: "cam3" }] as never[])
                       .map((x: { slot: string; videos?: number; public?: number;
                                  cams?: { label: string; videos: number }[] }) => ({
@@ -1994,6 +1997,14 @@ export default function Projects() {
                   </Typography.Text>
                 );
               })()}
+              {seekCam === "all" && (
+                <Tooltip title="按视频文件名里的 _imuM 和现场布局表配对（site_layout）。狗场一间一狗一摄像头，配得上；影棚 4 只狗共处、3 路全公共，配不上——那里的候选会带「多狗同场」标记，画面里哪只是这条 IMU 的只能人看">
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    按文件名里的 IMU 号配对，只跑这只狗自己单间那一路；狗场的公共区（cam7）自动排掉。
+                    影棚 4 只狗共处、没有单间，那里的候选会标「多狗同场」
+                  </Typography.Text>
+                </Tooltip>
+              )}
               {/* 每个槽位实际装了哪些场地·机位，**全列出来**。
                   下拉里那一行只放得下前两个，剩下的收进「等」里——而"等"里的
                   恰恰是人要核对的那部分（这个项目到底有没有狗场1 的素材）。
