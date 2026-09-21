@@ -179,7 +179,13 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
                       target="_blank"
                       rel="noreferrer"
                     >
-                      #{b.task_id} {formatMs(b.start_time_ms)}~{formatMs(b.end_time_ms)} · {b.label_name} · {STATUS_CN[b.status] ?? b.status}
+                      #{b.task_id} {formatMs(b.start_time_ms)}~{formatMs(b.end_time_ms)} ·{" "}
+                      {/* 标的跟这次想标的不一样 = 同一段换了个部位重写。写出来人才知道
+                          该去那条上改类别，而不是再写一条时间一模一样的 */}
+                      {b.want_label && b.want_label !== b.label_name
+                        ? `已标成 ${b.label_name}（你这次标的是 ${b.want_label}，要改就在那条上改）`
+                        : b.label_name}{" "}
+                      · {STATUS_CN[b.status] ?? b.status}
                     </a>
                   </span>
                 ))}

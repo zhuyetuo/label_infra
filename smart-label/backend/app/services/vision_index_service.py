@@ -31,6 +31,9 @@ _logger = logging.getLogger("smart-label.vision_index")
 
 REASON = "similar"
 MODEL_TAG = "siglip"
+# 两端都在这个误差内就算「同一段」。同一次命中换个部位重写一遍，合出来的段两端
+# 完全一致；真挨着的两个动作之间隔着的是秒级，不会被这 0.25 秒并掉
+SAME_SPAN_MS = 250
 
 
 # ── 建索引（后台） ────────────────────────────────────────────────────
@@ -370,10 +373,20 @@ async def add_similar_candidates(db: AsyncSession, task: Task, label_name: str,
         lab = s.get("label") or label_name
         hit_by = next((c for c in existing
                        if c.label_name == lab and overlaps(s_ms, e_ms, c.start_time_ms, c.end_time_ms)), None)
+        # 同一段时间已经从画面相似写过了，只是标成别的部位——那是「改类别」，不是新的一段。
+        # 只按类别去重的话，同一次命中换个部位再写一遍就会得到两行一模一样时间的候选，
+        # 人看着以为系统重复了。两端都对得上（250ms 内）才算同一段，别把真挨着的两个动作并掉
+        if hit_by is None:
+            hit_by = next((c for c in existing
+                           if c.reason == REASON
+                           and abs(c.start_time_ms - s_ms) <= SAME_SPAN_MS
+                           and abs(c.end_time_ms - e_ms) <= SAME_SPAN_MS), None)
         if hit_by is not None:
             if blocked is not None:
                 blocked.append({
-                    "task_id": task.id, "label_name": lab,
+                    # 挡路那条标的是什么 vs 这次想标什么：不一样就说明人是在改部位，
+                    # 提示里要两个都给，不然「挡路的是 舔-后肢」跟他刚标的 舔-后爪 对不上号
+                    "task_id": task.id, "label_name": hit_by.label_name, "want_label": lab,
                     "start_time_ms": hit_by.start_time_ms, "end_time_ms": hit_by.end_time_ms,
                     "status": getattr(hit_by.status, "value", str(hit_by.status)) if hit_by.status else "pending",
                     "reason": hit_by.reason,

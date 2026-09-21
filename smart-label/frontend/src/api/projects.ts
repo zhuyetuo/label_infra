@@ -194,7 +194,9 @@ export const projectSimilarWrite = (id: number, picks: [number, string, number, 
      *  只说「之前已经写过了」没用：人删掉的是片段，挡路的是留着的候选，
      *  而且多半已经不在「待确认」里，他照着提示去找只会找不到 */
     blocked?: {
-      task_id: number; label_name: string;
+      /** label_name = 挡路那条标的；want_label = 这次想标的。两个不一样 =
+       *  同一段换了个部位重写，那是「改类别」，不是新的一段 */
+      task_id: number; label_name: string; want_label?: string;
       start_time_ms: number; end_time_ms: number;
       status: string; reason?: string | null;
       want_start_ms: number; want_end_ms: number;

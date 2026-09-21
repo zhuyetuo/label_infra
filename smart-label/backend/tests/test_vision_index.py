@@ -578,3 +578,31 @@ def test_被挡下来时要说清是哪条候选挡的_包括已确认的(db, ru
     assert b["task_id"] == t1.id and b["status"] == "confirmed"
     assert (b["start_time_ms"], b["end_time_ms"]) == (199000, 201000)
     assert (b["want_start_ms"], b["want_end_ms"]) == (199500, 200500)
+
+
+def test_同一段换个部位重写不再写一条_按同段去重(db, run):
+    """同一次命中，标成 舔-后肢 写过一遍，又标成 舔-后爪 写一遍——只按类别去重的话
+    会得到两行时间一模一样的候选，人看着就是重复了。那是「改类别」，不是新的一段。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    db.add(LabelDefinition(project_id=p.id, code="lick_paw", display_name="舔-后爪", created_by=u.id))
+    db.add(AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔-后肢",
+                       start_time_ms=415000, end_time_ms=420000, confidence=0.2,
+                       reason=vi.REASON, status=CandidateStatus.rejected))
+    run(db.commit())
+    blocked: list[dict] = []
+    n = run(vi.add_similar_candidates(
+        db, t1, "舔-后爪", [{"start_s": 415.0, "end_s": 420.0, "score": 0.18}], blocked=blocked))
+    assert n == 0
+    assert blocked[0]["label_name"] == "舔-后肢" and blocked[0]["want_label"] == "舔-后爪"
+
+
+def test_真挨着的两个动作不会被同段去重并掉(db, run):
+    """250ms 只用来认「同一段重写」。隔着几秒的两段是两回事，照写。"""
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    db.add(LabelDefinition(project_id=p.id, code="shake2", display_name="甩身体", created_by=u.id))
+    db.add(AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔身体-后肢臀尾",
+                       start_time_ms=415000, end_time_ms=420000, confidence=0.2, reason=vi.REASON))
+    run(db.commit())
+    n = run(vi.add_similar_candidates(
+        db, t1, "甩身体", [{"start_s": 423.0, "end_s": 428.0, "score": 0.3}]))
+    assert n == 1
