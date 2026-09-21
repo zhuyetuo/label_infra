@@ -73,7 +73,7 @@ const CREATE_MODE_KEY = "smart-label:create-infer-mode";
 // 新建项目时上次选的标签模板：一段时间里建的项目基本都套同一个模板，
 // 每次都要从下拉里重新找一遍很烦。存 "none" 表示上次是特意清掉不套的。
 const CREATE_TEMPLATE_KEY = "smart-label:create-template-id";
-// 画面找片段上次用的哪家哪个模型，"provider|model"
+// 大模型看视频找动作上次用的哪家哪个模型，"provider|model"
 const SEEK_LLM_KEY = "smart-label:seek-llm";
 
 // 「连已经有 AI 片段的也重跑」也记住：换了模型想全量刷新时，每个项目都要重勾
@@ -179,7 +179,7 @@ export default function Projects() {
   );
   const [prelabelStarting, setPrelabelStarting] = useState(false);
   const [prelabelProgress, setPrelabelProgress] = useState<Record<number, PrelabelProgress>>({});
-  // 画面找片段：视觉大模型（API）看视频挑出像舔/啃/抓/蹭的几秒，写成候选给人确认
+  // 大模型看视频找动作：视觉大模型（API）看视频挑出像舔/啃/抓/蹭的几秒，写成候选给人确认
   const [seekTarget, setSeekTarget] = useState<Project | null>(null);
   const [seekProgress, setSeekProgress] = useState<Record<number, VisionSeekProgress>>({});
   const [seekLabels, setSeekLabels] = useState<string[]>([]);
@@ -189,7 +189,10 @@ export default function Projects() {
   const [seekCam, setSeekCam] = useState<"cam1" | "cam2" | "cam3">("cam1");
   const [seekMaxClips, setSeekMaxClips] = useState(120);
   const [seekLimit, setSeekLimit] = useState<number | null>(null);
-  const [seekDryRun, setSeekDryRun] = useState(true);
+  // 默认**直接跑**，不是先试算。试算只回答"这一批要花多少钱"，它没有结果可看，
+  // 而默认勾着它的后果是：人点了「开始」，等半天，回来发现什么都没有。
+  // 想知道花费的时候再勾——跑完有「先筛一遍再写」兜着，写不写还是人说了算
+  const [seekDryRun, setSeekDryRun] = useState(false);
   // 先筛一遍再写：跑完不直接写候选，把找到的段摆成一屏让人勾。默认开——
   // 模型一次能出几千段，错的直接进候选列表的话，人得跨几十个任务一条条排除
   const [seekReview, setSeekReview] = useState(true);
@@ -314,11 +317,11 @@ export default function Projects() {
           message.success(
             p.dry_run
               ? `预览完成：${p.succeeded} 个任务，本地筛出 ${p.clips_candidate} 段会送去问模型（没花钱）`
-              : `画面找片段完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选，约 $${p.est_usd}`,
+              : `大模型看视频找动作完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选，约 $${p.est_usd}`,
             8
           );
         } else if (p.status === "error") {
-          message.error(`画面找片段出错：${p.error_message}`);
+          message.error(`大模型看视频找动作出错：${p.error_message}`);
         }
         refresh();
       }
@@ -381,7 +384,7 @@ export default function Projects() {
     }
   };
 
-  // 画面找片段只认这四个父类（vision_service 有它们的一句话描述），部位子标签自动带上
+  // 大模型看视频找动作只认这四个父类（vision_service 有它们的一句话描述），部位子标签自动带上
   const SEEK_GROUPS = ["舔身体", "啃身体", "抓挠", "蹭身体"];
   const seekableLabels = (projectId: number) =>
     SEEK_GROUPS.filter((n) => (allLabels ?? []).some((l) => l.project_id === projectId && l.is_active && l.display_name === n));
@@ -1443,7 +1446,7 @@ export default function Projects() {
                     if (sp.total > 0) {
                       return (
                         <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
-                          上次画面找片段{sp.dry_run ? "（预览）" : ""}：{sp.succeeded} 个任务，
+                          上次大模型看视频找动作{sp.dry_run ? "（预览）" : ""}：{sp.succeeded} 个任务，
                           {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选，约 $${sp.est_usd}`}
                           {sp.status === "cancelled" && "（已停止）"}
                           {sp.status === "error" && `（出错：${sp.error_message}）`}
@@ -1578,7 +1581,7 @@ export default function Projects() {
                     loading={seekProgress[p.id]?.status === "running"}
                     onClick={() => openSeek(p)}
                   >
-                    画面找片段
+                    大模型看视频找动作
                   </Button>
                   <Button
                     size="small"
@@ -1699,7 +1702,7 @@ export default function Projects() {
         )}
       </Modal>
       <Modal
-        title={`画面找片段 - ${seekTarget?.name ?? ""}`}
+        title={`大模型看视频找动作 - ${seekTarget?.name ?? ""}`}
         open={seekTarget != null}
         onCancel={() => setSeekTarget(null)}
         onOk={handleStartSeek}
@@ -1718,12 +1721,17 @@ export default function Projects() {
         {seekTarget && (
           <Space direction="vertical" style={{ width: "100%" }}>
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              让视觉大模型看视频，把像<b>舔 / 啃 / 抓挠 / 蹭</b>的几秒挑出来，写成「疑似片段」候选，
-              工作台里逐条确认或排除，确认了 IMU 片段就随之落下。不用人从 24 小时视频里翻。
+              让视觉大模型<b>通看整段视频</b>，把像<b>舔 / 啃 / 抓挠 / 蹭</b>的几秒挑出来（还会说是身上哪一处、
+              为什么这么判），跑完先筛一遍，勾中的写成「疑似片段」候选。不用人从 24 小时视频里翻。
+              <br />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                跟「找相似」的分工：这边<b>不需要你先有样例</b>，某个动作一条都没标过时只有它能从零找出来，
+                代价是按段问大模型、慢且花钱；一旦某个类别攒够几条，后面用「找相似」扩，免费又瞬间。
+              </Typography.Text>
             </Typography.Paragraph>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               流程：本地先筛「画面里有狗且在动」的几秒窗（不花钱）→ 裁出狗那一块、抽几帧问大模型（走 API，按段计费）
-              → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限；先用「预览」看会送多少段。
+              → 相邻同类合成一段。每个视频最多送 <b>{seekMaxClips}</b> 段，这是花费上限；先用「只数会送多少段」试算。
               <b>先「建画面索引」再来</b>：建过索引的视频这里不用再解码检测，预览秒出；没建的每路要一两分钟。
             </Typography.Text>
             {seekProgress[seekTarget.id]?.service?.available === false && (
@@ -2266,9 +2274,9 @@ export default function Projects() {
         {renderSamplePicker(bulkSelected, setBulkSelected, alreadyImportedIds)}
       </Modal>
 
-      {/* 「画面找片段」跑完之后的筛选屏：跟「找相似」那一屏同一套操作 */}
+      {/* 「大模型看视频找动作」跑完之后的筛选屏：跟「找相似」那一屏同一套操作 */}
       <Modal
-        title={`筛一筛：画面找片段找到的段（项目 #${reviewOpen ?? ""}）`}
+        title={`筛一筛：大模型看视频找动作找到的段（项目 #${reviewOpen ?? ""}）`}
         open={reviewOpen != null}
         onCancel={() => { setReviewOpen(null); setReviewFound([]); }}
         width="100vw"

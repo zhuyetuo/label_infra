@@ -308,7 +308,7 @@ export default function LlmCallStats() {
         <Section
           tone={3}
           title="大模型 API"
-          tip="「画面找片段」每问一段就是一次调用，「测试」也算一次。花费按各家价格估的，账以各家后台为准"
+          tip="「大模型看视频找动作」每问一段就是一次调用，「测试」也算一次。花费按各家价格估的，账以各家后台为准"
           chips={llm.data ? [
             { k: "累计", v: `${fmtN(llm.data.all_time.calls)} 次` },
             { k: "token", v: fmtK(llm.data.all_time.total_tokens) },

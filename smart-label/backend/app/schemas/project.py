@@ -50,7 +50,7 @@ class ProjectPrelabelRequest(BaseModel):
 
 
 class ProjectVisionSeekRequest(BaseModel):
-    """画面找片段（视觉大模型走 API）。task_ids 留空 = 项目下待认领/标注中的全部任务。"""
+    """大模型看视频找动作（视觉大模型走 API）。task_ids 留空 = 项目下待认领/标注中的全部任务。"""
 
     task_ids: list[int] | None = None
     # 只找这几个父类（舔身体/啃身体/抓挠/蹭身体）；留空 = 项目里有的全找

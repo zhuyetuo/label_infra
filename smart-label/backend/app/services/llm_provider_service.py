@@ -1,7 +1,7 @@
 """
 大模型 API 配置：几家各一行，网页上配 key、模型列表、默认模型。
 
-给「画面找片段」用：跑之前按 (provider, model) 取出这一行，连 key 一起带给视觉服务。
+给「大模型看视频找动作」用：跑之前按 (provider, model) 取出这一行，连 key 一起带给视觉服务。
 """
 
 from __future__ import annotations

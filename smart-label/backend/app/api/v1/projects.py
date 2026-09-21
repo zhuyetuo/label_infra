@@ -140,7 +140,7 @@ async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: A
 
 @router.post("/{project_id}/vision-seek", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db: AsyncSession = Depends(get_db)):
-    """用画面找片段（后台跑，GET .../vision-seek/status 轮询）。
+    """用大模型看视频找动作（后台跑，GET .../vision-seek/status 轮询）。
 
     vision_service 先在本地筛出"有狗且在动"的几秒窗，再抽帧问视觉大模型（API），
     像的写成候选（reason=vision），工作台「疑似片段」里确认。dry_run 只筛不问，
@@ -166,7 +166,7 @@ async def start_vision_seek(project_id: int, body: ProjectVisionSeekRequest, db:
     else:
         st = await vision_sam_client.seek_status()
         if not st.get("available") and not body.dry_run:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面找片段不可用")
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "大模型看视频找动作不可用")
     params = vseek.SeekParams(labels=body.labels, part_depth=body.part_depth, cam=body.cam,
                               max_clips=body.max_clips, min_conf=body.min_conf, dry_run=body.dry_run,
                               provider=body.provider, model=body.model, review=body.review)

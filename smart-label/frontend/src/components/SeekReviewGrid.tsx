@@ -6,7 +6,7 @@ import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import { formatMs } from "@/components/SegmentPanel";
 
 /**
- * 「画面找片段」跑完之后的筛选屏：左边操作台（大图 / 循环播放 / 模型说了什么 /
+ * 「大模型看视频找动作」跑完之后的筛选屏：左边操作台（大图 / 循环播放 / 模型说了什么 /
  * 改类别），右边一屏结果。跟「找相似」那一屏同一套操作，别让人学两遍。
  *
  * 为什么要这一步：模型一次能出几千段，里面混着的错的要是直接写进候选，人得

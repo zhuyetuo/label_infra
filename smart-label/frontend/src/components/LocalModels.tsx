@@ -183,7 +183,7 @@ export default function LocalModels() {
               <Space size={0}>
                 {m.vllm ? (
                   m.vllm.running ? (
-                    <Popconfirm title="停掉 vLLM？" description="结束进程、释放显存；「画面找片段」选本地服务时会连不上" onConfirm={() => act(m, "unload")}>
+                    <Popconfirm title="停掉 vLLM？" description="结束进程、释放显存；「大模型看视频找动作」选本地服务时会连不上" onConfirm={() => act(m, "unload")}>
                       <Button size="small" type="link" danger loading={busy === `${m.key}:unload`} disabled={!!busy}>
                         停止
                       </Button>
