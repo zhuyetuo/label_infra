@@ -169,15 +169,21 @@ export const writeVisionSeekPicks = (id: number, picks: (SeekFound & { label_nam
 export const projectSimilarSearch = (id: number, body: {
   text: string; top_k?: number; min_score?: number; gap_s?: number;
   center?: boolean; pose_w?: number; part?: string;
+  /** 只搜这几个「场地·机位」（scopes 里给的 key）。空 = 全搜 */
+  scopes?: string[];
 }) =>
   request.post<never, {
     hits: SimilarHit[]; searched: number; missing: number; centered: boolean; pose_used: boolean;
-    /** 有几路索引是旧版（没有「没抠背景」那一列），这次没搜它们 */
+    /** 有几路索引是旧版（没有「没抠背景」那一列），这次退回抠图那一列搜的 */
     old_index?: number;
     /** 这次一句话搜比的是哪一列：原图 / 抠图 */
     text_space?: string | null;
     /** 搜过的里面有几路是快档（约 12 秒一帧）：搜不到不等于素材里没有 */
     coarse?: number;
+    /** 这个项目里有哪些「场地·机位」、各几路。**按全量给**，跟本次筛没筛无关——
+     *  不然筛过一次之后下拉里只剩选中的那个，人再也切不回去 */
+    scopes?: { key: string; label: string; videos: number }[];
+    scope_used?: string[];
   }>(`/projects/${id}/similar-search`, body, { timeout: 120000 });
 
 /** 勾中的帧 → 候选。[[任务号, 路径, 秒, 类别名], …]，类别各按各的 */

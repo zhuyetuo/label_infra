@@ -680,3 +680,44 @@ def test_任务列表带出候选的类别分布_项目页才筛得到(db, run):
     assert got["cand_count"] == 3 and got["cand_pending"] == 2
     # 没有候选的任务给空字典，不是 None——前端直接 Object.entries
     assert next(r for r in rows if r["id"] == t2.id)["cand_labels"] == {}
+
+
+def test_按场地机位筛_选项按全量给_筛掉别的路(db, run):
+    """一次搜整个项目会把两百多路一起搜，命中常常挤在某一个机位上——那个角度的
+    画面互相最像。人想问的是「狗场2 的 cam1 里有没有」。
+
+    两条要守住：选项**按全量算**（筛过一次之后下拉里还得有别的机位，不然切不回去）；
+    筛中的机位在这个范围里没视频时要报人话，别让人对着 0 条结果猜。
+    """
+    import pytest as _pytest
+
+    u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
+    # s1 只有 cam1，s2 有 cam1/cam2；路径里没有 _camN 后缀，所以先补成真实文件名
+    s1.video_cam1_path = "d/2026_9_16_gouchang2/x_cam1_imu9_raw.mp4"
+    s2.video_cam1_path = "d/2026_9_16_gouchang2/y_cam3_imu13_raw.mp4"
+    s2.video_cam2_path = "d/2026_9_16_gouchang2/y_cam1_imu13_raw.mp4"
+    run(db.commit())
+
+    seen: dict = {}
+
+    async def fn(paths, **kw):
+        seen["paths"] = sorted(paths)
+        return {"hits": [], "segments": [], "searched": len(paths), "missing": []}
+
+    r = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True),
+                            search_fn=fn, project_id=p.id))
+    assert {x["key"] for x in r["scopes"]} == {"gouchang2/cam1", "gouchang2/cam3"}
+    assert [x["label"] for x in r["scopes"] if x["key"] == "gouchang2/cam1"] == ["狗场2·cam1"]
+
+    r2 = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,
+                                                        scopes=("gouchang2/cam3",)),
+                             search_fn=fn, project_id=p.id))
+    assert seen["paths"] == ["d/2026_9_16_gouchang2/y_cam3_imu13_raw.mp4"]
+    # 选项还是全量：筛过一次也要能切回别的机位
+    assert {x["key"] for x in r2["scopes"]} == {"gouchang2/cam1", "gouchang2/cam3"}
+    assert r2["scope_used"] == ["gouchang2/cam3"]
+
+    with _pytest.raises(ValueError, match="没有视频"):
+        run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,
+                                                       scopes=("gouchang9/cam1",)),
+                            search_fn=fn, project_id=p.id))
