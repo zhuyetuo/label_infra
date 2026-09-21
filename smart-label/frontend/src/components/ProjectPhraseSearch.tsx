@@ -29,6 +29,11 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   const [topK, setTopK] = useState(60);
   const [poseW, setPoseW] = useState(0.5);
   const [gapS, setGapS] = useState(15);
+  // 去共同背景：图片那边每一帧减掉**它自己那一路**的平均画面，这是"搜出来全是
+  // 同一只狗"的解药。但一句话搜时，减掉的是**全局平均的图片向量**——把一个图像域
+  // 的均值从文字向量里减掉该不该做，没有证据。所以摆成一个开关：同一句话搜两遍，
+  // 哪个命中更像，人一眼就知道。别拿猜的当结论
+  const [center, setCenter] = useState(true);
   const [label, setLabel] = useState<string | null>(null);
   const [view, setView] = useState<SimilarThumbView>("box");
   const [loading, setLoading] = useState(false);
@@ -39,6 +44,8 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
   const [picked, setPicked] = useState<Map<string, string>>(new Map());
   const [cur, setCur] = useState<SimilarHit | null>(null);
+  // 上一次搜的那一行：A/B 对比时人记不住上一次最高分是多少，摆在这儿就不用记
+  const [prev, setPrev] = useState<{ text: string; center: boolean; top: number; n: number } | null>(null);
   // 自动填进去的那一句是从哪个标签拿的、是不是这一条本身。不是本身就得写明——
   // SigLIP 分不出左右、也分不出大腿内侧和大腿，装作分得出的话，人会拿着
   // 「左耳」的结果去标左耳
@@ -67,8 +74,11 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
     setLoading(true);
     try {
       const r = await projectSimilarSearch(projectId, {
-        text: text.trim(), top_k: topK, gap_s: gapS, pose_w: poseW,
+        text: text.trim(), top_k: topK, gap_s: gapS, pose_w: poseW, center,
       });
+      if (res && hits.length) {
+        setPrev({ text, center, top: Math.max(...hits.map((h) => h.score)), n: hits.length });
+      }
       setRes(r);
       // 换了一批命中，上一批勾的那些在这一批里未必还在——留着只会悄悄少写几条
       setPicked(new Map());
@@ -156,6 +166,17 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             <span>姿态占 <InputNumber size="small" min={0} max={1} step={0.1} value={poseW} onChange={(v) => setPoseW(v ?? 0.5)} style={{ width: 66 }} /></span>
           </Tooltip>
         </Space>
+        <Tooltip title="以图搜图时这个必须开（每一帧减掉它自己那一路的平均画面，否则搜出来全是同一只狗）。但一句话搜减的是全局平均的图片向量，从文字向量里减它该不该做没有证据——**同一句话搜两遍，关掉一次，哪个命中更像一眼就知道**">
+          <Checkbox checked={center} onChange={(e) => setCenter(e.target.checked)}>
+            去共同背景<Typography.Text type="secondary" style={{ fontSize: 12 }}>（一句话搜时值得关掉对比一次）</Typography.Text>
+          </Checkbox>
+        </Tooltip>
+        {prev && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            上一次：{prev.center ? "去背景" : "不去背景"} · {prev.n} 帧 · 最高分 {prev.top.toFixed(3)}
+            {res?.hits.length ? `｜这一次最高分 ${Math.max(...res.hits.map((h) => h.score)).toFixed(3)}` : ""}
+          </Typography.Text>
+        )}
         {auto && (
           <Typography.Text type={auto.exact ? "secondary" : "warning"} style={{ fontSize: 12 }}>
             {auto.exact
@@ -253,7 +274,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               </Tooltip>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 搜了 {res.searched} 路{res.missing ? `，${res.missing} 路还没建索引` : ""}
-                {res.centered ? "；已去共同背景，分数是相对的" : ""}
+                {res.centered ? "；已去共同背景，分数是相对的（0.3 以上算像）" : "；没去背景，分数普遍偏高，看相对高低"}
               </Typography.Text>
             </Space>
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexWrap: "wrap", gap: 8, alignContent: "flex-start" }}>
