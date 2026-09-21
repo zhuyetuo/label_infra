@@ -176,6 +176,8 @@ export const projectSimilarSearch = (id: number, body: {
     old_index?: number;
     /** 这次一句话搜比的是哪一列：原图 / 抠图 */
     text_space?: string | null;
+    /** 搜过的里面有几路是快档（约 12 秒一帧）：搜不到不等于素材里没有 */
+    coarse?: number;
   }>(`/projects/${id}/similar-search`, body, { timeout: 120000 });
 
 /** 勾中的帧 → 候选。[[任务号, 路径, 秒, 类别名], …]，类别各按各的 */
@@ -201,6 +203,8 @@ export const cancelVisionSeek = (id: number) =>
 // ── 画面向量索引（以图搜图 / 一句话搜的前提） ────────────────────────
 
 export interface VisionIndexProgress {
+  /** 这一轮建的是哪一档：fine 每秒一帧 / fast 只取关键帧 */
+  mode?: "fine" | "fast";
   /** paused：正在建的那几路建完就停在那，「继续」接着建 */
   status: "idle" | "running" | "paused" | "done" | "cancelled" | "error";
   project_id: number;
@@ -220,7 +224,11 @@ export interface VisionIndexProgress {
 }
 
 /** cam：all = 样本有几路建几路；cam1/2/3 是样本里的槽位（视角1/2/3），不是现场摄像头编号 */
-export const startVisionIndex = (id: number, body: { task_ids?: number[]; cam?: string; force?: boolean }) =>
+export const startVisionIndex = (id: number, body: {
+  task_ids?: number[]; cam?: string; force?: boolean;
+  /** fine = 每秒一帧（慢、全）；fast = 只解关键帧（快、稀，约 12 秒一帧，短动作会漏） */
+  mode?: "fine" | "fast";
+}) =>
   request.post<never, { started: boolean }>(`/projects/${id}/vision-index`, body);
 
 export const getVisionIndexStatus = (id: number) =>

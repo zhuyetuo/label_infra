@@ -39,7 +39,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ hits: SimilarHit[]; searched: number; missing: number; centered: boolean;
-                                   old_index?: number; text_space?: string | null } | null>(null);
+                                   old_index?: number; text_space?: string | null; coarse?: number } | null>(null);
   const [tokens, setTokens] = useState<Record<string, string>>({});
   // 勾中的 → 标成哪个类别。默认一张都不勾：一句话搜的命中里不对的不少，
   // 默认全勾等于让人去挑错的那些，挑漏一张就多一条脏候选
@@ -282,6 +282,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 搜了 {res.searched} 路{res.missing ? `，${res.missing} 路还没建索引` : ""}
                 {res.old_index ? `，${res.old_index} 路索引是旧版被跳过` : ""}
+                {res.coarse ? `，其中 ${res.coarse} 路是快档（约 12 秒一帧，短动作可能漏）` : ""}
                 {res.text_space ? `；比的是${res.text_space}那一列` : ""}
                 {res.centered ? "；已去共同背景，分数是相对的（0.3 以上算像）" : "；没去背景，分数普遍偏高，看相对高低"}
               </Typography.Text>

@@ -53,7 +53,7 @@ def test_建索引_同一路只建一次_失败不带倒(db, run):
     u, p, _, _ = _world(db, run)
     calls = []
 
-    async def build(path, force=False):
+    async def build(path, force=False, mode=None):
         calls.append((path, force))
         if "s2" in path:
             raise RuntimeError("坏视频")
@@ -65,7 +65,7 @@ def test_建索引_同一路只建一次_失败不带倒(db, run):
     assert prog.total == 2 and prog.built == 1 and prog.failed == 1
     calls.clear()
 
-    async def cached(path, force=False):
+    async def cached(path, force=False, mode=None):
         calls.append(path)
         return {"n": 5, "cached": True}
 
@@ -175,7 +175,7 @@ def test_按现场布局选路_狗场只用自己单间_影棚全用并提醒(db
 
     calls = []
 
-    async def build(path, force=False):
+    async def build(path, force=False, mode=None):
         calls.append(path)
         return {"n": 1, "cached": False}
 
@@ -350,7 +350,7 @@ def test_建索引_暂停继续_停止立刻掐掉正在建的(db, run, monkeypa
     async def go():
         started, release = [], asyncio.Event()
 
-        async def build(path, force=False):
+        async def build(path, force=False, mode=None):
             started.append(path)
             await release.wait()
             return {"n": 1, "cached": False, "seconds": 1}

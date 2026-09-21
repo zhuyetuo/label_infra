@@ -256,6 +256,10 @@ async def resume_vision_seek(project_id: int):
 
 class VisionIndexIn(BaseModel):
     task_ids: list[int] | None = None
+    # 档位：fine = 每秒一帧（慢、全）/ fast = 只解关键帧（快、稀）。
+    # 快档这批素材约 12 秒一帧，**短动作会整个漏掉**，只适合"找到第一张样例"和粗筛。
+    # 精档是快档的超集：已经有精档的路再要快档会原样返回，不会被降级
+    mode: str = Field("fine", pattern="^(fine|fast)$")
     # all = 样本有几路建几路。cam1/2/3 是**样本里的槽位**（该狗自己房间的机位 / 公共区机位），
     # 不是现场的 1~7 号摄像头编号
     cam: str = "all"
@@ -302,7 +306,8 @@ async def project_similar_search(project_id: int, body: ProjectSearchIn,
     return ok({"hits": r["hit_list"], "searched": r["searched"], "missing": r["missing"],
                "centered": r["centered"], "pose_used": r["pose_used"],
                # 有几路索引是旧版（没有"没抠背景"那一列），这次没搜它们
-               "old_index": r.get("old_index", 0), "text_space": r.get("text_space")})
+               "old_index": r.get("old_index", 0), "text_space": r.get("text_space"),
+               "coarse": r.get("coarse", 0)})
 
 
 class ProjectSearchWriteIn(BaseModel):
@@ -347,7 +352,7 @@ async def start_vision_index(project_id: int, body: VisionIndexIn, db: AsyncSess
     st = await vision_sam_client.embed_status()
     if not st.get("available"):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, st.get("error") or "画面向量模型不可用")
-    if not await vindex.start(project_id, body.task_ids, body.cam, body.force):
+    if not await vindex.start(project_id, body.task_ids, body.cam, body.force, body.mode):
         raise HTTPException(status.HTTP_409_CONFLICT, "这个项目正在建索引，等它跑完")
     return ok({"started": True})
 

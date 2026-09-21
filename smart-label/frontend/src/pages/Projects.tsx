@@ -217,6 +217,10 @@ export default function Projects() {
   const seekPrevRef = useRef<Record<number, string>>({});
   // 画面向量索引：建一次，之后工作台里「找相似」免费瞬间
   const [indexTarget, setIndexTarget] = useState<Project | null>(null);
+  // 档位：fast 只解关键帧（这批素材约 12 秒一帧，全量几分钟），fine 每秒一帧（一路十几秒）。
+  // 默认 fast：第一次建索引的人要的是"先能搜起来"，而不是等 40 分钟；
+  // 精档留给"这几路我要认真扩样本"那一步，按需建
+  const [indexMode, setIndexMode] = useState<"fine" | "fast">("fast");
   const [indexProgress, setIndexProgress] = useState<Record<number, VisionIndexProgress>>({});
   const [indexCam, setIndexCam] = useState<"all" | "cam1" | "cam2" | "cam3">("all");
   const [indexForce, setIndexForce] = useState(false);
@@ -1655,7 +1659,7 @@ export default function Projects() {
           if (!indexTarget) return;
           setIndexStarting(true);
           try {
-            await startVisionIndex(indexTarget.id, { cam: indexCam, force: indexForce });
+            await startVisionIndex(indexTarget.id, { cam: indexCam, force: indexForce, mode: indexMode });
             message.info("已开始，进度在项目行里看");
             await pollIndex([indexTarget.id]);
             setIndexTarget(null);
@@ -1668,13 +1672,36 @@ export default function Projects() {
         {indexTarget && (
           <Space direction="vertical" style={{ width: "100%" }}>
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              给项目里每路视频每秒一帧框出狗、算成向量存起来（本地跑 SigLIP，不花钱）。
-              建好之后在工作台「疑似片段」里点「找相似」：看到一帧舔尾巴，几秒钟把整个项目里长得像的段全挑出来。
-              索引建一次就够，加新标签不用重建。
+              给项目里每路视频框出狗、算成向量存起来（本地跑 SigLIP，不花钱）。
+              建好之后「找相似」「一句话找画面」才有东西可搜。索引建一次就够，加新标签不用重建。
             </Typography.Paragraph>
             {indexProgress[indexTarget.id]?.service?.available === false && (
               <Alert type="warning" showIcon message={`视觉服务那边向量模型不可用：${indexProgress[indexTarget.id]?.service?.error ?? ""}`} />
             )}
+            {/* 档位：这是这一屏最要紧的选择，摆在最前面 */}
+            <div>
+              <Typography.Text strong style={{ marginRight: 8 }}>密度：</Typography.Text>
+              <Radio.Group size="small" value={indexMode} onChange={(e) => setIndexMode(e.target.value)}>
+                <Radio.Button value="fast">快档（只取关键帧）</Radio.Button>
+                <Radio.Button value="fine">精档（每秒一帧）</Radio.Button>
+              </Radio.Group>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                {indexMode === "fast" ? (
+                  <>
+                    只解关键帧，<b>全量 224 路几分钟</b>。但这批素材关键帧约 12 秒一个——
+                    <b>短动作会整个漏掉</b>（5 秒的抓挠有一半以上概率一帧都没采到）。
+                    适合「先把索引建起来、一句话找到第一张样例」和粗筛哪几路有戏。
+                  </>
+                ) : (
+                  <>
+                    每秒一帧，<b>一路十几秒、全量 224 路约 40 分钟</b>。找相似扩样本、写候选要用这一档。
+                    建议：先用快档全量刷一遍找到目标，再**只对要扩的那几路**建精档。
+                  </>
+                )}
+                <br />
+                已经有精档的那几路，再建快档会直接跳过——<b>不会被降级</b>。
+              </Typography.Paragraph>
+            </div>
             <Space wrap>
               <span>
                 哪一路：

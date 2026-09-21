@@ -40,6 +40,8 @@ class IndexProgress:
     status: str = "idle"
     project_id: int = 0
     cam: str = "cam1"
+    # 这一轮建的是哪一档：fine = 每秒一帧 / fast = 只解关键帧（快，约 12 秒一帧）
+    mode: str = "fine"
     total: int = 0
     processed: int = 0
     built: int = 0
@@ -116,16 +118,19 @@ def resume(project_id: int) -> bool:
     return True
 
 
-async def start(project_id: int, task_ids: list[int] | None, cam: str, force: bool) -> bool:
+async def start(project_id: int, task_ids: list[int] | None, cam: str, force: bool,
+                mode: str | None = None) -> bool:
     if project_id in _running:
         return False
     _running.add(project_id)
-    asyncio.create_task(_run(project_id, task_ids, cam, force))
+    asyncio.create_task(_run(project_id, task_ids, cam, force, mode))
     return True
 
 
-async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: bool) -> None:
-    progress = IndexProgress(status="running", project_id=project_id, cam=cam, started_at=time.time())
+async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: bool,
+               mode: str | None = None) -> None:
+    progress = IndexProgress(status="running", project_id=project_id, cam=cam, mode=mode or "fine",
+                             started_at=time.time())
     _progress[project_id] = progress
     gate = asyncio.Event()      # 每次跑新建：Event 绑当前事件循环
     gate.set()
@@ -133,7 +138,7 @@ async def _run(project_id: int, task_ids: list[int] | None, cam: str, force: boo
     _paused.discard(project_id)
     try:
         async with SessionLocal() as db:
-            await run_project(db, project_id, task_ids, cam, force, progress)
+            await run_project(db, project_id, task_ids, cam, force, progress, mode=mode)
         progress.status = "cancelled" if project_id in _cancelled else "done"
     except Exception as exc:  # noqa: BLE001
         progress.status = "error"
@@ -216,7 +221,8 @@ def _spent_note(r: dict) -> str:
 
 
 async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | None, cam: str,
-                      force: bool, progress: IndexProgress, build_fn=None) -> None:
+                      force: bool, progress: IndexProgress, build_fn=None,
+                      mode: str | None = None) -> None:
     """同一路视频只建一次（几个任务共用一个样本时）。cam="all" = 样本有几路建几路。"""
     build_fn = build_fn or vc.embed_build
     seen: set[str] = set()
@@ -240,7 +246,7 @@ async def run_project(db: AsyncSession, project_id: int, task_ids: list[int] | N
                 return
             progress.current = code
             try:
-                r = await build_fn(path, force=force)
+                r = await build_fn(path, force=force, mode=mode)
             except asyncio.CancelledError:
                 progress.log(f"{code}：停止，这一路没建完")
                 return
@@ -487,6 +493,8 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
             # 一句话搜跳过了几路老索引（没有"没抠背景"那一列）。不报的话人只会看到
             # "搜到的少"，还以为是这一句不行
             "old_index": r.get("old_index", 0), "text_space": r.get("text_space"),
+            # 搜过的里面有几路是快档（约 12 秒一帧）：搜不到不等于素材里没有
+            "coarse": r.get("coarse", 0),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
             "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),
             # part_used=None 而 part 有值 = 这个部位判不了（腰、腹股沟…），**没筛**。
