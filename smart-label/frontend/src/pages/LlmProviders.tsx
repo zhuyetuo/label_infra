@@ -98,7 +98,7 @@ function LlmApiPanel() {
   return (
     <div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        「画面找片段」用的视觉大模型。key 在这里填，存在平台数据库里，视觉服务那边不存；
+        「大模型看视频找动作」用的视觉大模型。key 在这里填，存在平台数据库里，视觉服务那边不存；
         填过之后只显示末四位，没有地方能再看到整串。「测试」是用存着的 key 发一句最短的话（不带图，几乎不花钱），
         看 key 和模型名对不对。价格是 $/百万 token，只用来估花费，账以各家后台为准。
         本地服务（vLLM / SGLang / Ollama 开 OpenAI 兼容口）不需要 key，只填地址。

@@ -441,7 +441,7 @@ async def similar_thumb_tokens(body: ThumbTokensIn, db: AsyncSession = Depends(g
                                user: User = Depends(get_current_user)):
     """一次换好几个任务的缩略图 token。
 
-    「画面找片段」筛选那一屏里，一屏的段横跨几十上百个任务，一个一个换 token
+    「大模型看视频找动作」筛选那一屏里，一屏的段横跨几十上百个任务，一个一个换 token
     就是几十上百个请求——光是发请求就比取图还慢。看不到的任务直接不给，不报错。
     """
     from app.core.media_token import issue_media_token

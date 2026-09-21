@@ -144,7 +144,7 @@ export type SimilarThumbView = "mask" | "raw" | "pose" | "box";
 export const similarThumbToken = (taskId: number) =>
   request.post<never, { token: string }>("/candidates/similar/thumb-token", null, { params: { task_id: taskId } });
 
-/** 一次换好几个任务的缩略图 token：「画面找片段」筛选那一屏横跨几十上百个任务 */
+/** 一次换好几个任务的缩略图 token：「大模型看视频找动作」筛选那一屏横跨几十上百个任务 */
 export const similarThumbTokens = (taskIds: number[]) =>
   request.post<never, { tokens: Record<string, string> }>("/candidates/similar/thumb-tokens", { task_ids: taskIds });
 

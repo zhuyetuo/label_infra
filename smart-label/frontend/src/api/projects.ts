@@ -82,7 +82,7 @@ export const assignProject = (id: number, userId: number | null, includeClaimed 
     include_claimed: includeClaimed,
   });
 
-// ── 画面找片段（视觉大模型走 API） ───────────────────────────────────
+// ── 大模型看视频找动作（视觉大模型走 API） ───────────────────────────────────
 
 export interface VisionSeekProgress {
   status: "idle" | "running" | "paused" | "done" | "cancelled" | "error";
