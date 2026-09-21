@@ -300,7 +300,9 @@ async def project_similar_search(project_id: int, body: ProjectSearchIn,
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
     return ok({"hits": r["hit_list"], "searched": r["searched"], "missing": r["missing"],
-               "centered": r["centered"], "pose_used": r["pose_used"]})
+               "centered": r["centered"], "pose_used": r["pose_used"],
+               # 有几路索引是旧版（没有"没抠背景"那一列），这次没搜它们
+               "old_index": r.get("old_index", 0), "text_space": r.get("text_space")})
 
 
 class ProjectSearchWriteIn(BaseModel):

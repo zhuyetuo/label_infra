@@ -484,6 +484,9 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
             # 人手动去掉了几帧：写完要如实说，不然"命中 60 帧"跟实际写进去的对不上
             "dropped": dropped,
             "searched": r.get("searched", 0), "missing": len(r.get("missing", [])),
+            # 一句话搜跳过了几路老索引（没有"没抠背景"那一列）。不报的话人只会看到
+            # "搜到的少"，还以为是这一句不行
+            "old_index": r.get("old_index", 0), "text_space": r.get("text_space"),
             "query": r.get("query"), "per_task": per_task, "multi_dog_candidates": multi,
             "centered": bool(r.get("centered")), "pose_used": bool(r.get("pose_used")), "pose_w": r.get("pose_w"),
             # part_used=None 而 part 有值 = 这个部位判不了（腰、腹股沟…），**没筛**。
