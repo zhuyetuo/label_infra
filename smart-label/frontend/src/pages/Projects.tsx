@@ -1994,6 +1994,21 @@ export default function Projects() {
                   </Typography.Text>
                 );
               })()}
+              {/* 每个槽位实际装了哪些场地·机位，**全列出来**。
+                  下拉里那一行只放得下前两个，剩下的收进「等」里——而"等"里的
+                  恰恰是人要核对的那部分（这个项目到底有没有狗场1 的素材）。
+                  这一屏是布局表跟现场对不对得上的唯一照面，截断等于白做 */}
+              {camSlots?.slots?.some((x) => (x.cams?.length ?? 0) > 2) && (
+                <Tooltip title="按视频文件名和布局表数出来的。跟现场对不上就是布局表（site_layout）该改了">
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    每一路的明细：
+                    {camSlots.slots
+                      .filter((x) => x.videos > 0)
+                      .map((x) => `${x.slot}=${x.cams.map((c) => `${c.label} ${c.videos}`).join("、")}`)
+                      .join("；")}
+                  </Typography.Text>
+                </Tooltip>
+              )}
               <span>
                 每个视频最多送：
                 <InputNumber size="small" min={1} max={2000} value={seekMaxClips} onChange={(v) => setSeekMaxClips(v ?? 120)} style={{ width: 90 }} /> 段
