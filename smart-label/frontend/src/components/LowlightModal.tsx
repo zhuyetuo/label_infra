@@ -34,6 +34,9 @@ export default function LowlightModal({
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(1);
   const timer = useRef<number | null>(null);
+  // 模型那张默认不跑：实测对这批素材是在编（成块的橙绿紫），还要占一秒 GPU。
+  // 留个按钮而不是删掉——换了权重或换了素材，人要能自己再验一次
+  const [wantModel, setWantModel] = useState(false);
 
   // 换段/换机位就把上一段的帧丢掉，免得播着播着还是上一段的画面
   useEffect(() => { setSeq(null); setFrameIdx(0); }, [sampleId, cam, startS, endS]);
@@ -62,11 +65,11 @@ export default function LowlightModal({
     if (sampleId == null) return;
     setData(null);
     setLoading(true);
-    getLowlight(sampleId, { cam, t, window_s: 2 })
+    getLowlight(sampleId, { cam, t, window_s: 2, model: wantModel ? "retinexformer" : "" })
       .then(setData)
       .catch((e) => setData({ available: false, error: String(e) }))
       .finally(() => setLoading(false));
-  }, [sampleId, cam, t]);
+  }, [sampleId, cam, t, wantModel]);
 
   const pic = (title: string, b64?: string, note?: string) =>
     b64 ? (
@@ -179,6 +182,18 @@ export default function LowlightModal({
             {pic("只拉伸", data.stretch, "不编造，噪声照样放大")}
             {pic("多帧堆栈", data.stacked, ki ? `${ki.frames} 帧平均，不编造` : undefined)}
             {pic(`模型（${data.model_weights || data.model_name || ""}）`, data.model, "模型补出来的，不能当证据")}
+            {!wantModel && (
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <Typography.Text type="secondary">模型增强</Typography.Text>
+                <div style={{ marginTop: 8 }}>
+                  <Button size="small" onClick={() => setWantModel(true)}>也跑一下模型</Button>
+                </div>
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+                  默认不跑。实测这批素材上 Retinexformer + SMID 是在编（成块的橙绿紫），比不用还看不清，每次还占一秒 GPU。
+                  换了权重或换了素材想再验一次，点这里
+                </Typography.Text>
+              </div>
+            )}
           </div>
           {data.model_error && (
             <Alert type="info" showIcon style={{ marginTop: 12 }} message="模型那张没出" description={data.model_error} />
