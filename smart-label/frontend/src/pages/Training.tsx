@@ -40,6 +40,18 @@ const STATUS_META: Record<ModelVersion["status"], { color: string; label: string
 
 const MODEL_TYPES = ["rf", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
 
+/**
+ * 这一段到底是什么类别——取**叶子**（抓挠-躯干），不是根（抓挠）。
+ *
+ * 导出里存的是整条链 [抓挠, 抓挠-躯干]，而这一屏上面那排 chip（各类别段数）
+ * 数的就是叶子。行里却一直显示 labels[0] = 根，于是：
+ *   - 类别列永远只有「抓挠」，看不出标到了哪个部位
+ *   - 点 chip「抓挠-躯干 15」筛出 0 行（拿叶子名去比根）
+ * 两处都用叶子就对上了。老数据/老接口没有 labels，退回 label（那时它就是全部）。
+ */
+const leafOf = (r: DatasetSegment): string =>
+  r.labels?.length ? r.labels[r.labels.length - 1] : r.label;
+
 export default function Training() {
   const qc = useQueryClient();
   const { data: datasets, isLoading: loadingDs } = useQuery({ queryKey: ["train-datasets"], queryFn: listDatasets });
@@ -895,7 +907,7 @@ export default function Training() {
               size="small"
               rowKey={(r) => `${r.task_id}-${r.start}-${r.label}`}
               loading={loadingSegs}
-              dataSource={(dsSegs?.rows ?? []).filter((r) => !segLabel || r.label === segLabel)}
+              dataSource={(dsSegs?.rows ?? []).filter((r) => !segLabel || leafOf(r) === segLabel)}
               pagination={{ pageSize: 20, size: "small" }}
               // max-content 会按内容无限撑宽，「去修」被推到屏幕外；给个下限，
               // 剩下的宽度归「样本」那一列。
@@ -917,35 +929,21 @@ export default function Training() {
                   // 没导进去——其实导出文件里一直是全的，是这一列只画了 labels[0]
                   title: "类别", dataIndex: "label", width: 190,
                   render: (v: string, r: DatasetSegment) => {
-                    // labels 整个字段都没有 = 后端还是旧版（这一列画不出二级标签）。
-                    // 不标出来的话，人分不清"这条本来就没有子标签"和"服务还没更新"，
-                    // 只会反复重导数据集——而重导改不了这件事
-                    if (!("labels" in r)) {
-                      return (
-                        <Space size={2}>
-                          <Tag color={labelColor(v)}>{v}</Tag>
+                    // 显示**叶子全名**，跟上面那排 chip 一模一样（抓挠-躯干）。
+                    // 之前显示的是 labels[0]（根），所以这一列永远只有「抓挠」，
+                    // 看不出标到了哪个部位
+                    const leaf = leafOf(r);
+                    return (
+                      <Space size={2}>
+                        <Tag color={labelColor(v)}>{leaf}</Tag>
+                        {/* labels 整个字段都没有 = 后端还是旧版，这一列画不出二级标签。
+                            不标出来的话人分不清"本来就没有子标签"和"服务还没更新"，
+                            只会反复重导数据集——而重导改不了这件事 */}
+                        {!("labels" in r) && (
                           <Tooltip title="这个接口还是旧版，只回了根那一级。导出文件里二级/三级标签一直是全的，重新部署一次就能看到——重导数据集没用">
                             <Tag style={{ background: "transparent" }}>旧版接口</Tag>
                           </Tooltip>
-                        </Space>
-                      );
-                    }
-                    const chain = r.labels?.length ? r.labels : [v];
-                    return (
-                      <Space size={2} wrap>
-                        {chain.map((name, i) => (
-                          <Tag
-                            key={name}
-                            color={labelColor(chain[0])}
-                            // 子级用描边：一眼看出哪个是根、哪个是细分
-                            bordered
-                            style={i === 0 ? undefined : { background: "transparent" }}
-                          >
-                            {/* 子级只写自己那一截（抓挠-躯干 → 躯干），不然一行里
-                                「抓挠」出现三遍，真正有信息的那几个字反而被挤没 */}
-                            {i === 0 ? name : name.startsWith(`${chain[i - 1]}-`) ? name.slice(chain[i - 1].length + 1) : name}
-                          </Tag>
-                        ))}
+                        )}
                       </Space>
                     );
                   },
