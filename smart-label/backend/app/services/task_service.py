@@ -264,7 +264,24 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     def _span(x) -> tuple[int, int, int]:
         return (x.label_id, x.start_time_ms, x.end_time_ms)
 
-    seen_span = {_span(i) for i in items if i.origin_item_id}
+    # 同标签同起止的，只留一条——**不管它们是新加的还是库里早就有的**。
+    #
+    # 原来只拦"新加的那条"（`if not incoming.origin_item_id` 里才查重），于是
+    # 库里已经并排躺着的两条一模一样的行，存多少次草稿都还在：这条规则从一开始
+    # 就只防新增、不清旧账。而人看到的是两行分毫不差，删掉一条再存，下次点进来
+    # 还是两行（他删的是前端那份，后端照样把两条都写回去）。
+    #
+    # 留哪一条：优先留库里已有的（身上挂着出处 from_candidate_id、改没改过、
+    # 谁确认的），两条都已有就留 id 小的那条——**必须是确定的**，不然同一份草稿
+    # 存两次可能留下不同的行。
+    def _keep_rank(i) -> tuple[int, int]:
+        return (0 if i.origin_item_id else 1, i.origin_item_id or 0)
+
+    winner_by_span: dict[tuple[int, int, int], object] = {}
+    for i in items:
+        cur = winner_by_span.get(_span(i))
+        if cur is None or _keep_rank(i) < _keep_rank(cur):
+            winner_by_span[_span(i)] = i
 
     # 同一段时间上同时标了「舔」和「舔-躯干」：**父级那条一点新信息都没有**。
     # 导出时本来就是从叶子往上写整条链（["舔","舔-躯干"]），单独那条「舔」既不
@@ -304,10 +321,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     for incoming in items:
         if (incoming.start_time_ms, incoming.end_time_ms, incoming.label_id) in coarse_dupes:
             continue
-        if not incoming.origin_item_id:
-            if _span(incoming) in seen_span:
-                continue
-            seen_span.add(_span(incoming))
+        if winner_by_span.get(_span(incoming)) is not incoming:
+            continue        # 同标签同起止的另一条已经留下了
         origin = existing_by_id.get(incoming.origin_item_id) if incoming.origin_item_id else None
         if origin is not None:
             keep_ids.add(origin.id)
