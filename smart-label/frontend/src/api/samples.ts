@@ -198,3 +198,16 @@ export interface VisionScanTimeline {
 
 export const getVisionScanTimeline = (sampleId: number) =>
   request.get<never, Record<string, VisionScanTimeline>>(`/samples/${sampleId}/vision-scan/timeline`);
+
+/** 「看全场的那一路」（狗场 cam7）该补挂给哪些样本、偏移多少。**只出报告，不写库**。
+ *  偏移是从文件名的开机时刻推出来的，对不对要拿两路画面上同一个瞬间核一次 */
+export const sharedCamPlan = (dayDir?: string) =>
+  request.get<never, {
+    items: {
+      sample_id: number; sample_code: string; slot: string; path: string;
+      /** 这一路的第 0 秒在样本时间轴上是第几毫秒（它比样本早开就是负数） */
+      offset_ms: number; own_start_ms: number; public_start_ms: number;
+    }[];
+    skipped: Record<string, number>;
+    day_dirs: string[];
+  }>("/samples/shared-cam/plan", { params: dayDir ? { day_dir: dayDir } : {} });
