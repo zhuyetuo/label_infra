@@ -640,7 +640,9 @@ export default function Tasks() {
         initialCandFilter={urlCandFilter}
         initialSimilar={urlSimilar}
         initialSimilarLabel={urlSimilarLabel}
-        onClose={() => setWorkspaceTask(null)}
+        // 存草稿 / 关掉都刷一遍：不刷的话列表上的段数和类别汇总还是进去之前那份
+        onClose={() => { setWorkspaceTask(null); refresh(); }}
+        onSaved={refresh}
         onSubmitted={refresh}
       />
     </div>

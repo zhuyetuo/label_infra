@@ -70,6 +70,8 @@ interface Props {
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
   onClose: () => void;
+  /** 存过草稿之后通知外面刷新列表（段数、类别汇总都会变） */
+  onSaved?: () => void;
   onSubmitted?: () => void;
   /** 审核员看完可以直接在这里下结论，省得关掉再回列表点 */
   onApprove?: () => void | Promise<void>;
@@ -130,6 +132,7 @@ export default function AnnotationWorkspace({
   labels,
   readOnly,
   onClose,
+  onSaved,
   onSubmitted,
   onApprove,
   onReject,
@@ -579,6 +582,10 @@ export default function AnnotationWorkspace({
   const persist = async () => {
     if (taskId == null) return;
     await saveDraft(taskId, toDraftPayload(items));
+    // 存完通知外面刷一遍列表。原来只有「提交」才通知，于是存草稿之后回到列表，
+    // 段数、类别汇总全是旧的——人刚标完 3 段「抓挠-躯干」，列表里一条没有，
+    // 只能以为没存上。存草稿是最常用的那个动作，它才最该刷新
+    onSaved?.();
   };
 
   // AI 预标注：后端转发到 imu_train/label_service 的 /infer，返回的类别名按
