@@ -178,7 +178,7 @@ export default function LowlightModal({
             {pic("原样", data.raw, "原片就是这样")}
             {pic("只拉伸", data.stretch, "不编造，噪声照样放大")}
             {pic("多帧堆栈", data.stacked, ki ? `${ki.frames} 帧平均，不编造` : undefined)}
-            {pic(`模型（${data.model_name ?? ""}）`, data.model, "模型补出来的，不能当证据")}
+            {pic(`模型（${data.model_weights || data.model_name || ""}）`, data.model, "模型补出来的，不能当证据")}
           </div>
           {data.model_error && (
             <Alert type="info" showIcon style={{ marginTop: 12 }} message="模型那张没出" description={data.model_error} />
