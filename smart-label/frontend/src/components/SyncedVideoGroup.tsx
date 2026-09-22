@@ -10,6 +10,15 @@ const VIDEO_HEIGHT_KEY = "smart-label:video-area-height";
 interface VideoSrc {
   label: string;
   url: string;
+  /**
+   * 这一路的第 0 秒，在**样本时间轴**上是第几秒（默认 0 = 跟样本同一个原点）。
+   *
+   * 狗场两台采集机各自开机、落成两个 session，而看全场的那一路（cam7）只属于
+   * 其中一台。把它挂给另一台录的样本时，两边的原点差着几秒到几十分钟
+   * （实测 −0.3 秒 ~ +1611 秒）。不换算的话，第二路放的是十几分钟之外的画面，
+   * 而且界面上完全看不出来——人只会以为"公共区画面里这只狗没干这个事"。
+   */
+  offsetSec?: number;
 }
 
 interface Props {
@@ -69,6 +78,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   overlaysRef.current = overlays;
   const staticsRef = useRef(statics);
   staticsRef.current = statics;
+  // 每一路的时间偏移（秒）。下面所有跟时间有关的地方都分两种时间：
+  //   元素时间 video.currentTime —— 这一路自己的
+  //   样本时间 = 元素时间 + 偏移 —— 波形、片段、循环区间、bus 上跑的都是它
+  const offsetsRef = useRef<number[]>([]);
+  offsetsRef.current = videos.map((v) => v.offsetSec ?? 0);
+  const offAt = (i: number) => offsetsRef.current[i] ?? 0;
 
   // 叠框：每一路在 timeupdate / seeked 时重画一次。框是归一化坐标，要先算出画面在
   // <video> 元素里实际占的那块（object-fit: contain 会留黑边），再把 video 的缩放/平移
@@ -110,7 +125,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           }
           ctx.restore();
         }
-        const boxes = fn ? fn(video.currentTime) : null;
+        // overlays 是按**样本时间**给的（扫描结果存的就是样本时间轴）
+        const boxes = fn ? fn(video.currentTime + offAt(i)) : null;
         if (!boxes || !boxes.length) return;
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#52c41a";
@@ -218,6 +234,14 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   useEffect(() => {
     const all = () => refs.current.filter((v): v is HTMLVideoElement => v != null);
+    // 这一路的偏移（秒）。按元素在 refs 里的位置取，跟 videos 一一对应
+    const offOf = (v: HTMLVideoElement) => offsetsRef.current[refs.current.indexOf(v)] ?? 0;
+    /** 元素时间 → 样本时间 */
+    const busOf = (v: HTMLVideoElement) => v.currentTime + offOf(v);
+    /** 把这一路跳到样本时间 t（自己负责换算回元素时间） */
+    const seekTo = (v: HTMLVideoElement, t: number) => {
+      v.currentTime = Math.max(0, t - offOf(v));
+    };
 
     const cleanups: (() => void)[] = [];
 
@@ -230,7 +254,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           // 只有用户真的拖了进度条才把别人也拖过去；play/pause 不碰 currentTime——
           // 三路的 currentTime 本来就按各自帧对齐，天然差零点几帧，按这个差去
           // seek 就是无意义的来回抖，漂移交给下面的定时校正
-          if (action === "seek" && Math.abs(o.currentTime - self.currentTime) > 0.15) o.currentTime = self.currentTime;
+          // 比的是样本时间：两路偏移不同时，元素时间本来就该差着那个偏移
+          if (action === "seek" && Math.abs(busOf(o) - busOf(self)) > 0.15) seekTo(o, busOf(self));
           if (action === "play") progPlay(o);
           if (action === "pause") progPause(o);
         }
@@ -258,11 +283,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         // 区间循环：播过终点就跳回起点。只让第一路来判断，其它路会被同步过去，
         // 不然三路各自触发会来回抢着 seek
         const loop = bus.getLoop();
-        if (loop && idx === 0 && self.currentTime >= loop.end) {
+        if (loop && idx === 0 && busOf(self) >= loop.end) {
           bus.seek(loop.start);
           return;
         }
-        bus.reportTime(self.currentTime);
+        bus.reportTime(busOf(self));
       };
       const onRateChange = () => {
         if (isSuppressed()) return;
@@ -307,7 +332,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       markProgrammatic();
       for (const v of vids) {
         if (wasPlaying) progPause(v);
-        v.currentTime = target;
+        seekTo(v, target);          // target 是样本时间
       }
       bus.reportTime(target);
       if (!wasPlaying) return;
@@ -365,12 +390,12 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         const cur = bus.getLoop();
         if (!cur) return;
         const lead0 = all()[0];
-        if (lead0 && !lead0.seeking && lead0.currentTime >= cur.end) {
+        if (lead0 && !lead0.seeking && busOf(lead0) >= cur.end) {
           // 跳回起点不走 bus.seek：那条路是"暂停 -> seek -> 等 ready -> 再播"，
           // 一两秒的片段每圈都要暂停一次再播，看着就是三路来回闪。播放中直接改
           // currentTime 不会打断播放状态，三路一起改完接着播就行。
           markProgrammatic();
-          for (const v of all()) v.currentTime = cur.start;
+          for (const v of all()) seekTo(v, cur.start);
           bus.reportTime(cur.start);
         }
         loopRaf = requestAnimationFrame(tick);
@@ -405,9 +430,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       const tolerance = DRIFT_TOLERANCE_SEC * Math.max(1, base);
       markProgrammatic();
       for (const v of rest) {
-        const drift = v.currentTime - lead.currentTime; // >0 超前，<0 落后
+        const drift = busOf(v) - busOf(lead); // >0 超前，<0 落后（按样本时间比）
         if (Math.abs(drift) > DRIFT_HARD_SEEK_SEC) {
-          v.currentTime = lead.currentTime;
+          seekTo(v, busOf(lead));
           if (nudged.delete(v)) v.playbackRate = base;
         } else if (Math.abs(drift) > tolerance) {
           v.playbackRate = base * (drift > 0 ? 0.85 : 1.15);
@@ -677,7 +702,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     if (!lead) return;
     if (vids.some((v) => !v.paused)) toggleAll();
     const dt = 1 / (fps || 25);
-    const target = Math.max(0, lead.currentTime + n * dt);
+    // bus 上跑的是样本时间，lead.currentTime 是元素时间——差一个偏移
+    const target = Math.max(0, lead.currentTime + (offsetsRef.current[0] ?? 0) + n * dt);
     bus.seek(target);
     if (fps) setFrame(Math.round(target * fps));
   };

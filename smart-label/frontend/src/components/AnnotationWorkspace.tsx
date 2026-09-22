@@ -99,6 +99,8 @@ interface Props {
 interface VideoSrc {
   label: string;
   url: string;
+  /** 这一路的第 0 秒在样本时间轴上是第几秒（见 SyncedVideoGroup） */
+  offsetSec?: number;
 }
 
 const FALLBACK_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", "#13c2c2"];
@@ -371,10 +373,14 @@ export default function AnnotationWorkspace({
         ["视角3", media.video3_id],
       ];
       const vids: VideoSrc[] = [];
-      for (const [label, id] of entries) {
+      for (const [i, [label, id]] of entries.entries()) {
         if (id == null) continue;
         const { token } = await getMediaToken(id);
-        vids.push({ label, url: mediaStreamUrl(id, token) });
+        // 这一路的原点跟样本差多少：跨 session 挂过来的那一路（看全场的 cam7）
+        // 差着几秒到几十分钟，不换算就是放了十几分钟之外的画面
+        const off = (media.video_offsets_ms?.[i] ?? 0) / 1000;
+        vids.push({ label: off ? `${label}（差 ${off.toFixed(1)}s，已对齐）` : label,
+                    url: mediaStreamUrl(id, token), offsetSec: off });
       }
       setVideos(vids);
       setVideoWhy(

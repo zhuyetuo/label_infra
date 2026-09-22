@@ -18,6 +18,8 @@ interface Props {
 interface VideoSrc {
   label: string;
   url: string;
+  /** 这一路的第 0 秒在样本时间轴上是第几秒（见 SyncedVideoGroup） */
+  offsetSec?: number;
   /** 这一路在样本上的槽位（cam1/cam2/cam3），对应扫描结果的 cam */
   cam: string;
 }
@@ -75,10 +77,16 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regi
         // 三路 token 一起要，不用一个等一个
         const vids = (
           await Promise.all(
-            entries.map(async ([label, id, cam]) => {
+            entries.map(async ([label, id, cam], i) => {
               if (id == null) return null;
               const { token } = await getMediaToken(id);
-              return { label, url: mediaStreamUrl(id, token), cam } as VideoSrc;
+              // 跨 session 挂过来的那一路（看全场的 cam7）跟样本差着几秒到几十分钟，
+              // 不换算就是放了十几分钟之外的画面，而且看不出来
+              const off = (media.video_offsets_ms?.[i] ?? 0) / 1000;
+              return {
+                label: off ? `${label}（差 ${off.toFixed(1)}s，已对齐）` : label,
+                url: mediaStreamUrl(id, token), cam, offsetSec: off,
+              } as VideoSrc;
             })
           )
         ).filter((v): v is VideoSrc => v != null);
