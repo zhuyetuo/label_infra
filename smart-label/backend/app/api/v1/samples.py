@@ -630,10 +630,15 @@ async def shared_cam_apply(day_dir: str | None = None, db: AsyncSession = Depend
 
 @router.get("/{sample_id}/lowlight")
 async def sample_lowlight(sample_id: int, cam: str = "cam1", t: float = 0.0,
-                          window_s: float = 2.0, model: str | None = None,
+                          window_s: float = 2.0, model: str = "retinexformer",
                           db: AsyncSession = Depends(get_db),
                           user: User = Depends(get_current_user)):
-    """这一刻的夜视增强。回三张 base64 JPEG（原样 / 拉伸 / 多帧堆栈）。
+    """这一刻的夜视增强。回四张 base64 JPEG（原样 / 拉伸 / 多帧堆栈 / 模型）。
+
+    model 默认就跑，不用前端传：默认 None 的时候那一张**静悄悄地不出现**，
+    人只会以为"模型没装"，其实是压根没请求。模型没加载起来的话
+    enhance_clip 会把报错放在 model_error 里回来，界面照样摆出来——
+    看得见的失败比看不见的缺省强。传 model= 空串可以明确不要它。
 
     为什么做成"按一刻取"而不是整段转码：人要的是「IMU 说这几秒是抓挠，
     可画面是黑的，到底是不是」——看清那一刻就够了，几秒钟的量，贵一点的
