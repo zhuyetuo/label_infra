@@ -151,8 +151,9 @@ export default function AnnotationWorkspace({
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
-  // 夜视增强：看哪一刻、哪一路。夜里那几路黑得看不出狗在干嘛时用
-  const [lowlightAt, setLowlightAt] = useState<number | null>(null);
+  // 夜视增强：看哪一段、哪一路。夜里那几路黑得看不出狗在干嘛时用。
+  // 存的是整段起止不是中点——抓挠是动作，得能把这一段循环播放着看
+  const [lowlightAt, setLowlightAt] = useState<[number, number] | null>(null);
   // 这个样本实际有哪几路，给夜视弹窗切机位用
   const [camList, setCamList] = useState<{ value: string; label: string }[]>([]);
   const role = useAuthStore((s) => s.userInfo?.role);
@@ -1058,7 +1059,7 @@ export default function AnnotationWorkspace({
           message.success("已退回候选，可以重新判断");
         }}
         onCreate={readOnly ? undefined : appendItem}
-        onLowlight={setLowlightAt}
+        onLowlight={(a, b) => setLowlightAt([a, b])}
         initialFilterLabels={initialSegmentFilter}
       />
     ),
@@ -1821,7 +1822,8 @@ export default function AnnotationWorkspace({
     <LowlightModal
       sampleId={lowlightAt != null ? sampleId : null}
       cams={camList}
-      t={(lowlightAt ?? 0) / 1000}
+      startS={(lowlightAt?.[0] ?? 0) / 1000}
+      endS={(lowlightAt?.[1] ?? 0) / 1000}
       label={task?.sample_code ?? undefined}
       onClose={() => setLowlightAt(null)}
     />

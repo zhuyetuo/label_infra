@@ -237,3 +237,18 @@ export const getLowlight = (sampleId: number, params: { cam: string; t: number; 
     stack_info?: { frames: number; snr_gain: number; aligned: number; lo: number; hi: number; gain: number };
     model_name?: string; model_error?: string;
   }>(`/samples/${sampleId}/lowlight`, { params, timeout: 130000 });
+
+/** 整段夜视增强，回一串帧，前端自己轮播。
+ *
+ *  **抓挠是动作，单帧判不出来**——看清了"狗侧卧着"，还是不知道它在不在抓。
+ *  回图片串而不是视频文件：省掉转码和临时文件，还能随手改速度、来回看。 */
+export const getLowlightSeq = (
+  sampleId: number,
+  params: { cam: string; start: number; end: number; fps?: number; smooth?: number },
+) =>
+  request.get<never, {
+    available?: boolean; error?: string;
+    frames?: string[]; fps?: number;
+    /** 整段共用的那套拉伸：用到哪一段亮度、放大几倍、几帧、滑动平均几帧 */
+    info?: { lo: number; hi: number; gain: number; n: number; smooth: number; width: number };
+  }>(`/samples/${sampleId}/lowlight-seq`, { params, timeout: 250000 });
