@@ -711,16 +711,16 @@ def test_按场地机位筛_狗场按机位号分成两处_选项按全量给(db
     r = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True),
                             search_fn=fn, project_id=p.id))
     # 同一个日期目录，按机位号分成了两处场地
-    assert {x["key"] for x in r["scopes"]} == {"狗场1/cam1", "狗场2/cam5"}
-    assert [x["label"] for x in r["scopes"] if x["key"] == "狗场2/cam5"] == ["狗场2·cam5"]
+    assert {x["key"] for x in r["scopes"]} == {"狗场·1号机/cam1", "狗场·2号机/cam5"}
+    assert [x["label"] for x in r["scopes"] if x["key"] == "狗场·2号机/cam5"] == ["狗场·2号机·cam5"]
 
     r2 = run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,
-                                                        scopes=("狗场2/cam5",)),
+                                                        scopes=("狗场·2号机/cam5",)),
                              search_fn=fn, project_id=p.id))
     assert seen["paths"] == ["d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"]
     # 选项还是全量：筛过一次也要能切回别的机位
-    assert {x["key"] for x in r2["scopes"]} == {"狗场1/cam1", "狗场2/cam5"}
-    assert r2["scope_used"] == ["狗场2/cam5"]
+    assert {x["key"] for x in r2["scopes"]} == {"狗场·1号机/cam1", "狗场·2号机/cam5"}
+    assert r2["scope_used"] == ["狗场·2号机/cam5"]
 
     with _pytest.raises(ValueError, match="没有视频"):
         run(vi.find_similar(db, None, vi.SimilarParams(label_name="", text="a dog", dry_run=True,

@@ -35,7 +35,7 @@ def test_按文件名判自己单间还是公共区():
     assert L.dog_code_of("multicam_1_imu5", "2026_9_13_yingpeng") == "lulu"
 
 
-def test_狗场按机位号分成两处_影棚一处():
+def test_狗场按机位号分档_公共区单独一档_影棚一处():
     """日期目录里只写了 gouchang，没写是 1 号还是 2 号。分界靠机位号，
     依据是代码里早就记着的两件事：两台采集机各录一半房间（cam1~3 / cam4~7），
     cam7 是狗场2 那台电脑接的公共区（一台俯拍看六个单间）。
@@ -45,8 +45,11 @@ def test_狗场按机位号分成两处_影棚一处():
     """
     from app.services.site_layout import site_part
 
-    assert [site_part("gouchang", c) for c in (1, 2, 3)] == ["狗场1"] * 3
-    assert [site_part("gouchang", c) for c in (4, 5, 6, 7)] == ["狗场2"] * 4
+    assert [site_part("gouchang", c) for c in (1, 2, 3)] == ["狗场·1号机"] * 3
+    assert [site_part("gouchang", c) for c in (4, 5, 6)] == ["狗场·2号机"] * 3
+    # cam7 单独一档：它插在 2 号机上，但拍的是全部六间，算成「2 号机的」
+    # 会让人以为前三间没有公共区画面
+    assert site_part("gouchang", 7) == "狗场·公共区"
     assert [site_part("yingpeng", c) for c in (1, 2, 3)] == ["影棚"] * 3
     # 认不出来就 None，不猜
     assert site_part("gouchang", 9) is None

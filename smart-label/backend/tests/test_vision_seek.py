@@ -448,12 +448,12 @@ def test_按场地机位限定范围_跟配对规则是两件事(db, run):
     配对，只是限定在选中的那几处里。
     """
     u, p, (s1, s2), (t1, t2, t3) = _world(db, run)
-    s1.video_cam1_path = "d/2026_9_16_gouchang/x_cam1_imu9_raw.mp4"     # 狗场1
-    s2.video_cam1_path = "d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"    # 狗场2
+    s1.video_cam1_path = "d/2026_9_16_gouchang/x_cam1_imu9_raw.mp4"     # 1 号机
+    s2.video_cam1_path = "d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"    # 2 号机
     run(db.commit())
     calls = []
     prog = vs.SeekProgress(status="running", project_id=p.id)
-    run(vs.run_project(db, p.id, None, vs.SeekParams(cam="all", scopes=("狗场2/cam5",)), prog,
+    run(vs.run_project(db, p.id, None, vs.SeekParams(cam="all", scopes=("狗场·2号机/cam5",)), prog,
                        seek_fn=_fake_seek(calls)))
     assert [c["path"] for c in calls] == ["d/2026_9_16_gouchang/y_cam5_imu17_raw.mp4"]
     # 被范围挡掉的要说是"不在选中的场地·机位里"，不能说成"没有视频"——
