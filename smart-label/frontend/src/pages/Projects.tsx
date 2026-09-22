@@ -2714,7 +2714,9 @@ export default function Projects() {
         focusLabelIds={workspaceFocusLabels}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
-        onClose={() => setWorkspaceTask(null)}
+        // 关掉也刷一遍：中途改过类别、删过段，不刷的话列表上的数还是进去之前那份
+        onClose={() => { setWorkspaceTask(null); refresh(); }}
+        onSaved={refresh}
         onSubmitted={refresh}
       />
     </div>
