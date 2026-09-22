@@ -268,3 +268,42 @@ def test_删项目_有父子的标签也能整批删掉(db, run):
     run(papi.delete_project(p.id, db=db))
     assert _labels(db, run, p.id) == {}
     assert run(db.get(Project, p.id)) is None
+
+
+def test_项目现在跟着哪个标签模板_改过颜色的算断开(db, run):
+    """「标签模板」那一栏是套用动作、不是项目上存着的字段，所以打开编辑框只有一个
+    空下拉——人第一个想知道的「现在用的是哪个」反而无从回答。
+
+    但每条标签都记着来源条目（template_item_id），顺着它能数出来。两件事要如实分开：
+    改过颜色的会把 template_item_id 置空（断开跟随），手动加的本来就没有——
+    两者都算「不跟模板」，但总数不能少。
+    """
+    from app.api.v1 import projects as api
+    from app.models.label import LabelDefinition
+    from app.models.label_template import LabelTemplate, LabelTemplateItem
+    from app.models.project import Project
+    from app.models.user import User, UserRole
+
+    u = User(username="t1", password_hash="x", display_name="t", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    p = Project(name="p-tpl", created_by=u.id)
+    tpl = LabelTemplate(name="狗行为标准版", created_by=u.id)
+    db.add(p)
+    db.add(tpl)
+    run(db.flush())
+    items = [LabelTemplateItem(template_id=tpl.id, code=f"c{i}", display_name=f"标签{i}") for i in range(3)]
+    for it in items:
+        db.add(it)
+    run(db.flush())
+    # 两条跟着模板，一条手动加的（没有来源）
+    for i, it in enumerate(items[:2]):
+        db.add(LabelDefinition(project_id=p.id, code=it.code, display_name=it.display_name,
+                               template_item_id=it.id, created_by=u.id))
+    db.add(LabelDefinition(project_id=p.id, code="own", display_name="自己加的", created_by=u.id))
+    run(db.commit())
+
+    got = run(api.project_label_template(p.id, db=db, user=u))["data"]
+    assert got["total"] == 3
+    assert got["templates"] == [{"id": tpl.id, "name": "狗行为标准版", "labels": 2}]
+    assert got["unlinked"] == 1
