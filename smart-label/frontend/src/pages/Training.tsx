@@ -917,6 +917,19 @@ export default function Training() {
                   // 没导进去——其实导出文件里一直是全的，是这一列只画了 labels[0]
                   title: "类别", dataIndex: "label", width: 190,
                   render: (v: string, r: DatasetSegment) => {
+                    // labels 整个字段都没有 = 后端还是旧版（这一列画不出二级标签）。
+                    // 不标出来的话，人分不清"这条本来就没有子标签"和"服务还没更新"，
+                    // 只会反复重导数据集——而重导改不了这件事
+                    if (!("labels" in r)) {
+                      return (
+                        <Space size={2}>
+                          <Tag color={labelColor(v)}>{v}</Tag>
+                          <Tooltip title="这个接口还是旧版，只回了根那一级。导出文件里二级/三级标签一直是全的，重新部署一次就能看到——重导数据集没用">
+                            <Tag style={{ background: "transparent" }}>旧版接口</Tag>
+                          </Tooltip>
+                        </Space>
+                      );
+                    }
                     const chain = r.labels?.length ? r.labels : [v];
                     return (
                       <Space size={2} wrap>
