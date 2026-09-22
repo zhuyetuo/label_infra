@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -36,6 +36,12 @@ class Sample(Base):
     video_cam1_path: Mapped[str] = mapped_column(String(500), nullable=False)
     video_cam2_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     video_cam3_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 每路视频各自的时间偏移 {"cam2": -4171}：**这一路的第 0 秒在样本时间轴上是第几毫秒**。
+    # 空 / 缺键 = 0，跟样本同一个原点（绝大多数样本都是这样，行为不变）。
+    # 只有跨 session 挂过来的那一路才有值——狗场两台采集机各自开机，时间戳差几秒，
+    # 而 cam7 一台俯拍看的是全部六间，挂给另一台那三间时必须带上这个差值，
+    # 否则那一路上每一条标注都差几秒，而且错得看不出来
+    video_offsets_ms: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     imu_csv_path: Mapped[str] = mapped_column(String(500), nullable=False)
     ai_label_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

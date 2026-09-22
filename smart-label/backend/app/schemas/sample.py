@@ -72,6 +72,10 @@ class SampleMediaOut(BaseModel):
     # 这个文件），还是登记了但媒体库里找不到（文件没传上 NAS，或者传了没被扫到）。
     # 只给一句「没有找到可播放的视频」的话，没人知道该去哪儿查
     video_paths: list[str | None] = []
+    # 每路视频各自的时间偏移（毫秒，按 video_paths 的顺序）：**这一路的第 0 秒
+    # 在样本时间轴上是第几毫秒**。0 = 跟样本同一个原点（绝大多数都是）。
+    # 播放器要按它换算，否则跨 session 挂过来的那一路上每条标注都差几秒
+    video_offsets_ms: list[int] = []
     video_missing_in_library: list[str] = []
 
 

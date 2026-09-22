@@ -43,6 +43,7 @@ from app.services.sample_delete_service import delete_samples
 from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progress, start_scan_background
 from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
+from app.services import shared_cam_service
 from app.services import vision_sam_client
 from app.services.dog_name_service import dog_names_by_id
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
@@ -477,6 +478,8 @@ async def get_sample_media(
             csv_id=by_path.get(sample.imu_csv_path),
             video_fps=sample.video_fps,
             video_paths=cam_paths,
+            video_offsets_ms=[int((sample.video_offsets_ms or {}).get(c, 0))
+                              for c in ("cam1", "cam2", "cam3")],
             # 样本上登记了路径、媒体库里却没有这条：文件没传上 NAS，或者传了还没扫到
             video_missing_in_library=[p for p in cam_paths if p and p not in by_path],
         ).model_dump()
@@ -604,3 +607,22 @@ async def import_scan_status():
             estimated_remaining_sec=p.estimated_remaining_sec,
         ).model_dump()
     )
+
+
+# ── 把「看全场的那一路」补挂给同一天别的采集机录的样本 ──────────────────
+
+@router.get("/shared-cam/plan", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def shared_cam_plan(day_dir: str | None = None, db: AsyncSession = Depends(get_db)):
+    """先出报告：哪些样本该补挂 cam7、偏移多少。**不写库。**
+
+    偏移是从文件名的时间戳推出来的（前提是「文件名里那串数就是开机时刻」），
+    这个前提对不对只有拿两路画面上同一个可辨认的瞬间对一眼才知道。所以
+    先看 offset_ms 那一列，核对过再调 apply。
+    """
+    return ok(await shared_cam_service.plan(db, day_dir))
+
+
+@router.post("/shared-cam/apply", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def shared_cam_apply(day_dir: str | None = None, db: AsyncSession = Depends(get_db)):
+    """按上面那份报告真写库。day_dir 只处理一天——先拿一天验，别一次铺开。"""
+    return ok(await shared_cam_service.apply(db, day_dir))
