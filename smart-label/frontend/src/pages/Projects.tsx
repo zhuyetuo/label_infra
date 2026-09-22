@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
-import { currentName } from "@/utils/labelTree";
+import { currentName, descendantIds } from "@/utils/labelTree";
 import {
   Alert,
   Button,
@@ -989,6 +989,10 @@ export default function Projects() {
             const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
             const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
 
+            // 选中的类别连同它们的子类：选「抓挠」= 抓挠 + 抓挠-头颈耳 + 抓挠-头颈耳-耳/耳后…
+            const wantLabelIds = f.labels.length
+              ? descendantIds(labelsOf(p.id), f.labels)
+              : new Set<number>();
             const matchLabels = (t: Task) => {
               const lc = t.label_counts ?? {};
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
@@ -998,7 +1002,13 @@ export default function Projects() {
               // 「抓挠」，236 个任务全有，筛「抓挠」等于筛了大半个项目，
               // 「哪些任务有抓挠片段」这个问题反而问不出来了。
               // 候选按类别筛是旁边那个「候选类别」的活儿——两件事，两个控件。
-              if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
+              //
+              // **选父类要连子类一起**（跟工作台里的片段筛选同一个口径）。
+              // 不这样的话，把 30 段「抓挠」细标成「抓挠-头颈耳」之后，项目页筛
+              // 「抓挠」就只剩没细标的那些——细标这件事本身会让段"消失"，
+              // 而这恰恰是人正要去做的事
+              if (f.labels.length && !wantLabelIds.size) return false;
+              if (f.labels.length && ![...wantLabelIds].some((id) => (lc[id]?.n ?? 0) > 0)) return false;
               if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
               return true;
             };
@@ -1108,16 +1118,20 @@ export default function Projects() {
                   value={f.q}
                   onChange={(e) => setFilter(p.id, { q: e.target.value })}
                 />
-                <Select
-                  size="small"
-                  mode="multiple"
-                  allowClear
-                  placeholder="含类别…"
-                  style={{ minWidth: 160 }}
-                  value={f.labels}
-                  onChange={(v) => setFilter(p.id, { labels: v })}
-                  options={projLabels.map((l) => ({ value: l.id, label: l.display_name }))}
-                />
+                <Tooltip title="按片段的类别筛。选父类连子类一起算——选「抓挠」也会带上「抓挠-头颈耳」，跟工作台里那个筛选同一个口径。候选（疑似抓挠）不在这里，走旁边的「候选类别」">
+                  <Select
+                    size="small"
+                    mode="multiple"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="含类别（含子类）…"
+                    style={{ minWidth: 180 }}
+                    value={f.labels}
+                    onChange={(v) => setFilter(p.id, { labels: v })}
+                    options={projLabels.map((l) => ({ value: l.id, label: l.display_name }))}
+                  />
+                </Tooltip>
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
