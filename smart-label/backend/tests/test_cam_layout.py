@@ -458,3 +458,23 @@ def test_配对站点_没有自己那一路时_不拿别人房间顶上(nas):
     shared_cams = {c: g["videos"][c] for c in (1, 2, 3) if c in g["videos"]}
     cams = cams_for_imu(g, 13, shared_cams, genuinely_shared_cams(g))
     assert [os.path.basename(p) for p in cams.values()] == ["multicam_20260915_000000000_cam7_raw.mp4"]
+
+
+def test_跨session挂上来的那一路_扫描时不许动():
+    """看全场的那一路（cam7）是跨 session 挂上去的，它按定义就不在本 session 的
+    cam_paths 里。不钉住的话 exact 模式会当成「多出来的」清掉——实测
+    （2026-09-22）：挂好、两路画面也核对过了，点一次「立即扫描」就全被还原，
+    而且一声不吭。
+
+    钉住的只是那个槽位，别的槽位该修照修。
+    """
+    from app.services.sample_import_service import _plan_cam_path_fix
+
+    stored = ("d/own_cam3_imu14.mp4", "d/shared_cam7_imu20.mp4", "d/旧的_cam9_imu14.mp4")
+    cams = {1: "d/own_cam3_imu14.mp4"}          # 本 session 只算得出自己那一路
+    on_disk = set(stored)
+
+    # 不钉：cam7 那一路和第三路都被清掉
+    assert _plan_cam_path_fix(stored, cams, on_disk, exact=True) == {2: None, 3: None}
+    # 钉住 cam2：那一路留着，第三路照样清
+    assert _plan_cam_path_fix(stored, cams, on_disk, exact=True, pinned={2}) == {3: None}

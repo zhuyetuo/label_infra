@@ -440,6 +440,7 @@ def _plan_cam_path_fix(
     cam_paths: dict[int, str],
     on_disk: set[str],
     exact: bool = False,
+    pinned: set[int] | None = None,
 ) -> dict[int, str | None]:
     """
     一个样本上哪几路该改、改成什么。纯函数，不碰数据库/文件系统，好测。
@@ -456,9 +457,17 @@ def _plan_cam_path_fix(
     只补不删的话，早先按老逻辑存进去的那一路空房间画面会一直留着——文件还在
     NAS 上，上面那条规则永远碰不到它，界面上就是一只狗三个画面，其中一个是
     隔壁的空房间。
+
+    pinned：**这几个槽位一律不碰**。装的是跨 session 挂上来的那一路（看全场的
+    cam7，见 shared_cam_service）——它按定义就不在本 session 的 cam_paths 里，
+    exact 模式会当成"多出来的"清掉。实测（2026-09-22）：挂好、画面也核对过了，
+    点一次「立即扫描」就全被还原，而且一声不吭。
     """
+    pinned = pinned or set()
     plan: dict[int, str | None] = {}
     for slot in (1, 2, 3):
+        if slot in pinned:
+            continue
         cur = stored[slot - 1]
         want = cam_paths.get(slot)
         if exact:
@@ -519,7 +528,11 @@ async def _repair_sample_cam_paths(
         columns = {1: "video_cam1_path", 2: "video_cam2_path", 3: "video_cam3_path"}
         stored = (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path)
         info = candidates[sample.sample_code]
-        plan = _plan_cam_path_fix(stored, info["cam_paths"], on_disk, exact=bool(info.get("paired")))
+        # 跨 session 挂上来的那几路（看全场的 cam7）不参与重算：它按定义就不在
+        # 本 session 的 cam_paths 里，不钉住的话每次扫描都会被当成"多出来的"清掉
+        pinned = {int(k[-1]) for k in (sample.video_offsets_ms or {}) if k.startswith("cam") and k[-1].isdigit()}
+        plan = _plan_cam_path_fix(stored, info["cam_paths"], on_disk,
+                                  exact=bool(info.get("paired")), pinned=pinned)
         changed: list[str] = []
         for slot, want in sorted(plan.items()):
             cur = stored[slot - 1]
