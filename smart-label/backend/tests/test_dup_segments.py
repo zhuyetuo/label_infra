@@ -136,3 +136,32 @@ def test_父的那条更长时不丢_那截是真信息(db, run):
         _incoming(lab.id, 227040, 237090),
     ]))
     assert len(_items(db, run, rec.id)) == 2
+
+
+def test_库里已经并排躺着两条一样的_存一次就清掉(db, run):
+    """原来那条规则只拦**新加的**（`if not incoming.origin_item_id` 里才查重），
+    于是库里早就并排躺着的两条一模一样的行，存多少次草稿都还在。
+
+    人看到的是两行分毫不差，删掉一条再存，点进来还是两行——他删的是前端那份，
+    后端把两条都写回去了。
+    """
+    u, p, lab, t = _world(db, run)
+    # 先造出"库里两条一模一样"的局面
+    rec = run(task_service.save_draft(db, t.id, u, [_incoming(lab.id, 227040, 237090)]))
+    a = _items(db, run, rec.id)[0]
+    db.add(AnnotationLabelItem(annotation_record_id=rec.id, label_id=lab.id,
+                               start_time_ms=227040, end_time_ms=237090,
+                               source_type=LabelItemSource.human_added, created_by=u.id))
+    run(db.commit())
+    b = [i for i in _items(db, run, rec.id) if i.id != a.id][0]
+    assert len(_items(db, run, rec.id)) == 2
+
+    # 两条都带 origin 交回来（前端就是这么把库里那份原样带回来的）
+    rec2 = run(task_service.save_draft(db, t.id, u, [
+        _incoming(lab.id, 227040, 237090, origin=a.id),
+        _incoming(lab.id, 227040, 237090, origin=b.id),
+    ]))
+    got = _items(db, run, rec2.id)
+    assert len(got) == 1, "库里已有的两条一样的，存一次就该只剩一条"
+    # 留 id 小的那条：必须是确定的，不然同一份草稿存两次可能留下不同的行
+    assert got[0].id == min(a.id, b.id)
