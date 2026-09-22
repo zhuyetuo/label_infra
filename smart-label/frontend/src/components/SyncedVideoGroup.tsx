@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Button, Checkbox, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
 import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined, StepForwardOutlined } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
+import { NIGHT_VISION } from "@/config/features";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
 
 const VIDEO_HEIGHT_KEY = "smart-label:video-area-height";
@@ -914,6 +915,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       >
         {playing ? "暂停" : "播放"}
       </Button>
+      {/* 夜视这一摊默认关掉了（features.ts 里那个开关，原因也写在那儿）：
+          实测这几路夜间只有 26 级动态范围，提亮只是把噪声放大，判不出动作。
+          代码全留着——想再验就把 NIGHT_VISION 改成 true */}
+      {NIGHT_VISION && (
+        <>
       {/* 夜里那几路黑得看不见狗在干嘛。这里只调**显示**，不碰原片、不碰标注 */}
       <Tooltip title="夜视增强：把夜里那几路提亮到能看出轮廓。只改显示，不动原片（截图、标注、导出、送模型都还是原片）。提得越狠亮部越容易糊成一片白，所以分档——挑到刚好看得见那一档就行。要是拉到「强」还是一片噪点，说明这一路夜间根本没拍到东西，该去补红外补光">
         <Typography.Text type="secondary">夜视：</Typography.Text>
@@ -938,6 +944,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {nightInfo}
         </Typography.Text>
+      )}
+        </>
       )}
       <Typography.Text type="secondary">播放速度：</Typography.Text>
       <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>

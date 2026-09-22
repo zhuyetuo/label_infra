@@ -86,6 +86,19 @@ class Settings(BaseSettings):
     # 默认空 = 关着：视觉标注页上 SAM 按钮置灰，其它功能一概不受影响。
     # 要开就配 http://<跑 SAM 那台>:8385
     vision_service_url: str = ""
+
+    # 夜视增强（「夜视」按钮、播放器上的弱/中/强）。**默认关着。**
+    #
+    # 2026-09-22 实测到头了：狗场夜里那几路单间原片只用到 14~40 这 26 级亮度，
+    # 铺满要放大 9.81×，30 帧堆栈只能把信噪比抬 ×5.5——传感器本来就没记录下
+    # 更多信息，判不出"在不在抓挠"。深度学习那条（Retinexformer + SMID）更糟，
+    # 两种输入都在编。详见 imu_train 的 README。
+    #
+    # 代码全留着。想再打开，三处一起：
+    #   1. 这里（或 .env 里 NIGHT_VISION_ENABLED=1）
+    #   2. 前端 src/config/features.ts 的 NIGHT_VISION 改成 true
+    #   3. 算法机 vision_service/.env 里 LOWLIGHT_ENABLED=1
+    night_vision_enabled: bool = False
     # 建画面索引时几路视频一起送。
     #
     # 2026-09-21 量过之后从 3 → 6 → 12：建索引 93% 的时间在「解码+检测」，而那里面
