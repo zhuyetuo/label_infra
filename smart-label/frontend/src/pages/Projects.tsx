@@ -115,6 +115,15 @@ interface FormValues {
   templateId?: number;
 }
 
+/** 这一轮的产出该报哪个数。
+ *
+ * **「先筛一遍再写」模式下候选恒等于 0**——那个模式本来就不写库，段都攒在
+ * found 里等人筛。照搬 candidates 等于给人一个永远是 0 的数字，看着就像
+ * "跑了很多遍全是 0、模型坏了"，而真正的产出在旁边那个「筛一筛 N 段」上。
+ */
+const seekYield = (sp: { review?: boolean; found?: number; candidates: number }): string =>
+  sp.review ? `找到 ${sp.found ?? 0} 段待筛（这个模式不直接写候选）` : `得 ${sp.candidates} 条候选`;
+
 /** 模型这一批是怎么答的，写成一句人话。
  *  只报「得 0 条候选」的话，四种完全不同的原因长得一模一样（见 ans_* 的注释）。 */
 const answerNote = (sp: { clips_sent: number; ans_label?: number; ans_unclear?: number;
@@ -374,7 +383,7 @@ export default function Projects() {
           message.success(
             p.dry_run
               ? `预览完成：${p.succeeded} 个任务，本地筛出 ${p.clips_candidate} 段会送去问模型（没花钱）`
-              : `大模型看视频找动作完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，得 ${p.candidates} 条候选${answerNote(p)}，约 $${p.est_usd}`,
+              : `大模型看视频找动作完成：${p.succeeded} 个任务，送 ${p.clips_sent} 段，${seekYield(p)}${answerNote(p)}，约 $${p.est_usd}`,
             8
           );
         } else if (p.status === "error") {
@@ -1560,7 +1569,7 @@ export default function Projects() {
                           </Tooltip>
                           <Space size={4}>
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${sp.candidates} 条候选${answerNote(sp)} · 约 $${sp.est_usd}`}
+                              {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `已送 ${sp.clips_sent} 段 · ${seekYield(sp)}${answerNote(sp)} · 约 $${sp.est_usd}`}
                               {" · "}已用 {fmtClock(sp.elapsed_sec)}
                             </Typography.Text>
                             {/* 这一步是花钱的（每段问一次大模型），能随时按住比建索引那边更要紧：
@@ -1596,7 +1605,7 @@ export default function Projects() {
                       return (
                         <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 2 }}>
                           上次大模型看视频找动作{sp.dry_run ? "（预览）" : ""}：{sp.succeeded} 个任务，
-                          {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，得 ${sp.candidates} 条候选${answerNote(sp)}，约 $${sp.est_usd}`}
+                          {sp.dry_run ? `会送 ${sp.clips_candidate} 段` : `送 ${sp.clips_sent} 段，${seekYield(sp)}${answerNote(sp)}，约 $${sp.est_usd}`}
                           {sp.status === "cancelled" && "（已停止）"}
                           {sp.status === "error" && `（出错：${sp.error_message}）`}
                           {/* 攒着等人筛的：不摆个按钮在这儿，跑完就没人知道它们在哪 */}
@@ -1740,7 +1749,7 @@ export default function Projects() {
                       return (
                         <div style={{ fontSize: 12, lineHeight: 1.7, maxHeight: 320, overflow: "auto" }}>
                           <div style={{ marginBottom: 4 }}>
-                            {sp.processed}/{sp.total} · 已送 {sp.clips_sent} 段 · {sp.candidates} 条候选
+                            {sp.processed}/{sp.total} · 已送 {sp.clips_sent} 段 · {seekYield(sp)}
                             {answerNote(sp)}
                           </div>
                           {sp.detail?.length
