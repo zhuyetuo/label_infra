@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Modal, Segmented, Space, Spin, Typography } from "antd";
+import { Alert, Modal, Segmented, Spin, Typography } from "antd";
 import { getLowlight } from "@/api/samples";
 
 /**
@@ -83,15 +83,17 @@ export default function LowlightModal({
             description={
               ki && ki.gain >= 11
                 ? "放大已经顶到上限，再拉就是把噪声放成雪花。堆栈那张要是也看不出东西，说明这一路夜间根本没拍到——该去补红外补光，不是接着调算法"
-                : "「只拉伸」和「堆栈」都不编造像素；模型那张（如果有）是它补出来的，好看但不能当证据——拿同一时刻公共区那一路对一眼才算数"
+                : "「只拉伸」和「堆栈」都不编造像素；模型那张（如果有）是它补出来的，好看但不能当证据——拿同一时刻公共区那一路对一眼才算数。这两张接近灰度是故意的：这个亮度下色度通道全是噪声（放大后就是满屏紫麻点），压掉只去噪不动亮度，轮廓一点没少"
             }
           />
-          <Space align="start" style={{ width: "100%" }} wrap>
+          {/* 必须并排。Space 会把每张图各自包一层 div，里面的 flex:1 到不了，
+              结果四张叠成一列要往下滚——那就比不了了，人得同时看见才能判断 */}
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", width: "100%" }}>
             {pic("原样", data.raw, "原片就是这样")}
             {pic("只拉伸", data.stretch, "不编造，噪声照样放大")}
             {pic("多帧堆栈", data.stacked, ki ? `${ki.frames} 帧平均，不编造` : undefined)}
             {pic(`模型（${data.model_name ?? ""}）`, data.model, "模型补出来的，不能当证据")}
-          </Space>
+          </div>
           {data.model_error && (
             <Alert type="info" showIcon style={{ marginTop: 12 }} message="模型那张没出" description={data.model_error} />
           )}
