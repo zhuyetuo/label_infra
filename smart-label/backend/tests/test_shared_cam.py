@@ -53,7 +53,7 @@ def test_补挂公共区_偏移方向和大小_不是同一场的不挂(db, run)
     assert it["slot"] == "cam2" and it["path"].endswith("_cam7_imu20_raw.mp4")
     # 已经有公共区的那份不重复挂；隔壁场次的如实说为什么没挂
     assert p["skipped"].get("已经有公共区那一路") == 1
-    assert p["skipped"].get("最接近的那一路只盖住 0%，不像同一场") == 1
+    assert p["skipped"].get("最接近的那一路只盖住 0%，几乎不重叠") == 1
     assert c.video_cam2_path is None
 
     r = run(svc.apply(db))
@@ -92,3 +92,26 @@ def test_按盖没盖住挑_不是按开得近挑(db, run):
     # 按「开得近」会挑到只录 3 分钟的那一路（差 2 分钟 < 5 分钟）；按覆盖挑才对
     assert it["path"].endswith("_145500000_cam7_imu20_raw.mp4")
     assert it["offset_ms"] == -300_000 and 0.9 < it["coverage"] < 0.93
+
+
+def test_覆盖低但几乎同时开机的照挂_那是录得短不是挂错场(db, run):
+    """实测（2026-09-22）：有一批覆盖只有 52%，而时间差只有 1.25 秒——两台机器
+    几乎同时开机，不可能不是同一场；52% 是公共区那一路本身只录了一半就停了。
+
+    偏移对不对跟覆盖多少无关：重叠的那一段照样是对齐的，覆盖低只是说后半段
+    没有公共区画面可看。把「录得短」当成「挂错场」而拒绝挂，等于白白扔掉
+    前半段能看的画面。
+    """
+    u = User(username="sc3", password_hash="x", display_name="sc3", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    a = _mk(db, run, u, "s_hour", "150000000", 3, 14, dur=3600)
+    # 公共区几乎同时开（晚 1.25 秒），但只录了 31 分钟
+    b = _mk(db, run, u, "s_pub_half", "150001250", 6, 20, dur=1860)
+    b.video_cam2_path = "d/2026_9_20_gouchang/multicam_20260920_150001250_cam7_imu20_raw.mp4"
+    run(db.commit())
+
+    items = {i["sample_code"]: i for i in run(svc.plan(db))["items"]}
+    assert "s_hour" in items, "覆盖只有一半也该挂——那是录得短，不是挂错场"
+    it = items["s_hour"]
+    assert it["offset_ms"] == 1250 and 0.5 < it["coverage"] < 0.52

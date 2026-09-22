@@ -160,10 +160,20 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
         assert best is not None
         _score, start, path, cov = best
         gap = start - mine
-        # 盖不住一半就不是同一场。宁可漏挂，也别把别的场次的画面挂上来——
-        # 挂错了人看到的是"画面里那只狗在干别的"，而根本想不到是挂错了场次
-        if cov is not None and cov < 0.5:
-            skip(f"最接近的那一路只盖住 {cov:.0%}，不像同一场")
+        # **只要真有重叠就挂。**
+        #
+        # 一开始卡了「盖不住一半就不挂」，实测（2026-09-22）又是错的：有一批
+        # 覆盖只有 52%，可时间差只有 1.25 秒——两台机器几乎同时开机，不可能不是
+        # 同一场，52% 是因为公共区那一路本身只录了一半就停了。我把「录得短」
+        # 当成了「挂错场」。
+        #
+        # 想清楚一点：**偏移对不对，跟覆盖多少无关**。只要「文件名那串数 =
+        # 开机时刻」成立，重叠的那一段就是对齐的；覆盖低只是说后半段没有公共区
+        # 画面可看，不是挂错。真正的错误只有一种——挑了一路根本不重叠的。
+        #
+        # 所以这里只挡"几乎不重叠"的，覆盖本身如实报出来给人参考。
+        if cov is not None and cov < 0.02:
+            skip(f"最接近的那一路只盖住 {cov:.0%}，几乎不重叠")
             continue
         if cov is None and abs(gap) > 30 * 60 * 1000:
             skip("缺时长、只能按开机时刻比，而最近的一场也差了半小时以上")
@@ -172,7 +182,9 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
             "sample_id": s.id, "sample_code": s.sample_code, "slot": slot, "path": path,
             # 这一路的第 0 秒，在样本时间轴上是第几毫秒（它比样本早开就是负数）
             "offset_ms": gap,
-            # 这一路盖住了这份样本的多少（0~1）。None = 缺时长，没法算
+            # 这一路盖住了这份样本的多少（0~1）。**这是"能看到多少"，不是
+            # "对不对"**——公共区那一路录得短、开得晚，覆盖就低，但重叠的那段
+            # 照样是对齐的。None = 缺时长，没法算
             "coverage": None if cov is None else round(cov, 4),
             "own_start_ms": mine, "public_start_ms": start,
         })
