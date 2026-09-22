@@ -225,17 +225,18 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
   // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
   const [night, setNight] = useState(0);
-  // 直接写到 <video> 元素上，不走 React 的 style prop（那条路试过，没生效）。
+  // 夜视走 backdrop-filter，**不是 filter**。这条路是前面三次都失败之后才定的：
   //
-  // **千万别给外层 wrapper 也加。** 上一版为了保险两层都设，结果画面直接黑掉：
-  // 录屏逐帧量的，开启时均值从 19 掉到 0.0。给硬件加速的 <video> 的**祖先元素**
-  // 加 filter 会破坏它的合成层，整块渲染成黑的——比没效果还糟，而且看着像
-  // "夜视把画面弄得更黑了"。
-  useEffect(() => {
-    const css = NIGHT_LEVELS[night]?.css || "";
-    for (const el of refs.current) if (el) el.style.filter = css;
-    // 之前这里还给 wrapperRefs 设了一遍，那正是画面全黑的原因，别加回来
-  }, [night, videos]);
+  //   filter: url(#svg-gamma) 挂在 <video> 上   → 无效（均值 20/255，纹丝不动）
+  //   filter: brightness() 写在 React style prop → 无效
+  //   filter: brightness() 直接写 el.style       → 无效（录屏解析过档位确实切了）
+  //   同一句加在外层 wrapper 上                  → 画面**全黑**（均值 19 → 0.0）
+  //
+  // 前三次说明这个浏览器把 <video> 当独立合成层、忽略挂在它身上的滤镜；第四次
+  // 说明滤镜挂到祖先上会把合成整个搞崩。两头都走不通。
+  //
+  // backdrop-filter 滤的是**背后已经合成好的画面**，不碰 video 自己的图层——
+  // 盖一层透明 div 在视频上，pointer-events:none，原生控制条照样点得到。
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -944,6 +945,19 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                       : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }),
                   }}
                 />
+                {/* 夜视：透明的一层，只把背后的画面提亮。放在框叠层**前面**，
+                    这样绿框不会跟着一起被提亮糊掉 */}
+                {night > 0 && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      pointerEvents: "none",
+                      backdropFilter: NIGHT_LEVELS[night].css,
+                      WebkitBackdropFilter: NIGHT_LEVELS[night].css,
+                    }}
+                  />
+                )}
                 {/* 狗框叠层：不接鼠标，原生控制条照常能点 */}
                 <canvas
                   ref={(el) => {
