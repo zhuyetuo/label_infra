@@ -556,7 +556,11 @@ export default function Training() {
           <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)} style={{ width: "100%" }}>
             <Space direction="vertical" size={4}>
               <Radio value="approved">
-                只用审核通过的任务（整份都算数）
+                <Tooltip title="整份取：这个任务里的片段全要，包括没人看过的纯 AI 片段。任务审核通过意味着「这一份整体认可」，所以不再逐条看确认状态。只审了一部分就提交的任务别用这一档——那几十条没确认的 AI 片段会跟着进训练集，等于拿模型自己的输出喂它自己">
+                  <span style={{ borderBottom: "1px dashed #bbb" }}>
+                    只用审核通过的任务（整份都算数，<b>含没人确认过的 AI 片段</b>）
+                  </span>
+                </Tooltip>
               </Radio>
               <Radio value="reviewed">
                 <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似抓挠」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
