@@ -121,6 +121,8 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
+  /** 夜视增强：把这一刻黑得看不见的画面捞出来看清楚（夜里那几路才用得上） */
+  onLowlight?: (atMs: number) => void;
   /** 从候选确认上来的片段：退回去重新判断（删掉这条 + 那条候选回到待确认） */
   onReturnToCandidate?: (i: LabelItem) => void | Promise<void>;
   /** 刚重跑出来、跟人工已定片段撞上的那些：标个「疑似重复」好逐条对比 */
@@ -153,6 +155,7 @@ export default function SegmentPanel({
   loopRange,
   onUpdate,
   onDelete,
+  onLowlight,
   onReturnToCandidate,
   dupIds,
   onCreate,
@@ -787,6 +790,19 @@ export default function SegmentPanel({
                     跳转
                   </Button>
                   {loopButton(i.start_time_ms, i.end_time_ms)}
+                  {/* 夜里那几路黑得看不出狗在干嘛。按这一段的中点取一刻，
+                      三张并排（原样 / 拉伸 / 多帧堆栈）让人自己判断 */}
+                  {onLowlight && (
+                    <Tooltip title="这一刻太黑看不清时用：原样、只拉伸、多帧堆栈三张并排。堆栈那张是不编造的上限——它要是也看不出东西，说明这一路夜间根本没拍到">
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => onLowlight(Math.round((i.start_time_ms + i.end_time_ms) / 2))}
+                      >
+                        夜视
+                      </Button>
+                    </Tooltip>
+                  )}
                   {!readOnly && st === "pending" && (
                     <Tooltip title="AI 预测正确，确认通过">
                       <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => update([i.id], { ai_confirmed: true })}>

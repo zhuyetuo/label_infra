@@ -626,3 +626,27 @@ async def shared_cam_plan(day_dir: str | None = None, db: AsyncSession = Depends
 async def shared_cam_apply(day_dir: str | None = None, db: AsyncSession = Depends(get_db)):
     """按上面那份报告真写库。day_dir 只处理一天——先拿一天验，别一次铺开。"""
     return ok(await shared_cam_service.apply(db, day_dir))
+
+
+@router.get("/{sample_id}/lowlight")
+async def sample_lowlight(sample_id: int, cam: str = "cam1", t: float = 0.0,
+                          window_s: float = 2.0, model: str | None = None,
+                          db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """这一刻的夜视增强。回三张 base64 JPEG（原样 / 拉伸 / 多帧堆栈）。
+
+    为什么做成"按一刻取"而不是整段转码：人要的是「IMU 说这几秒是抓挠，
+    可画面是黑的，到底是不是」——看清那一刻就够了，几秒钟的量，贵一点的
+    办法也用得起。
+    """
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    path = {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path,
+            "cam3": sample.video_cam3_path}.get(cam)
+    if not path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"这个样本没有 {cam} 视频")
+    # 这一路要是跨 session 挂过来的（看全场那一路），它的第 0 秒跟样本时间轴
+    # 差着一个偏移——不换算的话捞出来的是十几分钟之外的画面
+    off = (sample.video_offsets_ms or {}).get(cam, 0) / 1000.0
+    return ok(await vision_sam_client.lowlight(path, t - off, window_s=window_s, model=model))

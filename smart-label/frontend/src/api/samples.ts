@@ -224,3 +224,16 @@ export const sharedCamPlan = (dayDir?: string) =>
 export const sharedCamApply = (dayDir?: string) =>
   request.post<never, { attached: number; skipped: Record<string, number> }>(
     "/samples/shared-cam/apply", null, { params: dayDir ? { day_dir: dayDir } : {} });
+
+/** 这一刻的夜视增强：原样 / 只拉伸 / 多帧堆栈（配了权重再加一张模型增强的）。
+ *  三张一起给，不是只给最好看的那张——判断"看不清"是哪一种要靠对比 */
+export const getLowlight = (sampleId: number, params: { cam: string; t: number; window_s?: number; model?: string }) =>
+  request.get<never, {
+    available?: boolean; error?: string;
+    raw?: string; stretch?: string; stacked?: string; model?: string;
+    /** 这一帧原本用到哪一段亮度、放大了几倍。**放大到封顶还是噪点 = 没拍到东西** */
+    stretch_info?: { lo: number; hi: number; gain: number };
+    /** 平均了几帧、信噪比理论上涨几倍 */
+    stack_info?: { frames: number; snr_gain: number; aligned: number; lo: number; hi: number; gain: number };
+    model_name?: string; model_error?: string;
+  }>(`/samples/${sampleId}/lowlight`, { params, timeout: 130000 });
