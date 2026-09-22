@@ -338,6 +338,13 @@ async def lowlight(path: str, t_s: float, window_s: float = 2.0, model: str | No
     回三张图（原样 / 只拉伸 / 多帧堆栈后拉伸），配了权重的话再加一张模型增强的。
     超时给足：堆栈要解几十帧，模型那张还要过一次网络。
     """
+    # 夜视这一摊默认关着：实测狗场夜间原片只用到 26 级亮度，判不出"在不在
+    # 抓挠"（见 imu_train README）。代码全留着，想再验就把算法机 .env 里的
+    # LOWLIGHT_ENABLED 设成 1、前端 config/features.ts 的 NIGHT_VISION 改 true
+    if not settings.night_vision_enabled:
+        return {"available": False, "error": (
+            "夜视增强已关闭。实测这几路夜间只有 26 级动态范围，提亮只是把噪声"
+            "放大，判不出动作——真正的解法是给单间补红外补光。想再验一次见 README")}
     if not enabled():
         return {"available": False, "error": _off_reason()}
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/lowlight"
@@ -363,6 +370,13 @@ async def lowlight_seq(path: str, start_s: float, end_s: float, fps: float = 10.
 
     超时比单帧那个还要给足：一段十来秒要解上百帧，每帧还要滑动平均加去色噪。
     """
+    # 夜视这一摊默认关着：实测狗场夜间原片只用到 26 级亮度，判不出"在不在
+    # 抓挠"（见 imu_train README）。代码全留着，想再验就把算法机 .env 里的
+    # LOWLIGHT_ENABLED 设成 1、前端 config/features.ts 的 NIGHT_VISION 改 true
+    if not settings.night_vision_enabled:
+        return {"available": False, "error": (
+            "夜视增强已关闭。实测这几路夜间只有 26 级动态范围，提亮只是把噪声"
+            "放大，判不出动作——真正的解法是给单间补红外补光。想再验一次见 README")}
     if not enabled():
         return {"available": False, "error": _off_reason()}
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/lowlight_seq"

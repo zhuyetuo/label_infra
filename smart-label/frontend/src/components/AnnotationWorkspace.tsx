@@ -21,6 +21,7 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import LowlightModal from "@/components/LowlightModal";
+import { NIGHT_VISION } from "@/config/features";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel, { candFocus } from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
@@ -1059,7 +1060,8 @@ export default function AnnotationWorkspace({
           message.success("已退回候选，可以重新判断");
         }}
         onCreate={readOnly ? undefined : appendItem}
-        onLowlight={(a, b) => setLowlightAt([a, b])}
+        // 夜视默认关着，见 config/features.ts：不传这个回调，按钮就不渲染
+        onLowlight={NIGHT_VISION ? (a, b) => setLowlightAt([a, b]) : undefined}
         initialFilterLabels={initialSegmentFilter}
       />
     ),
@@ -1820,7 +1822,7 @@ export default function AnnotationWorkspace({
         放在工作台这一层而不是片段面板里——它要用 sampleId，而且弹窗不该
         嵌在表格行里 */}
     <LowlightModal
-      sampleId={lowlightAt != null ? sampleId : null}
+      sampleId={NIGHT_VISION && lowlightAt != null ? sampleId : null}
       cams={camList}
       startS={(lowlightAt?.[0] ?? 0) / 1000}
       endS={(lowlightAt?.[1] ?? 0) / 1000}
