@@ -20,6 +20,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined,
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
+import LowlightModal from "@/components/LowlightModal";
 import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
 import CandidatePanel, { candFocus } from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
@@ -150,6 +151,8 @@ export default function AnnotationWorkspace({
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
+  // 夜视增强：看哪一刻、哪一路。夜里那几路黑得看不出狗在干嘛时用
+  const [lowlightAt, setLowlightAt] = useState<number | null>(null);
   const role = useAuthStore((s) => s.userInfo?.role);
 
   const [loading, setLoading] = useState(false);
@@ -1803,6 +1806,16 @@ export default function AnnotationWorkspace({
       </Spin>
       </div>
     </Modal>
+    {/* 夜视增强：夜里那几路黑得看不出狗在干嘛时，把那一刻捞出来看清楚。
+        放在工作台这一层而不是片段面板里——它要用 sampleId，而且弹窗不该
+        嵌在表格行里 */}
+    <LowlightModal
+      sampleId={lowlightAt != null ? sampleId : null}
+      cam="cam1"
+      t={(lowlightAt ?? 0) / 1000}
+      label={task?.sample_code ?? undefined}
+      onClose={() => setLowlightAt(null)}
+    />
     </>
   );
 }

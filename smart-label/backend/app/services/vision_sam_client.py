@@ -330,3 +330,25 @@ async def vllm_log(n: int = 300) -> dict:
     if resp.status_code != 200:
         raise SamUnavailable(f"视觉服务返回 {resp.status_code}: {_detail(resp)}")
     return resp.json()
+
+
+async def lowlight(path: str, t_s: float, window_s: float = 2.0, model: str | None = None) -> dict:
+    """夜里那几秒黑得看不见狗在干嘛——把那一刻捞出来看清楚。
+
+    回三张图（原样 / 只拉伸 / 多帧堆栈后拉伸），配了权重的话再加一张模型增强的。
+    超时给足：堆栈要解几十帧，模型那张还要过一次网络。
+    """
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/lowlight"
+    body = {"path": path, "t": t_s, "window_s": window_s}
+    if model:
+        body["model"] = model
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(url, json=body)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}：{resp.text[:200]}"}
+        return {"available": True, **resp.json()}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}: {e}"}
