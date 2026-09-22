@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
-import { currentName, findLabel } from "@/utils/labelTree";
+import { currentName } from "@/utils/labelTree";
 import {
   Alert,
   Button,
@@ -988,28 +988,17 @@ export default function Projects() {
             };
             const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
             const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
-            // 候选存的是类别名，片段那边用的是 label_id：按名字对回项目标签，
-            // 顺带认旧名（舔身体 → 舔），不然旧候选一律对不上、永远筛不到
-            const candLabelIds = (t: Task) => {
-              const m = new Map<number, number>();
-              for (const [name, c] of Object.entries(t.cand_labels ?? {})) {
-                const id = findLabel(labelsOf(p.id), name)?.id;
-                if (id != null) m.set(id, (m.get(id) ?? 0) + (c.n ?? 0));
-              }
-              return m;
-            };
+
             const matchLabels = (t: Task) => {
               const lc = t.label_counts ?? {};
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
-              // 「含类别」原来只认片段。一句话找画面刚给这个任务写了一条「舔-后爪」
-              // 候选，回到项目页按「舔」筛却找不着——它确实还没有舔的片段，有的是
-              // 一条等着判的候选。候选也算「含这一类」，不然人只会以为写失败了
-              if (f.labels.length) {
-                const byItem = f.labels.some((id) => (lc[id]?.n ?? 0) > 0);
-                const byCand = f.labels.some((id) => (candLabelIds(t).get(id) ?? 0) > 0);
-                if (!byItem && !byCand) return false;
-              }
+              // 「含类别」只认**片段**。曾经把候选也算进来过（为了让"一句话找画面
+              // 刚写的候选"能被搜到），结果更糟：疑似抓挠的候选 label_name 就是
+              // 「抓挠」，236 个任务全有，筛「抓挠」等于筛了大半个项目，
+              // 「哪些任务有抓挠片段」这个问题反而问不出来了。
+              // 候选按类别筛是旁边那个「候选类别」的活儿——两件事，两个控件。
+              if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
               if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
               return true;
             };
