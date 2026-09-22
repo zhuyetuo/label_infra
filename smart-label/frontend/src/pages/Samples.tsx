@@ -16,11 +16,13 @@ import {
   listVisionScans,
   runVisionScan,
   getVisionScanStatus,
+  sharedCamPlan,
 } from "@/api/samples";
 import { listDogs } from "@/api/dogs";
 import SamplePreviewModal from "@/components/SamplePreviewModal";
 import type { Sample } from "@/types";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { useAuthStore } from "@/stores/authStore";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
 
@@ -76,6 +78,19 @@ function nestByYearMonth(days: DayItem[]) {
 
 export default function Samples() {
   const qc = useQueryClient();
+  const isAdmin = useAuthStore((st) => st.userInfo?.role === "admin" || st.userInfo?.role === "super_admin");
+  // 「看全场的那一路」补挂的报告。只看不改——偏移是从文件名的开机时刻推出来的，
+  // 这个前提对不对，只有拿两路画面上同一个可辨认的瞬间核一次才知道
+  const [sharedCam, setSharedCam] = useState<Awaited<ReturnType<typeof sharedCamPlan>> | null>(null);
+  const [sharedCamLoading, setSharedCamLoading] = useState(false);
+  const loadSharedCam = async () => {
+    setSharedCamLoading(true);
+    try {
+      setSharedCam(await sharedCamPlan());
+    } finally {
+      setSharedCamLoading(false);
+    }
+  };
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
   // 画面扫描结果。一次拉回来按样本查，不每行一个请求——几百行的话那就是几百个请求。
@@ -409,6 +424,17 @@ export default function Samples() {
           立即扫描一次
         </Button>
         <Button onClick={() => refetch()}>刷新列表</Button>
+        {/* 「看全场的那一路」补挂：狗场两台采集机各自开机、落成两个 session，
+            cam7 的文件名带着 2 号机的时间戳，于是只挂给了它那三间——可它拍的是
+            全部六间。这里先出报告，核对偏移对不对再谈写库（写库还没开放：
+            播放器还没按偏移换算，挂上去那一路的每条标注都会差几秒） */}
+        {isAdmin && (
+          <Tooltip title="狗场的 cam7 一台俯拍看全部六间，但因为两台采集机各自开机、落成两个 session，它现在只挂在其中三间的样本上。这里算一下该补挂给谁、时间差多少——只看报告，不改数据">
+            <Button onClick={loadSharedCam} loading={sharedCamLoading}>
+              公共区补挂（看报告）
+            </Button>
+          </Tooltip>
+        )}
         {width.hasCustom && (
           <Tooltip title="列宽是拖出来的，记在这台电脑上。拖乱了点这里回到默认">
             <Button size="small" type="link" onClick={width.reset}>
@@ -746,6 +772,66 @@ export default function Samples() {
           value={markNote}
           onChange={(e) => setMarkNote(e.target.value)}
         />
+      </Modal>
+
+      <Modal
+        title="公共区补挂 · 报告（只看，不改数据）"
+        open={sharedCam != null}
+        onCancel={() => setSharedCam(null)}
+        footer={null}
+        width={900}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="偏移是从文件名里的开机时刻推出来的"
+          description={
+            <>
+              狗场两台采集机各自开机、落成两个 session（<code>..._000016301_...</code> / <code>..._000012130_...</code>），
+              而 cam7 一台俯拍看的是<b>全部六间</b>。补挂时必须带上两者的时间差，
+              否则那一路上每条标注都会差几秒、而且错得看不出来。
+              <br />
+              <b>先核对下面的「时间差」那一列：应该都在 ±几秒。</b>
+              出现几万毫秒就说明「文件名那串数 = 开机时刻」这个前提不成立，得换别的算法。
+              核对无误我再开放「写库」，以及让播放器按这个偏移换算。
+            </>
+          }
+        />
+        {sharedCam && (
+          <>
+            <Table
+              size="small"
+              rowKey="sample_id"
+              pagination={{ pageSize: 10, size: "small" }}
+              dataSource={sharedCam.items}
+              columns={[
+                { title: "样本", dataIndex: "sample_code" },
+                { title: "挂到哪个槽位", dataIndex: "slot", width: 110 },
+                {
+                  title: "时间差",
+                  dataIndex: "offset_ms",
+                  width: 150,
+                  render: (v: number) => (
+                    <Tag color={Math.abs(v) <= 60_000 ? "green" : "red"}>
+                      {(v / 1000).toFixed(3)} 秒{v < 0 ? "（公共区先开）" : v > 0 ? "（公共区后开）" : ""}
+                    </Tag>
+                  ),
+                },
+                { title: "要挂的那一路", dataIndex: "path", ellipsis: true },
+              ]}
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              共 {sharedCam.items.length} 份样本该补挂。
+              {Object.entries(sharedCam.skipped).length > 0 && (
+                <>
+                  {" "}没挂的：
+                  {Object.entries(sharedCam.skipped).map(([why, n]) => `${why} ${n}`).join("；")}
+                </>
+              )}
+            </Typography.Paragraph>
+          </>
+        )}
       </Modal>
 
       <SamplePreviewModal
