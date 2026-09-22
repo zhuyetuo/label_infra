@@ -766,13 +766,23 @@ export default function SegmentPanel({
               return (
                 <>
                   {st === "pending" ? (
-                    <Tag color="orange">AI 待确认</Tag>
+                    <Tooltip title="AI 标的，你还没表态。点右边「通过」认可它，或者直接改标签/拖起止——改了就算你的结论，不用再点通过">
+                      <Tag color="orange">AI 待确认</Tag>
+                    </Tooltip>
                   ) : st === "confirmed" ? (
-                    <Tag color="green">AI 已确认</Tag>
+                    <Tooltip title="你点过「通过」，这条按 AI 原样算数，会进训练集">
+                      <Tag color="green">AI 已确认</Tag>
+                    </Tooltip>
                   ) : st === "modified" ? (
-                    <Tag color="blue">AI 已纠正</Tag>
+                    // 改过之后「通过」按钮就没了，这是对的——已经是人的结论了。
+                    // 但界面上不说的话，看起来像"按钮怎么没了"，人会退出去重进
+                    <Tooltip title="你改过这条（换了标签或拖过起止），已经算你的结论，会进训练集——不用再点「通过」，那个按钮也因此不再出现">
+                      <Tag color="blue">AI 已纠正</Tag>
+                    </Tooltip>
                   ) : (
-                    <Tag>人工</Tag>
+                    <Tooltip title="你自己画的，不是 AI 标的">
+                      <Tag>人工</Tag>
+                    </Tooltip>
                   )}
                   {justTag}
                   {dupTag}

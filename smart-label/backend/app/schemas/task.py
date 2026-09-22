@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models.annotation import LabelItemSource
 from app.models.task import TaskStatus, TaskType
@@ -83,6 +83,22 @@ class LabelItemOut(LabelItemIn):
     uncertain_reason: str | None
     from_candidate_id: int | None
     created_by: int | None
+
+    @model_validator(mode="after")
+    def _origin_is_self(self):
+        """读出去的每一条，origin_item_id 就是它自己的 id。
+
+        **这是个必须补的洞**：origin_item_id 只是入参字段，库里没有这一列，
+        所以 `model_validate(ORM对象)` 取不到、落回默认值 None。前端原样带回来
+        存草稿时，后端就把每一条都当成新增——老行删掉、建一批新行，
+        `is_modified` 硬编码成 False。
+
+        后果是人改过的 AI 片段，存完草稿再进来又变回「AI 待确认」，改了等于白改；
+        顺带每次存草稿所有片段的 id 都会变一轮。
+        """
+        if self.origin_item_id is None:
+            self.origin_item_id = self.id
+        return self
 
 
 class DraftSaveRequest(BaseModel):
