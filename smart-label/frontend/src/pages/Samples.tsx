@@ -792,8 +792,10 @@ export default function Samples() {
               而 cam7 一台俯拍看的是<b>全部六间</b>。补挂时必须带上两者的时间差，
               否则那一路上每条标注都会差几秒、而且错得看不出来。
               <br />
-              <b>先核对下面的「时间差」那一列：应该都在 ±几秒。</b>
-              出现几万毫秒就说明「文件名那串数 = 开机时刻」这个前提不成立，得换别的算法。
+              <b>要核对的是「盖住多少」那一列，不是时间差。</b>
+              两台机器是人手动开的，同一场差 5~8 分钟很正常（实测 2026-09-17 就是
+              −317 秒和 −513 秒），光看时间差分不出是不是同一场；而同一场录的是同一段
+              时间，重叠接近满，隔壁场次几乎不重叠。<b>正常应该都在 90% 以上。</b>
               核对无误我再开放「写库」，以及让播放器按这个偏移换算。
             </>
           }
@@ -809,20 +811,43 @@ export default function Samples() {
                 { title: "样本", dataIndex: "sample_code" },
                 { title: "挂到哪个槽位", dataIndex: "slot", width: 110 },
                 {
+                  title: "盖住多少",
+                  dataIndex: "coverage",
+                  width: 110,
+                  sorter: (a: { coverage: number | null }, b: { coverage: number | null }) =>
+                    (a.coverage ?? -1) - (b.coverage ?? -1),
+                  defaultSortOrder: "ascend" as const,
+                  render: (v: number | null) =>
+                    v == null ? (
+                      <Tag>缺时长，算不了</Tag>
+                    ) : (
+                      <Tag color={v >= 0.9 ? "green" : v >= 0.5 ? "orange" : "red"}>{(v * 100).toFixed(0)}%</Tag>
+                    ),
+                },
+                {
                   title: "时间差",
                   dataIndex: "offset_ms",
                   width: 150,
+                  // 时间差不上色：它多大都可能是对的，判据在「盖住多少」那一列
                   render: (v: number) => (
-                    <Tag color={Math.abs(v) <= 60_000 ? "green" : "red"}>
+                    <span>
                       {(v / 1000).toFixed(3)} 秒{v < 0 ? "（公共区先开）" : v > 0 ? "（公共区后开）" : ""}
-                    </Tag>
+                    </span>
                   ),
                 },
                 { title: "要挂的那一路", dataIndex: "path", ellipsis: true },
               ]}
             />
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
-              共 {sharedCam.items.length} 份样本该补挂。
+              共 {sharedCam.items.length} 份样本该补挂
+              {(() => {
+                const low = sharedCam.items.filter((i) => i.coverage != null && i.coverage < 0.9).length;
+                const none = sharedCam.items.filter((i) => i.coverage == null).length;
+                return low || none
+                  ? `（其中盖住不到 90% 的 ${low} 份${none ? `，算不了的 ${none} 份` : ""}——这几份值得点开看一眼）`
+                  : "，全部盖住 90% 以上";
+              })()}
+              。
               {Object.entries(sharedCam.skipped).length > 0 && (
                 <>
                   {" "}没挂的：

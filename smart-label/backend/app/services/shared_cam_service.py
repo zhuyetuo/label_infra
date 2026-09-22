@@ -87,10 +87,14 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
     rows = (await db.execute(select(Sample))).scalars().all()
     # 每个日期目录里，看全场那一路长什么样（路径 + 它自己的开机时刻）。
     # 同一天可能有好几场，按开机时刻各存一份，补挂时挑最近的那一场
-    public_by_dir: dict[str, list[tuple[int, str]]] = {}
+    # (开机时刻, 路径, 这一路多长毫秒)。时长从它所属样本上取——同一段视频挂在
+    # 好几份样本上，取到哪一份都一样
+    public_by_dir: dict[str, list[tuple[int, str, int | None]]] = {}
+    seen_pub: set[str] = set()
     for s in rows:
+        dur = int(s.video_duration_sec * 1000) if s.video_duration_sec else None
         for p in _paths(s):
-            if not p:
+            if not p or p in seen_pub:
                 continue
             cam, _imu = site_layout.parse_cam_imu(p)
             if cam is None or cam not in site_layout.LAYOUT["gouchang"]["public_cams"]:
@@ -98,9 +102,8 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
             start = session_start_ms(p)
             if start is None:
                 continue
-            bucket = public_by_dir.setdefault(_day_dir(p), [])
-            if (start, p) not in bucket:
-                bucket.append((start, p))
+            seen_pub.add(p)
+            public_by_dir.setdefault(_day_dir(p), []).append((start, p, dur))
 
     items: list[dict] = []
     skipped: dict[str, int] = {}
@@ -132,18 +135,45 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
         if slot is None:
             skip("三个槽位都满了")
             continue
-        # 挑开机时刻最接近的那一场：一天里可能录了好几场，挂错场就是整段对不上
-        start, path = min(cands, key=lambda c: abs(c[0] - mine))
+        # **按「盖没盖住」挑，不是按「开得近」挑。**
+        #
+        # 一开始是按开机时刻最接近来挑、再用半小时的窗口卡一道。实测（2026-09-22）
+        # 那个判据不成立：两台机器是人手动开的，同一场也能差 5~8 分钟，而隔壁场次
+        # 差的可能更小。光看"开得近不近"分不出是不是同一场。
+        #
+        # 真正要问的是：这一路盖住了这份样本的多少时间。同一场的两台机器录的是同
+        # 一段时间，重叠接近满；隔壁场次几乎不重叠。这个数还能直接给人看——
+        # 盖了 96% 和盖了 12%，不用懂时间戳也知道哪个不对。
+        mine_dur = int(s.video_duration_sec * 1000) if s.video_duration_sec else None
+        best = None
+        for start, path, pdur in cands:
+            if mine_dur is None or pdur is None:
+                # 缺时长就退回老办法（按开得近），但要在结果里如实标出来
+                score = -abs(start - mine)
+                cov = None
+            else:
+                overlap = min(mine + mine_dur, start + pdur) - max(mine, start)
+                cov = max(0.0, overlap / mine_dur)
+                score = cov
+            if best is None or score > best[0]:
+                best = (score, start, path, cov)
+        assert best is not None
+        _score, start, path, cov = best
         gap = start - mine
-        # 差得太远说明不是同一场。半小时是个宽松的线——同一场的两台机器差几秒，
-        # 隔壁场次差的是整点。宁可漏挂，也别把上一场的画面挂上来
-        if abs(gap) > 30 * 60 * 1000:
-            skip("最近的一场也差了半小时以上，不像同一场")
+        # 盖不住一半就不是同一场。宁可漏挂，也别把别的场次的画面挂上来——
+        # 挂错了人看到的是"画面里那只狗在干别的"，而根本想不到是挂错了场次
+        if cov is not None and cov < 0.5:
+            skip(f"最接近的那一路只盖住 {cov:.0%}，不像同一场")
+            continue
+        if cov is None and abs(gap) > 30 * 60 * 1000:
+            skip("缺时长、只能按开机时刻比，而最近的一场也差了半小时以上")
             continue
         items.append({
             "sample_id": s.id, "sample_code": s.sample_code, "slot": slot, "path": path,
             # 这一路的第 0 秒，在样本时间轴上是第几毫秒（它比样本早开就是负数）
             "offset_ms": gap,
+            # 这一路盖住了这份样本的多少（0~1）。None = 缺时长，没法算
+            "coverage": None if cov is None else round(cov, 4),
             "own_start_ms": mine, "public_start_ms": start,
         })
     items.sort(key=lambda x: x["sample_code"] or "")
