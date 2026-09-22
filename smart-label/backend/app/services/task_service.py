@@ -271,11 +271,18 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     # 就只防新增、不清旧账。而人看到的是两行分毫不差，删掉一条再存，下次点进来
     # 还是两行（他删的是前端那份，后端照样把两条都写回去）。
     #
-    # 留哪一条：优先留库里已有的（身上挂着出处 from_candidate_id、改没改过、
-    # 谁确认的），两条都已有就留 id 小的那条——**必须是确定的**，不然同一份草稿
-    # 存两次可能留下不同的行。
-    def _keep_rank(i) -> tuple[int, int]:
-        return (0 if i.origin_item_id else 1, i.origin_item_id or 0)
+    # 留哪一条，按这个顺序挑，**必须是确定的**——不然同一份草稿存两次可能留下
+    # 不同的行：
+    #   1. 挂着候选出处（from_candidate_id）的优先。那条身上有置信度、是谁确认的，
+    #      而且「打开工作台补回确认过的候选」那一步是按它认的；留没出处的那条，
+    #      下次打开又会被补一条回来，来回拉锯
+    #   2. 其次是库里已有的（改没改过、谁建的都在上面）
+    #   3. 最后按 id 小的
+    def _keep_rank(i) -> tuple[int, int, int]:
+        origin = existing_by_id.get(i.origin_item_id) if i.origin_item_id else None
+        return (0 if (origin is not None and origin.from_candidate_id) else 1,
+                0 if i.origin_item_id else 1,
+                i.origin_item_id or 0)
 
     winner_by_span: dict[tuple[int, int, int], object] = {}
     for i in items:

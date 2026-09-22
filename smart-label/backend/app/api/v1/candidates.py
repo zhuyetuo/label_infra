@@ -133,16 +133,22 @@ async def repair_items(task_id: int, db: AsyncSession = Depends(get_db), user: U
         db.add(record)
         await db.flush()
 
-    have = set(
-        (
-            await db.execute(
-                select(AnnotationLabelItem.from_candidate_id).where(
-                    AnnotationLabelItem.annotation_record_id == record.id,
-                    AnnotationLabelItem.from_candidate_id.isnot(None),
-                )
+    # 已有的片段：按候选 id 认一遍，**再按「同起止 + 同类别」认一遍**。
+    #
+    # 只按 from_candidate_id 认的话会跟草稿那边的去重打架：存草稿时同标签同起止
+    # 的只留一条（留 id 小的），要是被留下的那条恰好没挂 from_candidate_id，
+    # 这里就以为"这条候选的片段丢了"，又补一条回去——人存完草稿看着干净了，
+    # 关掉重开又变回两行，来回拉锯。
+    rows_ = (
+        await db.execute(
+            select(AnnotationLabelItem.from_candidate_id, AnnotationLabelItem.label_id,
+                   AnnotationLabelItem.start_time_ms, AnnotationLabelItem.end_time_ms).where(
+                AnnotationLabelItem.annotation_record_id == record.id,
             )
-        ).scalars()
-    )
+        )
+    ).all()
+    have = {cid for cid, _l, _s, _e in rows_ if cid is not None}
+    have_span = {(l, s_, e_) for _cid, l, s_, e_ in rows_}
     n = 0
     for c in cands:
         if c.id in have:
@@ -159,6 +165,8 @@ async def repair_items(task_id: int, db: AsyncSession = Depends(get_db), user: U
             ).scalar_one_or_none()
         if label_id is None:
             continue
+        if (label_id, c.start_time_ms, c.end_time_ms) in have_span:
+            continue        # 同类别同起止的已经有了，只是没挂着这条候选的 id
         db.add(
             AnnotationLabelItem(
                 annotation_record_id=record.id,
