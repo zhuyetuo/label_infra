@@ -542,7 +542,12 @@ def read_segments(name: str, limit: int = 5000) -> dict:
                 rows.append({
                     "task_id": t.get("id"),
                     "sample_code": code,
+                    # 根那一级：老前端只认这个字段，别改它的含义
                     "label": labels[0] if labels else "",
+                    # **整条链**（[抓挠, 抓挠-躯干]）。只给根的话，明细表里永远是
+                    # 「抓挠」，跟上面按类别统计出来的「抓挠-躯干 15」对不上，
+                    # 人会以为二级标签没导进去——其实导出文件里一直是全的
+                    "labels": labels,
                     "start": start,
                     "end": end,
                     "seconds": sec,

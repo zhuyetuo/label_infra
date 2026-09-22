@@ -69,3 +69,31 @@ def test_导出带整条链_父子不冲突_粗段挖掉细段(db, run, tmp_path
     st = svc.label_stats(["h1"])
     by = {r["label"]: r["n_segments"] for r in st["rows"]}
     assert by["舔"] == 3 and by["活动"] == 1 and "舔-前左爪" not in by
+
+
+def test_明细行带整条链_不是只给根(tmp_path, monkeypatch):
+    """导出文件里 timeserieslabels 一直是整条链（[抓挠, 抓挠-躯干]），
+    但明细接口只回了 labels[0]，于是界面上每行都写「抓挠」，跟上面按类别
+    统计出来的「抓挠-躯干 15」对不上——人会以为二级标签没导进去。
+    """
+    import json
+
+    from app.services import training_export_service as svc
+
+    d = tmp_path / svc.TRAIN_DIR / "ds_x"
+    d.mkdir(parents=True)
+    (d / "merged_tmp.json").write_text(json.dumps([{
+        "id": 1,
+        "data": {"sample_code": "s1"},
+        "annotations": [{"result": [{
+            "from_name": "label", "to_name": "ts", "type": "timeserieslabels",
+            "value": {"start": "2026-09-20 19:02:25.602", "end": "2026-09-20 19:02:37.810",
+                      "timeserieslabels": ["抓挠", "抓挠-躯干"], "start_ms": 0, "end_ms": 12208},
+        }]}],
+    }]), encoding="utf-8")
+    monkeypatch.setattr(svc.settings, "nas_root", str(tmp_path))
+
+    r = svc.read_segments("ds_x")
+    row = r["rows"][0]
+    assert row["label"] == "抓挠"                       # 老字段含义不变
+    assert row["labels"] == ["抓挠", "抓挠-躯干"]        # 整条链也给出来

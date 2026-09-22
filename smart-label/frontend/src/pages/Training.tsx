@@ -912,8 +912,30 @@ export default function Training() {
                 // 空白，把「类别」推到老远。260 = 编号本身 230 + 内边距。
                 { title: "样本", dataIndex: "sample_code", width: 260, ellipsis: true },
                 {
-                  title: "类别", dataIndex: "label", width: 90,
-                  render: (v: string) => <Tag color={labelColor(v)}>{v}</Tag>,
+                  // 整条链一起显示：只给根的话，行上永远是「抓挠」，跟上面
+                  // 按类别统计出来的「抓挠-躯干 15」对不上，人会以为二级标签
+                  // 没导进去——其实导出文件里一直是全的，是这一列只画了 labels[0]
+                  title: "类别", dataIndex: "label", width: 190,
+                  render: (v: string, r: DatasetSegment) => {
+                    const chain = r.labels?.length ? r.labels : [v];
+                    return (
+                      <Space size={2} wrap>
+                        {chain.map((name, i) => (
+                          <Tag
+                            key={name}
+                            color={labelColor(chain[0])}
+                            // 子级用描边：一眼看出哪个是根、哪个是细分
+                            bordered
+                            style={i === 0 ? undefined : { background: "transparent" }}
+                          >
+                            {/* 子级只写自己那一截（抓挠-躯干 → 躯干），不然一行里
+                                「抓挠」出现三遍，真正有信息的那几个字反而被挤没 */}
+                            {i === 0 ? name : name.startsWith(`${chain[i - 1]}-`) ? name.slice(chain[i - 1].length + 1) : name}
+                          </Tag>
+                        ))}
+                      </Space>
+                    );
+                  },
                 },
                 // 2026-08-22 14:38:43.248 实际约 170px，190 是拍脑袋定的
                 { title: "开始", dataIndex: "start", width: 175 },
