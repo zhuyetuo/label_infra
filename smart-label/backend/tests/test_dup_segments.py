@@ -165,3 +165,48 @@ def test_库里已经并排躺着两条一样的_存一次就清掉(db, run):
     assert len(got) == 1, "库里已有的两条一样的，存一次就该只剩一条"
     # 留 id 小的那条：必须是确定的，不然同一份草稿存两次可能留下不同的行
     assert got[0].id == min(a.id, b.id)
+
+
+def test_去重和补回候选不打架_留带出处的那条(db, run):
+    """两条规则会互相拆台：
+
+      存草稿   同标签同起止的只留一条
+      打开工作台  按候选行把"确认过但没有片段"的补回来
+
+    留下的那条要是没挂 from_candidate_id，第二条规则就以为片段丢了，又补一条
+    回去——人存完看着干净了，关掉重开又是两行。录屏实测（2026-09-22）就是这样：
+    13 段存成 12 段，重开又变回 13 段。
+
+    两头都修：去重优先留**带出处**的那条；补回时除了按候选 id，也按
+    「同类别同起止」认一遍。
+    """
+    from app.api.v1 import candidates as cand_api
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+
+    u, p, lab, t = _world(db, run)
+    c = AiCandidate(task_id=t.id, round_no=t.round_no, label_name="舔-后肢",
+                    start_time_ms=227040, end_time_ms=237090, reason="similar",
+                    status=CandidateStatus.confirmed, decided_label_id=lab.id, decided_by=u.id)
+    db.add(c)
+    run(db.flush())
+    rec = run(task_service.save_draft(db, t.id, u, [_incoming(lab.id, 227040, 237090)]))
+    plain = _items(db, run, rec.id)[0]
+    db.add(AnnotationLabelItem(annotation_record_id=rec.id, label_id=lab.id,
+                               start_time_ms=227040, end_time_ms=237090,
+                               source_type=LabelItemSource.human_added,
+                               from_candidate_id=c.id, created_by=u.id))
+    run(db.commit())
+    linked = [i for i in _items(db, run, rec.id) if i.from_candidate_id][0]
+
+    rec2 = run(task_service.save_draft(db, t.id, u, [
+        _incoming(lab.id, 227040, 237090, origin=plain.id),
+        _incoming(lab.id, 227040, 237090, origin=linked.id),
+    ]))
+    got = _items(db, run, rec2.id)
+    assert len(got) == 1
+    # 留带出处的那条：没有它，下面那一步又会补一条回来
+    assert got[0].from_candidate_id == c.id
+
+    # 再打开一次工作台（会先跑补回）：不许再多出一条
+    run(cand_api.repair_items(t.id, db=db, user=u))
+    assert len(_items(db, run, rec2.id)) == 1
