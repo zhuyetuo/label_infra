@@ -866,20 +866,23 @@ export default function Samples() {
                     label: `${d}（${sharedCam.items.filter((i) => i.path.includes(`/${d}/`)).length} 份）`,
                   }))}
               />
+              {/* 一开始这里不让"全挂"：偏移的前提（文件名那串数 = 开机时刻）只能
+                  拿眼睛核，没核之前一次挂几百份，错了就是几百份的第二路都错。
+                  2026-09-22 拿 2026_9_20_gouchang 核过了（两路画面对得上，而且
+                  扫描也不再还原），所以这道闸可以开了——但"先挑一天"仍然是默认，
+                  换了新场地/新采集端还是该先验一天 */}
               <Popconfirm
-                title={sharedCamDay ? `把 ${sharedCamDay} 这一天挂上？` : "把全部 561 份一次挂上？"}
+                title={sharedCamDay ? `把 ${sharedCamDay} 这一天挂上？` : `把剩下的 ${sharedCam.items.length} 份一次挂上？`}
                 description={
                   sharedCamDay
                     ? "挂上之后去打开一个 imu9~14 的样本，两路一起播，找狗动的那一下核对。不对就告诉我，能原样退回去"
-                    : "**建议先只挂一天**。偏移的前提（文件名那串数 = 开机时刻）只能拿眼睛核一次，一次全挂上而前提不成立的话，几百份样本的第二路都是错的"
+                    : "偏移那套算法已经在 2026_9_20_gouchang 上核对过了（两路画面对得上）。换了新场地或新采集端的话，还是先挑一天验一次再全挂"
                 }
-                okText={sharedCamDay ? "挂" : "还是先挂一天"}
-                okButtonProps={{ danger: !sharedCamDay }}
+                okText={sharedCamDay ? "挂" : "全挂"}
                 onConfirm={async () => {
-                  if (!sharedCamDay) return;
                   setSharedCamBusy(true);
                   try {
-                    const r = await sharedCamApply(sharedCamDay);
+                    const r = await sharedCamApply(sharedCamDay);   // 不选就是全挂
                     // **挂了 0 份不是成功**。报告里明明列着这一天的样本，却一份都没挂上，
                     // 只弹个绿勾的话人只能干瞪眼——要么说清哪里被挡了，要么就承认不知道
                     if (r.attached === 0) {
@@ -898,8 +901,8 @@ export default function Samples() {
                   }
                 }}
               >
-                <Button type="primary" size="small" disabled={!sharedCamDay} loading={sharedCamBusy}>
-                  写库（挂上这一天）
+                <Button type="primary" size="small" loading={sharedCamBusy}>
+                  {sharedCamDay ? "写库（挂上这一天）" : "写库（全挂）"}
                 </Button>
               </Popconfirm>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
