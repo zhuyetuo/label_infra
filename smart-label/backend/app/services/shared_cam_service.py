@@ -116,7 +116,10 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
         if not own:
             continue
         d = _day_dir(own)
-        if day_dir is not None and d != day_dir:
+        # day_dir 两头写法不一样：界面上给的是目录名（2026_9_20_gouchang），
+        # 而这里存的是完整相对路径（data_raw/2026_9_20_gouchang）。
+        # 只认完整路径的话筛下来一条不剩、"挂上了 0 份"——两种都认
+        if day_dir is not None and d != day_dir and os.path.basename(d) != day_dir:
             continue
         if site_layout.site_of(s.sample_code, d, own) != "gouchang":
             continue            # 只管狗场：影棚三路本来就全是公共的
@@ -189,7 +192,9 @@ async def plan(db: AsyncSession, day_dir: str | None = None) -> dict:
             "own_start_ms": mine, "public_start_ms": start,
         })
     items.sort(key=lambda x: x["sample_code"] or "")
-    return {"items": items, "skipped": skipped, "day_dirs": sorted(public_by_dir)}
+    return {"items": items, "skipped": skipped,
+            # 完整路径和目录名都给：调用方拿哪个来筛都能对上
+            "day_dirs": sorted(public_by_dir)}
 
 
 async def apply(db: AsyncSession, day_dir: str | None = None) -> dict:

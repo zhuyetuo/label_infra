@@ -115,3 +115,24 @@ def test_覆盖低但几乎同时开机的照挂_那是录得短不是挂错场(
     assert "s_hour" in items, "覆盖只有一半也该挂——那是录得短，不是挂错场"
     it = items["s_hour"]
     assert it["offset_ms"] == 1250 and 0.5 < it["coverage"] < 0.52
+
+
+def test_按天挂_目录名和完整路径都认(db, run):
+    """界面上给的是目录名（2026_9_20_gouchang），服务里存的是完整相对路径
+    （data_raw/2026_9_20_gouchang）。只认完整路径的话筛下来一条不剩，
+    界面报「挂上了 0 份」而看不出为什么——两种都得认。"""
+    u = User(username="sc4", password_hash="x", display_name="sc4", role=UserRole.admin)
+    db.add(u)
+    run(db.flush())
+    day = "data_raw/2026_9_20_gouchang"
+    a = _mk(db, run, u, "s_d1", "150000000", 3, 14, day=day)
+    b = _mk(db, run, u, "s_d2", "150001000", 6, 20, day=day)
+    b.video_cam2_path = f"{day}/multicam_20260920_150001000_cam7_imu20_raw.mp4"
+    run(db.commit())
+
+    assert len(run(svc.plan(db, "2026_9_20_gouchang"))["items"]) == 1      # 目录名
+    assert len(run(svc.plan(db, day))["items"]) == 1                        # 完整路径
+    assert len(run(svc.plan(db, "别的一天"))["items"]) == 0
+    assert run(svc.apply(db, "2026_9_20_gouchang"))["attached"] == 1
+    run(db.refresh(a))
+    assert a.video_cam2_path is not None
