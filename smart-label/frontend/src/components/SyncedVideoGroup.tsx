@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
+import { Button, Checkbox, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
 import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined, StepForwardOutlined } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
@@ -234,6 +234,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 这一帧实际量到的亮度范围和放大倍数。摆出来是为了能判断"看不清"是哪一种：
   // 拉到 10× 还是一片噪点 = 这一路夜间根本没拍到东西，该去补红外补光
   const [nightInfo, setNightInfo] = useState("");
+  // 多帧平均降噪。噪声每帧随机、画面基本不动，平均几帧信噪比按 √N 涨，
+  // **一个像素都不编造**——这是低光里唯一物理上站得住的"增强"。
+  // 代价是狗一动就拖影，所以做成开关让人自己决定：看静止姿态时开，看动作时关
+  const [denoise, setDenoise] = useState(false);
   // 夜视：**把视频逐帧画到 canvas 上提亮**，不再走 CSS。
   //
   // CSS 那条路试了五次，每次都拿录屏逐帧量过（档位切换也从工具条上解析出来
@@ -270,6 +274,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     // 每一路各自的拉伸参数，量一次用一阵子——场景不会每帧突变，
     // 每帧都重算反而会让画面亮度抖
     const tone: { k: number; c: number; lo: number; hi: number }[] = [];
+    // 多帧平均用的累积画布（每一路一张）。用指数滑动平均：每帧以 alpha 的
+    // 透明度盖上去，等价于平均最近 1/alpha 帧，而且不用存一堆历史帧
+    const acc: (HTMLCanvasElement | null)[] = [];
+    const ALPHA = 0.18;          // ≈ 平均 5~6 帧，信噪比约 ×2.4
 
     const measure = (video: HTMLVideoElement, i: number) => {
       if (!pctx) return;
@@ -317,6 +325,29 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
         const cw = video.videoWidth * scale;
         const ch = video.videoHeight * scale;
+        // 降噪：先把原始帧累到一张画布上（指数滑动平均），再拿它去做拉伸。
+        // 顺序很重要——先平均后拉伸，噪声才是被压下去的那个；反过来是把
+        // 放大后的噪声再平均，白折腾
+        let src: CanvasImageSource = video;
+        if (denoise) {
+          let a = acc[i];
+          if (!a || a.width !== video.videoWidth) {
+            a = document.createElement("canvas");
+            a.width = video.videoWidth;
+            a.height = video.videoHeight;
+            acc[i] = a;
+            a.getContext("2d")?.drawImage(video, 0, 0);
+          }
+          const actx = a.getContext("2d");
+          if (actx) {
+            actx.globalAlpha = ALPHA;
+            actx.drawImage(video, 0, 0, a.width, a.height);
+            actx.globalAlpha = 1;
+            src = a;
+          }
+        } else {
+          acc[i] = null;
+        }
         // 每 20 帧量一次，其余帧沿用上次的参数
         if (!tone[i] || frames % 20 === 0) measure(video, i);
         const t = tone[i];
@@ -326,7 +357,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           // "已经拉到顶、下面全是噪点"
           if (i === 0) setNightInfo(`原片只用到 ${t.lo}~${t.hi}，放大 ${(t.k * t.c).toFixed(1)}×`);
         }
-        ctx.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch);
+        ctx.drawImage(src, (w - cw) / 2, (h - ch) / 2, cw, ch);
         ctx.filter = "none";
         // 底下这一条留空：原生控制条就画在那儿，盖住了就没法拖进度条了
         ctx.clearRect(0, h - CONTROLS_STRIP, w, CONTROLS_STRIP);
@@ -336,7 +367,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [night, videos]);
+  }, [night, denoise, videos]);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -896,6 +927,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       </Radio.Group>
       {/* 当前真正写下去的那串滤镜。两版都"看着写了、其实没上去"，光看选中态
           分不出是没生效还是没部署——把实际值摆出来，一眼就知道哪一种 */}
+      {night > 0 && (
+        <Tooltip title="多帧平均：噪声每帧随机、画面基本不动，平均几帧就能把噪点压下去，信噪比按帧数开方涨。一个像素都不编造。代价是狗一动就拖影——看它趴着在干嘛时开，看动作快慢时关">
+          <Checkbox checked={denoise} onChange={(e) => setDenoise(e.target.checked)} style={{ marginLeft: 4 }}>
+            降噪
+          </Checkbox>
+        </Tooltip>
+      )}
       {night > 0 && nightInfo && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {nightInfo}
