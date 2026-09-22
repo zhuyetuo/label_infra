@@ -880,7 +880,17 @@ export default function Samples() {
                   setSharedCamBusy(true);
                   try {
                     const r = await sharedCamApply(sharedCamDay);
-                    message.success(`挂上了 ${r.attached} 份。去开一个 imu9~14 的样本核对两路画面`);
+                    // **挂了 0 份不是成功**。报告里明明列着这一天的样本，却一份都没挂上，
+                    // 只弹个绿勾的话人只能干瞪眼——要么说清哪里被挡了，要么就承认不知道
+                    if (r.attached === 0) {
+                      const why = Object.entries(r.skipped).map(([k, v]) => `${k} ${v}`).join("；");
+                      message.warning(
+                        `一份都没挂上。${why ? `被挡下的：${why}` : "报告里这一天没有待挂的样本——换一天试试"}`,
+                        10,
+                      );
+                    } else {
+                      message.success(`挂上了 ${r.attached} 份。去开一个 imu9~14 的样本核对两路画面`);
+                    }
                     await loadSharedCam();
                     qc.invalidateQueries({ queryKey: ["samples"] });
                   } finally {
