@@ -153,6 +153,8 @@ export default function AnnotationWorkspace({
   const sampleId = task?.sample_id ?? null;
   // 夜视增强：看哪一刻、哪一路。夜里那几路黑得看不出狗在干嘛时用
   const [lowlightAt, setLowlightAt] = useState<number | null>(null);
+  // 这个样本实际有哪几路，给夜视弹窗切机位用
+  const [camList, setCamList] = useState<{ value: string; label: string }[]>([]);
   const role = useAuthStore((s) => s.userInfo?.role);
 
   const [loading, setLoading] = useState(false);
@@ -356,6 +358,7 @@ export default function AnnotationWorkspace({
   useEffect(() => {
     if (taskId == null || sampleId == null) {
       setVideos([]);
+      setCamList([]);
       setVideoWhy(null);
       setHasCsv(false);
       setFps(null);
@@ -376,8 +379,12 @@ export default function AnnotationWorkspace({
         ["视角3", media.video3_id],
       ];
       const vids: VideoSrc[] = [];
+      // 夜视弹窗要能切机位：黑的那一路看不清时，得拿同一时刻别的机位
+      // （尤其是看全场那一路）对一眼，才知道增强出来的东西是不是真的
+      const cams: { value: string; label: string }[] = [];
       for (const [i, [label, id]] of entries.entries()) {
         if (id == null) continue;
+        cams.push({ value: `cam${i + 1}`, label });
         const { token } = await getMediaToken(id);
         // 这一路的原点跟样本差多少：跨 session 挂过来的那一路（看全场的 cam7）
         // 差着几秒到几十分钟，不换算就是放了十几分钟之外的画面
@@ -386,6 +393,7 @@ export default function AnnotationWorkspace({
                     url: mediaStreamUrl(id, token), offsetSec: off });
       }
       setVideos(vids);
+      setCamList(cams);
       setVideoWhy(
         vids.length > 0
           ? null
@@ -1050,6 +1058,7 @@ export default function AnnotationWorkspace({
           message.success("已退回候选，可以重新判断");
         }}
         onCreate={readOnly ? undefined : appendItem}
+        onLowlight={setLowlightAt}
         initialFilterLabels={initialSegmentFilter}
       />
     ),
@@ -1811,7 +1820,7 @@ export default function AnnotationWorkspace({
         嵌在表格行里 */}
     <LowlightModal
       sampleId={lowlightAt != null ? sampleId : null}
-      cam="cam1"
+      cams={camList}
       t={(lowlightAt ?? 0) / 1000}
       label={task?.sample_code ?? undefined}
       onClose={() => setLowlightAt(null)}

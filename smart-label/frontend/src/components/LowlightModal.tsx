@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Modal, Space, Spin, Typography } from "antd";
+import { Alert, Modal, Segmented, Space, Spin, Typography } from "antd";
 import { getLowlight } from "@/api/samples";
 
 /**
@@ -10,16 +10,21 @@ import { getLowlight } from "@/api/samples";
  * 「看清了」和「模型/拉伸编出来的」。
  */
 export default function LowlightModal({
-  sampleId, cam, t, label, onClose,
+  sampleId, cams, t, label, onClose,
 }: {
   sampleId: number | null;
-  cam: string;
+  /** 这个样本有哪几路。**能切机位是关键**：黑的那一路增强出来的东西是真是假，
+   *  只能拿同一时刻别的机位（尤其是看全场那一路，它本来就是亮的）对一眼 */
+  cams: { value: string; label: string }[];
   t: number;
   label?: string;
   onClose: () => void;
 }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof getLowlight>> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [cam, setCam] = useState(cams[0]?.value ?? "cam1");
+  // 换一段/换一个样本时回到第一路，免得停在上一次选的那一路上
+  useEffect(() => { setCam(cams[0]?.value ?? "cam1"); }, [sampleId, t, cams]);
   useEffect(() => {
     if (sampleId == null) return;
     setData(null);
@@ -53,6 +58,15 @@ export default function LowlightModal({
       footer={null}
       width="90vw"
     >
+      {cams.length > 1 && (
+        <div style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary" style={{ marginRight: 8 }}>看哪一路：</Typography.Text>
+          <Segmented value={cam} onChange={(v) => setCam(String(v))} options={cams} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            切到本来就亮的那一路（看全场的公共区），对一眼同一时刻狗在不在、在干嘛——这是唯一不依赖算法的对照
+          </Typography.Text>
+        </div>
+      )}
       {loading && <Spin tip="解帧、对齐、堆栈中…" />}
       {data?.available === false && <Alert type="error" showIcon message={data.error} />}
       {data?.available && (
