@@ -225,6 +225,18 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
   // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
   const [night, setNight] = useState(0);
+  // **直接写到元素上**，不走 React 的 style prop。
+  //
+  // 先用 SVG filter(url(#..)) 挂在 <video> 上：实测无效（录屏逐帧量的，开到「强」
+  // 画面均值还是 20/255）。换成 CSS brightness/contrast 写在 style prop 里：还是无效。
+  // 两次都是"看着写了、其实没上去"，所以这次不猜是哪一层的问题，直接设 style.filter，
+  // 并且**连 wrapper 一起设**——video 那一层要是被浏览器当成独立合成层忽略滤镜，
+  // 外面这层普通 div 一定挡不住。
+  useEffect(() => {
+    const css = NIGHT_LEVELS[night]?.css || "";
+    for (const el of refs.current) if (el) el.style.filter = css;
+    for (const el of wrapperRefs.current) if (el) el.style.filter = css;
+  }, [night, videos]);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -782,6 +794,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           </Radio.Button>
         ))}
       </Radio.Group>
+      {/* 当前真正写下去的那串滤镜。两版都"看着写了、其实没上去"，光看选中态
+          分不出是没生效还是没部署——把实际值摆出来，一眼就知道哪一种 */}
+      {night > 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {NIGHT_LEVELS[night].css}
+        </Typography.Text>
+      )}
       <Typography.Text type="secondary">播放速度：</Typography.Text>
       <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
         {SPEED_OPTIONS.map((s) => (
@@ -924,8 +943,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                     ...(fill
                       ? { width: "100%", height: "100%", display: "block", transformOrigin: "center" }
                       : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }),
-                    // 只作用在显示上：截图、标注、导出走的都是原片
-                    filter: NIGHT_LEVELS[night]?.css || undefined,
                   }}
                 />
                 {/* 狗框叠层：不接鼠标，原生控制条照常能点 */}
