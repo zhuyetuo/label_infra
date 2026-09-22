@@ -225,17 +225,16 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
   // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
   const [night, setNight] = useState(0);
-  // **直接写到元素上**，不走 React 的 style prop。
+  // 直接写到 <video> 元素上，不走 React 的 style prop（那条路试过，没生效）。
   //
-  // 先用 SVG filter(url(#..)) 挂在 <video> 上：实测无效（录屏逐帧量的，开到「强」
-  // 画面均值还是 20/255）。换成 CSS brightness/contrast 写在 style prop 里：还是无效。
-  // 两次都是"看着写了、其实没上去"，所以这次不猜是哪一层的问题，直接设 style.filter，
-  // 并且**连 wrapper 一起设**——video 那一层要是被浏览器当成独立合成层忽略滤镜，
-  // 外面这层普通 div 一定挡不住。
+  // **千万别给外层 wrapper 也加。** 上一版为了保险两层都设，结果画面直接黑掉：
+  // 录屏逐帧量的，开启时均值从 19 掉到 0.0。给硬件加速的 <video> 的**祖先元素**
+  // 加 filter 会破坏它的合成层，整块渲染成黑的——比没效果还糟，而且看着像
+  // "夜视把画面弄得更黑了"。
   useEffect(() => {
     const css = NIGHT_LEVELS[night]?.css || "";
     for (const el of refs.current) if (el) el.style.filter = css;
-    for (const el of wrapperRefs.current) if (el) el.style.filter = css;
+    // 之前这里还给 wrapperRefs 设了一遍，那正是画面全黑的原因，别加回来
   }, [night, videos]);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
