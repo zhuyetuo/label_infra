@@ -40,6 +40,10 @@ export interface SampleMedia {
   video_paths: (string | null)[];
   /** 登记了路径但媒体库里没有这条：文件没传上 NAS，或者传了还没被扫到 */
   video_missing_in_library: string[];
+  /** 三路各自的时间偏移（毫秒，跟 video_paths 同序）：**这一路的第 0 秒在样本
+   *  时间轴上是第几毫秒**。0 = 同一个原点（绝大多数）。播放器必须按它换算，
+   *  否则跨 session 挂过来的那一路放的是十几分钟之外的画面 */
+  video_offsets_ms?: number[];
 }
 
 export const getSampleMedia = (sampleId: number) =>
@@ -214,3 +218,9 @@ export const sharedCamPlan = (dayDir?: string) =>
     skipped: Record<string, number>;
     day_dirs: string[];
   }>("/samples/shared-cam/plan", { params: dayDir ? { day_dir: dayDir } : {} });
+
+/** 真写库：按上面那份报告挂上那一路并记下偏移。
+ *  **建议先只跑一天**（day_dir），拿两路画面上同一个可辨认的瞬间核一眼再铺开 */
+export const sharedCamApply = (dayDir?: string) =>
+  request.post<never, { attached: number; skipped: Record<string, number> }>(
+    "/samples/shared-cam/apply", null, { params: dayDir ? { day_dir: dayDir } : {} });

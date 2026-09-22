@@ -16,6 +16,7 @@ import {
   listVisionScans,
   runVisionScan,
   getVisionScanStatus,
+  sharedCamApply,
   sharedCamPlan,
 } from "@/api/samples";
 import { listDogs } from "@/api/dogs";
@@ -83,6 +84,10 @@ export default function Samples() {
   // 这个前提对不对，只有拿两路画面上同一个可辨认的瞬间核一次才知道
   const [sharedCam, setSharedCam] = useState<Awaited<ReturnType<typeof sharedCamPlan>> | null>(null);
   const [sharedCamLoading, setSharedCamLoading] = useState(false);
+  // 只写一天：偏移的前提（文件名那串数 = 开机时刻）只能拿眼睛核，
+  // 先挑一天挂上去核完再铺开。默认挑报告里样本最多的那一天
+  const [sharedCamDay, setSharedCamDay] = useState<string | undefined>();
+  const [sharedCamBusy, setSharedCamBusy] = useState(false);
   const loadSharedCam = async () => {
     setSharedCamLoading(true);
     try {
@@ -844,6 +849,53 @@ export default function Samples() {
                 { title: "要挂的那一路", dataIndex: "path", ellipsis: true },
               ]}
             />
+            <Space wrap style={{ marginTop: 12 }}>
+              <Typography.Text>挂哪一天：</Typography.Text>
+              <Select
+                size="small"
+                allowClear
+                showSearch
+                placeholder="挑一天（建议先只挂一天）"
+                style={{ width: 300 }}
+                value={sharedCamDay}
+                onChange={setSharedCamDay}
+                options={[...new Set(sharedCam.items.map((i) => i.path.split("/").slice(-2, -1)[0]))]
+                  .sort()
+                  .map((d) => ({
+                    value: d,
+                    label: `${d}（${sharedCam.items.filter((i) => i.path.includes(`/${d}/`)).length} 份）`,
+                  }))}
+              />
+              <Popconfirm
+                title={sharedCamDay ? `把 ${sharedCamDay} 这一天挂上？` : "把全部 561 份一次挂上？"}
+                description={
+                  sharedCamDay
+                    ? "挂上之后去打开一个 imu9~14 的样本，两路一起播，找狗动的那一下核对。不对就告诉我，能原样退回去"
+                    : "**建议先只挂一天**。偏移的前提（文件名那串数 = 开机时刻）只能拿眼睛核一次，一次全挂上而前提不成立的话，几百份样本的第二路都是错的"
+                }
+                okText={sharedCamDay ? "挂" : "还是先挂一天"}
+                okButtonProps={{ danger: !sharedCamDay }}
+                onConfirm={async () => {
+                  if (!sharedCamDay) return;
+                  setSharedCamBusy(true);
+                  try {
+                    const r = await sharedCamApply(sharedCamDay);
+                    message.success(`挂上了 ${r.attached} 份。去开一个 imu9~14 的样本核对两路画面`);
+                    await loadSharedCam();
+                    qc.invalidateQueries({ queryKey: ["samples"] });
+                  } finally {
+                    setSharedCamBusy(false);
+                  }
+                }}
+              >
+                <Button type="primary" size="small" disabled={!sharedCamDay} loading={sharedCamBusy}>
+                  写库（挂上这一天）
+                </Button>
+              </Popconfirm>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                挂上之后播放器会自动按偏移对齐，那一路的标题上写着差了多少秒
+              </Typography.Text>
+            </Space>
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
               共 {sharedCam.items.length} 份样本该补挂
               {(() => {
