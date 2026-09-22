@@ -652,7 +652,8 @@ export default function SegmentPanel({
             : []),
           {
             title: "标签",
-            width: 150,
+            // 「抓挠-头颈耳-右眼周/颊」这种三级标签就有 12 个字，150px 装不下
+            width: 200,
             render: (_, i: LabelItem) => (
               <>
                 {/* 同类别、起止一模一样的两行：界面上分毫不差，人根本不知道该删哪条。
@@ -670,8 +671,17 @@ export default function SegmentPanel({
                     size="small"
                     variant="borderless"
                     value={i.label_id}
-                    style={{ width: 140 }}
+                    style={{ width: 170 }}
                     {...labelSelectProps}
+                    // 收起来之后**只显示标签本身**。选中项默认复用下拉里那份渲染，
+                    // 而那份带着缩进和「└」（在列表里用来看层级），塞进这个窄框里
+                    // 又被截成「└ ...」——层级信息在下拉里已经给过了，收起来之后
+                    // 人要看的就是"这条现在是什么类别"
+                    labelRender={({ value }) => (
+                      <Tag color={colorOf(Number(value))} style={{ marginRight: 0 }}>
+                        {nameOf(Number(value))}
+                      </Tag>
+                    )}
                     options={labelOptions}
                     onChange={(v) => update([i.id], { label_id: v })}
                     title="改类别"
