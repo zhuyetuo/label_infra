@@ -235,7 +235,8 @@ export const getLowlight = (sampleId: number, params: { cam: string; t: number; 
     stretch_info?: { lo: number; hi: number; gain: number };
     /** 平均了几帧、信噪比理论上涨几倍 */
     stack_info?: { frames: number; snr_gain: number; aligned: number; lo: number; hi: number; gain: number };
-    model_name?: string; model_error?: string;
+    /** 用的哪个权重文件。LOL_v1/v2 是照片数据集，对监控夜视不对口，出来会糊 */
+    model_name?: string; model_weights?: string; model_error?: string;
   }>(`/samples/${sampleId}/lowlight`, { params, timeout: 130000 });
 
 /** 整段夜视增强，回一串帧，前端自己轮播。
