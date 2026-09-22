@@ -121,8 +121,9 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
-  /** 夜视增强：把这一刻黑得看不见的画面捞出来看清楚（夜里那几路才用得上） */
-  onLowlight?: (atMs: number) => void;
+  /** 夜视增强：把这一段黑得看不见的画面捞出来看清楚（夜里那几路才用得上）。
+   *  给的是整段起止，不是中点——抓挠是动作，单帧判不出来，得能循环播放 */
+  onLowlight?: (startMs: number, endMs: number) => void;
   /** 从候选确认上来的片段：退回去重新判断（删掉这条 + 那条候选回到待确认） */
   onReturnToCandidate?: (i: LabelItem) => void | Promise<void>;
   /** 刚重跑出来、跟人工已定片段撞上的那些：标个「疑似重复」好逐条对比 */
@@ -797,7 +798,7 @@ export default function SegmentPanel({
                       <Button
                         size="small"
                         type="link"
-                        onClick={() => onLowlight(Math.round((i.start_time_ms + i.end_time_ms) / 2))}
+                        onClick={() => onLowlight(i.start_time_ms, i.end_time_ms)}
                       >
                         夜视
                       </Button>

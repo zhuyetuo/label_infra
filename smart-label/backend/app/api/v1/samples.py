@@ -655,3 +655,27 @@ async def sample_lowlight(sample_id: int, cam: str = "cam1", t: float = 0.0,
     # 差着一个偏移——不换算的话捞出来的是十几分钟之外的画面
     off = (sample.video_offsets_ms or {}).get(cam, 0) / 1000.0
     return ok(await vision_sam_client.lowlight(path, t - off, window_s=window_s, model=model))
+
+
+@router.get("/{sample_id}/lowlight-seq")
+async def sample_lowlight_seq(sample_id: int, cam: str = "cam1",
+                              start: float = 0.0, end: float = 0.0,
+                              fps: float = 10.0, smooth: int = 3,
+                              db: AsyncSession = Depends(get_db),
+                              user: User = Depends(get_current_user)):
+    """整段夜视增强，回一串帧，前端自己轮播。
+
+    抓挠是动作，单帧判不出来——看清了"狗侧卧着"还是不知道它在不在抓。
+    太长的段砍到 20 秒：再长就是几百帧几十兆，而人看 20 秒也够判断了。
+    """
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    path = {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path,
+            "cam3": sample.video_cam3_path}.get(cam)
+    if not path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"这个样本没有 {cam} 视频")
+    off = (sample.video_offsets_ms or {}).get(cam, 0) / 1000.0
+    end = min(end, start + 20.0)
+    return ok(await vision_sam_client.lowlight_seq(path, start - off, end - off,
+                                                   fps=fps, smooth=smooth))

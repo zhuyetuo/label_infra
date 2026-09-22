@@ -352,3 +352,27 @@ async def lowlight(path: str, t_s: float, window_s: float = 2.0, model: str | No
         return {"available": True, **resp.json()}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}: {e}"}
+
+
+async def lowlight_seq(path: str, start_s: float, end_s: float, fps: float = 10.0,
+                       smooth: int = 3, width: int = 640) -> dict:
+    """把一整段增强成一串帧，让人循环着看。
+
+    为什么要整段而不是一帧：抓挠是动作。单帧最多说清"狗在不在、什么姿势"，
+    说不清"它在不在抓"——而人要判断的正是后者。
+
+    超时比单帧那个还要给足：一段十来秒要解上百帧，每帧还要滑动平均加去色噪。
+    """
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/lowlight_seq"
+    body = {"path": path, "start": start_s, "end": end_s,
+            "fps": fps, "smooth": smooth, "width": width}
+    try:
+        async with httpx.AsyncClient(timeout=240.0) as client:
+            resp = await client.post(url, json=body)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}：{resp.text[:200]}"}
+        return {"available": True, **resp.json()}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}: {e}"}

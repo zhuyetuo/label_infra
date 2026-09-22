@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { Alert, Modal, Segmented, Spin, Typography } from "antd";
-import { getLowlight } from "@/api/samples";
+import { useEffect, useRef, useState } from "react";
+import { Alert, Button, Modal, Segmented, Slider, Spin, Typography } from "antd";
+import { getLowlight, getLowlightSeq } from "@/api/samples";
 
 /**
  * 夜视增强：把黑得看不见的那几秒捞出来看清楚。
@@ -10,19 +10,52 @@ import { getLowlight } from "@/api/samples";
  * 「看清了」和「模型/拉伸编出来的」。
  */
 export default function LowlightModal({
-  sampleId, cams, t, label, onClose,
+  sampleId, cams, startS, endS, label, onClose,
 }: {
   sampleId: number | null;
   /** 这个样本有哪几路。**能切机位是关键**：黑的那一路增强出来的东西是真是假，
    *  只能拿同一时刻别的机位（尤其是看全场那一路，它本来就是亮的）对一眼 */
   cams: { value: string; label: string }[];
-  t: number;
+  /** 这一段的起止（秒）。整段循环播放用它，单帧那四张取中点 */
+  startS: number;
+  endS: number;
   label?: string;
   onClose: () => void;
 }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof getLowlight>> | null>(null);
   const [loading, setLoading] = useState(false);
   const [cam, setCam] = useState(cams[0]?.value ?? "cam1");
+  const t = (startS + endS) / 2;
+  // 整段增强后的帧串。**抓挠是动作，单帧判不出来**——四张静态图最多说清
+  // "狗侧卧着"，说不清"它在不在抓"，所以这一段要能循环播放
+  const [seq, setSeq] = useState<Awaited<ReturnType<typeof getLowlightSeq>> | null>(null);
+  const [seqLoading, setSeqLoading] = useState(false);
+  const [frameIdx, setFrameIdx] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState(1);
+  const timer = useRef<number | null>(null);
+
+  // 换段/换机位就把上一段的帧丢掉，免得播着播着还是上一段的画面
+  useEffect(() => { setSeq(null); setFrameIdx(0); }, [sampleId, cam, startS, endS]);
+
+  useEffect(() => {
+    if (timer.current != null) window.clearInterval(timer.current);
+    const n = seq?.frames?.length ?? 0;
+    if (!playing || n === 0) return;
+    const ms = 1000 / ((seq?.fps ?? 10) * speed);
+    timer.current = window.setInterval(() => setFrameIdx((i) => (i + 1) % n), ms);
+    return () => { if (timer.current != null) window.clearInterval(timer.current); };
+  }, [playing, speed, seq]);
+
+  const loadSeq = () => {
+    if (sampleId == null) return;
+    setSeqLoading(true);
+    setFrameIdx(0);
+    getLowlightSeq(sampleId, { cam, start: startS, end: endS, fps: 10 })
+      .then((r) => { setSeq(r); setPlaying(true); })
+      .catch((e) => setSeq({ available: false, error: String(e) }))
+      .finally(() => setSeqLoading(false));
+  };
   // 换一段/换一个样本时回到第一路，免得停在上一次选的那一路上
   useEffect(() => { setCam(cams[0]?.value ?? "cam1"); }, [sampleId, t, cams]);
   useEffect(() => {
@@ -52,7 +85,7 @@ export default function LowlightModal({
   const ki = data?.stack_info;
   return (
     <Modal
-      title={`夜视增强 · ${label ?? ""} ${t.toFixed(1)}s（${cam}）`}
+      title={`夜视增强 · ${label ?? ""} ${startS.toFixed(1)}~${endS.toFixed(1)}s（${cam}）`}
       open={sampleId != null}
       onCancel={onClose}
       footer={null}
@@ -86,6 +119,59 @@ export default function LowlightModal({
                 : "「只拉伸」和「堆栈」都不编造像素；模型那张（如果有）是它补出来的，好看但不能当证据——拿同一时刻公共区那一路对一眼才算数。这两张接近灰度是故意的：这个亮度下色度通道全是噪声（放大后就是满屏紫麻点），压掉只去噪不动亮度，轮廓一点没少"
             }
           />
+          {/* 整段循环播放。**这才是能判断动作的那一块**：上面四张静态图
+              最多说清"狗在不在、什么姿势"，说不清"它在不在抓" */}
+          <div style={{ marginBottom: 16, padding: 12, border: "1px solid #303030", borderRadius: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+              <Typography.Text strong>整段循环播放（增强后）</Typography.Text>
+              {!seq && (
+                <Button size="small" type="primary" loading={seqLoading} onClick={loadSeq}>
+                  {seqLoading ? "解帧中…" : `增强这 ${(endS - startS).toFixed(1)} 秒并循环播放`}
+                </Button>
+              )}
+              {seq?.available && (
+                <>
+                  <Button size="small" onClick={() => setPlaying((p) => !p)}>
+                    {playing ? "暂停" : "播放"}
+                  </Button>
+                  <Segmented
+                    size="small"
+                    value={speed}
+                    onChange={(v) => setSpeed(Number(v))}
+                    options={[{ label: "0.25x", value: 0.25 }, { label: "0.5x", value: 0.5 },
+                              { label: "1x", value: 1 }, { label: "2x", value: 2 }]}
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    第 {frameIdx + 1}/{seq.frames?.length ?? 0} 帧
+                    {seq.info && ` · ${seq.info.smooth} 帧滑动平均，全段共用一套拉伸（放大 ${seq.info.gain}×）`}
+                  </Typography.Text>
+                </>
+              )}
+            </div>
+            {seq?.available === false && <Alert type="error" showIcon message={seq.error} />}
+            {seq?.available && seq.frames && seq.frames.length > 0 && (
+              <>
+                <img
+                  src={`data:image/jpeg;base64,${seq.frames[frameIdx] ?? seq.frames[0]}`}
+                  style={{ width: "100%", maxWidth: 900, display: "block", borderRadius: 4 }}
+                />
+                {/* 拖着逐帧看：动作就那么零点几秒，自动播容易一晃而过 */}
+                <Slider
+                  min={0}
+                  max={seq.frames.length - 1}
+                  value={frameIdx}
+                  onChange={(v) => { setPlaying(false); setFrameIdx(v); }}
+                  tooltip={{ formatter: (v) => `第 ${(v ?? 0) + 1} 帧` }}
+                />
+              </>
+            )}
+            {!seq && !seqLoading && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                抓挠是动作，静态图判不出来。这一段十来秒要解上百帧、每帧滑动平均再去色噪，要等一会儿——所以不自动跑，点了才算
+              </Typography.Text>
+            )}
+          </div>
+
           {/* 必须并排。Space 会把每张图各自包一层 div，里面的 flex:1 到不了，
               结果四张叠成一列要往下滚——那就比不了了，人得同时看见才能判断 */}
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start", width: "100%" }}>
