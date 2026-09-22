@@ -265,7 +265,45 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
         return (x.label_id, x.start_time_ms, x.end_time_ms)
 
     seen_span = {_span(i) for i in items if i.origin_item_id}
+
+    # 同一段时间上同时标了「舔」和「舔-躯干」：**父级那条一点新信息都没有**。
+    # 导出时本来就是从叶子往上写整条链（["舔","舔-躯干"]），单独那条「舔」既不
+    # 会让导出多出什么，还会触发"粗标签挖掉细段"那套逻辑白跑一遍；界面上更是
+    # 两行时间一模一样，人只会以为是重复了。
+    #
+    # 所以起止完全相同、而且一个是另一个的祖先时，只留**细的**那条。
+    # 只在起止完全相同时才丢：粗的那条要是更长，丢了就把没被细段盖住的那截也
+    # 丢了——那是真信息。
+    label_ids = {i.label_id for i in items if i.label_id is not None}
+    parent_of: dict[int, int | None] = {}
+    if label_ids:
+        rows_ = (await db.execute(
+            select(LabelDefinition.id, LabelDefinition.parent_id)
+        )).all()
+        parent_of = {int(a): (int(b) if b is not None else None) for a, b in rows_}
+
+    def _ancestors(lid: int) -> set[int]:
+        out: set[int] = set()
+        cur = parent_of.get(lid)
+        while cur is not None and cur not in out:
+            out.add(cur)
+            cur = parent_of.get(cur)
+        return out
+
+    by_span: dict[tuple[int, int], set[int]] = {}
+    for i in items:
+        if i.label_id is not None:
+            by_span.setdefault((i.start_time_ms, i.end_time_ms), set()).add(i.label_id)
+    coarse_dupes = {
+        (s_, e_, lid)
+        for (s_, e_), lids in by_span.items()
+        for lid in lids
+        if any(lid in _ancestors(other) for other in lids if other != lid)
+    }
+
     for incoming in items:
+        if (incoming.start_time_ms, incoming.end_time_ms, incoming.label_id) in coarse_dupes:
+            continue
         if not incoming.origin_item_id:
             if _span(incoming) in seen_span:
                 continue

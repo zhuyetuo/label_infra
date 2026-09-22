@@ -94,3 +94,45 @@ def test_起止差一毫秒的不算重复_照留(db, run):
         _incoming(lab.id, 100718, 107201),
     ]))
     assert len(_items(db, run, rec.id)) == 2
+
+
+def test_同一段时间父子都标了_只留细的那条(db, run):
+    """「舔」和「舔-躯干」标在同一段时间上：父级那条一点新信息都没有。
+
+    导出本来就是从叶子往上写整条链（["舔","舔-躯干"]），单独那条「舔」既不会让
+    导出多出什么，还会触发"粗标签挖掉细段"那套逻辑白跑一遍；界面上更是两行时间
+    一模一样，人只会以为是重复了。
+
+    **只在起止完全相同时才丢**：粗的那条要是更长，丢了就把没被细段盖住的那截
+    也一起丢了——那是真信息。
+    """
+    u, p, lab, t = _world(db, run)
+    parent = LabelDefinition(project_id=p.id, code="lick_root", display_name="舔", created_by=u.id)
+    db.add(parent)
+    run(db.flush())
+    lab.parent_id = parent.id
+    run(db.commit())
+
+    rec = run(task_service.save_draft(db, t.id, u, [
+        _incoming(parent.id, 227040, 237090),       # 舔      ← 被细的那条盖住，丢
+        _incoming(lab.id, 227040, 237090),          # 舔-后肢 ← 留
+        _incoming(parent.id, 300000, 320000),       # 起止不同：照留
+    ]))
+    got = [(i.label_id, i.start_time_ms) for i in _items(db, run, rec.id)]
+    assert got == [(lab.id, 227040), (parent.id, 300000)]
+
+
+def test_父的那条更长时不丢_那截是真信息(db, run):
+    """粗的比细的长：丢了就把没被细段盖住的那截也丢了。起止完全相同才算重复。"""
+    u, p, lab, t = _world(db, run)
+    parent = LabelDefinition(project_id=p.id, code="lick_root2", display_name="舔", created_by=u.id)
+    db.add(parent)
+    run(db.flush())
+    lab.parent_id = parent.id
+    run(db.commit())
+
+    rec = run(task_service.save_draft(db, t.id, u, [
+        _incoming(parent.id, 227040, 250000),       # 舔：更长，照留
+        _incoming(lab.id, 227040, 237090),
+    ]))
+    assert len(_items(db, run, rec.id)) == 2
