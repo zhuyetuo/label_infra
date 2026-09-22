@@ -63,24 +63,25 @@ const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4];
 // 是浏览器解码吞吐跟不上，不是代码问题，前端修不了。先把上限收到解码顶得住的
 // 范围，比瞎放开到卡顿强。
 const MAX_SPEED = 5;
-// 夜视增强：夜里那几路黑得看不出狗在干嘛，这里把画面提亮到能看轮廓。
+// 夜视增强：夜里那几路黑得看不出狗在干嘛。
 //
-// 本来用的是 gamma 曲线（SVG feComponentTransfer）——理论上比线性调亮好：夜间
-// 画面的像素挤在 0~30 那一小段里，gamma<1 能把这一段拉开而不把亮部糊掉。
-// 但实测（2026-09-22，录屏逐帧量的）**SVG filter 挂在 <video> 上没有生效**：
-// 开到「强」，画面平均亮度还是 20/255，跟「关」一模一样。所以改用 CSS 的
-// brightness/contrast——这两个在 video 上是确定生效的。
+// **按这一帧的实际直方图自动拉伸，不用固定倍数。** 固定倍数（brightness(2.8)）
+// 实测直接过曝：原画均值 20，开「中」冲到 194~206，整片发白、噪点满屏——
+// 看不清不是因为提得不够，是提过头把亮部全顶到 255 糊成一片了。而且每一路的
+// 暗法不一样，一个倍数不可能都合适。
 //
-// 代价是它是线性的：提得太狠亮部会糊成一片白。所以分档，让人自己挑到刚好
-// 看得见的那一档，而不是我替他定一个"正确"的强度。
-//
-// **只改显示**：截图、标注、导出、送模型走的都是原片。
+// 做法：量出这一帧真正用到的那一小段（低分位~高分位），把它铺满 0~255。
+// 档位控制的是"铺多满"：弱只铺到六成，强铺满——铺得越满，噪点也越明显。
 const NIGHT_LEVELS = [
-  { key: 0, label: "关", css: "" },
-  { key: 1, label: "弱", css: "brightness(1.8) contrast(1.15)" },
-  { key: 2, label: "中", css: "brightness(2.8) contrast(1.3)" },
-  { key: 3, label: "强", css: "brightness(4.5) contrast(1.5)" },
+  { key: 0, label: "关", lo: 0, hi: 0, fill: 0 },
+  { key: 1, label: "弱", lo: 0.05, hi: 0.98, fill: 0.6 },
+  { key: 2, label: "中", lo: 0.02, hi: 0.99, fill: 0.8 },
+  { key: 3, label: "强", lo: 0.01, hi: 0.995, fill: 1.0 },
 ] as const;
+
+// 放大倍数的上限。全黑画面（贴着噪声底）的低高分位几乎重合，不封顶的话
+// 斜率会冲到几十倍，把纯噪声放成雪花——那不是"看清了"，是看着像有东西
+const MAX_GAIN = 10;
 
 // 原生控制条大概这么高。夜视画布把这一条留空，不然进度条被盖住就拖不了了
 const CONTROLS_STRIP = 48;
@@ -230,6 +231,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
   // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
   const [night, setNight] = useState(0);
+  // 这一帧实际量到的亮度范围和放大倍数。摆出来是为了能判断"看不清"是哪一种：
+  // 拉到 10× 还是一片噪点 = 这一路夜间根本没拍到东西，该去补红外补光
+  const [nightInfo, setNightInfo] = useState("");
   // 夜视：**把视频逐帧画到 canvas 上提亮**，不再走 CSS。
   //
   // CSS 那条路试了五次，每次都拿录屏逐帧量过（档位切换也从工具条上解析出来
@@ -247,14 +251,53 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // canvas 2D 的 ctx.filter 不经过那套合成，画什么就是什么——代价是每帧要
   // drawImage 一次，所以只在开着夜视时才跑这个循环。
   useEffect(() => {
-    const css = NIGHT_LEVELS[night]?.css || "";
-    if (!css) {
+    const lv = NIGHT_LEVELS[night];
+    if (!lv || !lv.fill) {
       for (const c of nightRefs.current) {
         if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
       }
+      setNightInfo("");
       return;
     }
     let raf = 0;
+    let frames = 0;
+    // 量直方图用的小画布：64x36 足够看出这一帧用到了哪一段亮度，
+    // 而全尺寸 getImageData 每帧跑一次太贵
+    const probe = document.createElement("canvas");
+    probe.width = 64;
+    probe.height = 36;
+    const pctx = probe.getContext("2d", { willReadFrequently: true });
+    // 每一路各自的拉伸参数，量一次用一阵子——场景不会每帧突变，
+    // 每帧都重算反而会让画面亮度抖
+    const tone: { k: number; c: number; lo: number; hi: number }[] = [];
+
+    const measure = (video: HTMLVideoElement, i: number) => {
+      if (!pctx) return;
+      pctx.drawImage(video, 0, 0, probe.width, probe.height);
+      const d = pctx.getImageData(0, 0, probe.width, probe.height).data;
+      const hist = new Array(256).fill(0);
+      for (let p = 0; p < d.length; p += 4) {
+        hist[(d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114) | 0]++;
+      }
+      const total = d.length / 4;
+      const at = (q: number) => {
+        let acc = 0;
+        for (let v = 0; v < 256; v++) {
+          acc += hist[v];
+          if (acc >= total * q) return v;
+        }
+        return 255;
+      };
+      const lo = at(lv.lo);
+      const hi = Math.max(lo + 1, at(lv.hi));
+      // 把 [lo, hi] 铺到 [0, 255*fill]。用 brightness→contrast 两步凑出这条直线：
+      //   brightness(k) 先乘，contrast(c) 再绕 0.5 缩放
+      //   out = in*k*c + 0.5(1-c)，要它等于 (in - lo/255) * slope
+      const slope = Math.min(MAX_GAIN, (255 * lv.fill) / (hi - lo));
+      const c = Math.max(0.01, 1 + (2 * lo * slope) / 255);
+      tone[i] = { k: slope / c, c, lo, hi };
+    };
+
     const tick = () => {
       refs.current.forEach((video, i) => {
         const canvas = nightRefs.current[i];
@@ -274,12 +317,21 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
         const cw = video.videoWidth * scale;
         const ch = video.videoHeight * scale;
-        ctx.filter = css;
+        // 每 20 帧量一次，其余帧沿用上次的参数
+        if (!tone[i] || frames % 20 === 0) measure(video, i);
+        const t = tone[i];
+        if (t) {
+          ctx.filter = `brightness(${t.k.toFixed(3)}) contrast(${t.c.toFixed(3)})`;
+          // 第一路的实测值摆到工具条上：看不清时靠它判断是"还能再拉"还是
+          // "已经拉到顶、下面全是噪点"
+          if (i === 0) setNightInfo(`原片只用到 ${t.lo}~${t.hi}，放大 ${(t.k * t.c).toFixed(1)}×`);
+        }
         ctx.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch);
         ctx.filter = "none";
         // 底下这一条留空：原生控制条就画在那儿，盖住了就没法拖进度条了
         ctx.clearRect(0, h - CONTROLS_STRIP, w, CONTROLS_STRIP);
       });
+      frames++;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -844,9 +896,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       </Radio.Group>
       {/* 当前真正写下去的那串滤镜。两版都"看着写了、其实没上去"，光看选中态
           分不出是没生效还是没部署——把实际值摆出来，一眼就知道哪一种 */}
-      {night > 0 && (
+      {night > 0 && nightInfo && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {NIGHT_LEVELS[night].css}
+          {nightInfo}
         </Typography.Text>
       )}
       <Typography.Text type="secondary">播放速度：</Typography.Text>
