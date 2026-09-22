@@ -63,6 +63,22 @@ const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4];
 // 是浏览器解码吞吐跟不上，不是代码问题，前端修不了。先把上限收到解码顶得住的
 // 范围，比瞎放开到卡顿强。
 const MAX_SPEED = 5;
+// 夜视增强：**gamma 曲线，不是调亮度**。
+//
+// 夜里那几路画面像素挤在 0~30 这一小段里，直接 brightness() 是线性放大——亮部
+// 一起抬上去、整片发灰，暗部之间的差别照样分不出来。gamma<1 把暗部那一小段
+// 拉开、亮部压住，才是"看清狗在干嘛"要的。CSS filter 没有 gamma，用 SVG 的
+// feComponentTransfer。
+//
+// **这不是无中生有**：传感器要是已经贴着噪声底（整片纯黑），拉开的只有噪点。
+// 所以做成一个开关让人当场看一眼，别替素材下结论。
+const NIGHT_LEVELS = [
+  { key: 0, label: "关", gamma: 1, slope: 1 },
+  { key: 1, label: "弱", gamma: 0.6, slope: 1.2 },
+  { key: 2, label: "中", gamma: 0.42, slope: 1.5 },
+  { key: 3, label: "强", gamma: 0.3, slope: 1.8 },
+] as const;
+
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
 
@@ -203,6 +219,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const [frame, setFrame] = useState(0);
   // 总的播放状态（以第一路为准），给总播放/暂停按钮显示用
   const [playing, setPlaying] = useState(false);
+  // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
+  // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
+  const [night, setNight] = useState(0);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -749,6 +768,17 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       >
         {playing ? "暂停" : "播放"}
       </Button>
+      {/* 夜里那几路黑得看不见狗在干嘛。这里只调**显示**，不碰原片、不碰标注 */}
+      <Tooltip title="夜视增强：把挤在暗部的那一小段像素拉开（gamma 曲线，不是单纯调亮）。只改显示，不动原片。画面要是已经贴着噪声底（纯黑），拉开的只有噪点——那说明这一路夜间根本没拍到东西">
+        <Typography.Text type="secondary">夜视：</Typography.Text>
+      </Tooltip>
+      <Radio.Group size="small" value={night} onChange={(e) => setNight(e.target.value)}>
+        {NIGHT_LEVELS.map((n) => (
+          <Radio.Button key={n.key} value={n.key}>
+            {n.label}
+          </Radio.Button>
+        ))}
+      </Radio.Group>
       <Typography.Text type="secondary">播放速度：</Typography.Text>
       <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
         {SPEED_OPTIONS.map((s) => (
@@ -806,6 +836,23 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   );
 
   return (
+    <>
+      {/* 夜视用的 gamma 曲线。CSS filter 没有 gamma，只能用 SVG：
+          feFuncX type="gamma" 是 slope * C^exponent —— 指数 <1 把暗部那一小段
+          拉开、亮部压住。整个组只放一份，三路共用 */}
+      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden>
+        <defs>
+          {NIGHT_LEVELS.filter((n) => n.key > 0).map((n) => (
+            <filter key={n.key} id={`nv-${n.key}`} colorInterpolationFilters="sRGB">
+              <feComponentTransfer>
+                <feFuncR type="gamma" exponent={n.gamma} amplitude={n.slope} />
+                <feFuncG type="gamma" exponent={n.gamma} amplitude={n.slope} />
+                <feFuncB type="gamma" exponent={n.gamma} amplitude={n.slope} />
+              </feComponentTransfer>
+            </filter>
+          ))}
+        </defs>
+      </svg>
     <div
       className={fill ? "ws-videos" : undefined}
       style={
@@ -887,11 +934,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                   src={v.url}
                   controls
                   preload="auto"
-                  style={
-                    fill
+                  style={{
+                    ...(fill
                       ? { width: "100%", height: "100%", display: "block", transformOrigin: "center" }
-                      : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }
-                  }
+                      : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }),
+                    // 只作用在显示上：截图、标注、导出走的都是原片
+                    filter: night ? `url(#nv-${night})` : undefined,
+                  }}
                 />
                 {/* 狗框叠层：不接鼠标，原生控制条照常能点 */}
                 <canvas
@@ -926,5 +975,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         </div>
       )}
     </div>
+    </>
   );
 }
