@@ -348,13 +348,28 @@ export default function SegmentPanel({
   // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨在一起，好找
   const labelOptions = flatten(labels).map(({ label: l, depth }) => ({
     value: l.id,
+    // 能搜：标签树有上百条，「抓挠-头颈耳-耳/耳后」翻到手酸。
+    // 搜的是纯文本，所以单独给一个 title——label 是 ReactNode，搜不了
+    title: l.display_name,
     label: (
-      <span style={{ paddingLeft: depth * 12 }}>
+      <span style={{ paddingLeft: depth * 12, whiteSpace: "nowrap" }}>
         {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
         <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 0 }}>{l.display_name}</Tag>
       </span>
     ),
   }));
+  /** 类别下拉的公共设置。
+   *
+   *  **下拉不能跟着框的宽度走**：框只有 130~140px，而选项前面还有缩进和「└」，
+   *  于是二级、三级标签整条被截成「└ ...」——人看到的是一列一模一样的省略号，
+   *  根本没法选。popupMatchSelectWidth=false 让弹层按内容撑开。
+   *  顺带打开搜索：标签树上百条，翻不如打两个字。 */
+  const labelSelectProps = {
+    showSearch: true,
+    optionFilterProp: "title" as const,
+    popupMatchSelectWidth: false,
+    styles: { popup: { root: { maxHeight: 420, overflow: "auto" } } },
+  };
   // 筛选用：只列当前片段里实际出现过的类别（带数量），项目里配了但一段都没有的不出现
   const usedCounts = useMemo(() => {
     const m = new Map<number, number>();
@@ -592,6 +607,7 @@ export default function SegmentPanel({
                       placeholder="补标为…"
                       style={{ width: 130 }}
                       value={null}
+                      {...labelSelectProps}
                       options={labelOptions}
                       onChange={(v) => v != null && onCreate(g.start, g.end, v)}
                     />
@@ -655,6 +671,7 @@ export default function SegmentPanel({
                     variant="borderless"
                     value={i.label_id}
                     style={{ width: 140 }}
+                    {...labelSelectProps}
                     options={labelOptions}
                     onChange={(v) => update([i.id], { label_id: v })}
                     title="改类别"
