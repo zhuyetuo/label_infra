@@ -15,6 +15,7 @@ from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.label import LabelDefinition
+from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
@@ -384,6 +385,45 @@ _CAND_SOURCES: dict[str, tuple[str, str | None]] = {
 def _source_where(source: str):
     reason, model = _CAND_SOURCES[source]
     return [AiCandidate.reason == reason, AiCandidate.model == model]
+
+
+@router.get("/{project_id}/label-template")
+async def project_label_template(project_id: int, db: AsyncSession = Depends(get_db),
+                                 user: User = Depends(get_current_user)):
+    """这个项目的标签是从哪个模板来的、还有多少条跟着它。
+
+    「标签模板」那一栏是个**套用动作**，不是项目上存着的字段，所以问「现在用的是
+    哪个模板」原本无从回答——人打开编辑框，看到的是一个空下拉，只能猜。
+
+    但每条标签都记着来源条目（label_definitions.template_item_id），顺着它就能
+    数出来。注意两件事，都要如实说，不能含糊成一句「用的是 X」：
+
+      - 项目自己改过颜色的标签会把 template_item_id 置空（断开跟随），
+        所以「跟着模板的」比「当初套进来的」少是正常的
+      - 一个项目可以套过好几个模板，所以这里给的是一张表，不是一个名字
+    """
+    allowed = await visible_project_ids(db, user)
+    if allowed is not None and project_id not in allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在或无权访问")
+    total = (await db.execute(
+        select(func.count()).select_from(LabelDefinition)
+        .where(LabelDefinition.project_id == project_id)
+    )).scalar_one()
+    rows = (await db.execute(
+        select(LabelTemplate.id, LabelTemplate.name, func.count(LabelDefinition.id))
+        .join(LabelTemplateItem, LabelTemplateItem.template_id == LabelTemplate.id)
+        .join(LabelDefinition, LabelDefinition.template_item_id == LabelTemplateItem.id)
+        .where(LabelDefinition.project_id == project_id)
+        .group_by(LabelTemplate.id, LabelTemplate.name)
+        .order_by(func.count(LabelDefinition.id).desc())
+    )).all()
+    linked = sum(int(n) for _i, _nm, n in rows)
+    return ok({
+        "total": int(total),
+        "templates": [{"id": int(i), "name": nm, "labels": int(n)} for i, nm, n in rows],
+        # 不跟任何模板的：手动加的，或者套进来之后自己改过颜色断开了跟随
+        "unlinked": max(0, int(total) - linked),
+    })
 
 
 @router.get("/{project_id}/cam-slots")

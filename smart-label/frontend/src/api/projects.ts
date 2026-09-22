@@ -222,6 +222,16 @@ export const projectSimilarWrite = (id: number, picks: [number, string, number, 
     }[];
   }>(`/projects/${id}/similar-write`, { picks, gap_s: gapS });
 
+/** 这个项目的标签是从哪个模板来的、还有多少条跟着它。
+ *  「标签模板」那一栏是个套用动作、不是项目上存着的字段，所以「现在用的是哪个」
+ *  只能顺着每条标签记的来源条目数出来。改过颜色的会断开跟随，所以要分开报 */
+export const getProjectLabelTemplate = (id: number) =>
+  request.get<never, {
+    total: number;
+    templates: { id: number; name: string; labels: number }[];
+    unlinked: number;
+  }>(`/projects/${id}/label-template`);
+
 /** cam1/cam2/cam3 这三个**槽位**各装了什么。
  *  那不是机位号：导入时是把这只狗该看的几路按机位号从小到大塞进三个槽位的，
  *  所以狗场的「cam2」往往是天花板公共区，影棚的「cam2」只是另一个角度 */

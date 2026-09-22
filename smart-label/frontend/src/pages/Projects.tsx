@@ -33,6 +33,7 @@ import {
   cancelProjectPrelabel,
   getProjectPrelabelStatus,
   getCamSlots,
+  getProjectLabelTemplate,
   getCandidateSources,
   purgeCandidates,
   listProjects,
@@ -543,9 +544,14 @@ export default function Projects() {
     });
   };
 
+  // 这个项目现在的标签是从哪来的。模板那一栏是「套用」动作，不是存着的字段，
+  // 打开编辑框只看到一个空下拉，人根本不知道现在用的是哪个
+  const [curTpl, setCurTpl] = useState<Awaited<ReturnType<typeof getProjectLabelTemplate>> | null>(null);
   const openEdit = (p: Project) => {
     setEditing(p);
     form.setFieldsValue({ name: p.name, description: p.description ?? "", templateId: undefined });
+    setCurTpl(null);
+    getProjectLabelTemplate(p.id).then(setCurTpl).catch(() => setCurTpl(null));
     setOpen(true);
   };
 
@@ -2429,9 +2435,32 @@ export default function Projects() {
             name="templateId"
             label="标签模板（可选）"
             extra={
-              editing
-                ? "套用会把模板里的标签添加进来，已有同 code 的会跳过，不会覆盖"
-                : "创建后立即套用该模板的标签，不用另外去标签管理页配一遍"
+              editing ? (
+                <>
+                  {/* 先说清楚现在是什么，再说这个框会干什么。**这个框是「套用」，
+                      不是「当前值」**——它永远空着，而人打开编辑框第一个想知道的
+                      恰恰是"现在用的哪个" */}
+                  <div>
+                    现在：
+                    {curTpl == null
+                      ? "读取中…"
+                      : curTpl.templates.length === 0
+                        ? `没有跟着任何模板（${curTpl.total} 个标签都是手动加的，或者改过颜色断开了跟随）`
+                        : curTpl.templates.map((t) => `${t.name}（${t.labels} 个标签跟着它）`).join("、")}
+                    {curTpl != null && curTpl.templates.length > 0 && curTpl.unlinked > 0 && (
+                      <>
+                        ；另有 {curTpl.unlinked} 个不跟模板
+                        <Tooltip title="手动加的，或者套进来之后自己改过颜色——改颜色会断开跟随，之后模板改颜色不再同步过来">
+                          <span style={{ borderBottom: "1px dashed #bbb", marginLeft: 2 }}>为什么</span>
+                        </Tooltip>
+                      </>
+                    )}
+                  </div>
+                  <div>套用会把模板里的标签添加进来，已有同 code 的会跳过，不会覆盖</div>
+                </>
+              ) : (
+                "创建后立即套用该模板的标签，不用另外去标签管理页配一遍"
+              )
             }
           >
             <Select
