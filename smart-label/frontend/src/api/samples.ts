@@ -207,6 +207,9 @@ export const sharedCamPlan = (dayDir?: string) =>
       sample_id: number; sample_code: string; slot: string; path: string;
       /** 这一路的第 0 秒在样本时间轴上是第几毫秒（它比样本早开就是负数） */
       offset_ms: number; own_start_ms: number; public_start_ms: number;
+      /** 这一路盖住了这份样本的多少时间（0~1）。null = 缺时长算不了。
+       *  **判断该不该挂看这个，不是看时间差**：同一场重叠接近满，隔壁场次几乎不重叠 */
+      coverage: number | null;
     }[];
     skipped: Record<string, number>;
     day_dirs: string[];
