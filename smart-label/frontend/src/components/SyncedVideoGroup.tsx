@@ -82,6 +82,9 @@ const NIGHT_LEVELS = [
   { key: 3, label: "强", css: "brightness(4.5) contrast(1.5)" },
 ] as const;
 
+// 原生控制条大概这么高。夜视画布把这一条留空，不然进度条被盖住就拖不了了
+const CONTROLS_STRIP = 48;
+
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
 
@@ -93,6 +96,8 @@ interface ZoomState {
 
 export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays, statics }: Props) {
   const overlayRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  // 夜视用的画布：把视频逐帧画上去、顺手提亮，盖在原视频上面
+  const nightRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const overlaysRef = useRef(overlays);
   overlaysRef.current = overlays;
   const staticsRef = useRef(statics);
@@ -225,18 +230,61 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 夜视增强档位。记在这一屏里就行——不同任务的素材亮度差很多，
   // 记到 localStorage 反而会让人打开一个本来就亮的视频看到一片惨白
   const [night, setNight] = useState(0);
-  // 夜视走 backdrop-filter，**不是 filter**。这条路是前面三次都失败之后才定的：
+  // 夜视：**把视频逐帧画到 canvas 上提亮**，不再走 CSS。
   //
-  //   filter: url(#svg-gamma) 挂在 <video> 上   → 无效（均值 20/255，纹丝不动）
-  //   filter: brightness() 写在 React style prop → 无效
-  //   filter: brightness() 直接写 el.style       → 无效（录屏解析过档位确实切了）
-  //   同一句加在外层 wrapper 上                  → 画面**全黑**（均值 19 → 0.0）
+  // CSS 那条路试了五次，每次都拿录屏逐帧量过（档位切换也从工具条上解析出来
+  // 确认过确实切了）：
   //
-  // 前三次说明这个浏览器把 <video> 当独立合成层、忽略挂在它身上的滤镜；第四次
-  // 说明滤镜挂到祖先上会把合成整个搞崩。两头都走不通。
+  //   filter: url(#svg-gamma) 挂在 <video> 上     → 无效（均值 20/255 纹丝不动）
+  //   filter: brightness() 写在 React style prop  → 无效
+  //   filter: brightness() 直接写 el.style        → 无效
+  //   同一句加在外层 wrapper 上                   → 画面**全黑**（19 → 0.0）
+  //   透明层 backdrop-filter                      → 无效
   //
-  // backdrop-filter 滤的是**背后已经合成好的画面**，不碰 video 自己的图层——
-  // 盖一层透明 div 在视频上，pointer-events:none，原生控制条照样点得到。
+  // 这个浏览器把 <video> 当独立合成层：挂在它身上的滤镜被忽略，挂在祖先上会把
+  // 合成搞崩，backdrop 也取不到它的像素。CSS 这条路是堵死的。
+  //
+  // canvas 2D 的 ctx.filter 不经过那套合成，画什么就是什么——代价是每帧要
+  // drawImage 一次，所以只在开着夜视时才跑这个循环。
+  useEffect(() => {
+    const css = NIGHT_LEVELS[night]?.css || "";
+    if (!css) {
+      for (const c of nightRefs.current) {
+        if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+      }
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      refs.current.forEach((video, i) => {
+        const canvas = nightRefs.current[i];
+        if (!video || !canvas || !video.videoWidth) return;
+        const w = video.clientWidth;
+        const h = video.clientHeight;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        // 缩放/平移照抄给画布，放大拖动时画面跟得上（跟框叠层同一套）
+        canvas.style.transform = video.style.transform;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.clearRect(0, 0, w, h);
+        // object-fit: contain 会留黑边，画到同一块位置才不会错位
+        const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
+        const cw = video.videoWidth * scale;
+        const ch = video.videoHeight * scale;
+        ctx.filter = css;
+        ctx.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch);
+        ctx.filter = "none";
+        // 底下这一条留空：原生控制条就画在那儿，盖住了就没法拖进度条了
+        ctx.clearRect(0, h - CONTROLS_STRIP, w, CONTROLS_STRIP);
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [night, videos]);
   const [totalFrames, setTotalFrames] = useState<number | null>(null);
   // 每路画面的宽高比，用来按比例分配每列宽度（宽高比大的分到更宽的列），
   // 这样每路都能等高、完整显示（不裁不留黑边），比直接三等分更能利用屏幕——
@@ -945,19 +993,23 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                       : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }),
                   }}
                 />
-                {/* 夜视：透明的一层，只把背后的画面提亮。放在框叠层**前面**，
-                    这样绿框不会跟着一起被提亮糊掉 */}
-                {night > 0 && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      pointerEvents: "none",
-                      backdropFilter: NIGHT_LEVELS[night].css,
-                      WebkitBackdropFilter: NIGHT_LEVELS[night].css,
-                    }}
-                  />
-                )}
+                {/* 夜视画布：逐帧把视频画上来并提亮，盖住原画面。不接鼠标，
+                    底部留出控制条那一条；放在框叠层**前面**，绿框不会被糊掉 */}
+                <canvas
+                  ref={(el) => {
+                    nightRefs.current[i] = el;
+                  }}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: "100%",
+                    height: "100%",
+                    pointerEvents: "none",
+                    transformOrigin: "center",
+                    display: night > 0 ? "block" : "none",
+                  }}
+                />
                 {/* 狗框叠层：不接鼠标，原生控制条照常能点 */}
                 <canvas
                   ref={(el) => {
