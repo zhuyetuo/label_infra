@@ -84,7 +84,11 @@ export const exportDataset = (body: {
 export interface DatasetSegment {
   task_id: number;
   sample_code: string;
+  /** 根那一级（老字段，含义不变） */
   label: string;
+  /** 整条链：[抓挠, 抓挠-躯干]。只显示根的话，跟上面按类别统计出来的
+   *  「抓挠-躯干 15」对不上，人会以为二级标签没导进去 */
+  labels?: string[];
   start: string;
   end: string;
   seconds: number | null;
