@@ -36,6 +36,7 @@ from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.schemas.model_version import PrelabelItem
 from app.services import algo_client, edge_client
+from app.services import model_label_alias
 from app.services.imu_service import ImuReadError, get_start_timestamp
 from app.services.media_resolver import PathTraversalError, resolve_nas_path
 
@@ -811,7 +812,11 @@ async def _apply(
 
     written = 0
     for it in inf.items:
-        label_id = by_name.get(it.label_name)
+        # 按名字找不到时再查别名表：模型的类别名是训练那张重映射表定的，
+        # 跟标注模板早就分叉了（模型说「睡觉」，模板里叫「静止/休息」）。
+        # 不查的话那些片段被静默丢掉——实测一整夜的「睡觉」一段没进来，
+        # 工作台上就是一个 58.9 分钟的「未预测片段」
+        label_id = model_label_alias.resolve(it.label_name, by_name)
         if label_id is None:
             unmatched.add(it.label_name)
             continue
