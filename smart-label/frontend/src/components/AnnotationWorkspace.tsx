@@ -163,6 +163,9 @@ export default function AnnotationWorkspace({
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   // 没视频时用来解释是缺哪一步：样本上就没登记，还是登记了但媒体库里找不到
   const [videoWhy, setVideoWhy] = useState<string | null>(null);
+  // 路数比该场地应有的少时的那一句（后端算的）。跟 videoWhy 分开：那个只管
+  // "一路都没有"，这个管"有，但少了几路"——两种情况的补救办法不一样
+  const [videoNote, setVideoNote] = useState<string | null>(null);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   // 「疑似抓挠」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
@@ -362,6 +365,7 @@ export default function AnnotationWorkspace({
       setVideos([]);
       setCamList([]);
       setVideoWhy(null);
+      setVideoNote(null);
       setHasCsv(false);
       setFps(null);
       setItems([]);
@@ -396,6 +400,8 @@ export default function AnnotationWorkspace({
       }
       setVideos(vids);
       setCamList(cams);
+      // 影棚该有三路、狗场该有两路。少了但不是一路都没有时，原来这里一声不吭
+      setVideoNote(media.video_note ?? null);
       setVideoWhy(
         vids.length > 0
           ? null
@@ -1647,6 +1653,11 @@ export default function AnnotationWorkspace({
               </Space>
             }
           />
+        )}
+        {/* 有画面、但比该场地应有的少：影棚该三路、狗场该两路。原来这里一声
+            不吭，人对着一路画面只能猜是平台坏了 */}
+        {videos.length > 0 && videoNote && (
+          <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={videoNote} />
         )}
         {videos.length > 0 ? (
           <SyncedVideoGroup

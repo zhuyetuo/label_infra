@@ -40,6 +40,9 @@ export interface SampleMedia {
   video_paths: (string | null)[];
   /** 登记了路径但媒体库里没有这条：文件没传上 NAS，或者传了还没被扫到 */
   video_missing_in_library: string[];
+  /** 路数比该场地应有的少时的一句说明（少的是哪一种、该去做什么）。
+   *  没问题时后端回 null，界面上就不出现 */
+  video_note?: string | null;
   /** 三路各自的时间偏移（毫秒，跟 video_paths 同序）：**这一路的第 0 秒在样本
    *  时间轴上是第几毫秒**。0 = 同一个原点（绝大多数）。播放器必须按它换算，
    *  否则跨 session 挂过来的那一路放的是十几分钟之外的画面 */

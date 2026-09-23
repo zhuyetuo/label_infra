@@ -77,6 +77,10 @@ class SampleMediaOut(BaseModel):
     # 播放器要按它换算，否则跨 session 挂过来的那一路上每条标注都差几秒
     video_offsets_ms: list[int] = []
     video_missing_in_library: list[str] = []
+    # 路数比该场地应有的少时的一句说明。None = 没问题，界面上不出现。
+    # 少一路有两种原因、两种补救办法（媒体库没扫到 vs 采集时就没录），
+    # 不说清的话界面上只是默默少一个播放器
+    video_note: str | None = None
 
 
 class ScanStartResult(BaseModel):
