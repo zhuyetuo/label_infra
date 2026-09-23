@@ -313,7 +313,7 @@ export default function Training() {
                   </Button>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     导出到 NAS 的 data_train/&lt;名字&gt;/。可以只用审核通过的任务，也可以按片段取——
-                    只要人碰过的（审了一半的任务也能用）。勾选几份可以合起来看类别够不够。
+                    人确认过的那些（审了一半的任务也能用）。勾选几份可以合起来看类别够不够。
                   </Typography.Text>
                 </Space>
                 <Table
@@ -577,7 +577,7 @@ export default function Training() {
               <Radio value="reviewed">
                 <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似抓挠」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
                   <span style={{ borderBottom: "1px dashed #bbb" }}>
-                    按片段取：只要人碰过的（审了一半也能用）
+                    按片段取：人确认过的（审了一半也能用）
                   </span>
                 </Tooltip>
               </Radio>
@@ -653,7 +653,16 @@ export default function Training() {
                 {dsDetail.date_from} ~ {dsDetail.date_to}
               </Descriptions.Item>
               <Descriptions.Item label="取法">
-                {dsDetail.scope === "reviewed" ? "按片段取（只要人碰过的）" : "只用审核通过的任务"}
+                {/* 「人确认过的」而不是「人碰过的」：打开看一眼不算，得真的点了
+                    「通过」、改过、或者自己画的。下面「跳过没人看过的 AI 片段」
+                    那一栏就是被这条规则挡下来的数量 */}
+                {dsDetail.scope === "reviewed" ? (
+                  <Tooltip title="三种算数：点过「通过」的、改过的（换了标签或拖过起止）、人自己画的（含从「疑似抓挠」确认上来的）。只是打开看过、没点的不算——那些就是下面「跳过没人看过的 AI 片段」的数量">
+                    <span style={{ borderBottom: "1px dashed #bbb" }}>按片段取（人确认过的）</span>
+                  </Tooltip>
+                ) : (
+                  "只用审核通过的任务"
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="任务 / 片段">
                 {dsDetail.n_tasks} / {dsDetail.n_segments}

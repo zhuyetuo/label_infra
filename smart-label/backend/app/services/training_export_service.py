@@ -7,8 +7,9 @@ timeserieslabels}），写到 NAS 的 data_train/<name>/merged_tmp.json，旁边
 两种取法（scope）：
   approved   —— 只取审核通过（可选加上已提交）的任务，整份都算数。最稳，但一份
                 标注得从头到尾审完才用得上。
-  reviewed   —— 不看任务状态，只取**人碰过的那些片段**（确认过 / 改过 / 人工加的、
-                包括从「疑似抓挠」确认上来的）。人工复看是很费时间的事，实际总是
+  reviewed   —— 不看任务状态，只取**人确认过的那些片段**（点过「通过」/ 改过 /
+                人工加的，包括从「疑似抓挠」确认上来的）。只是打开看过、没点的
+                不算——界面上别写成"人碰过的"，那读起来像"打开看一眼也算"。人工复看是很费时间的事，实际总是
                 「这个任务只审了抓挠」「那个任务审了一半」，等整份审完再用，攒不出
                 数据集。按片段取就能一点一点往里加。
                 安全性来自导出格式本身：labelstudio_to_custom 只提取被标注区间里的
@@ -193,7 +194,8 @@ async def export_dataset(
             holes_by_task.setdefault(task_id, []).append((int(s_ms), int(e_ms)))
             continue
         if only_reviewed:
-            # 人碰过才算数：确认过、改过、或者本来就是人加的（含从候选确认上来的）。
+            # 人确认过才算数：点过「通过」、改过、或者本来就是人加的（含从候选
+            # 确认上来的）。**打开看过但没点的不算**，那正是 n_skipped_untouched。
             # 没人看过的纯 AI 片段跳过——它只是模型自己的输出，拿去训练就是自我强化
             touched = bool(confirmed) or bool(modified) or source == LabelItemSource.human_added
             if not touched:
