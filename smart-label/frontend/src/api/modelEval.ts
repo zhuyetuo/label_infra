@@ -122,6 +122,13 @@ export interface EdgeModel {
   window: number;
   hz: number;
   stride: number;
+  /** 5 = 3 轴（acc + pitch/roll），8 = 6 轴。老服务没这个字段 */
+  n_channels?: number;
+  kind?: string;
+  /** 训练记录里导出来的才有：平台靠它对回「训练记录 #N」 */
+  train?: { job_id: number | null; tag: string; axes?: number; sk_macro_f1?: number | null } | null;
+  /** 端侧 F1（板上那份 C 在留出集上） */
+  edge?: { macro_f1?: number; per_class?: Record<string, Record<string, number>> } | null;
 }
 
 /** enabled=false 是没配这个服务（功能关着）；enabled=true 但 models 空

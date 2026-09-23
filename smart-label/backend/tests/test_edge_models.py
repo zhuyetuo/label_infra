@@ -618,7 +618,8 @@ def test_edge_option_labels_stay_short():
     # 全局数会数到 5 个——这条测试原来就是这么写的，加了服务端那组之后红了。
     # 端侧组的起点是它的分组标题
     edge = src[src.index('label: "端侧模型'):]
-    labels = [ln for ln in edge.splitlines() if "label: `${m.tag}" in ln]
+    # 标签现在是 ${name}（训练记录导出的显示成「训练记录 #N · 端侧」，别的还是 m.tag）
+    labels = [ln for ln in edge.splitlines() if "label: `${name}" in ln]
     assert len(labels) == 3, f"端侧应该是三个选项，实际 {len(labels)}"
     for ln in labels:
         # 标签里不该再有括号说明

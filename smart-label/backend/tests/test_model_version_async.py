@@ -50,3 +50,44 @@ def test_同步了状态之后列表照样能序列化(tmp_path, monkeypatch):
 
     out = asyncio.run(go())
     assert out["data"][0]["status"] == "failed"
+
+
+def test_导出到端侧把端侧F1并进metrics(tmp_path, monkeypatch):
+    from app.services import edge_client
+
+    async def export_edge(_jid):
+        return {"tag": "train1", "spec": "edge:train1",
+                "edge": {"macro_f1": 0.61, "accuracy": 0.8, "n_windows": 10, "per_class": {}}}
+
+    async def reload():
+        return {"ok": True}
+
+    monkeypatch.setattr(algo_client, "export_edge", export_edge)
+    monkeypatch.setattr(edge_client, "enabled", lambda: True)
+    monkeypatch.setattr(edge_client, "reload", reload)
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'b.db'}")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        maker = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        async with maker() as db:
+            u = User(username="a", password_hash="x", display_name="a", role=UserRole.admin)
+            db.add(u)
+            await db.flush()
+            db.add(ModelVersion(algo_job_id=1, status=ModelTrainStatus.done, model_type="rf",
+                                model_path="/m/ml_rf.pkl", metrics='{"macro_f1": 0.7}',
+                                dataset_spec="{}", created_by=u.id))
+            await db.commit()
+        async with maker() as db:
+            out = await mv.export_edge(1, db)
+            row = await db.get(ModelVersion, 1)
+            metrics = row.metrics
+        await engine.dispose()
+        return out, metrics
+
+    out, metrics = asyncio.run(go())
+    assert out["data"]["reloaded"] is True and out["data"]["edge"]["macro_f1"] == 0.61
+    import json as _j
+    m = _j.loads(metrics)
+    assert m["macro_f1"] == 0.7 and m["edge"]["macro_f1"] == 0.61 and m["edge_tag"] == "train1"

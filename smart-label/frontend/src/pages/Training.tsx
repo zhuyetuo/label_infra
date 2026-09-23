@@ -23,7 +23,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, setModelListed, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, exportModelEdge, setModelListed, type EdgeMetrics, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -515,6 +515,12 @@ export default function Training() {
     const f1 = (m.f1_macro ?? m.macro_f1 ?? m.f1) as number | undefined;
     return typeof f1 === "number" ? f1 : null;
   };
+  /** 导出到端侧之后才有：板上那份 C 在留出集上的成绩 */
+  const edgeOf = (v: ModelVersion) => {
+    const e = metricsOf(v)?.edge as EdgeMetrics | undefined;
+    return e && typeof e.macro_f1 === "number" ? e : null;
+  };
+  const [exportingEdge, setExportingEdge] = useState<number | null>(null);
 
   return (
     <div>
@@ -711,6 +717,32 @@ export default function Training() {
                       );
                     },
                   },
+                  {
+                    title: (
+                      <Tooltip title="「导出到端侧」之后才有：用板上那份 C（float32 特征、量化过的叶子）在留出集上跑出来的成绩。跟左边 sklearn 的数不是一回事——这个才是项圈上会有的效果">
+                        端侧 F1
+                      </Tooltip>
+                    ),
+                    render: (_, v: ModelVersion) => {
+                      const e = edgeOf(v);
+                      if (!e) return <span style={{ color: "#999" }}>—</span>;
+                      const pc = Object.entries(e.per_class ?? {}).map(([cls, m]) => ({ cls, f1: m["f1-score"] ?? 0, p: m.precision ?? 0, r: m.recall ?? 0 }));
+                      return (
+                        <Space size={2} wrap>
+                          <Tooltip title={`端侧 macro-F1 ${e.macro_f1.toFixed(3)}，准确率 ${e.accuracy.toFixed(3)}，留出集 ${e.n_windows} 窗${e.flash_bytes ? `，模型 ${(e.flash_bytes / 1024).toFixed(1)} KB` : ""}${typeof e.agree_with_sklearn === "number" ? `，跟 sklearn 判决一致 ${(e.agree_with_sklearn * 100).toFixed(1)}%` : ""}`}>
+                            <b>{e.macro_f1.toFixed(3)}</b>
+                          </Tooltip>
+                          {pc.map((c) => (
+                            <Tooltip key={c.cls} title={`${c.cls}（端侧）：精确率 ${c.p.toFixed(2)} / 召回 ${c.r.toFixed(2)} / F1 ${c.f1.toFixed(2)}`}>
+                              <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>
+                                {c.cls} {c.f1.toFixed(2)}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </Space>
+                      );
+                    },
+                  },
                   { title: "标签", dataIndex: "model_version", width: 110, render: (t: string | null) => t || "-" },
                   {
                     title: "提交时间",
@@ -749,6 +781,40 @@ export default function Training() {
                                 }}
                               >
                                 {v.listed ? "停用" : "启用"}
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {v.status === "done" && v.model_path && v.model_type === "rf" && (
+                            <Tooltip
+                              title={
+                                edgeOf(v)
+                                  ? "已经导过端侧了。再点一次会重新导（模型没变的话结果一样）"
+                                  : "转成板上那份 C，在留出集上算「端侧 F1」，并挂到端侧服务上。之后启用它，「端侧模型 · 板上 C」那组下拉里就能选、能跟稳定版 v2 对比。要几十秒到一两分钟"
+                              }
+                            >
+                              <Button
+                                size="small"
+                                type="link"
+                                loading={exportingEdge === v.id}
+                                disabled={exportingEdge != null && exportingEdge !== v.id}
+                                onClick={async () => {
+                                  setExportingEdge(v.id);
+                                  try {
+                                    const r = await exportModelEdge(v.id);
+                                    const f1 = r.edge?.macro_f1;
+                                    message.success(
+                                      `端侧模型导好了（${r.tag}）${typeof f1 === "number" ? `，端侧 F1 ${f1.toFixed(3)}` : ""}` +
+                                        (r.reloaded ? "，端侧服务已挂上" : `。${r.reload_error ?? ""}`),
+                                      8,
+                                    );
+                                    qc.invalidateQueries({ queryKey: ["model-versions"] });
+                                    qc.invalidateQueries({ queryKey: ["edge-models"] });
+                                  } finally {
+                                    setExportingEdge(null);
+                                  }
+                                }}
+                              >
+                                {edgeOf(v) ? "重导端侧" : "导出到端侧"}
                               </Button>
                             </Tooltip>
                           )}

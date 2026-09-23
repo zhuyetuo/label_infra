@@ -27,7 +27,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import ModelVersionOut, TrainSubmitIn
 from app.services.ai_prelabel_service import _csv_start_of
-from app.services import algo_client
+from app.services import algo_client, edge_client
 from app.services.training_export_service import (
     TrainingExportError,
     delete_dataset,
@@ -194,6 +194,45 @@ async def set_listed(version_id: int, on: bool = True, db: AsyncSession = Depend
     row.listed = bool(on)
     out = {"id": row.id, "listed": row.listed}
     await db.commit()
+    return ok(out)
+
+
+@router.post("/{version_id}/export-edge")
+async def export_edge(version_id: int, db: AsyncSession = Depends(get_db)):
+    """导出到端侧：算法机把这一版随机森林转成板上那份 C，在留出集上算「端侧 F1」，
+    然后让端侧服务重新加载——之后「端侧模型 · 板上 C」那组下拉里就有它（启用了才显示）。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    if row.status != ModelTrainStatus.done or not row.model_path:
+        raise HTTPException(status_code=400, detail="这条记录还没有模型文件（训练没完成或失败）")
+    try:
+        res = await algo_client.export_edge(row.algo_job_id)
+    except algo_client.AlgoConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    # 端侧 F1 跟训练那份指标存在一起（metrics.edge），列表直接读
+    try:
+        metrics = json.loads(row.metrics) if row.metrics else {}
+    except ValueError:
+        metrics = {}
+    metrics["edge"] = res.get("edge") or {}
+    metrics["edge_tag"] = res.get("tag")
+    metrics["edge_spec"] = res.get("spec")
+    row.metrics = json.dumps(metrics, ensure_ascii=False)
+    out = {"tag": res.get("tag"), "spec": res.get("spec"), "edge": metrics["edge"],
+           "reloaded": False, "reload_error": None}
+    await db.commit()
+    # 让端侧服务挂上。挂不上不算导出失败——文件已经导好了，下次起服务也会挂
+    if edge_client.enabled():
+        try:
+            await edge_client.reload()
+            out["reloaded"] = True
+        except edge_client.EdgeServiceError as e:
+            out["reload_error"] = str(e)
+    else:
+        out["reload_error"] = "端侧服务没配（EDGE_SERVICE_URL 为空），导出的文件在算法机上，服务起来才用得了"
     return ok(out)
 
 
