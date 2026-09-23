@@ -771,6 +771,9 @@ export default function Projects() {
   // CSV 行数 0 = 空文件；null 是导入时没统计到，不当成"没数据"
   // 排序记住：任务表常按「片段数 / 样本」排着找活干，切走再回来不用重排
   const taskSort = usePersistedSort("project-tasks-sort");
+  // 外层项目表自己的排序记忆。里层任务表早就有了，外层一直没接——
+  // 排一次"按项目名（= 日期）降序"，换个页面回来又变回默认，每次都得重排
+  const projectSort = usePersistedSort("projects-sort");
   // 列宽也让人自己拖：「片段」那列内容长短差得远，写死一个宽度总有一头不合适
   const taskWidth = useResizableColumns("project-tasks-widths");
   const noCsv = (t: Task) => {
@@ -973,6 +976,8 @@ export default function Projects() {
         rowKey="id"
         loading={isLoading}
         dataSource={data}
+        // 排序是人的看法，不是页面的初始状态——记住它，下次回来还按上次排的
+        onChange={projectSort.onTableChange}
         expandable={{
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
@@ -1461,7 +1466,7 @@ export default function Projects() {
             );
           },
         }}
-        columns={[
+        columns={projectSort.applySort<Project>([
           { title: "ID", dataIndex: "id", width: 60, sorter: (a: Project, b: Project) => a.id - b.id },
           {
             title: "项目名",
@@ -1835,7 +1840,7 @@ export default function Projects() {
                 </Space>
               ),
           },
-        ]}
+        ])}
       />
 
       <Modal
