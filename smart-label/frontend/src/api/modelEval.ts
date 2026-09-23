@@ -146,6 +146,8 @@ export interface ServerModel {
   spec_stable: string | null;
   /** 目录名，给人看的 */
   name: string;
+  /** 训练记录里训出来、自动登记进来的那几版才有：对回训练记录用 */
+  train?: { job_id: number; dataset?: string; axes?: number; classes?: string[]; macro_f1?: number };
   model_path: string;
   /** 还没被用过的模型是懒加载的，这时候类别/几何是 null——
    *  为了列个下拉就把每个 50MB 的 pkl 都加载一遍太贵 */

@@ -5,6 +5,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery } from "@tanstack/react-query";
 import { listLabels } from "@/api/labels";
+import { useInferModes } from "@/hooks/useInferModes";
 import {
   compareModels, createEvalSet, getEvalRunProgress, listEdgeModels, listEvalRuns, listEvalSets,
   startEvalRun, type CompareResult, type VersionDiff, type VersionResult,
@@ -44,6 +45,7 @@ export default function ModelCompare() {
   // 评哪个类别。**以前写死「抓挠」**（前端根本没传这个字段），于是拆成
   // 二级标签之后没法回答"它能不能分出是头颈耳还是躯干"这个问题
   const [evalLabel, setEvalLabel] = useState("抓挠");
+  const { serverGroup } = useInferModes();
   // 候选类别从项目标签里来——这样拆出来的二级标签（抓挠-头颈耳）自动就在列表里，
   // 不用每加一个类别回来改一次代码
   const { data: allLabels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
@@ -172,6 +174,9 @@ export default function ModelCompare() {
           onChange={setRunModes}
           options={[
             { label: "算法服务（imu_train 的 label_service）", options: MODES.map((m) => ({ value: m, label: modeLabel(m) })) },
+            // 训练记录里训出来的那几版（显示成「训练记录 #N」）。以前这一组漏了，
+            // 训完的模型在这里选不到，也就没法跟线上那版在同一批样本上比
+            ...(serverGroup ? [serverGroup] : []),
             // 端侧那组：服务没配/没起来时这一组是空的，antd 会自动不显示分组标题。
             // 不写死在前端，是因为写死的话服务换了模型，这里会出现一个
             // 选了就报错的选项，而错误是"没有这个端侧模型"
