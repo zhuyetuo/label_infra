@@ -570,6 +570,12 @@ def label_stats(names: list[str]) -> dict:
     """
     per: dict[str, Counter] = {}
     per_sec: dict[str, Counter] = {}
+    # 细类（整条链的最后一级）的那一份。导出文件里 timeserieslabels 存的是
+    # **整条链** [抓挠, 抓挠-躯干]，之前统计只取 labels[0]，于是「抓挠 1125 秒」
+    # 底下 34 段躯干、94 段头颈耳全看不见——而要判断"够不够训二级"恰恰得看这个。
+    # 键是 (根, 叶)：叶子名要挂回自己的根，不然排序和占比算不出层次
+    per_leaf: dict[str, Counter] = {}
+    per_leaf_sec: dict[str, Counter] = {}
     missing: list[str] = []
     for name in names:
         if not _NAME_RE.match(name):
@@ -581,6 +587,7 @@ def label_stats(names: list[str]) -> dict:
         with open(path, encoding="utf-8") as f:
             tasks = json.load(f)
         c, s = Counter(), Counter()
+        lc, ls = Counter(), Counter()
         for t_ in tasks:
             for ann in t_.get("annotations") or []:
                 for seg in ann.get("result") or []:
@@ -596,14 +603,45 @@ def label_stats(names: list[str]) -> dict:
                         sec = 0.0
                     c[labels[0]] += 1
                     s[labels[0]] += sec
+                    lc[(labels[0], labels[-1])] += 1
+                    ls[(labels[0], labels[-1])] += sec
         per[name] = c
         per_sec[name] = s
+        per_leaf[name] = lc
+        per_leaf_sec[name] = ls
 
     total_c, total_s = Counter(), Counter()
+    leaf_c, leaf_s = Counter(), Counter()
     for name in per:
         total_c.update(per[name])
         total_s.update(per_sec[name])
+        leaf_c.update(per_leaf[name])
+        leaf_s.update(per_leaf_sec[name])
     grand = sum(total_s.values()) or 1.0
+
+    def _children(root: str) -> list[dict]:
+        """这个大类底下各细类。没打过二级标签的那部分也要单独摆出来。
+
+        **「未细分」不能省。** 抓挠 129 段里有 94 段头颈耳、34 段躯干，还剩
+        1 段只标到「抓挠」——省掉的话各细类加起来对不上大类，人会以为统计错了。
+        占比按**本大类内部**算，不是全局：要回答的是"抓挠里头颈耳占多少"。
+        """
+        kids = [(leaf, leaf_c[(root, leaf)], leaf_s[(root, leaf)])
+                for (r, leaf) in leaf_s if r == root]
+        base = total_s[root] or 1.0
+        return [
+            {
+                "label": leaf if leaf != root else f"{root}（未细分）",
+                "is_root_only": leaf == root,
+                "n_segments": n,
+                "seconds": round(sec, 1),
+                "pct_in_parent": round(sec / base * 100, 1),
+                "by_dataset": {d: round(per_leaf_sec[d][(root, leaf)], 1)
+                               for d in per if per_leaf_sec[d][(root, leaf)] > 0},
+            }
+            for leaf, n, sec in sorted(kids, key=lambda x: -x[2])
+        ]
+
     rows = [
         {
             "label": k,
@@ -613,6 +651,9 @@ def label_stats(names: list[str]) -> dict:
             "pct": round(total_s[k] / grand * 100, 2),
             # 每份数据集各贡献了多少秒，一眼看出"这个类别只有某一批有"
             "by_dataset": {n: round(per_sec[n][k], 1) for n in per if per_sec[n][k] > 0},
+            # 大类底下的细类。**大类够不等于细类够**：抓挠 1125 秒看着很多，
+            # 摊到头颈耳/躯干/肩胸上可能某一类只有几十秒，训不出来
+            "children": _children(k),
         }
         for k in sorted(total_s, key=lambda x: -total_s[x])
     ]
