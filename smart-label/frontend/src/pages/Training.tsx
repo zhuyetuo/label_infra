@@ -290,24 +290,43 @@ export default function Training() {
     return out.sort((a, b) => b.sec - a.sec);
   }, [trainStats]);
 
-  /** 这一类走完整条流程最后会变成什么。归并 → remap 表 → 训练类别 */
-  const finalOf = (name: string): { cls: string | null; via: string | null } => {
-    const mapped = remapEdits[name] && remapEdits[name] !== name ? remapEdits[name] : null;
-    const key = mapped ?? name;
-    const table = remap?.table ?? {};
-    // 细类（抓挠-躯干）在 remap 表里没有，但训练取的是链的第 0 个，
-    // 也就是大类——所以按「-」前面那一段去查
-    const root = key.includes("-") ? key.split("-")[0] : key;
-    const cls = table[key] ?? table[root] ?? null;
-    return { cls, via: mapped };
-  };
+  /** 这一类最后算作哪个训练类别。**就是这张表说了算**——算法侧会按它生成
+   *  这一次训练专用的重映射表，所以界面上看到什么，训出来就是什么。
+   *  空 = 不参与训练（那些样本会被丢掉）。 */
+  const finalOf = (name: string): string | null => remapEdits[name] || null;
+
+  /** 这次训练最终会有哪几个类别。少于两个就没法训——分类器要有东西可比 */
+  const trainTargets = useMemo(
+    () => [...new Set(trainCats.map((c) => remapEdits[c.name]).filter(Boolean))] as string[],
+    [trainCats, remapEdits]
+  );
+
+  // 类别查出来之后按默认那张 3 类表预填：绝大多数类别本来就该照默认走
+  // （行走/奔跑 → 活动），人只需要改自己在意的那两三行。**没有默认的就留空**，
+  // 那正是「会被丢掉」，留空才看得见。
+  useEffect(() => {
+    if (!trainFor || !trainCats.length) return;
+    setRemapEdits((prev) => {
+      const next = { ...prev };
+      let touched = false;
+      for (const c of trainCats) {
+        if (c.name in next) continue;             // 人改过的不动
+        const table = remap?.table ?? {};
+        // 细类（抓挠-躯干）默认跟着它的大类走：训练本来就取链的第 0 个
+        const root = c.name.includes("-") ? c.name.split("-")[0] : c.name;
+        const d = table[c.name] ?? table[root] ?? "";
+        if (d) { next[c.name] = d; touched = true; }
+      }
+      return touched ? next : prev;
+    });
+  }, [trainFor, trainCats, remap]);
 
   /** 打开「提交训练」。上一次选的一起训练/归并不能留着——换了数据集那些
    *  类别名根本对不上，留着等于把上一份的设置悄悄套到这一份头上 */
   const openTrain = (d: TrainDataset) => {
     setExtraDs([]);
     setExtraHz({});
-    setRemapEdits({});
+    setRemapEdits({});     // 类别还没查出来，下面那个 effect 按默认表填
     setTrainFor(d);
   };
 
@@ -326,9 +345,11 @@ export default function Training() {
             // 采样率重采样
             source_hz: extraHz[d.name] ?? sourceHz,
           })),
-          // 只报真正改了的：值跟原名一样等于没改，送过去白白让人以为动过
+          // **整张表都送**，不只改过的那几行：算法侧按这张表生成这次训练专用的
+          // 重映射配置，训练类别就是表里那些目标名。只送改动过的话，没动过的
+          // 类别在那边就成了"表里没有"，反而会被丢掉
           label_remap: Object.fromEntries(
-            Object.entries(remapEdits).filter(([from, to]) => to && to !== from)
+            trainCats.map((c) => [c.name, remapEdits[c.name] || ""]).filter(([, to]) => to)
           ),
           source_hz: sourceHz,
           hz,
@@ -1212,58 +1233,83 @@ export default function Training() {
                       ),
                     },
                     {
-                      title: "归并到", width: 190,
+                      title: "训练时算作", width: 210,
                       render: (_, c) => (
                         <Select
                           size="small"
                           allowClear
-                          style={{ width: 175 }}
-                          placeholder="保持原样"
+                          showSearch
+                          style={{ width: 195 }}
+                          placeholder="不参与训练"
                           value={remapEdits[c.name] || undefined}
                           onChange={(v) => setRemapEdits((m) => ({ ...m, [c.name]: v ?? "" }))}
                           options={[
-                            // 训练最终那几类（活动/睡觉/抓挠/未佩戴）排前面——
-                            // 「把舔折成活动当负样本」是最常做的一件事
-                            ...(remap?.classes ?? []).map((v) => ({ value: v, label: v })),
-                            // 再给同批数据里的别的类别，用来把太少的细类并进兄弟
+                            // 自成一类排第一：**这就是「识别出是什么抓挠」的做法**，
+                            // 选了它这一类就是一个独立的训练类别
+                            { value: c.name, label: `${c.name}（自成一类）` },
+                            // 再是默认那几类（活动/睡觉/抓挠），把不训的行为折进去当负样本
+                            ...(remap?.classes ?? [])
+                              .filter((v) => v !== c.name)
+                              .map((v) => ({ value: v, label: v })),
+                            // 最后是同批数据里的别的类别，用来把太少的细类并进兄弟
                             ...trainCats
                               .filter((o) => o.name !== c.name && !(remap?.classes ?? []).includes(o.name))
-                              .map((o) => ({ value: o.name, label: o.name })),
+                              .map((o) => ({ value: o.name, label: `并进 ${o.name}` })),
                           ]}
                         />
                       ),
                     },
                     {
-                      title: "训练时算作",
+                      title: "", width: 110,
                       render: (_, c) => {
-                        const { cls, via } = finalOf(c.name);
-                        if (!remap?.available) {
-                          return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>;
-                        }
-                        // 表里没有的类别，训练脚本直接把这些样本丢掉，只在日志里
-                        // 打一句。**必须在这儿说出来**，不然人以为数据都进去了
+                        const cls = finalOf(c.name);
+                        // 留空 = 不参与训练，那些样本会被丢掉。**必须说出来**，
+                        // 不然人以为数据都进去了（以前就是只在训练日志里打一句）
                         if (!cls) {
                           return (
-                            <Tooltip title={`训练那张重映射表（${remap.path}）里没有「${via ?? c.name}」，这些样本会被直接丢掉，只在训练日志里打一句。归并到上面那几个训练类别就能留下`}>
+                            <Tooltip title="这一类的样本不会进训练集。要留下就在左边选一个——自成一类，或者并进别的类别">
                               <Tag color="red">会被丢掉</Tag>
                             </Tooltip>
                           );
                         }
-                        return (
-                          <Space size={4}>
-                            <Tag color={labelColor(cls) ?? "blue"}>{cls}</Tag>
-                            {via && <Typography.Text type="secondary" style={{ fontSize: 12 }}>（经 {via}）</Typography.Text>}
-                          </Space>
-                        );
+                        if (cls === c.name) {
+                          return <Tag color="green">独立一类</Tag>;
+                        }
+                        return <Typography.Text type="secondary" style={{ fontSize: 12 }}>→ {cls}</Typography.Text>;
                       },
                     },
                   ]}
                 />
+                {/* 最终会训出哪几类——这是提交前最该确认的一件事。
+                    少于两类根本训不了：分类器要有东西可比 */}
+                <Alert
+                  type={trainTargets.length < 2 ? "error" : "info"}
+                  showIcon
+                  message={
+                    trainTargets.length < 2
+                      ? `这样只会训出 ${trainTargets.length} 个类别，分类器没东西可比，训不了`
+                      : `这次会训出 ${trainTargets.length} 个类别`
+                  }
+                  description={
+                    <Space wrap size={4}>
+                      {trainTargets.map((t) => (
+                        <Tag key={t} color={labelColor(t.split("-")[0])}>{t}</Tag>
+                      ))}
+                      {trainTargets.length < 2 && (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          　在「一起训练」里掺上带「活动」「睡觉」的老批次，或者把几个类别拆成独立的
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  }
+                />
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  归并只在训练时生效，<b>不动 NAS 上的导出</b>——同一份数据集可以换着归并反复试。
-                  两个常见用法：份量太少的细类（几十秒的）并进兄弟类别；这次不训的行为
-                  （舔、甩头/抖身）归到「活动」当负样本。
-                  {remap?.available === false && `　拿不到重映射表（${remap.error}），所以「训练时算作」这一列是空的，不影响提交。`}
+                  <b>想识别出「是什么抓挠」，就把「抓挠-头颈耳」「抓挠-躯干」各选「自成一类」</b>——
+                  它们就会变成独立的训练类别，模型不只说这是抓挠，还说是哪种。代价是每一类都要够份量，
+                  几十秒的那种训不出来，不如并进兄弟类别。
+                  <br />
+                  这张表只在训练时生效，<b>不动 NAS 上的导出</b>，同一份数据集可以换着配反复试。
+                  {remap?.available === false && `　拿不到默认的重映射表（${remap.error}），所以没有预填，要自己每一行都选。`}
                 </Typography.Text>
               </>
             )}
