@@ -54,6 +54,10 @@ from app.models.label import LabelDefinition
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.services import label_tracks
+
+#: 「未佩戴」的 code。按 code 认不按显示名——名字改了这里不会报错，
+#: 只会悄悄退回旧行为（又被当成设备轨丢进 aux）
+NOT_WORN_CODE = "NOT_WORN"
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
 from app.services.skin_link_service import _read_ai_json
 
@@ -128,6 +132,11 @@ async def export_dataset(
     # 没分轨的标签（老项目）排最后：跟分了轨的混在一个项目里时让分了轨的赢
     rank_of = {t: i for i, t in enumerate(priority)}
     rank_of[""] = len(priority)
+    # 「未佩戴」压过所有轨。设备轨里只剩它（颈圈松动已经拿去 aux 了），
+    # 所以给整条 device 轨排在最前就行。
+    # 为什么必须它赢：项圈不在狗身上时，IMU 测的是桌子，那段时间里任何"行为"
+    # 都不成立——让「活动」赢的话，等于把一段桌子的数据当成狗在活动喂给模型
+    rank_of["device"] = -1
     only_reviewed = scope == "reviewed"
     q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
     # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
@@ -149,11 +158,14 @@ async def export_dataset(
         )
 
     label_rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id,
-                                          LabelDefinition.track))).all()
-    label_names = {i: n for i, n, _p, _t in label_rows}
+                                          LabelDefinition.track, LabelDefinition.code))).all()
+    label_names = {i: n for i, n, _p, _t, _c in label_rows}
+    # 「未佩戴」要按 code 认，不按显示名——名字是会改的，改完这里悄无声息地
+    # 退回旧行为（又被当成设备轨丢进 aux），而那正是它一段都进不了训练的原因
+    not_worn_ids = {i for i, _n, _p, _t, c in label_rows if c == NOT_WORN_CODE}
     # 层级：一段标了「舔-前左爪」也算「舔-前爪」「舔」，导出时带整条链，训练用哪层自己挑
-    parent_of = {i: p for i, _n, p, _t in label_rows}
-    own_track = {i: t for i, _n, _p, t in label_rows}
+    parent_of = {i: p for i, _n, p, _t, _c in label_rows}
+    own_track = {i: t for i, _n, _p, t, _c in label_rows}
 
     def track(label_id: int) -> str:
         return label_tracks.track_of(parent_of, own_track, label_id)
@@ -287,9 +299,22 @@ async def export_dataset(
             n_merged_overlaps += len(spans) - len(merged)
             merged_items.extend((label_id, a_ms, b_ms) for a_ms, b_ms in merged)
 
-        # 设备轨（颈圈松动）跟什么都能同时发生，也不该进 22 类里：拿出来单独导
-        device_items = sorted((x for x in merged_items if track(x[0]) == "device"), key=lambda x: x[1])
-        merged_items = [x for x in merged_items if track(x[0]) != "device"]
+        # 设备轨里这两个性质完全不同，不能一起处理：
+        #
+        #   颈圈松动  项圈还在狗身上，只是松了。跟什么行为都能同时发生，
+        #             也不该进 22 类里 → 单独放 aux，训练不读
+        #   未佩戴    项圈根本不在狗身上，IMU 测的是桌子不是狗。它**是**训练的
+        #             一个类别（configs/remap_custom_3class.yaml 里写着"作为独立
+        #             类别参与训练"），而且那段时间里任何"行为"都不成立
+        #
+        # 以前两个一起丢进 aux，结果实测 2026-09-23：项目 195 有 411 段未佩戴、
+        # 233 个任务，一段都到不了训练，而模型那边偏偏有这么个类别要喂。
+        device_items = sorted(
+            (x for x in merged_items if track(x[0]) == "device" and x[0] not in not_worn_ids),
+            key=lambda x: x[1],
+        )
+        merged_items = [x for x in merged_items
+                        if track(x[0]) != "device" or x[0] in not_worn_ids]
 
         # 不同类别压在一起是矛盾标注（同一段时间既是活动又是抓挠）。两条都导出的话，
         # 同一批数据行会以两个类别各进一次，模型学到的是纯噪声——比不要这段更糟。
