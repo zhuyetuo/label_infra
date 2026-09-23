@@ -200,13 +200,15 @@ export default function Training() {
   };
   const [detail, setDetail] = useState<ModelVersion | null>(null);
 
-  // 调试时同一套参数要导好几遍，每次重敲一遍名字和条件很烦。上次用的存下来，
-  // 下次打开直接是它。存的是整套（名字/项目/取法/含待审核），不只是名字——
-  // 光记名字没用，条件还是得重挑一遍。
+  // 调试时同一套参数要导好几遍，每次重敲一遍条件很烦。上次用的条件存下来，
+  // 下次打开直接是它（项目/取法/含待审核/折叠），不用重挑一遍。
   //
-  // 日期范围不记：它默认是"最近 30 天"，跟着今天走；记住一个写死的区间，过几天
-  // 再打开就是一段莫名其妙的历史范围，比重挑更容易出错。
+  // **名字是例外，每次都给新的时间戳。** 沿用上次那个名字听着方便，代价是
+  // 再导一次会**原地覆盖**那个目录——而「训练记录」里可能正引用着它，覆盖之后
+  // 那条记录指向的就不是当初训练用的数据了，且看不出来。想覆盖是合理需求，
+  // 但得是明说的，所以放到下面「沿用上次」那个按钮上，按钮上写清会覆盖。
   const EXPORT_FORM_KEY = "train-export-form";
+  const [lastName, setLastName] = useState<string | null>(null);
   useEffect(() => {
     if (!exportOpen) return;
     if (name) return;
@@ -214,13 +216,12 @@ export default function Training() {
       const raw = localStorage.getItem(EXPORT_FORM_KEY);
       if (raw) {
         const v = JSON.parse(raw);
-        if (typeof v.name === "string" && v.name) setName(v.name);
+        if (typeof v.name === "string" && v.name) setLastName(v.name);
         if (Array.isArray(v.projectIds)) setProjectIds(v.projectIds);
         if (v.scope === "approved" || v.scope === "reviewed") setScope(v.scope);
         if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
         if (typeof v.flatten === "boolean") setFlatten(v.flatten);
         if (Array.isArray(v.trackPriority) && v.trackPriority.length) setTrackPriority(v.trackPriority);
-        return;
       }
     } catch {
       // 存的东西坏了不该让弹窗打不开，退回默认名字就是了
@@ -255,6 +256,8 @@ export default function Training() {
           EXPORT_FORM_KEY,
           JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority })
         );
+        // 「沿用上次」要指向刚导的这份，不然它还指着更早的那一份
+        setLastName(name.trim());
       } catch {
         // 存不下（隐私模式/满了）不影响导出本身
       }
@@ -640,6 +643,16 @@ export default function Training() {
             <Button size="small" type="link" onClick={() => setName(`ds_${dayjs().format("YYYYMMDD_HHmm")}`)}>
               换个新名字
             </Button>
+            {/* 想覆盖上次那份是合理需求（同一套条件重导），但得是明说的——
+                默认沿用的话，「训练记录」里引用着它的那条记录会指向新数据，
+                而且一点痕迹都没有 */}
+            {lastName && lastName !== name && (
+              <Tooltip title={`上次导的是「${lastName}」。用同一个名字会原地覆盖那份数据`}>
+                <Button size="small" type="link" onClick={() => setName(lastName)}>
+                  沿用上次（会覆盖）
+                </Button>
+              </Tooltip>
+            )}
           </Space>
           {nameExists && (
             <Typography.Text type="warning" style={{ fontSize: 12 }}>
