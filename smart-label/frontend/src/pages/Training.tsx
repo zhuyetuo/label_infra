@@ -141,6 +141,8 @@ export default function Training() {
   const [remapEdits, setRemapEdits] = useState<Record<string, string>>({});
   const [modelType, setModelType] = useState("rf");
   const [sourceHz, setSourceHz] = useState<number>(50);
+  // 用几轴。6=加速度+陀螺仪（默认），3=只用加速度——**端侧只有加速度计时用 3**
+  const [axes, setAxes] = useState<number>(6);
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
   const [tag, setTag] = useState("");
@@ -378,6 +380,7 @@ export default function Training() {
           ),
           source_hz: sourceHz,
           hz,
+          axes,
           skip_syn: skipSyn,
           clean: true,
         },
@@ -1198,6 +1201,28 @@ export default function Training() {
                 options={[16, 25, 50].map((v) => ({ value: v, label: `${v}Hz` }))}
               />
             </Space>
+            <Space>
+              <Tooltip title="项圈上有陀螺仪就用 6 轴，只有加速度计就用 3 轴。选错的后果是单向的：端侧只有加速度计、却用 6 轴训，指标再好也代表不了端上的表现——那是拿一块板子上根本没有的信号在学。反过来（端上有陀螺仪却只用 3 轴训）只是浪费了一半信号，不会不准">
+                <Typography.Text style={{ borderBottom: "1px dashed #666" }}>传感器轴数</Typography.Text>
+              </Tooltip>
+              <Radio.Group
+                size="small"
+                value={axes}
+                onChange={(e) => setAxes(e.target.value)}
+                options={[
+                  { value: 6, label: "6 轴（加速度+陀螺仪）" },
+                  { value: 3, label: "3 轴（只用加速度）" },
+                ]}
+                optionType="button"
+              />
+            </Space>
+            {axes === 3 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                只用加速度那三列训，陀螺仪整个丢掉。
+                <b>只在项圈上没有陀螺仪时才该这么选</b>——不然等于白扔一半信号。
+                3 轴的预处理产物单独存，跟 6 轴那版互不覆盖，两版可以并存对比。
+              </Typography.Text>
+            )}
             <Checkbox checked={skipSyn} onChange={(e) => setSkipSyn(e.target.checked)}>
               跳过合成数据（只训练纯标注那一版，快一些）
             </Checkbox>
