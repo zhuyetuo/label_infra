@@ -4,6 +4,7 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import { useQuery } from "@tanstack/react-query";
+import { listLabels } from "@/api/labels";
 import {
   compareModels, createEvalSet, getEvalRunProgress, listEdgeModels, listEvalRuns, listEvalSets,
   startEvalRun, type CompareResult, type VersionDiff, type VersionResult,
@@ -40,6 +41,18 @@ export default function ModelCompare() {
   const [picked, setPicked] = useState<string[]>([]);
   const [runModes, setRunModes] = useState<string[]>(["stable", "viterbi"]);
   const [iouMin, setIouMin] = useState(0.3);
+  // 评哪个类别。**以前写死「抓挠」**（前端根本没传这个字段），于是拆成
+  // 二级标签之后没法回答"它能不能分出是头颈耳还是躯干"这个问题
+  const [evalLabel, setEvalLabel] = useState("抓挠");
+  // 候选类别从项目标签里来——这样拆出来的二级标签（抓挠-头颈耳）自动就在列表里，
+  // 不用每加一个类别回来改一次代码
+  const { data: allLabels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
+  const labelOptions = useMemo(() => {
+    const names = [...new Set((allLabels ?? []).map((l) => l.display_name))];
+    // 「抓挠」和它的子类排最前：九成场合评的就是它们
+    names.sort((a, b) => Number(b.startsWith("抓挠")) - Number(a.startsWith("抓挠")) || a.localeCompare(b));
+    return (names.length ? names : ["抓挠"]).map((n) => ({ value: n, label: n }));
+  }, [allLabels]);
   const [result, setResult] = useState<CompareResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -94,6 +107,7 @@ export default function ModelCompare() {
             return { model_tag, mode };
           }),
           iou_min: iouMin,
+          label: evalLabel,
         })
       );
     } finally {
@@ -212,6 +226,18 @@ export default function ModelCompare() {
           options={options}
           maxTagCount="responsive"
         />
+        {/* 评哪个类别。**以前写死「抓挠」**，拆成二级标签之后就没法回答
+            "它到底能不能分出是头颈耳还是躯干"——那正是要拿这一页验的事 */}
+        <Tooltip title="拿哪个类别的人工标注当答案。想验「能不能分出部位」就分别评「抓挠-头颈耳」和「抓挠-躯干」：两个的召回都不错 = 分得开；合起来的「抓挠」召回高、单看各自都低 = 检出没问题但部位认错了">
+          <Select
+            showSearch
+            style={{ width: 170 }}
+            value={evalLabel}
+            onChange={setEvalLabel}
+            placeholder="评哪个类别"
+            options={labelOptions}
+          />
+        </Tooltip>
         <Tooltip title="重叠多少算「同一段」。0.3 宽松，起止差一点也认；想专门考察边界准不准就调到 0.5 以上">
           <InputNumber
             addonBefore="IoU≥"
@@ -231,7 +257,10 @@ export default function ModelCompare() {
       {result && (
         <>
           <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            评的是 <Tag color="blue">{evalLabel}</Tag>——
             {result.n_samples} 个样本、{result.n_truth} 段人工标注当正确答案，IoU≥{result.iou_min} 算同一段。
+            {/* 不写清评的是哪个类别的话，分别评了头颈耳和躯干之后，
+                两份报告摆在一起根本分不出哪份是哪份 */}
           </Typography.Paragraph>
           {result.warnings.length > 0 && (
             <Alert
