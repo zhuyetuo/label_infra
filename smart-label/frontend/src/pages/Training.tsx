@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -22,6 +22,7 @@ import {
   getDatasetSegments,
   deleteDataset,
   activateModel, exportDataset, listDatasets, listModelVersions, refreshModelVersion, submitTrain,
+  trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
 
@@ -113,6 +114,14 @@ export default function Training() {
   const [exporting, setExporting] = useState(false);
 
   const [trainFor, setTrainFor] = useState<TrainDataset | null>(null);
+  // 一起训练的其它数据集。**单独一份常常训不了**：按片段取只收人确认过的片段，
+  // 而没人会去确认「活动」「睡觉」，整份只有正样本，分类器没有可对比的负类
+  const [extraDs, setExtraDs] = useState<string[]>([]);
+  // 每份额外数据集自己的真实采样率。**不能跟主批次一刀切**：老批次是 16Hz
+  // 导出的，新的 NAS 原始数据是 50Hz，报错了合并时就按错的采样率重采样
+  const [extraHz, setExtraHz] = useState<Record<string, number>>({});
+  // 类别归并 {原名: 新名}。细类太少就并进兄弟类别，不训的行为折进「活动」当负样本
+  const [remapEdits, setRemapEdits] = useState<Record<string, string>>({});
   const [modelType, setModelType] = useState("rf");
   const [sourceHz, setSourceHz] = useState<number>(50);
   const [hz, setHz] = useState<number>(16);
@@ -243,6 +252,65 @@ export default function Training() {
     }
   };
 
+  const extraRows = useMemo(
+    () => (datasets ?? []).filter((d) => extraDs.includes(d.name)),
+    [datasets, extraDs]
+  );
+
+  // 训练时那张类别重映射表：用来写清"这一类最后会变成哪一类、会不会被丢掉"。
+  // 拿不到（算法服务没起）也不挡提交，只是少一列说明
+  const { data: remap } = useQuery({ queryKey: ["train-remap"], queryFn: trainRemap });
+
+  // 这次要训的全部数据集（主 + 一起训的）按类别摊开。**要的是细类那一层**：
+  // 人想归并的正是「抓挠-肩胸只有 1 段」这种，看大类看不出来
+  const trainNames = useMemo(
+    () => (trainFor ? [trainFor.name, ...extraDs] : []),
+    [trainFor, extraDs]
+  );
+  const { data: trainStats } = useQuery({
+    queryKey: ["ds-stats", "train", trainNames],
+    queryFn: () => datasetStats(trainNames),
+    enabled: trainNames.length > 0,
+  });
+
+  /** 这次数据里出现的类别，按时长从多到少。没有细类的大类就是它自己 */
+  const trainCats = useMemo(() => {
+    const out: { name: string; n: number; sec: number }[] = [];
+    for (const r of trainStats?.rows ?? []) {
+      const kids = r.sub_labels ?? [];
+      if (!kids.length) {
+        out.push({ name: r.label, n: r.n_segments, sec: r.seconds });
+        continue;
+      }
+      for (const k of kids) {
+        // 「X（未细分）」是只标到大类那部分，映射时按大类名算
+        out.push({ name: k.is_root_only ? r.label : k.label, n: k.n_segments, sec: k.seconds });
+      }
+    }
+    return out.sort((a, b) => b.sec - a.sec);
+  }, [trainStats]);
+
+  /** 这一类走完整条流程最后会变成什么。归并 → remap 表 → 训练类别 */
+  const finalOf = (name: string): { cls: string | null; via: string | null } => {
+    const mapped = remapEdits[name] && remapEdits[name] !== name ? remapEdits[name] : null;
+    const key = mapped ?? name;
+    const table = remap?.table ?? {};
+    // 细类（抓挠-躯干）在 remap 表里没有，但训练取的是链的第 0 个，
+    // 也就是大类——所以按「-」前面那一段去查
+    const root = key.includes("-") ? key.split("-")[0] : key;
+    const cls = table[key] ?? table[root] ?? null;
+    return { cls, via: mapped };
+  };
+
+  /** 打开「提交训练」。上一次选的一起训练/归并不能留着——换了数据集那些
+   *  类别名根本对不上，留着等于把上一份的设置悄悄套到这一份头上 */
+  const openTrain = (d: TrainDataset) => {
+    setExtraDs([]);
+    setExtraHz({});
+    setRemapEdits({});
+    setTrainFor(d);
+  };
+
   const doTrain = async () => {
     if (!trainFor) return;
     setSubmitting(true);
@@ -251,6 +319,17 @@ export default function Training() {
         dataset: {
           date: trainFor.name,
           export_json: trainFor.export_json,
+          extra_datasets: extraRows.map((d) => ({
+            date: d.name,
+            export_json: d.export_json,
+            // 各批次自己的采样率：老批次 16Hz、新的 50Hz，不分开报就会按错的
+            // 采样率重采样
+            source_hz: extraHz[d.name] ?? sourceHz,
+          })),
+          // 只报真正改了的：值跟原名一样等于没改，送过去白白让人以为动过
+          label_remap: Object.fromEntries(
+            Object.entries(remapEdits).filter(([from, to]) => to && to !== from)
+          ),
           source_hz: sourceHz,
           hz,
           skip_syn: skipSyn,
@@ -385,7 +464,7 @@ export default function Training() {
                           >
                             详情
                           </Button>
-                          <Button size="small" type="link" onClick={() => setTrainFor(d)}>
+                          <Button size="small" type="link" onClick={() => openTrain(d)}>
                             用它训练
                           </Button>
                           <Popconfirm
@@ -1060,6 +1139,134 @@ export default function Training() {
             <Checkbox checked={skipSyn} onChange={(e) => setSkipSyn(e.target.checked)}>
               跳过合成数据（只训练纯标注那一版，快一些）
             </Checkbox>
+
+            {/* ── 一起训练的其它数据集 ──────────────────────────────
+                单独一份常常训不了：按片段取只收人确认过的片段，而没人会去
+                确认「活动」「睡觉」，整份只有正样本，分类器没有可对比的负类 */}
+            <Divider style={{ margin: "4px 0" }} />
+            <Space align="start" wrap>
+              <Typography.Text>一起训练</Typography.Text>
+              <Select
+                mode="multiple"
+                allowClear
+                style={{ minWidth: 380 }}
+                placeholder="再挑几份数据集合并训练（可不选）"
+                value={extraDs}
+                onChange={setExtraDs}
+                options={(datasets ?? [])
+                  .filter((d) => d.name !== trainFor.name)
+                  .map((d) => ({
+                    value: d.name,
+                    label: `${d.name}（${d.n_segments} 段 / ${d.total_hours} 小时）`,
+                  }))}
+              />
+            </Space>
+            {extraRows.length > 0 && (
+              <Space wrap size={4}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>各自的原始采样率：</Typography.Text>
+                {extraRows.map((d) => (
+                  <Space key={d.name} size={4}>
+                    <Typography.Text style={{ fontSize: 12 }}>{d.name}</Typography.Text>
+                    <Select
+                      size="small"
+                      style={{ width: 84 }}
+                      value={extraHz[d.name] ?? sourceHz}
+                      onChange={(v) => setExtraHz((m) => ({ ...m, [d.name]: v }))}
+                      options={[16, 25, 50, 100].map((v) => ({ value: v, label: `${v}Hz` }))}
+                    />
+                  </Space>
+                ))}
+              </Space>
+            )}
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              「按片段取」的数据集只收人确认过的片段，而没人会去确认「活动」「睡觉」——
+              整份可能只有正样本，分类器没有可对比的负类。掺上带状态标签的老批次再训。
+              <b>老批次多半是 16Hz 导出的，新的 NAS 原始数据是 50Hz</b>，各报各的，
+              别一刀切，不然会按错的采样率重采样。
+            </Typography.Text>
+
+            {/* ── 类别归并 ──────────────────────────────────────────
+                两个用处：细类太少就并进兄弟类别；不训的行为折进「活动」当负样本。
+                后者是必须的——remap 表对不上名字的类别会被静默丢掉 */}
+            {trainCats.length > 0 && (
+              <>
+                <Divider style={{ margin: "4px 0" }} />
+                <Typography.Text>类别归并（可不改）</Typography.Text>
+                <Table
+                  rowKey="name"
+                  size="small"
+                  pagination={false}
+                  scroll={{ y: 220 }}
+                  dataSource={trainCats}
+                  columns={[
+                    {
+                      title: "这次数据里的类别", dataIndex: "name", width: 160,
+                      render: (v: string) => <Tag color={labelColor(v.split("-")[0])}>{v}</Tag>,
+                    },
+                    {
+                      title: "份量", width: 120,
+                      render: (_, c) => (
+                        <Typography.Text type={c.sec < 60 ? "warning" : undefined} style={{ fontSize: 12 }}>
+                          {c.n} 段 / {Math.round(c.sec)} 秒
+                        </Typography.Text>
+                      ),
+                    },
+                    {
+                      title: "归并到", width: 190,
+                      render: (_, c) => (
+                        <Select
+                          size="small"
+                          allowClear
+                          style={{ width: 175 }}
+                          placeholder="保持原样"
+                          value={remapEdits[c.name] || undefined}
+                          onChange={(v) => setRemapEdits((m) => ({ ...m, [c.name]: v ?? "" }))}
+                          options={[
+                            // 训练最终那几类（活动/睡觉/抓挠/未佩戴）排前面——
+                            // 「把舔折成活动当负样本」是最常做的一件事
+                            ...(remap?.classes ?? []).map((v) => ({ value: v, label: v })),
+                            // 再给同批数据里的别的类别，用来把太少的细类并进兄弟
+                            ...trainCats
+                              .filter((o) => o.name !== c.name && !(remap?.classes ?? []).includes(o.name))
+                              .map((o) => ({ value: o.name, label: o.name })),
+                          ]}
+                        />
+                      ),
+                    },
+                    {
+                      title: "训练时算作",
+                      render: (_, c) => {
+                        const { cls, via } = finalOf(c.name);
+                        if (!remap?.available) {
+                          return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>;
+                        }
+                        // 表里没有的类别，训练脚本直接把这些样本丢掉，只在日志里
+                        // 打一句。**必须在这儿说出来**，不然人以为数据都进去了
+                        if (!cls) {
+                          return (
+                            <Tooltip title={`训练那张重映射表（${remap.path}）里没有「${via ?? c.name}」，这些样本会被直接丢掉，只在训练日志里打一句。归并到上面那几个训练类别就能留下`}>
+                              <Tag color="red">会被丢掉</Tag>
+                            </Tooltip>
+                          );
+                        }
+                        return (
+                          <Space size={4}>
+                            <Tag color={labelColor(cls) ?? "blue"}>{cls}</Tag>
+                            {via && <Typography.Text type="secondary" style={{ fontSize: 12 }}>（经 {via}）</Typography.Text>}
+                          </Space>
+                        );
+                      },
+                    },
+                  ]}
+                />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  归并只在训练时生效，<b>不动 NAS 上的导出</b>——同一份数据集可以换着归并反复试。
+                  两个常见用法：份量太少的细类（几十秒的）并进兄弟类别；这次不训的行为
+                  （舔、甩头/抖身）归到「活动」当负样本。
+                  {remap?.available === false && `　拿不到重映射表（${remap.error}），所以「训练时算作」这一列是空的，不影响提交。`}
+                </Typography.Text>
+              </>
+            )}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               训练在 AI 服务那台机器上跑，几十分钟到几小时不等，可以关掉页面。回来在「训练记录」里看结果。
             </Typography.Text>

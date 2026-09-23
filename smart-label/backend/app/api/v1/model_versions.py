@@ -114,6 +114,16 @@ async def dataset_label_stats(names: str = ""):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.get("/train-remap")
+async def train_remap():
+    """训练时那张类别重映射表。界面拿它写清"这一类最后会变成什么、会不会被丢掉"。
+
+    路由放在 /datasets/{name} 系列之前——不然会被当成某个数据集的名字匹配进去
+    （跟 dataset-stats 同一个坑）。
+    """
+    return ok(await algo_client.get_remap())
+
+
 @router.get("/datasets/{name}/segments")
 async def dataset_segments(name: str, limit: int = 5000, db: AsyncSession = Depends(get_db)):
     """这份导出里到底装了哪些片段——直接读最终喂给训练的那个 json。
