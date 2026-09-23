@@ -60,6 +60,8 @@ export interface ModelVersion {
   error: string | null;
   dataset_spec: string;
   metrics: string | null;
+  /** 启用了才出现在项目的「版本」下拉里 */
+  listed?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -239,6 +241,9 @@ export const cancelModelVersion = (id: number) =>
 
 export const refreshModelVersion = (id: number) =>
   request.post<never, ModelVersion>(`/model-versions/${id}/refresh`);
+
+export const setModelListed = (id: number, on: boolean) =>
+  request.post<never, { id: number; listed: boolean }>(`/model-versions/${id}/listed`, undefined, { params: { on } });
 
 export const activateModel = (id: number) =>
   request.post<never, { model_path: string; classes: string[]; hz: number }>(

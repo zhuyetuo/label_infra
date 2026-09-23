@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -41,6 +41,9 @@ class ModelVersion(Base):
     model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metrics: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON字符串，训练脚本产出的指标")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 启用了才出现在项目的「版本」下拉里。训练一次多一版，全自动上架的话
+    # 训个几十版下拉就没法用了——效果好的才手动启用
+    listed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

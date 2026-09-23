@@ -183,6 +183,20 @@ async def remove_dataset(name: str):
     return ok(msg="已删除")
 
 
+@router.post("/{version_id}/listed")
+async def set_listed(version_id: int, on: bool = True, db: AsyncSession = Depends(get_db)):
+    """启用/停用：只决定它出不出现在项目的「版本」下拉里，不动 AI 服务的默认模型。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    if on and not row.model_path:
+        raise HTTPException(status_code=400, detail="这条记录还没有模型文件（训练没完成或失败）")
+    row.listed = bool(on)
+    out = {"id": row.id, "listed": row.listed}
+    await db.commit()
+    return ok(out)
+
+
 @router.post("/{version_id}/activate")
 async def activate_model(version_id: int, db: AsyncSession = Depends(get_db)):
     """让 AI 服务立刻用这个训练产出的模型跑推理（重建进程池，正在跑的推理会中断）。"""

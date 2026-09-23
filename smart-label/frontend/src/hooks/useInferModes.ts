@@ -68,10 +68,17 @@ export function useInferModes() {
     for (const v of versions ?? []) m.set(v.algo_job_id, v.id);
     return m;
   }, [versions]);
+  // 训练记录里「启用」了的才上架。训一次多一版，全列出来的话训几十版下拉就没法用了
+  const listedJobs = useMemo(
+    () => new Set((versions ?? []).filter((v) => v.listed).map((v) => v.algo_job_id)),
+    [versions],
+  );
 
   const edgeModels = data?.models ?? [];
   // 默认模型不列：它就是「稳定版 / 稳定版 v2 / 调试版」那三行
-  const serverModels = (srv?.models ?? []).filter((m) => !m.is_default && m.spec);
+  const serverModels = (srv?.models ?? []).filter(
+    (m) => !m.is_default && m.spec && (!m.train || listedJobs.has(m.train.job_id)),
+  );
 
   const options = useMemo(() => {
     const online = {

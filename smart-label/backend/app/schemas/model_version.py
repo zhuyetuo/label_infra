@@ -63,6 +63,7 @@ class ModelVersionOut(BaseModel):
     error: str | None
     dataset_spec: str
     metrics: str | None
+    listed: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -23,7 +23,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, setModelListed, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -732,6 +732,27 @@ export default function Training() {
                             详情
                           </Button>
                           {v.status === "done" && v.model_path && (
+                            <Tooltip
+                              title={
+                                v.listed
+                                  ? "已启用：新建项目、批量预标注、模型对比的「版本」下拉里能选到它。停用后下拉里就不再出现（已经跑出来的结果不受影响）"
+                                  : "启用后才会出现在新建项目、批量预标注、模型对比的「版本」下拉里。只影响下拉列表，不改 AI 服务的默认模型"
+                              }
+                            >
+                              <Button
+                                size="small"
+                                type="link"
+                                onClick={async () => {
+                                  await setModelListed(v.id, !v.listed);
+                                  message.success(v.listed ? `已停用训练记录 #${v.id}` : `已启用训练记录 #${v.id}，项目的版本下拉里可以选了`);
+                                  qc.invalidateQueries({ queryKey: ["model-versions"] });
+                                }}
+                              >
+                                {v.listed ? "停用" : "启用"}
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {v.status === "done" && v.model_path && (
                             <Popconfirm
                               title="把它换成 AI 服务的默认模型？"
                               description={
@@ -739,17 +760,17 @@ export default function Training() {
                                   会影响所有人：所有没指定版本的预标注都改用它；正在跑的推理会中断；
                                   AI 服务重启后回到配置里的默认模型。
                                   <br />
-                                  <b>只是想在某个项目上试一下的话不用启用</b>——新建项目、重跑预标注、
-                                  模型对比的「版本」下拉里直接选「训练记录 #{v.id}」
+                                  <b>只是想在某个项目上试一下的话用「启用」就行</b>——启用后在新建项目、重跑预标注、
+                                  模型对比的「版本」下拉里选「训练记录 #{v.id}」
                                 </span>
                               }
                               onConfirm={async () => {
                                 const r = await activateModel(v.id);
-                                message.success(`已启用：${r.classes.join("/")}`);
+                                message.success(`已设为默认：${r.classes.join("/")}`);
                               }}
                             >
                               <Button size="small" type="link">
-                                启用
+                                设为默认
                               </Button>
                             </Popconfirm>
                           )}

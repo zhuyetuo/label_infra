@@ -190,5 +190,5 @@ async def dispatch_batch(items: list[dict], mode: str | None,
     if is_edge(mode):
         return await infer_spec(items, mode, **edge_kw)
     if algo_client.is_srv(mode):
-        return await algo_client.infer_spec(items, mode)
+        return algo_client.stamp_spec(await algo_client.infer_spec(items, mode), mode)
     return await algo_client.infer_batch(items, mode=mode)
