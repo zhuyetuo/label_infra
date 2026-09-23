@@ -6,6 +6,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
+import { getSavedRange, saveRange } from "@/utils/persistedSize";
 import { useAuthStore } from "@/stores/authStore";
 import { claimTask, getTask } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
@@ -52,6 +53,8 @@ const MODEL_TYPES = ["rf", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
  */
 const leafOf = (r: DatasetSegment): string =>
   r.labels?.length ? r.labels[r.labels.length - 1] : r.label;
+
+const EXPORT_RANGE_KEY = "export-date-range";
 
 export default function Training() {
   const qc = useQueryClient();
@@ -108,7 +111,17 @@ export default function Training() {
   // 日期范围可以清空。项目名跟日期不是一回事——导进来的项目名是日期区间
   // （2026_7_17-2026_7_29_old），还有按狗命名的（..._imu4_xiaoman_unwear_old），
   // 只按日期圈根本圈不准，得能直接挑项目。
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>([dayjs().subtract(30, "day"), dayjs()]);
+  // 日期范围记住上次选的：数据是一批批攒的，导的往往就是同一个区间
+  // （这几天新采的那批），每开一次弹窗重挑一遍日历纯属浪费。
+  // 没存过才退回"最近 30 天"
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(() => {
+    const saved = getSavedRange(EXPORT_RANGE_KEY);
+    return saved ? [dayjs(saved[0]), dayjs(saved[1])] : [dayjs().subtract(30, "day"), dayjs()];
+  });
+  const pickRange = (v: [dayjs.Dayjs, dayjs.Dayjs] | null) => {
+    setRange(v);
+    saveRange(EXPORT_RANGE_KEY, v ? [v[0].format("YYYY-MM-DD"), v[1].format("YYYY-MM-DD")] : null);
+  };
   const [projectIds, setProjectIds] = useState<number[]>([]);
   const [includeSubmitted, setIncludeSubmitted] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -638,7 +651,7 @@ export default function Training() {
             <Typography.Text>日期范围</Typography.Text>
             <DatePicker.RangePicker
               value={range}
-              onChange={(v) => setRange(v && v[0] && v[1] ? [v[0], v[1]] : null)}
+              onChange={(v) => pickRange(v && v[0] && v[1] ? [v[0], v[1]] : null)}
               allowClear
             />
           </Space>

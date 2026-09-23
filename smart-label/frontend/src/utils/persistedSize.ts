@@ -76,3 +76,28 @@ export function saveText(key: string, value: string): void {
     // 存不了就算了
   }
 }
+
+// 日期范围：导出数据集时选的那一段。**每次都重置成"最近 30 天"是不对的**——
+// 人攒数据是一批批来的，导的往往是同一个区间（这几天新采的那批），
+// 每开一次弹窗重挑一遍日历纯属浪费。存 YYYY-MM-DD 两个字符串，不存 dayjs
+// 对象：那个序列化出来带时区和毫秒，换个时区读回来就偏一天。
+export function getSavedRange(key: string): [string, string] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    const ok = (x: unknown) => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x);
+    return Array.isArray(v) && v.length === 2 && ok(v[0]) && ok(v[1]) ? [v[0], v[1]] : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveRange(key: string, range: [string, string] | null): void {
+  try {
+    if (range == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(range));
+  } catch {
+    // 存不了就算了
+  }
+}
