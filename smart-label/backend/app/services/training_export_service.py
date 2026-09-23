@@ -141,10 +141,14 @@ async def export_dataset(
     q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
     # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
     # 一份），只是导出来会很大，n_tasks 会如实报出来。
-    if date_from is not None:
-        q = q.where(Sample.session_date >= date_from)
-    if date_to is not None:
-        q = q.where(Sample.session_date <= date_to)
+    # 选了项目就按项目取，日期不再限制：老项目的名字不按日期来
+    # （2026_7_17-2026_7_29_old、2026_8_28_imu4_xiaoman…），采集日期也早过了
+    # 默认的「最近 30 天」——两个条件同时生效的话，挑了项目却一条都导不出来
+    if not project_ids:
+        if date_from is not None:
+            q = q.where(Sample.session_date >= date_from)
+        if date_to is not None:
+            q = q.where(Sample.session_date <= date_to)
     if not only_reviewed:
         # 整份取：任务本身得审过
         statuses = [TaskStatus.APPROVED] + ([TaskStatus.SUBMITTED] if include_submitted else [])
