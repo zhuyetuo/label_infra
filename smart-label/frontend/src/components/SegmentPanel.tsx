@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import type { SelectProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
@@ -104,6 +106,8 @@ function coverage(items: LabelItem[], durationMs: number | null) {
 interface Props {
   items: LabelItem[];
   labels: LabelDefinition[];
+  /** 这个任务属于哪个项目：「最近用过的类别」按项目分开记（不同项目标签模板不同） */
+  projectKey?: number | string | null;
   readOnly?: boolean;
   /** IMU 总时长，算覆盖率用；没有 CSV 时为 null */
   durationMs: number | null;
@@ -163,6 +167,7 @@ export default function SegmentPanel({
   initialFilterLabels,
   controlsPortalTarget,
   focusMs,
+  projectKey,
 }: Props) {
   const labelMap = useMemo(() => byId(labels), [labels]);
   const usedTracks = useMemo(() => new Set(labels.map((l) => trackOf(labelMap, l.id)).filter(Boolean)), [labels, labelMap]);
@@ -211,6 +216,16 @@ export default function SegmentPanel({
     }
     onUpdate(ids, patch);
   };
+  // 勾选里不能留着已经不存在的片段（删掉的、退回候选的）——留着的话
+  // 「已选 12 条」点下去只改到 9 条，人以为改全了
+  useEffect(() => {
+    setPicked((prev) => {
+      const alive = new Set(items.map((i) => i.id));
+      const next = prev.filter((id) => alive.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [items]);
+
   // 换任务时工作台会先把 items 清空再灌新的，借这个时机清掉，别把上一个任务的
   // id 带过来（片段 id 是全局唯一的，串不了行，但计数会不对）
   const empty = items.length === 0;
@@ -350,6 +365,21 @@ export default function SegmentPanel({
 
   // 改类别/补标用：项目下全部标签
   // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨在一起，好找
+  // 批量改类别用的勾选。**标注一轮往往是同一个二级标签连点几十次**——
+  // 一条条改，光翻标签树就比判断动作还费时间
+  const [picked, setPicked] = useState<number[]>([]);
+  // 最近用过的类别（按项目记）。既用来置顶下拉，也用来给批量那个框填默认值
+  const [recent, setRecent] = useState<number[]>(() => recentLabels(projectKey));
+  const noteLabel = (id: number) => {
+    rememberLabel(projectKey, id);
+    setRecent(recentLabels(projectKey));
+  };
+  // 换任务就重读一次，并把上一个任务的勾选清掉（片段 id 不一样，留着是错的）
+  useEffect(() => {
+    setRecent(recentLabels(projectKey));
+    setPicked([]);
+  }, [projectKey]);
+
   const labelOptions = flatten(labels).map(({ label: l, depth }) => ({
     value: l.id,
     // 能搜：标签树有上百条，「抓挠-头颈耳-耳/耳后」翻到手酸。
@@ -362,6 +392,22 @@ export default function SegmentPanel({
       </span>
     ),
   }));
+  /** 下拉选项，最近用过的那几条置顶。
+   *
+   *  标签树有上百条、三四级深，而实际连着改的往往就那一两个（「抓挠-头颈耳」
+   *  连点几十次）。置顶之后不用每次都翻或者搜。分组标题让人知道下面还有全量。 */
+  const labelOptionsWithRecent: SelectProps["options"] = useMemo(() => {
+    const usable = recent.filter((id) => labels.some((l) => l.id === id));
+    if (!usable.length) return labelOptions;
+    const pick = (id: number) => labelOptions.find((o) => o.value === id)!;
+    return [
+      { label: "最近用过", title: "最近用过", options: usable.map(pick) },
+      { label: "全部类别", title: "全部类别", options: labelOptions },
+    ];
+    // labelOptions 每次渲染都是新数组，用 labels/recent 当依赖就够
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labels, recent]);
+
   /** 类别下拉的公共设置。
    *
    *  **下拉不能跟着框的宽度走**：框只有 130~140px，而选项前面还有缩进和「└」，
@@ -473,6 +519,46 @@ export default function SegmentPanel({
           <Tooltip title="改过类别/标了待定的那几条现在无视筛选一直显示，核对完可以收起来">
             <Button size="small" onClick={() => setJustEdited(new Set())}>
               收起刚改的 {justEdited.size} 条
+            </Button>
+          </Tooltip>
+        )}
+        {/* 批量改类别。**这是标注里最重复的一件事**：一整段「抓挠」逐条细化
+            成「抓挠-头颈耳」，一条条改光翻标签树就比判断动作还费时间 */}
+        {!readOnly && picked.length > 0 && (
+          <>
+            <Typography.Text strong>已选 {picked.length} 条</Typography.Text>
+            <Select
+              size="small"
+              style={{ width: 150 }}
+              placeholder="全部改成…"
+              value={undefined}
+              {...labelSelectProps}
+              options={labelOptionsWithRecent}
+              onChange={(v) => {
+                const id = Number(v);
+                noteLabel(id);
+                update(picked, { label_id: id });
+                setPicked([]);
+              }}
+            />
+            {/* 上一次用的那个给个一键——连着改几十条时，连下拉都不用开 */}
+            {recent[0] != null && labels.some((l) => l.id === recent[0]) && (
+              <Tooltip title="上次用的那个类别，连着改同一类时不用再开下拉">
+                <Button
+                  size="small"
+                  onClick={() => { update(picked, { label_id: recent[0] }); setPicked([]); }}
+                >
+                  改成 <Tag color={colorOf(recent[0])} style={{ marginInlineEnd: 0 }}>{nameOf(recent[0])}</Tag>
+                </Button>
+              </Tooltip>
+            )}
+            <Button size="small" type="text" onClick={() => setPicked([])}>取消选择</Button>
+          </>
+        )}
+        {!readOnly && picked.length === 0 && filtered.length > 0 && (
+          <Tooltip title="把当前筛出来的这些全勾上，然后一次改掉类别">
+            <Button size="small" onClick={() => setPicked(filtered.map((i) => i.id))}>
+              选中筛出的 {filtered.length} 条
             </Button>
           </Tooltip>
         )}
@@ -612,8 +698,8 @@ export default function SegmentPanel({
                       style={{ width: 130 }}
                       value={null}
                       {...labelSelectProps}
-                      options={labelOptions}
-                      onChange={(v) => v != null && onCreate(g.start, g.end, v)}
+                      options={labelOptionsWithRecent}
+                      onChange={(v) => { if (v != null) { noteLabel(Number(v)); onCreate(g.start, g.end, v); } }}
                     />
                   )}
                 </Space>
@@ -627,6 +713,15 @@ export default function SegmentPanel({
         rowKey="id"
         dataSource={filtered}
         pagination={false}
+        // 勾选是为了批量改类别。只读时不给——看的人改不了，多一列白占宽度
+        rowSelection={readOnly ? undefined : {
+          selectedRowKeys: picked,
+          onChange: (keys) => setPicked(keys as number[]),
+          columnWidth: 36,
+          // 表头那个全选只管**当前筛出来的**，跟人看到的一致；想连没筛出来的
+          // 一起改，先把筛选清掉
+          fixed: true,
+        }}
         // 上千行时只渲染可视区那十来行（每行还带一个 Select），否则整页都跟着卡
         virtual
         scroll={{ x: 900, y: 220 }}
@@ -686,8 +781,8 @@ export default function SegmentPanel({
                         {nameOf(Number(value))}
                       </Tag>
                     )}
-                    options={labelOptions}
-                    onChange={(v) => update([i.id], { label_id: v })}
+                    options={labelOptionsWithRecent}
+                    onChange={(v) => { noteLabel(Number(v)); update([i.id], { label_id: v }); }}
                     title="改类别"
                   />
                 )}

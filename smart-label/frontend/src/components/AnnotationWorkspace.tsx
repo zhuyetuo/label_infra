@@ -1041,6 +1041,7 @@ export default function AnnotationWorkspace({
     children: (
       <SegmentPanel
         controlsPortalTarget={segControlsHost}
+        projectKey={task?.project_id ?? null}
         focusMs={initialSeekMs}
         items={items}
         labels={labels}
