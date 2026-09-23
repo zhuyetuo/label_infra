@@ -228,3 +228,25 @@ async def poll_train(algo_job_id: int) -> dict:
     if resp.status_code != 200:
         raise AlgoServiceError(f"算法服务 /train/{algo_job_id} 返回 {resp.status_code}: {resp.text[:500]}")
     return resp.json()
+
+
+async def get_remap() -> dict:
+    """训练时那张类别重映射表。**用来告诉人"这一类最后会变成什么"。**
+
+    表里没有的类别，训练脚本会直接把那些样本丢掉，只在训练日志里打一句——
+    界面上不说的话，人只会以为数据都进去了。实测 2026-09-23：那张表用的还是
+    旧模板的名字（舔身体/甩身体/蹭擦身体），现在模板发的是「舔」「甩头/抖身」
+    「蹭」，对不上，全被丢了。
+
+    连不上不算事故：拿不到表就不显示"会变成什么"，提交训练照常。
+    """
+    url = f"{_base_url()}/api/v1/label/remap"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"available": False, "error": f"算法服务 /remap 返回 {resp.status_code}", "table": {}, "classes": []}
+        return resp.json()
+    except httpx.RequestError as e:
+        return {"available": False, "error": f"连不上算法服务（imu_train 的 label_service）: {e}",
+                "table": {}, "classes": []}

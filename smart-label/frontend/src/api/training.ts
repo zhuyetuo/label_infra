@@ -174,11 +174,29 @@ export const deleteDataset = (name: string) =>
 
 export const listModelVersions = () => request.get<never, ModelVersion[]>("/model-versions");
 
+/** 训练时那张类别重映射表。`table` 里没有的类别，训练脚本会把那些样本丢掉，
+ *  只在训练日志里打一句——界面要靠它写清"这一类最后会变成什么"。 */
+export type TrainRemap = {
+  available?: boolean;
+  error?: string;
+  path?: string;
+  /** {原始类别名: 训练类别名} */
+  table: Record<string, string>;
+  /** 训练最终的那几类（活动 / 睡觉 / 抓挠 / 未佩戴），当"映射到"的候选 */
+  classes: string[];
+};
+
+export const trainRemap = () => request.get<never, TrainRemap>("/model-versions/train-remap");
+
 export const submitTrain = (body: {
   dataset: {
     date: string;
     export_json?: string | null;
     extra_date?: string[];
+    /** 一起训练的其它数据集（各带自己的 json 和采样率） */
+    extra_datasets?: { date: string; export_json: string; source_hz?: number | null }[];
+    /** 类别归并 {原名: 新名}，AI 服务整理数据时改写，不动 NAS 上的导出 */
+    label_remap?: Record<string, string>;
     missing_strategy?: string | null;
     skip_syn?: boolean;
     source_hz?: number | null;
