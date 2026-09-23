@@ -242,6 +242,25 @@ export const cancelModelVersion = (id: number) =>
 export const refreshModelVersion = (id: number) =>
   request.post<never, ModelVersion>(`/model-versions/${id}/refresh`);
 
+/** 端侧 F1：板上那份 C 在留出集上的成绩（特征是板上的 float32 实现、叶子量化过） */
+export interface EdgeMetrics {
+  macro_f1: number;
+  accuracy: number;
+  n_windows: number;
+  per_class: Record<string, { precision: number; recall: number; "f1-score": number; support?: number }>;
+  flash_bytes?: number;
+  split?: string;
+  agree_with_sklearn?: number;
+}
+
+/** 导出到端侧：算法机转成板上那份 C、算端侧 F1、端侧服务重新加载。要几十秒到一两分钟 */
+export const exportModelEdge = (id: number) =>
+  request.post<never, { tag: string; spec: string; edge: EdgeMetrics; reloaded: boolean; reload_error: string | null }>(
+    `/model-versions/${id}/export-edge`,
+    undefined,
+    { timeout: 1_900_000 }
+  );
+
 export const setModelListed = (id: number, on: boolean) =>
   request.post<never, { id: number; listed: boolean }>(`/model-versions/${id}/listed`, undefined, { params: { on } });
 

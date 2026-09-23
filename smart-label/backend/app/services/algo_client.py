@@ -285,6 +285,30 @@ class AlgoConflict(AlgoServiceError):
     """算法服务说这一版现在不能删（还在跑 / 正在用）。原因要原样给人看。"""
 
 
+async def export_edge(algo_job_id: int) -> dict:
+    """把这一版导成端侧模型（算法机上跑 algo_tinyml 的导出脚本，要编译 C、在留出集上
+    跑一遍，几十秒到一两分钟）。返回 {tag, spec, edge:{macro_f1, per_class, ...}}。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/export_edge"
+    try:
+        async with httpx.AsyncClient(timeout=1800.0) as client:
+            resp = await client.post(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 409:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:300]
+        raise AlgoConflict(str(detail))
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:800]
+        raise AlgoServiceError(f"算法服务导出端侧失败（{resp.status_code}）：{detail}")
+    return resp.json()
+
+
 async def delete_train(algo_job_id: int) -> dict:
     """删掉算法机上这一版训练的全部产物。已经不在了（404）当成删成功。"""
     url = f"{_base_url()}/api/v1/label/train/{algo_job_id}"

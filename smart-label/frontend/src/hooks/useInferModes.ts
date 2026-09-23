@@ -74,7 +74,10 @@ export function useInferModes() {
     [versions],
   );
 
-  const edgeModels = data?.models ?? [];
+  // 训练记录导出的端侧模型也要「启用」了才上架，跟服务端那组同一个规矩
+  const edgeModels = (data?.models ?? []).filter(
+    (m) => !m.train?.job_id || listedJobs.has(m.train.job_id),
+  );
   // 默认模型不列：它就是「稳定版 / 稳定版 v2 / 调试版」那三行
   const serverModels = (srv?.models ?? []).filter(
     (m) => !m.is_default && m.spec && (!m.train || listedJobs.has(m.train.job_id)),
@@ -144,20 +147,28 @@ export function useInferModes() {
         // 也就是真正区分它们的那部分。写进 hover 提示也不行：人是扫列表的，
         // 不是逐个悬停的。一张表最省事。
         options: edgeModels.flatMap((m) => {
-          const geom = `${m.window} 点 @${m.hz}Hz`;
+          const geom = `${m.window} 点 @${m.hz}Hz${m.n_channels ? `，${m.n_channels === 5 ? "3 轴" : "6 轴"}` : ""}`;
+          // 训练记录导出来的：显示成「训练记录 #N · 端侧 · 3轴 · F1 0.53」，F1 是端侧的
+          const t = m.train;
+          const vid = t?.job_id != null ? versionIdOf.get(t.job_id) : undefined;
+          const name = t
+            ? `训练记录 #${vid ?? `?(算法#${t.job_id})`} · 端侧` +
+              (m.n_channels ? ` · ${m.n_channels === 5 ? "3轴" : "6轴"}` : "") +
+              (typeof m.edge?.macro_f1 === "number" ? ` · F1 ${m.edge.macro_f1.toFixed(2)}` : "")
+            : m.tag;
           return [
             {
-              label: `${m.tag} · 稳定版 v2`,
+              label: `${name} · 稳定版 v2`,
               value: m.spec,
               title: `${geom}。${EDGE_MODE_HINT}`,
             },
             {
-              label: `${m.tag} · 板上整条链`,
+              label: `${name} · 板上整条链`,
               value: m.spec_board ?? `${m.spec}@board`,
               title: `${geom}。${EDGE_BOARD_HINT}`,
             },
             {
-              label: `${m.tag} · 板上原始`,
+              label: `${name} · 板上原始`,
               value: m.spec_raw ?? `${m.spec}@raw`,
               title: `${geom}。${EDGE_RAW_HINT}`,
             },
@@ -166,6 +177,7 @@ export function useInferModes() {
       },
     ];
   }, [edgeModels, serverModels, versionIdOf]);
+  // eslint 会抱怨 listedJobs 没进依赖：它已经通过 edgeModels/serverModels 体现了
 
   // 「其它模型」这一组单独给出去：模型对比那页自己拼下拉（它要的是"跑哪几个
   // 版本做评测"，不是"用哪个铺草稿"），但这一组得跟这里是同一份——以前它漏了

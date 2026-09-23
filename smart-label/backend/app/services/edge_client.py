@@ -123,6 +123,22 @@ async def available() -> list[dict]:
         return []
 
 
+async def reload() -> dict:
+    """让端侧服务重读模型清单（训练记录导出之后新模型才挂得上）。"""
+    url = f"{_base_url()}/api/v1/label/reload"
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(url, json={})
+    except httpx.RequestError as e:
+        raise EdgeServiceError(f"连不上端侧服务 ({url}): {e}") from e
+    if resp.status_code != 200:
+        raise EdgeServiceError(f"端侧服务 reload 返回 {resp.status_code}: {resp.text[:300]}")
+    data = resp.json() or {}
+    if not data.get("ok"):
+        raise EdgeServiceError(f"端侧服务 reload 失败：{data.get('error')} {data.get('errors') or ''}")
+    return data
+
+
 async def infer_batch(items: list[dict], model: str, post_mode: str = EDGE_DEFAULT_POST,
                       labels: list[str] | None = None,
                       min_windows: int = 1, max_gap: int = 2) -> list[dict]:
