@@ -64,7 +64,8 @@ class DatasetExportIn(BaseModel):
     project_id: int | None = None
     # 只用「已通过」最稳；赶时间可以把「待审核」也算上，但那部分还没人复核
     include_submitted: bool = False
-    # approved = 整份审完的任务才算；reviewed = 不看任务状态，只取人碰过的片段
+    # approved = 整份审完的任务才算；reviewed = 不看任务状态，只取人确认过的片段
+    # （点过「通过」/ 改过 / 人自己画的；只是打开看过没点的不算）
     scope: str = "approved"
     # 分了互斥轨的项目：按优先级折叠成"一个时刻一个标签"（默认 行为 > 运动 > 姿态）。
     # 不折叠就各轨原样导，给分轨训练用。没分轨的项目两种一样

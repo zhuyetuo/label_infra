@@ -7,7 +7,8 @@ export interface TrainDataset {
   date_to: string;
   project_id: number | null;
   include_submitted: boolean;
-  /** approved = 整份审完的任务；reviewed = 只取人碰过的片段 */
+  /** approved = 整份审完的任务；reviewed = 只取人确认过的片段
+   *  （点过「通过」/ 改过 / 人自己画的。只是打开看过没点的不算） */
   scope?: "approved" | "reviewed";
   /** reviewed 模式下跳过了多少条"没人看过的 AI 片段" */
   n_untouched_skipped?: number;
