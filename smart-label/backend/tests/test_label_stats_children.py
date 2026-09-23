@@ -6,6 +6,10 @@
 
 数据一直都在：导出文件里 timeserieslabels 存的是整条链 [抓挠, 抓挠-躯干]，
 之前统计只取了 labels[0]。
+
+字段叫 sub_labels 不叫 children 是**故意的**：antd 的 Table 会把 dataSource 里
+的 children 当成树形子行自动展开，跟界面自己写的明细表叠在一起，每个细类出现
+两次（实测 2026-09-23）。下面有一条守着这个名字。
 """
 
 import json
@@ -59,35 +63,46 @@ def test_大类还是原来那个数(ds):
 
 def test_细类摊开_按时长从多到少(ds):
     kids = {k["label"]: k for k in
-            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["children"]}
+            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["sub_labels"]}
     assert kids["抓挠-头颈耳"]["n_segments"] == 9
     assert kids["抓挠-头颈耳"]["seconds"] == 90.0
     assert kids["抓挠-躯干"]["seconds"] == 30.0
     # 多的排前面：人一眼要看到哪一类撑起了这个大类
     order = [k["label"] for k in
-             next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["children"]]
+             next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["sub_labels"]]
     assert order[0] == "抓挠-头颈耳"
 
 
 def test_只标到大类的那部分不能省(ds):
     """省掉的话细类加起来对不上大类，人会以为统计错了。"""
     kids = {k["label"]: k for k in
-            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["children"]}
+            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["sub_labels"]}
     assert "抓挠（未细分）" in kids
     assert kids["抓挠（未细分）"]["is_root_only"] is True
     assert kids["抓挠（未细分）"]["seconds"] == 5.0
     root = next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")
-    assert round(sum(k["seconds"] for k in root["children"]), 1) == root["seconds"]
+    assert round(sum(k["seconds"] for k in root["sub_labels"]), 1) == root["seconds"]
 
 
 def test_细类占比按本大类算_不是全局(ds):
     """要回答的是"抓挠里头颈耳占多少"，不是"头颈耳占全部数据多少"。"""
     kids = {k["label"]: k for k in
-            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["children"]}
+            next(r for r in label_stats([ds])["rows"] if r["label"] == "抓挠")["sub_labels"]}
     assert kids["抓挠-头颈耳"]["pct_in_parent"] == pytest.approx(72.0, abs=0.1)   # 90/125
     assert sum(k["pct_in_parent"] for k in kids.values()) == pytest.approx(100.0, abs=0.2)
 
 
 def test_没有二级标签的大类只有一个未细分的孩子(ds):
     lick = next(r for r in label_stats([ds])["rows"] if r["label"] == "舔")
-    assert [k["label"] for k in lick["children"]] == ["舔-躯干"]
+    assert [k["label"] for k in lick["sub_labels"]] == ["舔-躯干"]
+
+
+def test_字段不能叫children(ds):
+    """antd 的 Table 见到 children 就当树形子行自动展开，会和明细表叠出两份。
+
+    这条不是洁癖：实测 2026-09-23 界面上每个细类真的出现了两次，第二份还用
+    外层的列渲染，占比那一格是空的。名字改回去就会再犯一遍。
+    """
+    row = label_stats([ds])["rows"][0]
+    assert "sub_labels" in row
+    assert "children" not in row

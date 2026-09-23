@@ -652,8 +652,14 @@ def label_stats(names: list[str]) -> dict:
             # 每份数据集各贡献了多少秒，一眼看出"这个类别只有某一批有"
             "by_dataset": {n: round(per_sec[n][k], 1) for n in per if per_sec[n][k] > 0},
             # 大类底下的细类。**大类够不等于细类够**：抓挠 1125 秒看着很多，
-            # 摊到头颈耳/躯干/肩胸上可能某一类只有几十秒，训不出来
-            "children": _children(k),
+            # 摊到头颈耳/躯干/肩胸上可能某一类只有几十秒，训不出来。
+            #
+            # **字段名不能叫 children**：antd 的 Table 会把 dataSource 里的
+            # children 当成树形子行自动展开，跟界面自己写的明细表叠在一起，
+            # 每个细类出现两次（实测 2026-09-23，而且第二份用外层的列渲染，
+            # 占比那格是空的）。换个名字比在前端关掉那个默认行为稳——
+            # 关掉要记得关，换名字是忘不掉的
+            "sub_labels": _children(k),
         }
         for k in sorted(total_s, key=lambda x: -total_s[x])
     ]

@@ -1115,16 +1115,18 @@ export default function Training() {
               scroll={{ y: 420 }}
               // 展开看细类。**大类够不等于细类够**：抓挠 1125 秒占 94%，
               // 看着很充足，可摊开可能某个部位只有几十秒，根本训不出二级。
-              // 老数据集回不出 children，那种行就不给展开箭头
+              // 老数据集回不出细类，那种行就不给展开箭头。
+              // 字段叫 sub_labels 不叫 children：后者会被 Table 当成树形子行
+              // 自动展开，跟这里的明细表叠成两份
               expandable={{
-                rowExpandable: (r) => (r.children?.length ?? 0) > 0,
+                rowExpandable: (r) => (r.sub_labels?.length ?? 0) > 0,
                 expandedRowRender: (r) => (
                   <Table
                     rowKey="label"
                     size="small"
                     pagination={false}
                     showHeader={false}
-                    dataSource={r.children ?? []}
+                    dataSource={r.sub_labels ?? []}
                     columns={[
                       {
                         title: "细类", width: 140,
@@ -1180,9 +1182,9 @@ export default function Training() {
                   render: (v: string, r) => (
                     <Space size={4}>
                       <Tag color={labelColor(v)}>{v}</Tag>
-                      {(r.children?.filter((k) => !k.is_root_only).length ?? 0) > 0 && (
+                      {(r.sub_labels?.filter((k) => !k.is_root_only).length ?? 0) > 0 && (
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {r.children!.filter((k) => !k.is_root_only).length} 个细类
+                          {r.sub_labels!.filter((k) => !k.is_root_only).length} 个细类
                         </Typography.Text>
                       )}
                     </Space>
