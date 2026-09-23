@@ -368,6 +368,12 @@ export default function SegmentPanel({
   // 批量改类别用的勾选。**标注一轮往往是同一个二级标签连点几十次**——
   // 一条条改，光翻标签树就比判断动作还费时间
   const [picked, setPicked] = useState<number[]>([]);
+  // 选中的里面还没确认的那几条。「通过」只对这些有意义——已经确认过的、
+  // 人工加的再点一次什么也不会变，把它们算进数字里只会让人以为自己漏了几条
+  const pickedPending = useMemo(() => {
+    const set = new Set(picked);
+    return items.filter((i) => set.has(i.id) && aiState(i) === "pending");
+  }, [items, picked]);
   // 最近用过的类别（按项目记）。既用来置顶下拉，也用来给批量那个框填默认值
   const [recent, setRecent] = useState<number[]>(() => recentLabels(projectKey));
   const noteLabel = (id: number) => {
@@ -526,6 +532,9 @@ export default function SegmentPanel({
             成「抓挠-头颈耳」，一条条改光翻标签树就比判断动作还费时间 */}
         {!readOnly && picked.length > 0 && (
           <>
+            {/* 加个竖线把"只管选中的"这一组跟前面的筛选控件分开——
+                不分的话一整排看着是平级的，人分不清哪个按钮动的是哪些行 */}
+            <span style={{ color: "#555" }}>|</span>
             <Typography.Text strong>已选 {picked.length} 条</Typography.Text>
             <Select
               size="small"
@@ -562,7 +571,20 @@ export default function SegmentPanel({
             </Button>
           </Tooltip>
         )}
-        {!readOnly && pendingInView.length > 0 && (
+        {/* 勾了东西就只管勾的那些。**两种作用范围不能混在一排**：选了 2 条，
+            旁边的按钮却去动筛出来的 21 条，点下去的后果差十倍，而按钮上
+            看不出这个区别 */}
+        {!readOnly && pickedPending.length > 0 && (
+          <Popconfirm
+            title={`把选中的 ${pickedPending.length} 段 AI 预测标为"确认正确"？`}
+            onConfirm={() => { update(pickedPending.map((i) => i.id), { ai_confirmed: true }); setPicked([]); }}
+          >
+            <Button size="small" icon={<CheckOutlined />}>
+              通过选中的 {pickedPending.length} 条
+            </Button>
+          </Popconfirm>
+        )}
+        {!readOnly && picked.length === 0 && pendingInView.length > 0 && (
           <Popconfirm
             title={`把当前筛出来的 ${pendingInView.length} 段 AI 预测全部标为"确认正确"？`}
             onConfirm={() => update(pendingInView.map((i) => i.id), { ai_confirmed: true })}
