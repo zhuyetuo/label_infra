@@ -57,6 +57,11 @@ const leafOf = (r: DatasetSegment): string =>
 
 const EXPORT_RANGE_KEY = "export-date-range";
 
+/** 一个训练类别至少要有这么多段，验证结果才有点参考价值。
+ *  训练是按片段分组切分的（同一段不会一半进训练一半进验证），段数太少的话
+ *  训练和验证各只分到一两段，模型只见过这一类的一两个样子 */
+const MIN_SEGMENTS = 5;
+
 /** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
 type TrainOpts = {
   modelType?: string;
@@ -1446,11 +1451,31 @@ export default function Training() {
                     },
                     {
                       title: "份量", width: 120,
-                      render: (_, c) => (
-                        <Typography.Text type={c.sec < 60 ? "warning" : undefined} style={{ fontSize: 12 }}>
-                          {c.n} 段 / {Math.round(c.sec)} 秒
-                        </Typography.Text>
-                      ),
+                      // **段数少和时长短是两回事，都得标。** 未佩戴 2 段 / 7197 秒：
+                      // 按时长看很充足，可训练是按片段分组切分的——1 段进训练、1 段整个
+                      // 进验证，模型只见过一次不戴项圈的样子，验证那段全认成了静止，
+                      // 召回 0（2026-09-23 第一次跑通的那一版）
+                      render: (_, c) => {
+                        const fewSeg = c.n < MIN_SEGMENTS;
+                        const short = c.sec < 60;
+                        const text = (
+                          <Typography.Text type={fewSeg || short ? "warning" : undefined} style={{ fontSize: 12 }}>
+                            {c.n} 段 / {Math.round(c.sec)} 秒
+                          </Typography.Text>
+                        );
+                        if (!fewSeg && !short) return text;
+                        return (
+                          <Tooltip
+                            title={
+                              fewSeg
+                                ? `只有 ${c.n} 段。训练按片段分组切分：一两段进训练、剩下的整段进验证——模型只见过这一类的一两个样子，时长再长也没用，验证结果基本看运气。并进别的类别，或者先攒够段数`
+                                : "不到一分钟，切成窗口没几个，这一类训不出来。并进兄弟类别，或者先攒够份量"
+                            }
+                          >
+                            {text}
+                          </Tooltip>
+                        );
+                      },
                     },
                     {
                       title: "训练时算作", width: 210,
@@ -1519,9 +1544,20 @@ export default function Training() {
                   }
                   description={
                     <Space wrap size={4}>
-                      {trainTargets.map((t) => (
-                        <Tag key={t} color={labelColor(t.split("-")[0])}>{t}</Tag>
-                      ))}
+                      {trainTargets.map((t) => {
+                        // 归并之后这一类一共多少段。单看每一行不够：几行各 2 段的并在一起可能就够了
+                        const n = trainCats.filter((c) => remapEdits[c.name] === t).reduce((a, c) => a + c.n, 0);
+                        return (
+                          <Tooltip
+                            key={t}
+                            title={n < MIN_SEGMENTS ? `一共只有 ${n} 段——验证结果不可信，这一类的 F1 别当真` : `${n} 段`}
+                          >
+                            <Tag color={n < MIN_SEGMENTS ? "warning" : labelColor(t.split("-")[0])}>
+                              {t}{n < MIN_SEGMENTS ? `（仅 ${n} 段）` : ""}
+                            </Tag>
+                          </Tooltip>
+                        );
+                      })}
                       {trainTargets.length < 2 && (
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           　在「一起训练」里掺上带「活动」「睡觉」的老批次，或者把几个类别拆成独立的
