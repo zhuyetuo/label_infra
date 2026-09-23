@@ -1113,10 +1113,80 @@ export default function Training() {
               pagination={false}
               dataSource={stats.rows}
               scroll={{ y: 420 }}
+              // 展开看细类。**大类够不等于细类够**：抓挠 1125 秒占 94%，
+              // 看着很充足，可摊开可能某个部位只有几十秒，根本训不出二级。
+              // 老数据集回不出 children，那种行就不给展开箭头
+              expandable={{
+                rowExpandable: (r) => (r.children?.length ?? 0) > 0,
+                expandedRowRender: (r) => (
+                  <Table
+                    rowKey="label"
+                    size="small"
+                    pagination={false}
+                    showHeader={false}
+                    dataSource={r.children ?? []}
+                    columns={[
+                      {
+                        title: "细类", width: 140,
+                        render: (_, k) =>
+                          k.is_root_only
+                            ? <Typography.Text type="secondary">{k.label}</Typography.Text>
+                            : <Tag color={labelColor(r.label)}>{k.label}</Tag>,
+                      },
+                      { title: "段数", dataIndex: "n_segments", width: 80,
+                        render: (v: number) => `${v} 段` },
+                      {
+                        title: "时长", width: 110,
+                        render: (_, k) =>
+                          k.seconds >= 3600
+                            ? `${(k.seconds / 3600).toFixed(2)} 小时`
+                            : `${Math.round(k.seconds)} 秒`,
+                      },
+                      {
+                        title: "占本类", width: 200,
+                        render: (_, k) => (
+                          <Space size={6}>
+                            <div style={{ width: 100, height: 6, background: "rgba(128,128,128,.25)", borderRadius: 3 }}>
+                              <div style={{
+                                width: `${Math.max(k.pct_in_parent, 0.5)}%`, height: "100%", borderRadius: 3,
+                                background: labelColor(r.label) ?? "#1677ff",
+                              }} />
+                            </div>
+                            <span style={{ fontSize: 12 }}>{k.pct_in_parent}%</span>
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: "各数据集贡献",
+                        render: (_, k) => (
+                          <Space size={4} wrap>
+                            {Object.entries(k.by_dataset).map(([n, sec]) => (
+                              <Tooltip key={n} title={`${n}：${Math.round(sec)} 秒`}>
+                                <Tag>{n.replace(/^ds_/, "")} {(sec / 60).toFixed(1)}分</Tag>
+                              </Tooltip>
+                            ))}
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                ),
+              }}
               columns={[
                 {
-                  title: "类别", dataIndex: "label", width: 110,
-                  render: (v: string) => <Tag color={labelColor(v)}>{v}</Tag>,
+                  title: "类别", dataIndex: "label", width: 160,
+                  // 有几个细类直接写在大类旁边——不展开也该知道这个大类是不是
+                  // 一整块，还是摊在好几个部位上
+                  render: (v: string, r) => (
+                    <Space size={4}>
+                      <Tag color={labelColor(v)}>{v}</Tag>
+                      {(r.children?.filter((k) => !k.is_root_only).length ?? 0) > 0 && (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {r.children!.filter((k) => !k.is_root_only).length} 个细类
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  ),
                 },
                 { title: "段数", dataIndex: "n_segments", width: 80,
                   sorter: (a, b) => a.n_segments - b.n_segments },
@@ -1158,6 +1228,10 @@ export default function Training() {
               ]}
             />
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 10 }}>
+              点左边的箭头**展开看细类**——大类够不等于细类够：抓挠总时长很长，摊到
+              头颈耳/躯干/肩胸上可能某一类只有几十秒，那就训不出二级标签，只能先当一类用。
+              「X（未细分）」是只标到大类、没往下点的那部分。
+              <br />
               「各数据集贡献」能看出某个类别是不是只有某一批数据里有——只有一份贡献的类别，
               模型很可能只是记住了那一批的场地/设备，换个场地就不认了。
             </Typography.Paragraph>

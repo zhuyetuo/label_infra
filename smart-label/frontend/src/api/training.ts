@@ -122,6 +122,18 @@ export interface DatasetCheck {
   shared_samples: { sample_code: string; task_ids: number[] }[];
 }
 
+/** 大类底下的一个细类（整条链的最后一级）。没打过二级标签的那部分叫
+ *  「X（未细分）」，不能省——省了各细类加起来就对不上大类 */
+export type LabelStatChild = {
+  label: string;
+  is_root_only: boolean;
+  n_segments: number;
+  seconds: number;
+  /** 占**本大类**的百分比，不是占全局：要回答的是"抓挠里头颈耳占多少" */
+  pct_in_parent: number;
+  by_dataset: Record<string, number>;
+};
+
 export type LabelStatRow = {
   label: string;
   n_segments: number;
@@ -129,6 +141,9 @@ export type LabelStatRow = {
   hours: number;
   pct: number;
   by_dataset: Record<string, number>;
+  /** 细类摊开。**大类够不等于细类够**——抓挠 1125 秒看着充足，
+   *  摊到头颈耳/躯干/肩胸上可能某一类只有几秒。老数据集回不出这个字段 */
+  children?: LabelStatChild[];
 };
 export type LabelStats = {
   datasets: string[];
