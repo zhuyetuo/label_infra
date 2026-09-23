@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Modal, Segmented, Spin, Typography } from "antd";
+import { Alert, Modal, Segmented, Spin, Typography } from "antd";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleMedia, getVisionScanTimeline, type VisionScanTimeline } from "@/api/samples";
 import ImuChart from "@/components/ImuChart";
@@ -48,6 +48,8 @@ function overlayOf(tl: VisionScanTimeline | undefined): ((t: number) => number[]
 export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regionsBySlot }: Props) {
   const [loading, setLoading] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
+  // 路数不对时那一句说明（后端算的，认不出场地就没有）
+  const [videoNote, setVideoNote] = useState<string | null>(null);
   const [hasCsv, setHasCsv] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [timelines, setTimelines] = useState<Record<string, VisionScanTimeline>>({});
@@ -59,6 +61,7 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regi
       setVideos([]);
       setHasCsv(false);
       setFps(null);
+      setVideoNote(null);
       setTimelines({});
       return;
     }
@@ -91,6 +94,9 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regi
           )
         ).filter((v): v is VideoSrc => v != null);
         setVideos(vids);
+        // 影棚该有三路、狗场该有两路。少了要说清少的是哪一种——**只是默默少画
+        // 一个播放器的话，人只能猜是平台坏了**
+        setVideoNote(media.video_note ?? null);
         setHasCsv(media.csv_id != null);
         setFps(media.video_fps);
       } finally {
@@ -126,6 +132,9 @@ export default function SamplePreviewModal({ sampleId, sampleCode, onClose, regi
             没框不等于没狗，只是那一帧没检出来；白色虚线是公共区里各单间的位置。
             {videos.filter((v) => timelines[v.cam] && !timelines[v.cam].points.length).map((v) => ` ${v.label} 还没扫过。`).join("")}
           </Typography.Text>
+        )}
+        {!loading && videoNote && (
+          <Alert type="warning" showIcon style={{ marginTop: 8 }} message={videoNote} />
         )}
         {!loading && videos.length === 0 && (
           <Typography.Text type="secondary">没有找到可播放的视频（可能未走标准导入流程）</Typography.Text>

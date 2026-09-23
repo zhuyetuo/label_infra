@@ -472,6 +472,7 @@ async def get_sample_media(
     cam_paths = [sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path]
     return ok(
         SampleMediaOut(
+            video_note=_video_note(sample, cam_paths, by_path),
             video1_id=by_path.get(sample.video_cam1_path),
             video2_id=by_path.get(sample.video_cam2_path),
             video3_id=by_path.get(sample.video_cam3_path),
@@ -485,6 +486,55 @@ async def get_sample_media(
         ).model_dump()
     )
 
+
+
+def _video_note(sample: Sample, cam_paths: list[str | None], by_path: dict) -> str | None:
+    """路数比该有的少时，说清少的是哪一种。没问题就返回 None（界面上不出现）。
+
+    少一路有两种完全不同的原因，补救办法也完全不同：
+
+      登记了、媒体库里没有  → 文件没传上 NAS，或者传了还没扫到。去点「立即扫描」。
+      样本上压根没登记      → 采集时那一路就没录上。去 NAS 上看这一场有几个 mp4。
+
+    不分清的话，界面上只是默默少一个播放器——人对着影棚那种"该有三路"的样本
+    看到一路，只能猜是平台坏了。实测 2026-09-22 的影棚数据里两种都有。
+    """
+    from app.services import site_layout as _sl
+
+    # 用 site_layout 那个 site_of，**不是 dog_presence_service 的**：后者只认
+    # 「一间一狗一摄像头」的场地，影棚被它故意排除在外（那边判的是"画面里
+    # 这只狗是不是唯一的狗"，影棚四只共处，答案永远是否）。拿它来认场地的话，
+    # 影棚永远是 None，这句说明就永远不出现——而影棚正是最需要它的那个。
+    site = _sl.site_of(sample.sample_code, os.path.dirname(sample.video_cam1_path or ""))
+    want = _sl.expected_cams(site, _sl.imu_of(sample.sample_code))
+    if not want:
+        return None
+    site_name = "影棚" if site == "yingpeng" else "狗场"
+    listed = [p for p in cam_paths if p]
+    playable = [p for p in listed if p in by_path]
+    if len(playable) >= len(want):
+        return None
+    head = f"{site_name}这只狗该有 {len(want)} 路画面（cam{'、cam'.join(str(c) for c in sorted(want))}），现在能播 {len(playable)} 路。"
+
+    # 登记了、媒体库里却没有：文件的事，重扫能解决
+    not_in_library = [os.path.basename(p) for p in listed if p not in by_path]
+    if not_in_library:
+        return (head + f"样本上登记了但媒体库里没有：{'、'.join(not_in_library)}——"
+                       "文件没传上 NAS，或者传了还没被扫到，去「样本」页点一次「立即扫描」。")
+
+    # 压根没登记的是哪几路。**分开说**：公共区那一路是跨 session 挂上来的，
+    # 有专门的「公共区补挂」；自己单间那一路没有就是采集时没录上，重扫一百遍
+    # 也变不出来。混成一句话的话，人会照着错的那条去白忙一趟
+    have = {c for c, _imu in (_sl.parse_cam_imu(p) for p in listed) if c}
+    gap = sorted(want - have)
+    public = set(_sl.LAYOUT[_sl.SITE_KEYS.get(site, site)]["public_cams"])
+    if gap and set(gap) <= public and site == "gouchang":
+        return (head + f"缺的是公共区俯拍那一路（cam{gap[0]}）。它是另一台采集机录的，"
+                       "属于另一个 session，导入时挂不上——去「样本」页用「公共区补挂（看报告）」"
+                       "把它挂上来，会自动算好两边的时间差。")
+    return (head + f"缺的是 cam{'、cam'.join(str(c) for c in gap)}，样本上压根没登记。"
+                   "多半是采集时那几路没开或没录上——去 NAS 上这一天的目录看看这个时间点有几个 mp4，"
+                   "只有一个就是采集端的事，平台这边没得补（重扫也变不出来）。")
 
 @scoped_router.get("/{sample_id}/ai-label-info")
 async def ai_label_info(sample_id: int, db: AsyncSession = Depends(get_db)):

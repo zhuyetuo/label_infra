@@ -133,3 +133,23 @@ def dog_code_of(sample_code: str | None, day_dir: str | None = None) -> str | No
     if site is None or imu is None:
         return None
     return LAYOUT[site]["imu"].get(imu, (None, None))[1]
+
+
+def expected_cams(site: str | None, imu: int | None) -> set[int]:
+    """这只狗这一场**本该**有哪几路画面。认不出来返回空集（不猜）。
+
+    影棚：三个机位全是公共的，四只狗共处一室——每只狗都该有 cam1~3 三路。
+    狗场：一间一狗一摄像头，所以是"自己那间 + 公共区俯拍"两路。
+
+    用处只有一个：**路数不对时能说清少的是哪一种**。少一路有两种完全不同的
+    原因——采集时那一路就没录上（该去看 NAS），还是录了但媒体库没扫到
+    （该去点「立即扫描」）。不给这个判断的话，界面上只是默默少一个播放器，
+    人看半天以为平台坏了。
+    """
+    key = SITE_KEYS.get((site or "").lower()) or (site if site in LAYOUT else None)
+    if key is None:
+        return set()
+    layout = LAYOUT[key]
+    public = set(layout["public_cams"])
+    own = (layout["imu"].get(imu) or (None, None))[0]
+    return public | ({own} if own else set())
