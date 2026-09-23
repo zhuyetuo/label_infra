@@ -209,6 +209,28 @@ export const submitTrain = (body: {
   tag?: string | null;
 }) => request.post<never, ModelVersion>("/model-versions/train", body);
 
+/** 训练日志的一段。offset 是下次该从哪儿接着要——前端只管追加 text、存下 offset */
+export type TrainLog = {
+  job_id: number;
+  status: "queued" | "running" | "done" | "failed";
+  offset: number;
+  size: number;
+  text: string;
+  /** 现在跑到哪一步了（日志里最后一行 ▶ 开头的） */
+  stage: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+};
+
+export const trainLog = (id: number, offset: number) =>
+  request.get<never, TrainLog>(`/model-versions/${id}/log`, { params: { offset } });
+
+/** 删掉这一版：算法机上的模型/预处理数据/日志 + 这边的记录。
+ *  还在跑的、正在用的会被拒绝（409），原因在报错里 */
+export const deleteModelVersion = (id: number) =>
+  request.delete<never, { deleted: string[] }>(`/model-versions/${id}`, { timeout: 90_000 });
+
 export const refreshModelVersion = (id: number) =>
   request.post<never, ModelVersion>(`/model-versions/${id}/refresh`);
 

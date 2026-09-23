@@ -250,3 +250,43 @@ async def get_remap() -> dict:
     except httpx.RequestError as e:
         return {"available": False, "error": f"连不上算法服务（imu_train 的 label_service）: {e}",
                 "table": {}, "classes": []}
+
+
+async def train_log(algo_job_id: int, offset: int = 0) -> dict:
+    """从 offset 往后读训练日志（算法服务按偏移给一段，前端拼起来就是实时滚动）。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/log"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params={"offset": offset})
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 404:
+        raise AlgoServiceError(f"算法服务找不到训练任务 #{algo_job_id}（可能已经在算法机上删掉了）")
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务 /train/{algo_job_id}/log 返回 {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+class AlgoConflict(AlgoServiceError):
+    """算法服务说这一版现在不能删（还在跑 / 正在用）。原因要原样给人看。"""
+
+
+async def delete_train(algo_job_id: int) -> dict:
+    """删掉算法机上这一版训练的全部产物。已经不在了（404）当成删成功。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.delete(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 404:
+        return {"deleted": []}
+    if resp.status_code == 409:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:300]
+        raise AlgoConflict(str(detail))
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务 DELETE /train/{algo_job_id} 返回 {resp.status_code}: {resp.text[:300]}")
+    return resp.json()

@@ -227,6 +227,18 @@ async def submit_train(
 async def list_model_versions(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ModelVersion).order_by(ModelVersion.created_at.desc()))
     rows = result.scalars().all()
+    # 还在排队/在跑的，顺手去算法机问一下现在到哪了。以前只有手动点「刷新」
+    # 才会去问，于是前端 10 秒刷一次列表也只是反复拿到同一个「排队中」——
+    # 训练早就挂了，界面上还一直排着队（2026-09-23 第一次网页训练就是这样）
+    pending = [r for r in rows if r.status in (ModelTrainStatus.queued, ModelTrainStatus.running)]
+    if pending:
+        async def _sync(r: ModelVersion) -> None:
+            try:
+                _apply_status(r, await algo_client.poll_train(r.algo_job_id))
+            except Exception:  # noqa: BLE001 问不到就算了，列表照样给
+                pass
+        await asyncio.gather(*(_sync(r) for r in pending))
+        await db.commit()
     return ok([ModelVersionOut.model_validate(r).model_dump() for r in rows])
 
 
@@ -247,6 +259,53 @@ async def refresh_model_version(version_id: int, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(row)
     return ok(ModelVersionOut.model_validate(row).model_dump())
+
+
+@router.get("/{version_id}/log")
+async def model_version_log(version_id: int, offset: int = 0, db: AsyncSession = Depends(get_db)):
+    """训练日志，从 offset 往后一段。前端每隔几秒接着要，拼起来就是实时滚动的日志。
+
+    顺手把状态也更新了：日志里看到训练结束，表格那一行却还挂着「训练中」，
+    得人再去点「刷新」——那就不叫实时了。
+    """
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        r = await algo_client.train_log(row.algo_job_id, offset)
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    algo_status = r.get("status")
+    if algo_status and algo_status != (row.status.value if hasattr(row.status, "value") else row.status):
+        try:
+            _apply_status(row, await algo_client.poll_train(row.algo_job_id))
+            await db.commit()
+        except algo_client.AlgoServiceError:
+            pass            # 状态同步是顺带的，日志照样给
+    return ok(r)
+
+
+@router.delete("/{version_id}")
+async def delete_model_version(version_id: int, db: AsyncSession = Depends(get_db)):
+    """删掉这一版：算法机上的模型/预处理数据/日志，再删这边的记录。
+
+    **先删算法机那边，成功了才删记录。** 反过来的话，算法机连不上时记录没了、
+    文件还躺在那儿——界面上再也找不到它，那些文件就成了没人管的孤儿。
+
+    还在跑的、模型正是现在推理在用的，算法服务会拒绝（409），原因原样给人看。
+    """
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        r = await algo_client.delete_train(row.algo_job_id)
+    except algo_client.AlgoConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=f"算法机那边没删成，记录先留着：{e}") from e
+    await db.delete(row)
+    await db.commit()
+    return ok({"deleted": r.get("deleted", [])})
 
 
 def _apply_status(row: ModelVersion, status_data: dict) -> None:

@@ -11,6 +11,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { claimTask, getTask } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import TrainLogModal from "@/components/TrainLogModal";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import ModelCompare from "@/components/ModelCompare";
 import type { LabelDefinition, Task } from "@/types";
@@ -22,7 +23,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, exportDataset, listDatasets, listModelVersions, refreshModelVersion, submitTrain,
+  activateModel, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -205,6 +206,9 @@ export default function Training() {
     }
   };
   const [detail, setDetail] = useState<ModelVersion | null>(null);
+  // 看哪一版的实时日志。提交训练成功后直接打开——人提交完最想知道的就是
+  // "它开始跑了没、跑到哪了"，不该让他再去列表里找
+  const [logFor, setLogFor] = useState<number | null>(null);
 
   // 调试时同一套参数要导好几遍，每次重敲一遍条件很烦。上次用的条件存下来，
   // 下次打开直接是它（项目/取法/含待审核/折叠），不用重挑一遍。
@@ -361,7 +365,7 @@ export default function Training() {
     if (!trainFor) return;
     setSubmitting(true);
     try {
-      await submitTrain({
+      const row = await submitTrain({
         dataset: {
           date: trainFor.name,
           export_json: trainFor.export_json,
@@ -387,8 +391,9 @@ export default function Training() {
         model_type: modelType,
         tag: tag.trim() || null,
       });
-      message.success("已提交训练，进度在下面的「训练记录」里看（训练要跑一段时间）");
+      message.success("已提交训练，下面是实时日志（可以关掉，之后在「训练记录」里点「日志」再看）");
       setTrainFor(null);
+      setLogFor(row.id);
       setTag("");
       qc.invalidateQueries({ queryKey: ["model-versions"] });
     } finally {
@@ -404,6 +409,24 @@ export default function Training() {
       return null;
     }
   };
+  /** 这一版的数据集参数（提交时存的那份 JSON） */
+  const specOf = (v: ModelVersion): Record<string, unknown> => {
+    try {
+      return JSON.parse(v.dataset_spec) ?? {};
+    } catch {
+      return {};
+    }
+  };
+  /** 每类的 P/R/F1。训练脚本产出的 json 里叫 per_class，键是类别名 */
+  const perClassOf = (v: ModelVersion) => {
+    const pc = metricsOf(v)?.per_class as Record<string, Record<string, number>> | undefined;
+    if (!pc) return [] as { cls: string; p: number; r: number; f1: number }[];
+    return Object.entries(pc).map(([cls, m]) => ({
+      cls, p: m.precision ?? 0, r: m.recall ?? 0, f1: m["f1-score"] ?? 0,
+    }));
+  };
+  const f1Color = (f1: number) => (f1 >= 0.8 ? "green" : f1 >= 0.6 ? "gold" : "red");
+
   const f1Of = (v: ModelVersion) => {
     const m = metricsOf(v);
     if (!m) return null;
@@ -550,73 +573,115 @@ export default function Training() {
                 pagination={{ pageSize: 20 }}
                 scroll={{ x: "max-content" }}
                 columns={[
-                  { title: "ID", dataIndex: "id", width: 60 },
+                  { title: "ID", dataIndex: "id", width: 50 },
                   {
                     title: "状态",
-                    width: 100,
+                    width: 80,
                     render: (_, v: ModelVersion) => (
                       <Tag color={STATUS_META[v.status].color}>{STATUS_META[v.status].label}</Tag>
                     ),
                   },
-                  { title: "模型", dataIndex: "model_type", width: 90 },
-                  { title: "版本/标签", dataIndex: "model_version", width: 160, render: (v: string | null) => v || "-" },
                   {
                     title: "数据集",
                     render: (_, v: ModelVersion) => {
-                      try {
-                        return (JSON.parse(v.dataset_spec) as { date?: string }).date ?? "-";
-                      } catch {
-                        return "-";
-                      }
+                      const sp = specOf(v);
+                      const extra = (sp.extra_datasets as unknown[] | undefined)?.length ?? 0;
+                      return (
+                        <Space size={4} wrap>
+                          <span>{(sp.date as string) ?? "-"}</span>
+                          {extra > 0 && <Tag>+{extra} 份</Tag>}
+                          {/* 轴数：3 轴和 6 轴的模型不能拿来直接比，一眼得看出来 */}
+                          <Tag color={Number(sp.axes) === 3 ? "purple" : undefined}>
+                            {Number(sp.axes) === 3 ? "3 轴" : "6 轴"}
+                          </Tag>
+                          <Tag>{v.model_type}</Tag>
+                        </Space>
+                      );
                     },
                   },
                   {
-                    title: "F1",
-                    width: 80,
+                    title: <Tooltip title="macro-F1：各类别 F1 的平均，每一类算一票。少数类（抓挠）训不好这个数就上不去——比准确率更能说明问题">F1</Tooltip>,
+                    width: 70,
+                    sorter: (a, b) => (f1Of(a) ?? -1) - (f1Of(b) ?? -1),
                     render: (_, v: ModelVersion) => {
                       const f1 = f1Of(v);
-                      return f1 != null ? f1.toFixed(3) : "-";
+                      return f1 != null ? <b>{f1.toFixed(3)}</b> : "-";
                     },
                   },
+                  {
+                    title: <Tooltip title="每一类自己的 F1（绿 ≥0.8，黄 ≥0.6，红 <0.6）。**看这一列比看总的 F1 有用**：静止占了大头的话总分会很好看，而抓挠可能是红的">各类 F1</Tooltip>,
+                    render: (_, v: ModelVersion) => {
+                      const pc = perClassOf(v);
+                      if (!pc.length) return "-";
+                      return (
+                        <Space size={2} wrap>
+                          {pc.map((c) => (
+                            <Tooltip key={c.cls} title={`${c.cls}：精确率 ${c.p.toFixed(2)} / 召回 ${c.r.toFixed(2)} / F1 ${c.f1.toFixed(2)}`}>
+                              <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>
+                                {c.cls} {c.f1.toFixed(2)}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </Space>
+                      );
+                    },
+                  },
+                  { title: "标签", dataIndex: "model_version", width: 110, render: (t: string | null) => t || "-" },
                   {
                     title: "提交时间",
                     dataIndex: "created_at",
-                    width: 160,
-                    render: (v: string) => v?.replace("T", " ").slice(0, 19),
+                    width: 150,
+                    render: (t: string) => t?.replace("T", " ").slice(0, 16),
                   },
                   {
                     title: "操作",
-                    render: (_, v: ModelVersion) => (
-                      <Space size={0}>
-                        <Button size="small" type="link" onClick={() => setDetail(v)}>
-                          详情
-                        </Button>
-                        <Button
-                          size="small"
-                          type="link"
-                          onClick={async () => {
-                            await refreshModelVersion(v.id);
-                            qc.invalidateQueries({ queryKey: ["model-versions"] });
-                          }}
-                        >
-                          刷新
-                        </Button>
-                        {v.status === "done" && v.model_path && (
+                    fixed: "right",
+                    render: (_, v: ModelVersion) => {
+                      const busy = v.status === "queued" || v.status === "running";
+                      return (
+                        <Space size={0}>
+                          <Button size="small" type="link" onClick={() => setLogFor(v.id)}>
+                            {busy ? "看进度" : "日志"}
+                          </Button>
+                          <Button size="small" type="link" onClick={() => setDetail(v)}>
+                            详情
+                          </Button>
+                          {v.status === "done" && v.model_path && (
+                            <Popconfirm
+                              title="让 AI 服务改用这个模型？"
+                              description="会重建推理进程池，正在跑的推理会中断；AI 服务重启后会回到配置里的默认模型"
+                              onConfirm={async () => {
+                                const r = await activateModel(v.id);
+                                message.success(`已启用：${r.classes.join("/")}`);
+                              }}
+                            >
+                              <Button size="small" type="link">
+                                启用
+                              </Button>
+                            </Popconfirm>
+                          )}
+                          {/* 删掉效果不好的那一版。每一版现在各存各的，删一版只删
+                              它自己；还在跑的、正在用的算法服务会拒绝，原因原样显示 */}
                           <Popconfirm
-                            title="让 AI 服务改用这个模型？"
-                            description="会重建推理进程池，正在跑的推理会中断；AI 服务重启后会回到配置里的默认模型"
+                            title={`删掉第 ${v.id} 版？`}
+                            description="算法机上这一版的模型、预处理数据、日志都会删掉，这条记录也一起删，删了找不回来"
+                            okButtonProps={{ danger: true }}
+                            disabled={busy}
                             onConfirm={async () => {
-                              const r = await activateModel(v.id);
-                              message.success(`已启用：${r.classes.join("/")}`);
+                              const r = await deleteModelVersion(v.id);
+                              message.success(`已删除，清掉了 ${r.deleted.length} 处文件`);
+                              qc.invalidateQueries({ queryKey: ["model-versions"] });
                             }}
                           >
-                            <Button size="small" type="link">
-                              启用此模型
-                            </Button>
+                            <Tooltip title={busy ? "还在跑，等它结束再删" : undefined}>
+                              <Button size="small" type="link" danger disabled={busy}>
+                                删除
+                              </Button>
+                            </Tooltip>
                           </Popconfirm>
-                        )}
-                      </Space>
-                    ),
+                        </Space>
+                      );
+                    },
                   },
                 ]}
               />
@@ -1393,6 +1458,12 @@ export default function Training() {
         )}
       </Modal>
 
+      <TrainLogModal
+        versionId={logFor}
+        onClose={() => setLogFor(null)}
+        onFinished={() => qc.invalidateQueries({ queryKey: ["model-versions"] })}
+      />
+
       <Modal title={`训练详情 #${detail?.id ?? ""}`} open={detail != null} onCancel={() => setDetail(null)} footer={null} width={720}>
         {detail && (
           <Descriptions column={1} size="small" bordered>
@@ -1400,11 +1471,64 @@ export default function Training() {
               <Tag color={STATUS_META[detail.status].color}>{STATUS_META[detail.status].label}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="模型路径">{detail.model_path || "-"}</Descriptions.Item>
-            <Descriptions.Item label="数据集参数">
-              <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.dataset_spec}</pre>
+            {/* 效果放最前面：点进详情最想知道的就是"这一版到底怎么样"，
+                原来是一坨原始 JSON，得自己在里面找 per_class */}
+            {perClassOf(detail).length > 0 && (
+              <Descriptions.Item label="各类效果">
+                <Table
+                  size="small"
+                  rowKey="cls"
+                  pagination={false}
+                  dataSource={perClassOf(detail)}
+                  columns={[
+                    { title: "类别", dataIndex: "cls" },
+                    { title: "精确率", dataIndex: "p", render: (x: number) => x.toFixed(3) },
+                    { title: "召回", dataIndex: "r", render: (x: number) => x.toFixed(3) },
+                    {
+                      title: "F1", dataIndex: "f1",
+                      render: (x: number) => <Tag color={f1Color(x)}>{x.toFixed(3)}</Tag>,
+                    },
+                  ]}
+                />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  准确率 {(Number(metricsOf(detail)?.accuracy) || 0).toFixed(3)}，
+                  macro-F1 {(f1Of(detail) ?? 0).toFixed(3)}。
+                  精确率低 = 报出来的里面混了别的类别；召回低 = 这一类很多没报出来。
+                </Typography.Text>
+              </Descriptions.Item>
+            )}
+            <Descriptions.Item label="训练设置">
+              {(() => {
+                const sp = specOf(detail);
+                const remap = (sp.label_remap as Record<string, string> | undefined) ?? {};
+                const targets = [...new Set(Object.values(remap))];
+                return (
+                  <Space direction="vertical" size={2}>
+                    <span>
+                      {(sp.date as string) ?? "-"}
+                      {((sp.extra_datasets as { date: string }[] | undefined) ?? []).map((e) => ` + ${e.date}`).join("")}
+                    </span>
+                    <span>
+                      {Number(sp.axes) === 3 ? "3 轴（只用加速度）" : "6 轴（加速度+陀螺仪）"} ·
+                      原始 {String(sp.source_hz ?? "-")}Hz → 训练 {String(sp.hz ?? "-")}Hz · {detail.model_type}
+                      {sp.skip_syn ? " · 跳过合成数据" : ""}
+                    </span>
+                    {targets.length > 0 && (
+                      <span>
+                        训练类别：{targets.map((t) => <Tag key={t}>{t}</Tag>)}
+                      </span>
+                    )}
+                  </Space>
+                );
+              })()}
             </Descriptions.Item>
-            <Descriptions.Item label="指标">
-              <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.metrics || "-"}</pre>
+            <Descriptions.Item label="原始参数 / 指标">
+              {/* 原样的 JSON 留着排查用，但收起来——不该是人第一眼看到的东西 */}
+              <details>
+                <summary style={{ cursor: "pointer" }}>展开</summary>
+                <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.dataset_spec}</pre>
+                <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.metrics || "-"}</pre>
+              </details>
             </Descriptions.Item>
             {detail.error && (
               <Descriptions.Item label="错误">
