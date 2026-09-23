@@ -142,8 +142,11 @@ export type LabelStatRow = {
   pct: number;
   by_dataset: Record<string, number>;
   /** 细类摊开。**大类够不等于细类够**——抓挠 1125 秒看着充足，
-   *  摊到头颈耳/躯干/肩胸上可能某一类只有几秒。老数据集回不出这个字段 */
-  children?: LabelStatChild[];
+   *  摊到头颈耳/躯干/肩胸上可能某一类只有几秒。老数据集回不出这个字段。
+   *
+   *  **不叫 children**：antd 的 Table 会把 dataSource 里的 children 当成树形
+   *  子行自动展开，跟下面自己写的明细表叠在一起，每个细类出现两次。 */
+  sub_labels?: LabelStatChild[];
 };
 export type LabelStats = {
   datasets: string[];
