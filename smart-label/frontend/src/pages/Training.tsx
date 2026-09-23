@@ -56,6 +56,10 @@ const leafOf = (r: DatasetSegment): string =>
 
 const EXPORT_RANGE_KEY = "export-date-range";
 
+/** 「不参与训练」那一项的值。存进表里是空字符串，但空字符串当不了 Select 的
+ *  value（antd 当成"没选"），所以下拉里用这个哨兵 */
+const DROP = "__drop__";
+
 export default function Training() {
   const qc = useQueryClient();
   const { data: datasets, isLoading: loadingDs } = useQuery({ queryKey: ["train-datasets"], queryFn: listDatasets });
@@ -1279,7 +1283,10 @@ export default function Training() {
                           style={{ width: 195 }}
                           placeholder="不参与训练"
                           value={remapEdits[c.name] || undefined}
-                          onChange={(v) => setRemapEdits((m) => ({ ...m, [c.name]: v ?? "" }))}
+                          // DROP 是"不参与训练"的哨兵值，存进去是空字符串——
+                          // 空字符串当不了 Select 的 value（antd 会当成"没选"，
+                          // 于是选项永远选不中、看着像没生效）
+                          onChange={(v) => setRemapEdits((m) => ({ ...m, [c.name]: v === DROP || v == null ? "" : v }))}
                           options={[
                             // 自成一类排第一：**这就是「识别出是什么抓挠」的做法**，
                             // 选了它这一类就是一个独立的训练类别
@@ -1288,10 +1295,14 @@ export default function Training() {
                             ...(remap?.classes ?? [])
                               .filter((v) => v !== c.name)
                               .map((v) => ({ value: v, label: v })),
-                            // 最后是同批数据里的别的类别，用来把太少的细类并进兄弟
+                            // 同批数据里的别的类别，用来把太少的细类并进兄弟
                             ...trainCats
                               .filter((o) => o.name !== c.name && !(remap?.classes ?? []).includes(o.name))
                               .map((o) => ({ value: o.name, label: `并进 ${o.name}` })),
+                            // **「不参与训练」得是一个真选项。** 原来它只是 placeholder，
+                            // 想清空只能去点那个悬停才出现的小 ✕——没人找得到，而
+                            // "这一类干脆不要"恰恰是常用操作（份量太少、这次不训它）
+                            { value: DROP, label: "不参与训练（丢掉这些样本）" },
                           ]}
                         />
                       ),
