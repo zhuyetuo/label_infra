@@ -23,7 +23,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -56,6 +56,49 @@ const leafOf = (r: DatasetSegment): string =>
   r.labels?.length ? r.labels[r.labels.length - 1] : r.label;
 
 const EXPORT_RANGE_KEY = "export-date-range";
+
+/** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
+type TrainOpts = {
+  modelType?: string;
+  sourceHz?: number;
+  hz?: number;
+  axes?: number;
+  skipSyn?: boolean;
+  extraDs?: string[];
+  extraHz?: Record<string, number>;
+  remapEdits?: Record<string, string>;
+};
+const TRAIN_OPTS_KEY = "train-submit-opts";
+
+function loadTrainOpts(): { byDataset: Record<string, TrainOpts>; last: TrainOpts | null } {
+  try {
+    const v = JSON.parse(localStorage.getItem(TRAIN_OPTS_KEY) || "null");
+    if (v && typeof v === "object") return { byDataset: v.byDataset ?? {}, last: v.last ?? null };
+  } catch {
+    // 存的东西坏了不该让弹窗打不开，当没存过
+  }
+  return { byDataset: {}, last: null };
+}
+
+function saveTrainOpts(dataset: string, opts: TrainOpts) {
+  try {
+    const cur = loadTrainOpts();
+    // 先删再插：对象的键按**首次**插入的顺序排，直接覆盖不会把它挪到末尾，
+    // 下面"只留最近 30 份"就会把刚用过的那份当成最老的删掉
+    delete cur.byDataset[dataset];
+    cur.byDataset[dataset] = opts;
+    // 数据集会越攒越多：只留最近 30 份的，免得 localStorage 被撑满
+    const names = Object.keys(cur.byDataset);
+    if (names.length > 30) {
+      for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
+    }
+    const { modelType, sourceHz, hz, axes, skipSyn } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, skipSyn };
+    localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
+  } catch {
+    // 存不了就算了，不影响这次提交
+  }
+}
 
 /** 「不参与训练」那一项的值。存进表里是空字符串，但空字符串当不了 Select 的
  *  value（antd 当成"没选"），所以下拉里用这个哨兵 */
@@ -354,10 +397,34 @@ export default function Training() {
 
   /** 打开「提交训练」。上一次选的一起训练/归并不能留着——换了数据集那些
    *  类别名根本对不上，留着等于把上一份的设置悄悄套到这一份头上 */
+  /**
+   * 打开「提交训练」：**同一份数据集按上次提交时的那一套恢复**。
+   *
+   * 调试就是同一份数据反复训——改一个选项、看一眼结果、再改。每次都从头勾一遍
+   * 轴数、合成数据、一起训练、十几行归并，光这个就比训练本身烦。
+   *
+   * 换了一份没训过的数据集：通用的那几个（模型、采样率、轴数、合成数据）沿用
+   * 上一次的——人一般是一路按同一套设置在试；跟数据集绑定的（一起训练哪几份、
+   * 归并表）清空，那些类别名换了数据集根本对不上，带过来等于悄悄套了一份错的。
+   * 标签不记：它是给这一次起的名字。
+   */
   const openTrain = (d: TrainDataset) => {
-    setExtraDs([]);
-    setExtraHz({});
-    setRemapEdits({});     // 类别还没查出来，下面那个 effect 按默认表填
+    const saved = loadTrainOpts();
+    const mine = saved.byDataset[d.name];
+    const base = mine ?? saved.last;
+    if (base) {
+      if (base.modelType) setModelType(base.modelType);
+      if (base.sourceHz) setSourceHz(base.sourceHz);
+      if (base.hz) setHz(base.hz);
+      if (base.axes) setAxes(base.axes);
+      if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
+    }
+    // 一起训练的那几份：删掉了的数据集别再选着——选择框里会出现一个认不出的名字
+    const alive = new Set((datasets ?? []).map((x) => x.name));
+    setExtraDs(mine ? (mine.extraDs ?? []).filter((n) => alive.has(n) && n !== d.name) : []);
+    setExtraHz(mine?.extraHz ?? {});
+    // 归并表：恢复上次的；这次多出来的类别，下面那个 effect 按默认表补上
+    setRemapEdits(mine?.remapEdits ?? {});
     setTrainFor(d);
   };
 
@@ -390,6 +457,11 @@ export default function Training() {
         },
         model_type: modelType,
         tag: tag.trim() || null,
+      });
+      saveTrainOpts(trainFor.name, {
+        modelType, sourceHz, hz, axes, skipSyn, extraDs, extraHz,
+        // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
+        remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
       message.success("已提交训练，下面是实时日志（可以关掉，之后在「训练记录」里点「日志」再看）");
       setTrainFor(null);
@@ -660,25 +732,42 @@ export default function Training() {
                               </Button>
                             </Popconfirm>
                           )}
-                          {/* 删掉效果不好的那一版。每一版现在各存各的，删一版只删
-                              它自己；还在跑的、正在用的算法服务会拒绝，原因原样显示 */}
-                          <Popconfirm
-                            title={`删掉第 ${v.id} 版？`}
-                            description="算法机上这一版的模型、预处理数据、日志都会删掉，这条记录也一起删，删了找不回来"
-                            okButtonProps={{ danger: true }}
-                            disabled={busy}
-                            onConfirm={async () => {
-                              const r = await deleteModelVersion(v.id);
-                              message.success(`已删除，清掉了 ${r.deleted.length} 处文件`);
-                              qc.invalidateQueries({ queryKey: ["model-versions"] });
-                            }}
-                          >
-                            <Tooltip title={busy ? "还在跑，等它结束再删" : undefined}>
-                              <Button size="small" type="link" danger disabled={busy}>
+                          {/* 在跑的给「停止」，结束了的给「删除」。原来在跑的只有一个
+                              灰掉的删除——而服务一重启，那些任务就永远是「训练中」，
+                              删也删不掉、停也停不了（2026-09-23 就是这样） */}
+                          {busy ? (
+                            <Popconfirm
+                              title={`停掉第 ${v.id} 版的训练？`}
+                              description="整个训练进程一起停掉，停了之后可以删"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={async () => {
+                                await cancelModelVersion(v.id);
+                                message.success("已停止");
+                                qc.invalidateQueries({ queryKey: ["model-versions"] });
+                              }}
+                            >
+                              <Button size="small" type="link" danger>
+                                停止
+                              </Button>
+                            </Popconfirm>
+                          ) : (
+                            /* 删掉效果不好的那一版。每一版各存各的，删一版只删它自己；
+                               正在用的那个算法服务会拒绝，原因原样显示 */
+                            <Popconfirm
+                              title={`删掉第 ${v.id} 版？`}
+                              description="算法机上这一版的模型、预处理数据、日志都会删掉，这条记录也一起删，删了找不回来"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={async () => {
+                                const r = await deleteModelVersion(v.id);
+                                message.success(`已删除，清掉了 ${r.deleted.length} 处文件`);
+                                qc.invalidateQueries({ queryKey: ["model-versions"] });
+                              }}
+                            >
+                              <Button size="small" type="link" danger>
                                 删除
                               </Button>
-                            </Tooltip>
-                          </Popconfirm>
+                            </Popconfirm>
+                          )}
                         </Space>
                       );
                     },

@@ -130,3 +130,33 @@ def test_日志里看到结束了_表格那一行也跟着变(db, run, monkeypat
     assert out["data"]["text"] == "完成\n"
     got = run(db.get(ModelVersion, row.id))
     assert got.status == ModelTrainStatus.done and got.model_path == "/x/ml_rf.pkl"
+
+
+# ── 停止 ────────────────────────────────────────────────────────────────
+
+
+def test_停止之后状态变成失败_就能删了(db, run, monkeypatch):
+    """在跑的原来只有一个灰掉的删除——服务一重启，它就永远「训练中」，
+    删也删不掉、停也停不了。"""
+    row = _row(db, run, status=ModelTrainStatus.running)
+
+    async def cancel(jid):
+        return {"status": "failed", "error": "手动停止"}
+
+    monkeypatch.setattr(algo_client, "cancel_train", cancel)
+    out = run(mv.cancel_model_version(row.id, db))
+    assert out["data"]["status"] == "failed"
+    assert out["data"]["error"] == "手动停止"
+
+
+def test_停止时算法机连不上_状态不动(db, run, monkeypatch):
+    row = _row(db, run, status=ModelTrainStatus.running)
+
+    async def cancel(jid):
+        raise algo_client.AlgoServiceError("连不上")
+
+    monkeypatch.setattr(algo_client, "cancel_train", cancel)
+    with pytest.raises(HTTPException) as e:
+        run(mv.cancel_model_version(row.id, db))
+    assert e.value.status_code == 502
+    assert run(db.get(ModelVersion, row.id)).status == ModelTrainStatus.running
