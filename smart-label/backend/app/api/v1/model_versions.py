@@ -238,8 +238,16 @@ async def list_model_versions(db: AsyncSession = Depends(get_db)):
             except Exception:  # noqa: BLE001 问不到就算了，列表照样给
                 pass
         await asyncio.gather(*(_sync(r) for r in pending))
+    # **先序列化，再 commit。** updated_at 是 onupdate=func.now()，值是数据库那边
+    # 算的：更新过的行一 flush，SQLAlchemy 就把这个字段标成"得回库里重读"（跟
+    # expire_on_commit 无关）。commit 之后再序列化，读 updated_at 就触发一次隐式
+    # 查库——异步会话里那是 MissingGreenlet，整个列表接口 500。界面上就是一个
+    # 「ValidationError」弹窗，列表停在旧状态，删除按钮一直灰着。
+    # 同步夹具里隐式查库是合法的，所以这个只有用真的异步会话才测得出来
+    out = [ModelVersionOut.model_validate(r).model_dump() for r in rows]
+    if pending:
         await db.commit()
-    return ok([ModelVersionOut.model_validate(r).model_dump() for r in rows])
+    return ok(out)
 
 
 @router.post("/{version_id}/refresh")
@@ -283,6 +291,23 @@ async def model_version_log(version_id: int, offset: int = 0, db: AsyncSession =
         except algo_client.AlgoServiceError:
             pass            # 状态同步是顺带的，日志照样给
     return ok(r)
+
+
+@router.post("/{version_id}/cancel")
+async def cancel_model_version(version_id: int, db: AsyncSession = Depends(get_db)):
+    """停掉这一版的训练。停了之后状态是失败（原因「手动停止」），就能删了。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        status_data = await algo_client.cancel_train(row.algo_job_id)
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    _apply_status(row, status_data)
+    # 跟列表那里同一个坑：先序列化再 commit（updated_at 是数据库那边算的）
+    out = ModelVersionOut.model_validate(row).model_dump()
+    await db.commit()
+    return ok(out)
 
 
 @router.delete("/{version_id}")

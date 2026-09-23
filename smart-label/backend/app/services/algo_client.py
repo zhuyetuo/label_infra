@@ -290,3 +290,18 @@ async def delete_train(algo_job_id: int) -> dict:
     if resp.status_code != 200:
         raise AlgoServiceError(f"算法服务 DELETE /train/{algo_job_id} 返回 {resp.status_code}: {resp.text[:300]}")
     return resp.json()
+
+
+async def cancel_train(algo_job_id: int) -> dict:
+    """停掉算法机上一个排队中/在跑的训练（整个进程组一起停）。返回停之后的任务状态。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/cancel"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 404:
+        raise AlgoServiceError(f"算法服务找不到训练任务 #{algo_job_id}")
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务 /train/{algo_job_id}/cancel 返回 {resp.status_code}: {resp.text[:300]}")
+    return resp.json()

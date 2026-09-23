@@ -231,6 +231,10 @@ export const trainLog = (id: number, offset: number) =>
 export const deleteModelVersion = (id: number) =>
   request.delete<never, { deleted: string[] }>(`/model-versions/${id}`, { timeout: 90_000 });
 
+/** 停掉这一版的训练（整个进程组一起停）。停了之后状态是失败，就能删了 */
+export const cancelModelVersion = (id: number) =>
+  request.post<never, ModelVersion>(`/model-versions/${id}/cancel`, undefined, { timeout: 40_000 });
+
 export const refreshModelVersion = (id: number) =>
   request.post<never, ModelVersion>(`/model-versions/${id}/refresh`);
 
