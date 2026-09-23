@@ -143,6 +143,20 @@ async def infer(
     return resp.json()
 
 
+def stamp_spec(rows: list[dict], spec: str) -> list[dict]:
+    """结果里的 mode 换成完整版本串（srv:train6@viterbi）。
+
+    AI 服务回的 mode 只是后处理名（viterbi），而训练出来的模型文件名跟默认模型
+    一样都叫 ml_rf.pkl——不换的话 (模型, 版本) 两个都撞：历史记录显示成
+    「稳定版 v2 · ml_rf.pkl」，结果索引还会把默认模型那份盖掉（2026-09-23 训练记录 #6）。
+    """
+    for r in rows:
+        res = r.get("result") if isinstance(r, dict) else None
+        if isinstance(res, dict):
+            res["mode"] = spec
+    return rows
+
+
 async def infer_spec(items: list[dict], spec: str) -> list[dict]:
     """按完整版本串（`srv:<标签>[@后处理]`）跑。
 

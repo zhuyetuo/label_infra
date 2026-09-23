@@ -383,9 +383,9 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
             # algo_client.infer 的话，`srv:acc3` 不在 raw/stable/viterbi 里，
             # _mode() 会把它**当成没传**、退回默认后处理和默认模型——
             # 而结果存进库里标着 srv:acc3。**没有任何迹象。**
-            rows = await algo_client.infer_spec(
+            rows = algo_client.stamp_spec(await algo_client.infer_spec(
                 [{"path": sample.imu_csv_path, "sample_id": sample.id,
-                  "device_hz": sample.sample_hz}], mode)
+                  "device_hz": sample.sample_hz}], mode), mode)
             if not rows or not rows[0].get("ok"):
                 raise PrelabelError(
                     f"推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
