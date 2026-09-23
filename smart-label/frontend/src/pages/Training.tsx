@@ -68,6 +68,7 @@ type TrainOpts = {
   sourceHz?: number;
   hz?: number;
   axes?: number;
+  edgeSize?: boolean;
   skipSyn?: boolean;
   extraDs?: string[];
   extraHz?: Record<string, number>;
@@ -97,8 +98,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
     if (names.length > 30) {
       for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
     }
-    const { modelType, sourceHz, hz, axes, skipSyn } = opts;
-    cur.last = { modelType, sourceHz, hz, axes, skipSyn };
+    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn };
     localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
   } catch {
     // 存不了就算了，不影响这次提交
@@ -192,6 +193,8 @@ export default function Training() {
   const [sourceHz, setSourceHz] = useState<number>(50);
   // 用几轴。6=加速度+陀螺仪（默认），3=只用加速度——**端侧只有加速度计时用 3**
   const [axes, setAxes] = useState<number>(6);
+  // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
+  const [edgeSize, setEdgeSize] = useState(false);
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
   const [tag, setTag] = useState("");
@@ -423,6 +426,7 @@ export default function Training() {
       if (base.hz) setHz(base.hz);
       if (base.axes) setAxes(base.axes);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
+      if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
     }
     // 一起训练的那几份：删掉了的数据集别再选着——选择框里会出现一个认不出的名字
     const alive = new Set((datasets ?? []).map((x) => x.name));
@@ -457,6 +461,7 @@ export default function Training() {
           source_hz: sourceHz,
           hz,
           axes,
+          edge_size: edgeSize,
           skip_syn: skipSyn,
           clean: true,
         },
@@ -464,7 +469,7 @@ export default function Training() {
         tag: tag.trim() || null,
       });
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, skipSyn, extraDs, extraHz,
+        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -672,6 +677,9 @@ export default function Training() {
                             {Number(sp.axes) === 3 ? "3 轴" : "6 轴"}
                           </Tag>
                           <Tag>{v.model_type}</Tag>
+                          {/* 端侧尺寸的跟不限深的大模型不能直接比分数：一个要塞进 128KB，
+                              一个没限制。混在一起看，端侧那版永远像是"更差的那个" */}
+                          {Boolean(sp.edge_size) && <Tag color="cyan">端侧尺寸</Tag>}
                         </Space>
                       );
                     },
@@ -1382,6 +1390,22 @@ export default function Training() {
                 ]}
                 optionType="button"
               />
+            </Space>
+            <Space>
+              <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
+                <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB；板子给模型留的 flash 大约 128KB，差两三个数量级。勾上之后用端侧那套超参（xgb 50 轮×深 6、rf 限深 4），训完才导得出去">
+                  <span style={{ borderBottom: "1px dashed #666" }}>端侧尺寸（要烧进项圈就勾）</span>
+                </Tooltip>
+              </Checkbox>
+              {edgeSize && modelType === "rf" && (
+                // 端侧配置里明写了：rf 压到塞得下只剩 4 层，已经欠拟合。
+                // 不硬改人的选择，但得说出来——选了 rf 训出一个很差的端侧模型，
+                // 人会以为是 3 轴不行，而其实是模型挑错了
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                  端侧建议选 xgb：rf 压到塞得下只剩 4 层，欠拟合。
+                  <a onClick={() => setModelType("xgb")}>换成 xgb</a>
+                </Typography.Text>
+              )}
             </Space>
             {axes === 3 && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
