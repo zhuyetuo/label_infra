@@ -258,6 +258,11 @@ export default function Training() {
         );
         // 「沿用上次」要指向刚导的这份，不然它还指着更早的那一份
         setLastName(name.trim());
+        // 日期范围也在这儿存一份。**只在手动动选择器时存是不够的**：用着默认的
+        // 「最近 30 天」直接导出的话什么都没存下，而那个默认值每天往后挪一天，
+        // 下次打开看到的是另一个区间——看起来就像没记住
+        saveRange(EXPORT_RANGE_KEY,
+                  range ? [range[0].format("YYYY-MM-DD"), range[1].format("YYYY-MM-DD")] : null);
       } catch {
         // 存不下（隐私模式/满了）不影响导出本身
       }
@@ -627,10 +632,13 @@ export default function Training() {
             把这段日期里的标注导成训练数据。人工纠正过的 AI 片段、人工新增的、从「疑似抓挠」里确认或
             改成别的类别的，都算数；标了「待定」的和采集掉数据的时段会挖掉。下面选按什么范围取。
           </Typography.Paragraph>
-          <Space>
-            <Typography.Text>数据集名</Typography.Text>
+          {/* 标签 + 输入框占一行，两个次要操作另起一行。
+              挤在一行里的话（弹窗只有 520 宽）标签会被压成竖排的「数 据 集 名」，
+              右边那个还会溢出到框外去 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Typography.Text style={{ whiteSpace: "nowrap" }}>数据集名</Typography.Text>
             <AutoComplete
-              style={{ width: 260 }}
+              style={{ flex: 1, minWidth: 0 }}
               value={name}
               onChange={setName}
               placeholder="字母/数字/下划线"
@@ -640,16 +648,19 @@ export default function Training() {
                 (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())
               }
             />
+          </div>
+          <Space size={0} wrap>
             <Button size="small" type="link" onClick={() => setName(`ds_${dayjs().format("YYYYMMDD_HHmm")}`)}>
               换个新名字
             </Button>
             {/* 想覆盖上次那份是合理需求（同一套条件重导），但得是明说的——
                 默认沿用的话，「训练记录」里引用着它的那条记录会指向新数据，
-                而且一点痕迹都没有 */}
+                而且一点痕迹都没有。点了之后下面那条黄字会说清会覆盖，
+                所以按钮上不用再写一遍，省得这一行又撑开 */}
             {lastName && lastName !== name && (
-              <Tooltip title={`上次导的是「${lastName}」。用同一个名字会原地覆盖那份数据`}>
+              <Tooltip title={`上次导的是「${lastName}」，用同一个名字会原地覆盖那份数据`}>
                 <Button size="small" type="link" onClick={() => setName(lastName)}>
-                  沿用上次（会覆盖）
+                  沿用上次
                 </Button>
               </Tooltip>
             )}
