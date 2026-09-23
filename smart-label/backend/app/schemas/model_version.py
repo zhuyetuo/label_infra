@@ -32,6 +32,9 @@ class DatasetSpecIn(BaseModel):
     # **端侧只有加速度计时要用 3**——否则模型学的是板上根本没有的信号，
     # 服务端指标再好也代表不了端上的表现
     axes: int = 6
+    # 端侧尺寸：用 imu_train 的 configs/ml_edge.yaml（限深限棵数），模型才塞得进
+    # 板子给模型留的约 128KB flash。默认那份是 200 棵不限深的森林，几十 MB
+    edge_size: bool = False
     missing_strategy: str | None = None
     skip_syn: bool = False
     # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。

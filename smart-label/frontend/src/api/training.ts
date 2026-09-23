@@ -199,6 +199,8 @@ export const submitTrain = (body: {
     label_remap?: Record<string, string>;
     /** 用几轴：6=加速度+陀螺仪，3=只用加速度（端侧没有陀螺仪时用） */
     axes?: number;
+    /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
+    edge_size?: boolean;
     missing_strategy?: string | null;
     skip_syn?: boolean;
     source_hz?: number | null;
