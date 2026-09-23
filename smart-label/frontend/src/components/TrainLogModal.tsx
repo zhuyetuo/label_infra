@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Checkbox, Modal, Space, Tag, Typography } from "antd";
 import { trainLog, type TrainLog } from "@/api/training";
 
@@ -23,6 +23,31 @@ const STATUS: Record<TrainLog["status"], { color: string; label: string }> = {
   done: { color: "success", label: "完成" },
   failed: { color: "error", label: "失败" },
 };
+
+/**
+ * 按终端的规矩渲染日志：`\r` 是"回到行首覆盖"，一行里只留最后一次写的内容。
+ *
+ * 进度条（tqdm 这类）就是靠 `\r` 把同一行反复刷新的——终端里看是一行在跳，
+ * 原样写进文件就是几百个进度条首尾相连挤成一大坨（2026-09-23 第一次网页训练，
+ * 「生成训练 CSV」那一步糊了半屏）。
+ *
+ * 还没换行的最后一行（进度条正在跑）也照这个处理，显示的就是最新进度。
+ * 顺带去掉 ANSI 控制码：进度条会发 ESC[A 之类的"光标上移"，浏览器里只会显示成乱码。
+ */
+export function renderTerminal(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  const noAnsi = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  return noAnsi
+    .split("\n")
+    .map((line) => {
+      if (!line.includes("\r")) return line;
+      // 末尾正好是 \r 的话最后一段是空的——取最后一段有内容的
+      const segs = line.split("\r");
+      for (let i = segs.length - 1; i >= 0; i--) if (segs[i]) return segs[i];
+      return "";
+    })
+    .join("\n");
+}
 
 function fmtDur(sec: number) {
   const m = Math.floor(sec / 60);
@@ -129,6 +154,10 @@ export default function TrainLogModal({
     if (follow && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
   }, [text, follow]);
 
+  // text 存原样（下一段接着追加时，一行可能正好切在进度条中间，得等拼齐了再处理），
+  // 显示的时候再按终端规矩折叠
+  const shown = useMemo(() => renderTerminal(text), [text]);
+
   const st = info ? STATUS[info.status] : null;
   const elapsed =
     info?.started_at != null
@@ -195,7 +224,7 @@ export default function TrainLogModal({
           borderRadius: 6,
         }}
       >
-        {text || (info?.status === "queued" ? "排队中，还没开始跑…" : "等日志…")}
+        {shown || (info?.status === "queued" ? "排队中，还没开始跑…" : "等日志…")}
       </pre>
     </Modal>
   );
