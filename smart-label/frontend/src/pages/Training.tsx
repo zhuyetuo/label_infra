@@ -1393,17 +1393,19 @@ export default function Training() {
             </Space>
             <Space>
               <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
-                <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB；板子给模型留的 flash 大约 128KB，差两三个数量级。勾上之后用端侧那套超参（xgb 50 轮×深 6、rf 限深 4），训完才导得出去">
+                <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB，板子上装不下。勾上之后：rf = 20 棵 × 深 10，跟板上现在跑的 edge_rf_d10 同规格；xgb = 50 轮 × 深 6">
                   <span style={{ borderBottom: "1px dashed #666" }}>端侧尺寸（要烧进项圈就勾）</span>
                 </Tooltip>
               </Checkbox>
-              {edgeSize && modelType === "rf" && (
-                // 端侧配置里明写了：rf 压到塞得下只剩 4 层，已经欠拟合。
-                // 不硬改人的选择，但得说出来——选了 rf 训出一个很差的端侧模型，
-                // 人会以为是 3 轴不行，而其实是模型挑错了
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                  端侧建议选 xgb：rf 压到塞得下只剩 4 层，欠拟合。
-                  <a onClick={() => setModelType("xgb")}>换成 xgb</a>
+              {edgeSize && (
+                // 写清楚这次用的是哪个规格：端侧尺寸训出来的跟不限深的大模型不能直接
+                // 比分数，人得知道自己训的是多大的
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {modelType === "rf"
+                    ? "rf：20 棵 × 深 10，跟板上 edge_rf_d10 同规格"
+                    : modelType === "xgb"
+                      ? "xgb：50 轮 × 深 6"
+                      : `${modelType} 用端侧那套超参（configs/ml_edge.yaml），能不能导到板上要看 algo_tinyml 支不支持这种模型`}
                 </Typography.Text>
               )}
             </Space>
