@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listEdgeModels, listServerModels } from "@/api/modelEval";
+import { listModelVersions } from "@/api/training";
 import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
 
 /**
@@ -54,6 +55,20 @@ export function useInferModes() {
     retry: false,
   });
 
+  // 训练记录：把算法服务里的 train<任务号> 对回平台上的「训练记录 #N」。
+  // 两边的号不是一个——平台的 id 是这边数据库自增的，算法那边是它自己的任务号
+  const { data: versions } = useQuery({
+    queryKey: ["model-versions"],
+    queryFn: listModelVersions,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const versionIdOf = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const v of versions ?? []) m.set(v.algo_job_id, v.id);
+    return m;
+  }, [versions]);
+
   const edgeModels = data?.models ?? [];
   // 默认模型不列：它就是「稳定版 / 稳定版 v2 / 调试版」那三行
   const serverModels = (srv?.models ?? []).filter((m) => !m.is_default && m.spec);
@@ -74,18 +89,31 @@ export function useInferModes() {
           // 标签**只留名字**，差异放在下拉旁边那个问号里（InferModeHelp）。
           // 用 tag 不用 name：name 是目录名（.../rf/ml_rf.pkl → "rf"），
           // 挂两个模型的话会显示成两个一模一样的"rf"
-          options: serverModels.flatMap((m) => [
+          options: serverModels.flatMap((m) => {
+            // 训练记录里训出来的那几版：显示成「训练记录 #N · 3轴 · F1 0.53」，
+            // 而不是算法服务内部的 train1——人是从训练记录那一页过来的，认的是那个号
+            const t = m.train;
+            const vid = t ? versionIdOf.get(t.job_id) : undefined;
+            const name = t
+              ? `训练记录 #${vid ?? `?(算法#${t.job_id})`} · ${t.axes === 3 ? "3轴" : "6轴"}` +
+                (typeof t.macro_f1 === "number" ? ` · F1 ${t.macro_f1.toFixed(2)}` : "")
+              : m.tag;
+            const origin = t
+              ? `训练记录里训出来的（数据集 ${t.dataset ?? "?"}${t.classes ? `，类别：${t.classes.join("/")}` : ""}）。`
+              : "";
+            return [
             {
-              label: `${m.tag} · 稳定版 v2`,
+              label: `${name} · 稳定版 v2`,
               value: m.spec as string,
-              title: `服务端推理。后处理跟线上「稳定版 v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
+              title: `${origin}服务端推理。后处理跟线上「稳定版 v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
             },
             {
-              label: `${m.tag} · 调试版`,
+              label: `${name} · 调试版`,
               value: (m.spec_raw ?? `${m.spec}@raw`) as string,
-              title: `模型逐窗口原始输出，不做后处理。用来看这个模型到底说了什么。${m.model_path}`,
+              title: `${origin}模型逐窗口原始输出，不做后处理。用来看这个模型到底说了什么。${m.model_path}`,
             },
-          ]),
+          ];
+          }),
         }]
       : [];
 
@@ -130,10 +158,16 @@ export function useInferModes() {
         }),
       },
     ];
-  }, [edgeModels, serverModels]);
+  }, [edgeModels, serverModels, versionIdOf]);
+
+  // 「其它模型」这一组单独给出去：模型对比那页自己拼下拉（它要的是"跑哪几个
+  // 版本做评测"，不是"用哪个铺草稿"），但这一组得跟这里是同一份——以前它漏了
+  // 这组，训练记录里训出来的那一版在模型对比里根本选不到
+  const serverGroup = options.find((g) => "label" in g && g.label === "算法服务 · 其它模型");
 
   return {
     options,
+    serverGroup,
     /** 配了地址但连不上：下拉里那一组是空的，而人看不出为什么。
      *  "没开这个功能"和"开了但服务挂了"要分得开。 */
     edgeOffline: Boolean(data?.enabled) && edgeModels.length === 0,

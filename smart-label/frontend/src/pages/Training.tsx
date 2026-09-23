@@ -725,8 +725,16 @@ export default function Training() {
                           </Button>
                           {v.status === "done" && v.model_path && (
                             <Popconfirm
-                              title="让 AI 服务改用这个模型？"
-                              description="会重建推理进程池，正在跑的推理会中断；AI 服务重启后会回到配置里的默认模型"
+                              title="把它换成 AI 服务的默认模型？"
+                              description={
+                                <span>
+                                  会影响所有人：所有没指定版本的预标注都改用它；正在跑的推理会中断；
+                                  AI 服务重启后回到配置里的默认模型。
+                                  <br />
+                                  <b>只是想在某个项目上试一下的话不用启用</b>——新建项目、重跑预标注、
+                                  模型对比的「版本」下拉里直接选「训练记录 #{v.id}」
+                                </span>
+                              }
                               onConfirm={async () => {
                                 const r = await activateModel(v.id);
                                 message.success(`已启用：${r.classes.join("/")}`);
