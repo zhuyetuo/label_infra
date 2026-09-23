@@ -197,6 +197,8 @@ export const submitTrain = (body: {
     extra_datasets?: { date: string; export_json: string; source_hz?: number | null }[];
     /** 类别归并 {原名: 新名}，AI 服务整理数据时改写，不动 NAS 上的导出 */
     label_remap?: Record<string, string>;
+    /** 用几轴：6=加速度+陀螺仪，3=只用加速度（端侧没有陀螺仪时用） */
+    axes?: number;
     missing_strategy?: string | null;
     skip_syn?: boolean;
     source_hz?: number | null;

@@ -28,6 +28,10 @@ class DatasetSpecIn(BaseModel):
     # 当负样本。AI 服务整理数据时改写，不动 NAS 上的导出——同一份数据集能
     # 喂给不同的归并方案反复试
     label_remap: dict[str, str] = {}
+    # 用几轴：6=加速度+陀螺仪（默认），3=只用加速度。
+    # **端侧只有加速度计时要用 3**——否则模型学的是板上根本没有的信号，
+    # 服务端指标再好也代表不了端上的表现
+    axes: int = 6
     missing_strategy: str | None = None
     skip_syn: bool = False
     # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。
