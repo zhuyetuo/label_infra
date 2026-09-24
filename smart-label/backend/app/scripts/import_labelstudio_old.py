@@ -196,6 +196,44 @@ def media_of(task: dict) -> str:
     return ""
 
 
+_CSV_KEYS = ("csv", "csv1", "csv2", "csv3", "csv4")
+
+
+def split_channels(task: dict) -> list[tuple[str, list[dict]]]:
+    """一条 LS 任务 → 若干 (媒体文件名, 这一路的标注结果)。
+
+    两路 imu 的老任务（data 里有 csv1 + csv2）在 LS 里是**一个任务里两条时间序列**：
+    ts1 的标注属于 imu1、ts2 的属于 imu2。第一版只看第一个媒体字段，把两路的标注
+    全塞进 imu1 的样本——2026-07-15 那条任务 15 + 17 = 32 段全落在 imu1 上，
+    imu2 的样本在平台上根本没有任务（2026-09-24 拆项目时发现）。
+
+    单路的任务原样返回一路；多路的按 to_name 末尾的编号分（ts1 → csv1），
+    没编号的结果归第一路。编号对不上任何一路 csv 的丢掉并打一句。
+    """
+    data = task.get("data") or {}
+    results = [r for a in task.get("annotations") or [] for r in a.get("result") or []]
+    csvs = [(k, data[k]) for k in _CSV_KEYS if data.get(k)]
+    if len(csvs) <= 1:
+        base = media_of(task)
+        return [(base, results)] if base else []
+    by_n: dict[str, list[dict]] = defaultdict(list)
+    other: list[dict] = []
+    for r in results:
+        m = re.search(r"(\d+)$", str(r.get("to_name") or ""))
+        (by_n[m.group(1)] if m else other).append(r)
+    out = []
+    for i, (k, v) in enumerate(csvs):
+        n = k[3:] or "1"
+        rs = by_n.pop(n, [])
+        if i == 0:
+            rs = rs + other
+        out.append((os.path.basename(str(v)), rs))
+    if by_n:
+        print(f"  ⚠ LS 任务 {task.get('id')} 有 {sum(len(v) for v in by_n.values())} 条标注的 to_name 编号"
+              f"（{', '.join(sorted(by_n))}）对不上任何一路 csv（{[k for k, _ in csvs]}），丢掉")
+    return out
+
+
 def extract_sources(src: str) -> tuple[str, tempfile.TemporaryDirectory | None]:
     """--src 可以是解压好的目录，也可以是一堆 .zip 所在的目录。"""
     zips = sorted(glob.glob(os.path.join(src, "*.zip")))
@@ -398,8 +436,9 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
             # 本次运行里已经建过的任务：键 → (annotation_record_id, 已有的标注集合)
             # dry-run 时没有 record_id，只放集合
             in_run: dict = {}
-            for t in tasks_raw:
-                base = media_of(t)
+            # 一条 LS 任务可能是两路 imu（csv1 + csv2），各自的标注要落到各自的样本上
+            units = [(t, base, rs) for t in tasks_raw for base, rs in split_channels(t)]
+            for t, base, results in units:
                 m = _MEDIA_RE.search(base) or _ONECAM_RE.search(base)
                 if not m:
                     # 更早的 rec_wit_* 单设备录制，平台里没有对应样本，导不了
@@ -467,8 +506,8 @@ async def run(src: str, user_id: int, dry: bool, only: str | None, reset: bool =
                         continue
 
                 items: list[tuple[str, int, int]] = []
-                for a in t.get("annotations") or []:
-                    for r in a.get("result") or []:
+                if True:
+                    for r in results:
                         v = r.get("value") or {}
                         s, e = parse_ts(v.get("start") or ""), parse_ts(v.get("end") or "")
                         codes = v.get("timeserieslabels") or []
