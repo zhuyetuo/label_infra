@@ -270,6 +270,30 @@ def clip_window(m: re.Match, day: str) -> tuple[float, float] | None:
     return s.timestamp(), e.timestamp()
 
 
+async def reset_projects(db, names: list[str]) -> None:
+    """把这几个 _old 项目连同任务、标注、标签整个删掉（--reset 用）。
+    跟删项目接口同一套顺序：任务下面的东西交给 purge_task_children，再删任务、标签、项目。"""
+    from sqlalchemy import delete, update
+
+    from app.services.task_service import purge_task_children
+
+    for name in names:
+        p = (await db.execute(select(Project).where(Project.name == name))).scalar_one_or_none()
+        if p is None:
+            print(f"  {name}：不存在，跳过")
+            continue
+        task_ids = list((await db.execute(select(Task.id).where(Task.project_id == p.id))).scalars())
+        if task_ids:
+            await purge_task_children(db, task_ids)
+            await db.execute(delete(Task).where(Task.project_id == p.id))
+        await db.execute(update(LabelDefinition).where(LabelDefinition.project_id == p.id).values(parent_id=None))
+        await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == p.id))
+        await db.delete(p)
+        await db.flush()
+        print(f"  {name}：删掉了（{len(task_ids)} 个任务）")
+    await db.commit()
+
+
 async def get_or_create_project(db, name: str, user_id: int, dry: bool) -> Project | None:
     p = (await db.execute(select(Project).where(Project.name == name))).scalar_one_or_none()
     if p or dry:

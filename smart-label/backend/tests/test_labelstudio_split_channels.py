@@ -44,3 +44,9 @@ def test_real_fixture_0715_has_two_imu():
                     assert [(b.split("_")[3], len(rs)) for b, rs in out] == [("cam1", 15), ("cam2", 17)]
                     return
     raise AssertionError("fixture 里没找到任务 472")
+
+
+def test_reset_projects_exists():
+    """--reset 那条路以前调了一个不存在的函数，真跑时才 NameError（dry-run 不走这一段）。"""
+    from app.scripts import import_labelstudio_old as m
+    assert callable(m.reset_projects)
