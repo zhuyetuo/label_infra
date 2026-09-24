@@ -12,6 +12,14 @@ export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "
 
 export const deleteProject = (id: number) => request.delete<never, null>(`/projects/${id}`);
 
+/** 把混了好多天的老项目按采集日期拆成一天一个项目（任务搬过去，标注跟着走；老项目停用） */
+export const splitProjectByDate = (id: number) =>
+  request.post<never, {
+    created: { id: number; name: string; date: string; n_tasks: number }[];
+    skipped_no_date: number;
+    source: { id: number; name: string };
+  }>(`/projects/${id}/split-by-date`, undefined, { timeout: 300_000 });
+
 export interface PrelabelProgress {
   status: "idle" | "running" | "done" | "cancelled" | "error";
   project_id: number;

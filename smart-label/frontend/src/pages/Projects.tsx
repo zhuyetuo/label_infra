@@ -29,6 +29,7 @@ import {
   assignProject,
   createProject,
   deleteProject,
+  splitProjectByDate,
   getProjectPrelabelHistory,
   cancelProjectPrelabel,
   getProjectPrelabelStatus,
@@ -1808,6 +1809,34 @@ export default function Projects() {
                       清理候选
                     </Button>
                   </Tooltip>
+                  {/* 早期导进来的项目十几天混在一起，查某一天要翻半天。拆成跟新采数据
+                      一样"一天一个项目"的形状。任务是搬走的不是复制的，标注一条不丢 */}
+                  <Popconfirm
+                    title="按采集日期拆成一天一个项目？"
+                    description={
+                      <div style={{ maxWidth: 340 }}>
+                        这个项目的 <b>{tasksOf(p.id).length}</b> 个任务会按各自样本的采集日期
+                        <b>搬到</b>新建的「YYYY-MM-DD」项目里（标注结果、审核记录、轮次都跟着走，
+                        一条不丢；标签整套克隆过去）。搬空后这个项目<b>保留但停用</b>，说明里会写拆到了哪些项目。
+                      </div>
+                    }
+                    okText="拆"
+                    onConfirm={async () => {
+                      const r = await splitProjectByDate(p.id);
+                      message.success(
+                        `拆成 ${r.created.length} 个项目：${r.created.map((c) => `${c.name}（${c.n_tasks}）`).join("、")}` +
+                          (r.skipped_no_date ? `；${r.skipped_no_date} 个没有采集日期的任务留在原项目` : ""),
+                        10,
+                      );
+                      refresh();
+                    }}
+                  >
+                    <Tooltip title="老项目十几天混在一起的话，拆成一天一个项目，跟新采的数据一个形状，方便查阅调整">
+                      <Button size="small" type="link">
+                        按日期拆分
+                      </Button>
+                    </Tooltip>
+                  </Popconfirm>
                   <Button size="small" type="link" onClick={() => openEdit(p)}>
                     编辑
                   </Button>

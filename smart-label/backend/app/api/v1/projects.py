@@ -81,6 +81,21 @@ async def update_project(project_id: int, body: ProjectUpdate, db: AsyncSession 
     return ok(ProjectOut.model_validate(project).model_dump())
 
 
+@router.post("/{project_id}/split-by-date", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def split_project_by_date(project_id: int, db: AsyncSession = Depends(get_db),
+                                admin: User = Depends(get_current_user)):
+    """把混了好多天数据的老项目按采集日期拆成一天一个项目。任务是搬过去的（标注、审核
+    都跟着走），标签整套克隆；老项目搬空后保留、停用。见 project_split_service。"""
+    from app.services import project_split_service as pss
+
+    try:
+        out = await pss.split_by_date(db, project_id, admin.id)
+    except pss.SplitError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    await db.commit()
+    return ok(out)
+
+
 @router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db)):
     """
