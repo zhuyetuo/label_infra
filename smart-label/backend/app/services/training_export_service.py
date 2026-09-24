@@ -51,6 +51,7 @@ from app.core.config import settings
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.label import LabelDefinition
+from app.models.project import Project
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.services import label_tracks
@@ -155,6 +156,10 @@ async def export_dataset(
         q = q.where(Task.status.in_(statuses))
     if project_ids:
         q = q.where(Task.project_id.in_(project_ids))
+    else:
+        # 没指定项目时跳过停用的项目：老项目「按日期拆分」之后原项目留着对照，
+        # 核对完停用它——不跳过的话同一段标注（原项目 + 拆出来的）会算两遍
+        q = q.where(Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True))))
     rows = (await db.execute(q)).all()
     if not rows:
         raise TrainingExportError(

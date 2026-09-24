@@ -96,6 +96,19 @@ async def split_project_by_date(project_id: int, db: AsyncSession = Depends(get_
     return ok(out)
 
 
+@router.post("/{project_id}/unsplit", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def unsplit_project(project_id: int, db: AsyncSession = Depends(get_db)):
+    """撤销「按日期拆分」：拆出来的子项目整个删掉，老项目回到原样（第一版搬走的任务也搬回来）。"""
+    from app.services import project_split_service as pss
+
+    try:
+        out = await pss.unsplit(db, project_id)
+    except pss.SplitError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    await db.commit()
+    return ok(out)
+
+
 @router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db)):
     """

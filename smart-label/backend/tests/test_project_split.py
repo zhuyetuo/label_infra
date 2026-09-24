@@ -1,4 +1,4 @@
-"""老项目按采集日期拆成一天一个项目：任务搬走、标签克隆、标注条目的 label_id 对到新标签上。"""
+"""老项目按采集日期拆成一天一个项目：原项目不动，副本进新项目；撤销拆分能回到原样。"""
 
 from datetime import date
 
@@ -52,7 +52,16 @@ def _seed(db, run):
     return run(go())
 
 
-def test_split_by_date(db, run):
+async def _items_of_project(db, pid):
+    out = []
+    for t in (await db.execute(select(Task).where(Task.project_id == pid))).scalars().all():
+        for r in (await db.execute(select(AnnotationRecord).where(AnnotationRecord.task_id == t.id))).scalars().all():
+            out += (await db.execute(select(AnnotationLabelItem).where(
+                AnnotationLabelItem.annotation_record_id == r.id))).scalars().all()
+    return out
+
+
+def test_split_copies_and_keeps_source(db, run):
     u, p, parent, child, tasks = _seed(db, run)
     out = run(pss.split_by_date(db, p.id, u.id))
     run(db.commit())
@@ -61,47 +70,70 @@ def test_split_by_date(db, run):
     assert out["skipped_no_date"] == 1
 
     async def check():
+        # 原项目一个字不动：4 个任务、标注还指向原标签、仍启用
+        old = await db.get(Project, p.id)
+        assert old.is_active is True and "拆成 2 个项目" in old.description
+        stay = (await db.execute(select(Task).where(Task.project_id == p.id))).scalars().all()
+        assert len(stay) == 4
+        assert all(it.label_id == child.id for it in await _items_of_project(db, p.id))
+        # 新项目：标签克隆、副本的标注指向新标签
         new = (await db.execute(select(Project).where(Project.name == "2026-07-17"))).scalar_one()
-        labels = (await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == new.id))).scalars().all()
-        by_code = {l.code: l for l in labels}
-        assert set(by_code) == {"scratch", "scratch_head"}
+        by_code = {l.code: l for l in (await db.execute(
+            select(LabelDefinition).where(LabelDefinition.project_id == new.id))).scalars().all()}
         assert by_code["scratch_head"].parent_id == by_code["scratch"].id
         assert by_code["scratch"].track == "行为轨" and by_code["scratch"].color == "#f00"
-        # 搬过去的任务，标注条目指向新项目的同名标签
-        moved = (await db.execute(select(Task).where(Task.project_id == new.id))).scalars().all()
-        assert len(moved) == 2
-        for t in moved:
-            rec = (await db.execute(select(AnnotationRecord).where(AnnotationRecord.task_id == t.id))).scalar_one()
-            item = (await db.execute(select(AnnotationLabelItem).where(
-                AnnotationLabelItem.annotation_record_id == rec.id))).scalar_one()
-            assert item.label_id == by_code["scratch_head"].id
-        # 没日期的那个还在老项目里，标签也没被改
-        old = await db.get(Project, p.id)
-        stay = (await db.execute(select(Task).where(Task.project_id == p.id))).scalars().all()
-        assert len(stay) == 1
-        rec = (await db.execute(select(AnnotationRecord).where(AnnotationRecord.task_id == stay[0].id))).scalar_one()
-        item = (await db.execute(select(AnnotationLabelItem).where(
-            AnnotationLabelItem.annotation_record_id == rec.id))).scalar_one()
-        assert item.label_id == child.id
-        assert old.is_active is True and "拆成 2 个项目" in (old.description or "")
+        items = await _items_of_project(db, new.id)
+        assert len(items) == 2 and all(it.label_id == by_code["scratch_head"].id for it in items)
+        # 拆过的不能再拆
+        with pytest.raises(pss.SplitError):
+            await pss.split_by_date(db, p.id, u.id)
 
     run(check())
 
 
-def test_single_day_refuses(db, run):
-    async def go():
-        u = User(username="b", password_hash="x", display_name="b", role=UserRole.admin)
-        db.add(u)
-        await db.flush()
-        p = Project(name="one", created_by=u.id)
-        db.add(p)
-        await db.flush()
-        s = Sample(sample_code="s", video_cam1_path="v", imu_csv_path="c", session_date=date(2026, 1, 1), created_by=u.id)
-        db.add(s)
-        await db.flush()
-        db.add(Task(project_id=p.id, sample_id=s.id, task_type=TaskType.from_scratch, created_by=u.id))
-        await db.commit()
-        with pytest.raises(pss.SplitError):
-            await pss.split_by_date(db, p.id, u.id)
+def test_unsplit_removes_copies(db, run):
+    u, p, parent, child, tasks = _seed(db, run)
+    run(pss.split_by_date(db, p.id, u.id))
+    run(db.commit())
+    out = run(pss.unsplit(db, p.id))
+    run(db.commit())
+    assert [r["name"] for r in out["removed"]] == ["2026-07-17", "2026-07-18"] and out["moved_back"] == 0
 
-    run(go())
+    async def check():
+        assert (await db.execute(select(Project.id).where(Project.name == "2026-07-17"))).scalar_one_or_none() is None
+        old = await db.get(Project, p.id)
+        assert old.description == "老的"
+        assert len((await db.execute(select(Task).where(Task.project_id == p.id))).scalars().all()) == 4
+
+    run(check())
+
+
+def test_unsplit_moves_back_first_version(db, run):
+    """第一版拆分是把任务搬走的：撤销要把它们搬回来、label_id 对回原标签。"""
+    u, p, parent, child, tasks = _seed(db, run)
+
+    async def simulate_old_split():
+        new = Project(name="2026-07-18", description=f"从「{p.name}」按日期拆出（2026-07-18）", created_by=u.id)
+        db.add(new)
+        await db.flush()
+        mapping = await pss.clone_labels(db, p.id, new.id, u.id)
+        t = tasks[2]
+        t.project_id = new.id
+        for it in await _items_of_project(db, new.id):
+            it.label_id = mapping[it.label_id]
+        p.is_active = False
+        p.description = "老的\n已按日期拆成 1 个项目：2026-07-18"
+        await db.commit()
+
+    run(simulate_old_split())
+    out = run(pss.unsplit(db, p.id))
+    run(db.commit())
+    assert out["moved_back"] == 1
+
+    async def check():
+        old = await db.get(Project, p.id)
+        assert old.is_active is True and old.description == "老的"
+        assert len((await db.execute(select(Task).where(Task.project_id == p.id))).scalars().all()) == 4
+        assert all(it.label_id == child.id for it in await _items_of_project(db, p.id))
+
+    run(check())
