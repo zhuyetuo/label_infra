@@ -12,13 +12,18 @@ export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "
 
 export const deleteProject = (id: number) => request.delete<never, null>(`/projects/${id}`);
 
-/** 把混了好多天的老项目按采集日期拆成一天一个项目（任务搬过去，标注跟着走；老项目停用） */
+/** 把混了好多天的老项目按采集日期拆成一天一个项目（副本进新项目，原项目不动） */
 export const splitProjectByDate = (id: number) =>
   request.post<never, {
     created: { id: number; name: string; date: string; n_tasks: number }[];
     skipped_no_date: number;
     source: { id: number; name: string };
-  }>(`/projects/${id}/split-by-date`, undefined, { timeout: 300_000 });
+  }>(`/projects/${id}/split-by-date`, undefined, { timeout: 600_000 });
+
+/** 撤销拆分：拆出来的子项目整个删掉，原项目回到原样 */
+export const unsplitProject = (id: number) =>
+  request.post<never, { removed: { id: number; name: string; n_tasks: number }[]; moved_back: number }>(
+    `/projects/${id}/unsplit`, undefined, { timeout: 600_000 });
 
 export interface PrelabelProgress {
   status: "idle" | "running" | "done" | "cancelled" | "error";
