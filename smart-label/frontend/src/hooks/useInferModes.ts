@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listEdgeModels, listServerModels } from "@/api/modelEval";
 import { listModelVersions } from "@/api/training";
+import { useAuthStore } from "@/stores/authStore";
 import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_MODE_OPTIONS } from "@/utils/inferMode";
 
 /**
@@ -36,9 +37,15 @@ export const INFER_SELECT_PROPS = {
 
 
 export function useInferModes() {
+  // 端侧模型 / 服务端其它模型 / 训练记录这三个接口都只对管理员开放。标注员打开
+  // 项目页或工作台时也会走到这个 hook，不拦的话右上角连弹三个「权限不足」
+  // （2026-09-28 实习生第一天就撞上了）。标注员只用默认那组版本，够了
+  const role = useAuthStore((s) => s.userInfo?.role);
+  const isAdmin = role === "admin" || role === "super_admin";
   const { data } = useQuery({
     queryKey: ["edge-models"],
     queryFn: listEdgeModels,
+    enabled: isAdmin,
     // 端侧服务是选型阶段才起的，起没起会变。但也别太频繁——
     // 它只是个下拉的内容，不是实时数据
     staleTime: 30_000,
@@ -51,6 +58,7 @@ export function useInferModes() {
   const { data: srv } = useQuery({
     queryKey: ["server-models"],
     queryFn: listServerModels,
+    enabled: isAdmin,
     staleTime: 30_000,
     retry: false,
   });
@@ -60,6 +68,7 @@ export function useInferModes() {
   const { data: versions } = useQuery({
     queryKey: ["model-versions"],
     queryFn: listModelVersions,
+    enabled: isAdmin,
     staleTime: 30_000,
     retry: false,
   });
