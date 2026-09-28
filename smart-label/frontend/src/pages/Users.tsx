@@ -73,6 +73,15 @@ export default function Users() {
     refresh();
   };
 
+  // 用户名是登录名，只有超级管理员能改；显示名管理员就能改
+  const handleNameChange = async (u: AppUser, field: "username" | "display_name", v: string) => {
+    const trimmed = v.trim();
+    if (!trimmed || trimmed === u[field]) return;
+    await updateUser(u.id, { [field]: trimmed });
+    message.success(field === "username" ? `用户名已改为 ${trimmed}，对方下次用它登录` : "显示名已更新");
+    refresh();
+  };
+
   const handleRoleChange = (u: AppUser, role: AppUser["role"]) => {
     if (role === u.role) return;
     const roleLabel = ROLE_OPTIONS.find((r) => r.value === role)?.label ?? role;
@@ -100,8 +109,33 @@ export default function Users() {
         dataSource={data}
         columns={[
           { title: "ID", dataIndex: "id", width: 60 },
-          { title: "用户名", dataIndex: "username" },
-          { title: "显示名", dataIndex: "display_name" },
+          {
+            title: "用户名",
+            dataIndex: "username",
+            render: (name: string, u: AppUser) =>
+              isSuperAdmin ? (
+                <Typography.Text
+                  editable={{
+                    text: name,
+                    tooltip: "改用户名（登录名）。改了之后对方要用新名字登录",
+                    onChange: (v) => handleNameChange(u, "username", v),
+                  }}
+                >
+                  {name}
+                </Typography.Text>
+              ) : (
+                name
+              ),
+          },
+          {
+            title: "显示名",
+            dataIndex: "display_name",
+            render: (name: string, u: AppUser) => (
+              <Typography.Text editable={{ text: name, onChange: (v) => handleNameChange(u, "display_name", v) }}>
+                {name}
+              </Typography.Text>
+            ),
+          },
           {
             title: "角色",
             dataIndex: "role",

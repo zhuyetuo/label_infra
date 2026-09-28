@@ -14,7 +14,7 @@ export const createUser = (body: {
 
 export const updateUser = (
   id: number,
-  body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced" | "remark">>
+  body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced" | "remark" | "username" | "display_name">>
 ) => request.patch<never, AppUser>(`/users/${id}`, body);
 
 export const deleteUser = (id: number) => request.delete<never, null>(`/users/${id}`);
