@@ -144,12 +144,28 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/{user_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
-async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends(get_db)):
+async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends(get_db),
+                      me: User = Depends(get_current_user)):
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
 
     updates = body.model_dump(exclude_unset=True)
+    # 用户名 = 登录名，改了对方下次就得用新名字登录，只让超级管理员动；不能为空、不能重名
+    if "username" in updates:
+        if me.role != UserRole.super_admin:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "只有超级管理员能改用户名")
+        new_name = (updates["username"] or "").strip()
+        if not new_name:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "用户名不能为空")
+        dup = (await db.execute(select(User).where(User.username == new_name, User.id != user_id))).scalar_one_or_none()
+        if dup is not None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"用户名「{new_name}」已被占用")
+        updates["username"] = new_name
+    if "display_name" in updates:
+        updates["display_name"] = (updates["display_name"] or "").strip()
+        if not updates["display_name"]:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "显示名不能为空")
     new_role = updates.get("role", user.role)
     new_outsourced = updates.get("is_outsourced", user.is_outsourced)
     if new_outsourced and new_role != UserRole.annotator:

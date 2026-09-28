@@ -36,6 +36,8 @@ class UserCreateOut(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    # 用户名是登录名，只有超级管理员能改（接口里再校验）
+    username: str | None = None
     display_name: str | None = None
     email: str | None = None
     role: UserRole | None = None
