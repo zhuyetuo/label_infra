@@ -10,6 +10,7 @@ from app.core.deps import require_role
 from app.db.session import get_db
 from app.models.user import UserRole
 from app.schemas.envelope import ok
+from app.services import workforce_service as wf
 from app.services.annotator_work_service import annotator_work, project_progress
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
@@ -35,3 +36,12 @@ async def get_annotator_work(date_from: _dt.date, date_to: _dt.date, user_id: in
 async def get_project_progress(db: AsyncSession = Depends(get_db)):
     """每个启用中的项目：任务交了几个、抓挠片段还有几段没确认、疑似候选还有几条没判。"""
     return ok(await project_progress(db))
+
+
+@router.get("/workforce")
+async def get_workforce(date_from: _dt.date, date_to: _dt.date, db: AsyncSession = Depends(get_db)):
+    """人力管理：分配台账（所有启用项目）+ 效率（这段日期）+ 按效率预估剩余工时。"""
+    led = await wf.ledger(db)
+    eff = await wf.efficiency(db, date_from, date_to)
+    return ok({"ledger": led, "efficiency": eff, "estimate": wf.estimate(led, eff),
+               "gap_max_seconds": wf.GAP_MAX})

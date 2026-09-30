@@ -341,17 +341,25 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             origin.label_id = incoming.label_id
             origin.start_time_ms = incoming.start_time_ms
             origin.end_time_ms = incoming.end_time_ms
+            # 人动过这条（改了、确认了、标了待定）就记一笔时间——每一类片段的
+            # 确认耗时靠它。没变化的保存不记，不然一次全量保存把所有条目都"动"了
+            touched = changed
             if changed:
                 origin.is_modified = True
                 origin.created_by = user.id
                 # 改过之后原来的"确认正确"不再成立，除非这次请求明确再确认
                 origin.ai_confirmed = bool(incoming.ai_confirmed)
             elif incoming.ai_confirmed is not None:
+                touched = touched or (origin.ai_confirmed != incoming.ai_confirmed)
                 origin.ai_confirmed = incoming.ai_confirmed
             if incoming.uncertain is not None:
+                touched = touched or (origin.uncertain != incoming.uncertain)
                 origin.uncertain = incoming.uncertain
                 # 取消待定就把原因一起清掉，别留个孤零零的原因在库里
                 origin.uncertain_reason = incoming.uncertain_reason if incoming.uncertain else None
+            if touched:
+                origin.touched_at = datetime.now()
+                origin.touched_by = user.id
         else:
             new_item = AnnotationLabelItem(
                 annotation_record_id=record.id,
@@ -367,6 +375,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 uncertain=bool(incoming.uncertain),
                 uncertain_reason=incoming.uncertain_reason if incoming.uncertain else None,
                 created_by=user.id,
+                touched_at=datetime.now(),
+                touched_by=user.id,
             )
             db.add(new_item)
             await db.flush()
