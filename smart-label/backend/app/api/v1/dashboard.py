@@ -13,6 +13,9 @@ from app.schemas.envelope import ok
 from app.services.annotator_work_service import annotator_work, project_progress
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+# 审核页也要显示项目整体进度，审核员得能读这一条；单独一个 router，不放宽整个 /dashboard
+progress_router = APIRouter(prefix="/dashboard", tags=["dashboard"],
+                            dependencies=[Depends(require_role(UserRole.reviewer, UserRole.admin, UserRole.super_admin))])
 
 
 @router.get("/summary")
@@ -28,7 +31,7 @@ async def get_annotator_work(date_from: _dt.date, date_to: _dt.date, user_id: in
     return ok(await annotator_work(db, date_from, date_to, user_id))
 
 
-@router.get("/project-progress")
+@progress_router.get("/project-progress")
 async def get_project_progress(db: AsyncSession = Depends(get_db)):
     """每个启用中的项目：任务交了几个、抓挠片段还有几段没确认、疑似候选还有几条没判。"""
     return ok(await project_progress(db))
