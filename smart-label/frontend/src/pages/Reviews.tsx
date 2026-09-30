@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Input, Modal, Space, Table, Tag, message } from "antd";
+import { Button, Input, Modal, Space, Table, Tag, Tooltip, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimReview, decideReview, releaseReview, reviewQueue } from "@/api/reviews";
 import { listLabels } from "@/api/labels";
@@ -71,8 +71,27 @@ export default function Reviews() {
             sorter: (a: Task, b: Task) => (a.video_duration_sec ?? 0) - (b.video_duration_sec ?? 0),
             render: (_: unknown, task: Task) => formatDuration(task.video_duration_sec),
           },
-          { title: "轮次", dataIndex: "round_no" },
-          { title: "标注员ID", dataIndex: "assigned_to" },
+          { title: "轮次", dataIndex: "round_no", width: 60 },
+          {
+            title: "标注员",
+            dataIndex: "assigned_to_name",
+            render: (n: string | null, t: Task) => n ?? (t.assigned_to ?? "-"),
+          },
+          {
+            title: "提交时间",
+            dataIndex: "submitted_at",
+            width: 150,
+            sorter: (a: Task, b: Task) => (a.submitted_at ?? "").localeCompare(b.submitted_at ?? ""),
+            render: (v: string | null) => (v ? v.replace("T", " ").slice(0, 16) : "-"),
+          },
+          {
+            title: <Tooltip title="从这一轮第一次保存草稿到提交。中途去吃饭的会虚高">用时</Tooltip>,
+            dataIndex: "work_seconds",
+            width: 90,
+            sorter: (a: Task, b: Task) => (a.work_seconds ?? -1) - (b.work_seconds ?? -1),
+            render: (s: number | null) => (s == null ? "-" : s < 60 ? `${s} 秒` : `${Math.round(s / 60)} 分`),
+          },
+          { title: "片段", dataIndex: "item_count", width: 60, render: (n: number | null) => n ?? "-" },
           {
             title: "审核占用",
             dataIndex: "reviewer_id",

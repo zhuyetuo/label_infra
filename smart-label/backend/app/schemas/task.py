@@ -47,6 +47,11 @@ class TaskOut(BaseModel):
     # IMU CSV 数据行数，0 = 文件是空的，打开工作台会报"CSV 没有数据行"，这种任务管理员该删掉
     imu_row_count: int | None = None
     assigned_to_name: str | None = None
+    # 审核队列带：这一轮什么时候交的、开始动手到提交用了多久、几段。别的列表不算
+    submitted_at: datetime | None = None
+    started_at: datetime | None = None
+    work_seconds: int | None = None
+    item_count: int | None = None
     # 指派人角色，列表里按角色上色（超管/管理员/标注员/审核员一眼分开）
     assigned_to_role: str | None = None
 

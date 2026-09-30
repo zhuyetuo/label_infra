@@ -12,6 +12,7 @@ from app.schemas.envelope import ok
 from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
 from app.services.review_service import ReviewConflictError, claim_review, decide_review, release_review
+from app.services.annotator_work_service import record_briefs
 from app.services.task_scope import exclude_own_annotation, exclude_sensitive
 from app.services.task_service import sample_brief
 
@@ -32,7 +33,18 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
     query = exclude_sensitive(query, user)
     tasks = (await db.execute(query)).scalars().all()
     briefs = await sample_brief(db, tasks)
-    return ok([{**TaskOut.model_validate(t).model_dump(), **briefs.get(t.sample_id, {})} for t in tasks])
+    # 审核的人要知道是谁标的、什么时候交的、花了多久——只给一个 ID 的话得去账号页对
+    recs = await record_briefs(db, tasks)
+    names: dict[int, str] = {}
+    uids = {t.assigned_to for t in tasks if t.assigned_to is not None}
+    if uids:
+        for uid, dn, un in (await db.execute(
+                select(User.id, User.display_name, User.username).where(User.id.in_(uids)))).all():
+            names[uid] = dn or un
+    return ok([{**TaskOut.model_validate(t).model_dump(), **briefs.get(t.sample_id, {}),
+                **recs.get(t.id, {}),
+                "assigned_to_name": names.get(t.assigned_to) if t.assigned_to is not None else None}
+               for t in tasks])
 
 
 @router.post("/{task_id}/claim")
