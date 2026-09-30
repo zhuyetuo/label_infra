@@ -19,6 +19,7 @@ import {
   reviewQueue,
 } from "@/api/reviews";
 import { listLabels } from "@/api/labels";
+import { listProjectProgress, type ProjectProgress } from "@/api/dashboard";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { useUrlTask } from "@/utils/urlTask";
@@ -74,6 +75,14 @@ export default function Reviews() {
     return [...m.values()].sort((a, b) => b.name.localeCompare(a.name));
   }, [data]);
   const [expanded, setExpanded] = useState<number[]>([]);
+  // 整个项目还剩多少没做（不只是已提交的这些）：抓挠待确认、疑似待判、还没交的任务。
+  // 审核队列只看得到交上来的，标注员手里那 200 多个任务里压着的待确认根本不在这里
+  const { data: progress } = useQuery({ queryKey: ["project-progress"], queryFn: listProjectProgress, refetchInterval: 60_000 });
+  const progressOf = useMemo(() => {
+    const m = new Map<number, ProjectProgress>();
+    for (const p of progress ?? []) m.set(p.project_id, p);
+    return m;
+  }, [progress]);
   const [rejectTaskId, setRejectTaskId] = useState<number | null>(null);
   const [comment, setComment] = useState("");
   const [viewTask, setViewTask] = useState<Task | null>(null);
@@ -332,6 +341,24 @@ export default function Reviews() {
               ) : (
                 "-"
               ),
+          },
+          {
+            title: <Tooltip title="整个项目（含标注员手里还没交的任务）：还有几个任务没交、抓挠片段还剩几段没确认、疑似抓挠还剩几条没判。三个都到 0 这一天才算做完">项目整体还剩</Tooltip>,
+            render: (_, g: Group) => {
+              const p = progressOf.get(g.project_id);
+              if (!p) return "-";
+              const left = p.tasks_total - p.tasks_submitted;
+              const done = !left && !p.scratch_pending && !p.cand_pending;
+              return done ? (
+                <Tag color="green">全部完成</Tag>
+              ) : (
+                <Space size={4} wrap>
+                  <Tag color={left ? "orange" : "green"}>未交任务 {left} / {p.tasks_total}</Tag>
+                  <Tag color={p.scratch_pending ? "red" : "green"}>抓挠待确认 {p.scratch_pending} / {p.scratch_total}</Tag>
+                  <Tag color={p.cand_pending ? "magenta" : "green"}>疑似待判 {p.cand_pending} / {p.cand_total}</Tag>
+                </Space>
+              );
+            },
           },
           {
             title: "标注员",
