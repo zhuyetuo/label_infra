@@ -43,5 +43,8 @@ async def get_workforce(date_from: _dt.date, date_to: _dt.date, db: AsyncSession
     """人力管理：分配台账（所有启用项目）+ 效率（这段日期）+ 按效率预估剩余工时。"""
     led = await wf.ledger(db)
     eff = await wf.efficiency(db, date_from, date_to)
+    pool = wf.pool_rates(eff)
+    unassigned = [{**u, **wf.hours_for(pool, u["tasks_left"], u["scratch_pending"], u["cand_pending"])}
+                  for u in await wf.unassigned_workload(db)]
     return ok({"ledger": led, "efficiency": eff, "estimate": wf.estimate(led, eff),
-               "gap_max_seconds": wf.GAP_MAX})
+               "unassigned": unassigned, "pool_rates": pool, "gap_max_seconds": wf.GAP_MAX})

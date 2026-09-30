@@ -220,6 +220,71 @@ async def ledger(db: AsyncSession) -> list[dict]:
     return out
 
 
+async def unassigned_workload(db: AsyncSession) -> list[dict]:
+    """还没分给人的活：每个启用项目里 assigned_to 为空的任务有几个、里面抓挠几段、疑似几条。
+    分配之前看这个决定给谁、给多少。"""
+    rows = (await db.execute(
+        select(Task.project_id, Project.name, func.count(Task.id))
+        .join(Project, Project.id == Task.project_id)
+        .where(Task.assigned_to.is_(None), Project.is_active.is_(True),
+               Task.status.in_((TaskStatus.PENDING_ASSIGN, TaskStatus.IN_PROGRESS, TaskStatus.REJECTED)))
+        .group_by(Task.project_id, Project.name))).all()
+    if not rows:
+        return []
+    pids = [r[0] for r in rows]
+    is_scratch = LabelDefinition.display_name.like(f"{SCRATCH_PREFIX}%")
+    pend = ((AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
+            & (AnnotationLabelItem.ai_confirmed.is_(False)) & (AnnotationLabelItem.is_modified.is_(False))
+            & (AnnotationLabelItem.uncertain.is_(False)))
+    scratch = {p: (int(n or 0), int(x or 0)) for p, n, x in (await db.execute(
+        select(Task.project_id, func.sum(case((is_scratch, 1), else_=0)), func.sum(case((is_scratch & pend, 1), else_=0)))
+        .select_from(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .join(Task, Task.id == AnnotationRecord.task_id)
+        .join(LabelDefinition, LabelDefinition.id == AnnotationLabelItem.label_id)
+        .where(Task.project_id.in_(pids), Task.assigned_to.is_(None), AnnotationRecord.round_no == Task.round_no)
+        .group_by(Task.project_id))).all()}
+    cands = {p: (int(n), int(x or 0)) for p, n, x in (await db.execute(
+        select(Task.project_id, func.count(AiCandidate.id),
+               func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)))
+        .select_from(AiCandidate).join(Task, Task.id == AiCandidate.task_id)
+        .where(Task.project_id.in_(pids), Task.assigned_to.is_(None), AiCandidate.round_no == Task.round_no)
+        .group_by(Task.project_id))).all()}
+    out = []
+    for pid, name, n in rows:
+        s_total, s_pend = scratch.get(pid, (0, 0))
+        c_total, c_pend = cands.get(pid, (0, 0))
+        out.append({"project_id": pid, "project_name": name, "tasks_left": int(n),
+                    "scratch_total": s_total, "scratch_pending": s_pend,
+                    "cand_total": c_total, "cand_pending": c_pend})
+    out.sort(key=lambda r: r["project_name"], reverse=True)
+    return out
+
+
+def pool_rates(eff: list[dict]) -> dict[str, float | None]:
+    """全员每类中位耗时（每人至少 5 条实测才算数）。分配之前没有"这个人"，只能按全员算。"""
+    def med_of(user: dict, cat: str) -> float | None:
+        for c in user["categories"]:
+            if c["category"] == cat and c["median_seconds"] is not None and c["n_timed"] >= 5:
+                return c["median_seconds"]
+        return None
+    return {cat: _median([v for v in (med_of(e, cat) for e in eff) if v is not None])
+            for cat in (SCRATCH_PREFIX, CAND_CATEGORY, SUBMIT_CATEGORY)}
+
+
+def hours_for(rates: dict[str, float | None], tasks_left: int, scratch_pending: int, cand_pending: int) -> dict:
+    parts = {
+        "scratch": scratch_pending * rates[SCRATCH_PREFIX] if rates[SCRATCH_PREFIX] is not None else None,
+        "cand": cand_pending * rates[CAND_CATEGORY] if rates[CAND_CATEGORY] is not None else None,
+        "tasks": tasks_left * rates[SUBMIT_CATEGORY] if rates[SUBMIT_CATEGORY] is not None else None,
+    }
+    known = [v for v in parts.values() if v is not None]
+    total = sum(known) if known else None
+    return {"hours_left": round(total / 3600, 1) if total is not None else None,
+            "days_left": round(total / 3600 / 6, 1) if total is not None else None,
+            "missing": [k for k, v in parts.items() if v is None]}
+
+
 def estimate(ledger_rows: list[dict], eff: list[dict]) -> list[dict]:
     """按每个人实测的每条耗时，算每个（项目, 人）剩下的活还要多久。
     没测到那一类的速度（还没做过、或部署前的数据）就用全员中位数，再没有就空着。"""
