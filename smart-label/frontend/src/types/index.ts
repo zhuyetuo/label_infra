@@ -55,6 +55,11 @@ export interface Task {
   task_type: TaskType;
   status: TaskStatus;
   round_no: number;
+  /** 审核队列才带：这一轮什么时候交的、开始动手到提交用了多久、几段 */
+  submitted_at?: string | null;
+  started_at?: string | null;
+  work_seconds?: number | null;
+  item_count?: number | null;
   segment_start_ms: number | null;
   segment_end_ms: number | null;
   assigned_to: number | null;

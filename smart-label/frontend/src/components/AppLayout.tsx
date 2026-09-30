@@ -14,6 +14,7 @@ const ALL_ITEMS = [
   { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"] },
   { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin"] },
   { key: "/daily-stats", label: "日常统计", roles: ["super_admin", "admin"] },
+  { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
   { key: "/vision", label: "视觉标注", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/training", label: "模型训练", roles: ["super_admin", "admin"] },
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
