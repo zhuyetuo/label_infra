@@ -99,6 +99,10 @@ class AnnotationLabelItem(Base):
         BigInteger, ForeignKey("ai_candidates.id"), nullable=True, comment="从哪条候选确认来的"
     )
 
+    # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
+    # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列
+    touched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    touched_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     # 实际标注这一条的用户；AI生成的为 NULL；任务被中途转手也能按人追溯
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

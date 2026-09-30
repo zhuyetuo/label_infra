@@ -4,12 +4,14 @@
 这里只做参数校验+调用+异常转换。
 """
 
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.ai_candidate import AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.review import ReviewRecord
@@ -133,6 +135,9 @@ async def bulk_create_tasks(
                 for sid in new_sample_ids
             ],
         )
+        if body.assigned_to is not None:
+            db.add(AuditLog(user_id=admin.id, action="task.assign", target_type="project", target_id=body.project_id,
+                            detail=json.dumps({"assigned_to": body.assigned_to, "n": created}, ensure_ascii=False)))
         await db.commit()
         wanted = set(new_sample_ids)
         new_task_ids = [

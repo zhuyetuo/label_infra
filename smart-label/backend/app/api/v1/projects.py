@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+import json
+
 from app.models.ai_candidate import AiCandidate, CandidateStatus
+from app.models.audit_log import AuditLog
 from app.models.label import LabelDefinition
 from app.models.label_template import LabelTemplate, LabelTemplateItem
 from app.models.project import Project
@@ -110,7 +113,8 @@ async def unsplit_project(project_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{project_id}/assign", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
-async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db)):
+async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncSession = Depends(get_db),
+                         admin: User = Depends(get_current_user)):
     """
     把整个项目的任务一次性指派给某人：一个项目往往就是一批要一起干的活儿，
     逐个任务点太麻烦。
@@ -147,8 +151,12 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
     result = await db.execute(
         update(Task).where(Task.project_id == project_id, Task.status.in_(movable)).values(**values)
     )
-    await db.commit()
     assigned = result.rowcount or 0
+    # 分配日志：人力管理页按它算"什么时候把这个项目分给了谁、几天做完"
+    if body.user_id is not None and assigned:
+        db.add(AuditLog(user_id=admin.id, action="task.assign", target_type="project", target_id=project_id,
+                        detail=json.dumps({"assigned_to": body.user_id, "n": assigned}, ensure_ascii=False)))
+    await db.commit()
     return ok(ProjectAssignResult(assigned=assigned, skipped=total - assigned).model_dump())
 
 

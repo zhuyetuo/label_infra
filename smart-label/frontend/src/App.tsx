@@ -12,6 +12,7 @@ import LlmProviders from "@/pages/LlmProviders";
 import Tooth from "@/pages/Tooth";
 import DailyStats from "@/pages/DailyStats";
 import AnnotatorStats from "@/pages/AnnotatorStats";
+import Workforce from "@/pages/Workforce";
 import Skin from "@/pages/Skin";
 import Vision from "@/pages/Vision";
 import Training from "@/pages/Training";
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/skin" element={<Skin />} />
         <Route path="/daily-stats" element={<DailyStats />} />
         <Route path="/annotator-stats" element={<AnnotatorStats />} />
+        <Route path="/workforce" element={<Workforce />} />
         <Route path="/vision" element={<Vision />} />
         <Route path="/training" element={<Training />} />
         <Route path="/users" element={<Users />} />
