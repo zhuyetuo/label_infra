@@ -60,6 +60,11 @@ export interface Task {
   started_at?: string | null;
   work_seconds?: number | null;
   item_count?: number | null;
+  project_name?: string | null;
+  /** 抓挠片段几段、其中 AI 给的还没人确认的几段；疑似候选几条、还没判的几条 */
+  scratch_items?: number | null;
+  scratch_pending?: number | null;
+  cand_total?: number | null;
   segment_start_ms: number | null;
   segment_end_ms: number | null;
   assigned_to: number | null;
