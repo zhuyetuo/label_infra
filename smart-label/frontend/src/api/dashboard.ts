@@ -111,10 +111,25 @@ export interface EstimateRow {
   days_left: number | null;
   missing: string[];
 }
+export interface UnassignedRow {
+  project_id: number;
+  project_name: string;
+  tasks_left: number;
+  scratch_total: number;
+  scratch_pending: number;
+  cand_total: number;
+  cand_pending: number;
+  hours_left: number | null;
+  days_left: number | null;
+  missing: string[];
+}
 export interface Workforce {
   ledger: LedgerRow[];
   efficiency: EffUser[];
   estimate: EstimateRow[];
+  /** 还没分给人的活，按全员速度预估 */
+  unassigned: UnassignedRow[];
+  pool_rates: Record<string, number | null>;
   gap_max_seconds: number;
 }
 export const getWorkforce = (dateFrom: string, dateTo: string) =>

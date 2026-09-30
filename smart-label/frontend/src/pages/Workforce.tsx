@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Alert, Card, DatePicker, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
-import { getWorkforce, type EffUser, type EstimateRow, type LedgerRow } from "@/api/dashboard";
+import { getWorkforce, type EffUser, type EstimateRow, type LedgerRow, type UnassignedRow } from "@/api/dashboard";
 
 /**
  * 人力管理：三张表回答三个问题。
@@ -50,6 +50,13 @@ export default function Workforce() {
     return [...front, ...rest];
   }, [data]);
   const catOf = (u: EffUser, c: string) => u.categories.find((x) => x.category === c);
+  const estOf = useMemo(() => {
+    const m = new Map<string, EstimateRow>();
+    for (const e of data?.estimate ?? []) m.set(`${e.project_id}-${e.user_id}`, e);
+    return m;
+  }, [data]);
+  const missingText = (m: string[]) => m.map((x) => ({ scratch: "抓挠", cand: "疑似", tasks: "任务" })[x]).join("/");
+  const rates = data?.pool_rates ?? {};
 
   return (
     <div>
@@ -93,23 +100,41 @@ export default function Workforce() {
               ),
             },
             {
-              title: "抓挠待确认",
+              title: <Tooltip title="他名下任务里 AI 给的抓挠片段：还剩几段没人确认 / 总共几段。红 = 还有没确认的">抓挠待确认</Tooltip>,
               width: 110,
               render: (_, r: LedgerRow) =>
                 r.scratch_total ? (
-                  <Tag color={r.scratch_pending ? "red" : "green"}>{r.scratch_pending} / {r.scratch_total}</Tag>
+                  <Tooltip title={`还剩 ${r.scratch_pending} 段没确认，共 ${r.scratch_total} 段抓挠片段（已确认 ${r.scratch_total - r.scratch_pending}）`}>
+                    <Tag color={r.scratch_pending ? "red" : "green"}>{r.scratch_pending} / {r.scratch_total}</Tag>
+                  </Tooltip>
                 ) : "-",
             },
             {
-              title: "疑似待判",
+              title: <Tooltip title="他名下任务里的「疑似抓挠」候选：还剩几条没判 / 总共几条。判 = 确认成抓挠、排除、或标待定">疑似待判</Tooltip>,
               width: 110,
               render: (_, r: LedgerRow) =>
                 r.cand_total ? (
-                  <Tag color={r.cand_pending ? "magenta" : "green"}>{r.cand_pending} / {r.cand_total}</Tag>
+                  <Tooltip title={`还剩 ${r.cand_pending} 条没判，共 ${r.cand_total} 条疑似抓挠（已判 ${r.cand_total - r.cand_pending}）`}>
+                    <Tag color={r.cand_pending ? "magenta" : "green"}>{r.cand_pending} / {r.cand_total}</Tag>
+                  </Tooltip>
                 ) : "-",
             },
             { title: "第一次动手", dataIndex: "first_touch", width: 120, render: (v: string | null) => fmtTime(v) },
             { title: "最近动手", dataIndex: "last_touch", width: 120, render: (v: string | null) => fmtTime(v) },
+            {
+              title: <Tooltip title="按他自己实测的速度算剩下的还要多久（下面「预估」表的同一个数）">预计还要</Tooltip>,
+              width: 150,
+              render: (_, r: LedgerRow) => {
+                if (r.done) return <Tag color="green">已完成</Tag>;
+                const e = estOf.get(`${r.project_id}-${r.user_id}`);
+                if (!e) return "-";
+                return e.hours_left == null ? (
+                  <Tooltip title={`还没有 ${missingText(e.missing)} 的实测速度`}><span style={{ color: "#888" }}>数据不够</span></Tooltip>
+                ) : (
+                  <b>{e.hours_left} 小时 ≈ {e.days_left} 天</b>
+                );
+              },
+            },
             {
               title: <Tooltip title="任务全交、抓挠全确认、疑似全判完才算完成；还没完成的显示到现在用了几天">用了几天</Tooltip>,
               width: 110,
@@ -119,6 +144,50 @@ export default function Workforce() {
                   <Tag color="green">{r.days_used} 天完成</Tag>
                 ) : (
                   <span>{r.days_used} 天（进行中）</span>
+                ),
+            },
+          ]}
+        />
+      </Card>
+
+      <Card
+        size="small"
+        title="待分配的工作量（还没指派给人的任务）"
+        extra={
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            按全员中位速度算：抓挠 {fmtSec(rates["抓挠"])} / 段 · 疑似 {fmtSec(rates["疑似抓挠"])} / 条 · 每任务 {fmtSec(rates["提交任务"])}。分配前先看这里定给谁、给多少
+          </Typography.Text>
+        }
+        style={{ marginBottom: 12 }}
+      >
+        <Table
+          rowKey="project_id"
+          size="small"
+          loading={isLoading}
+          dataSource={data?.unassigned ?? []}
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          columns={[
+            { title: "项目", dataIndex: "project_name", width: 130 },
+            { title: "未分配任务", dataIndex: "tasks_left", width: 100 },
+            {
+              title: "抓挠片段（待确认 / 总）",
+              width: 160,
+              render: (_, r: UnassignedRow) => (r.scratch_total ? `${r.scratch_pending} / ${r.scratch_total}` : "-"),
+            },
+            {
+              title: "疑似抓挠（待判 / 总）",
+              width: 160,
+              render: (_, r: UnassignedRow) => (r.cand_total ? `${r.cand_pending} / ${r.cand_total}` : "-"),
+            },
+            {
+              title: "预计工作量",
+              width: 170,
+              sorter: (a: UnassignedRow, b: UnassignedRow) => (a.hours_left ?? -1) - (b.hours_left ?? -1),
+              render: (_, r: UnassignedRow) =>
+                r.hours_left == null ? (
+                  <Tooltip title={`全员都还没有 ${missingText(r.missing)} 的实测速度`}><span style={{ color: "#888" }}>数据不够</span></Tooltip>
+                ) : (
+                  <b>{r.hours_left} 小时 ≈ {r.days_left} 天</b>
                 ),
             },
           ]}

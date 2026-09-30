@@ -83,3 +83,29 @@ def test_workforce(db, run):
     assert est[0]["tasks_left"] == 1 and est[0]["hours_left"] is None
     # 每类不足 5 条实测的话，用全员中位数——这里全员就他一个，也不足 5 条 → 空着
     assert est[0]["missing"] == ["scratch", "cand", "tasks"]
+
+
+def test_unassigned_and_pool(db, run):
+    async def go():
+        u = User(username="a", password_hash="x", display_name="a", role=UserRole.admin)
+        db.add(u)
+        await db.flush()
+        p = Project(name="2026-09-26", created_by=u.id)
+        db.add(p)
+        await db.flush()
+        s = Sample(sample_code="x", video_cam1_path="v", imu_csv_path="c", created_by=u.id)
+        db.add(s)
+        await db.flush()
+        t = Task(project_id=p.id, sample_id=s.id, task_type=TaskType.ai_assisted, created_by=u.id)
+        db.add(t)
+        await db.flush()
+        db.add(AiCandidate(task_id=t.id, round_no=1, label_name="疑似抓挠", start_time_ms=0, end_time_ms=1, reason="low_conf"))
+        await db.commit()
+        return await wf.unassigned_workload(db)
+
+    out = run(go())
+    assert out == [{"project_id": out[0]["project_id"], "project_name": "2026-09-26", "tasks_left": 1,
+                    "scratch_total": 0, "scratch_pending": 0, "cand_total": 1, "cand_pending": 1}]
+    rates = {"抓挠": 30.0, "疑似抓挠": 20.0, "提交任务": None}
+    h = wf.hours_for(rates, 10, 6, 100)
+    assert h["missing"] == ["tasks"] and h["hours_left"] == round((6 * 30 + 100 * 20) / 3600, 1)
