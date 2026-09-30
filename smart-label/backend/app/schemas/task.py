@@ -52,6 +52,12 @@ class TaskOut(BaseModel):
     started_at: datetime | None = None
     work_seconds: int | None = None
     item_count: int | None = None
+    project_name: str | None = None
+    # 抓挠片段几段、其中 AI 给的还没人确认的几段；疑似候选几条、还没判的几条
+    scratch_items: int | None = None
+    scratch_pending: int | None = None
+    cand_total: int | None = None
+    cand_pending: int | None = None
     # 指派人角色，列表里按角色上色（超管/管理员/标注员/审核员一眼分开）
     assigned_to_role: str | None = None
 

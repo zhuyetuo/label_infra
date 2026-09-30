@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
@@ -41,8 +42,13 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
         for uid, dn, un in (await db.execute(
                 select(User.id, User.display_name, User.username).where(User.id.in_(uids)))).all():
             names[uid] = dn or un
+    pnames: dict[int, str] = {}
+    pids = {t.project_id for t in tasks}
+    if pids:
+        pnames = dict((await db.execute(select(Project.id, Project.name).where(Project.id.in_(pids)))).all())
     return ok([{**TaskOut.model_validate(t).model_dump(), **briefs.get(t.sample_id, {}),
                 **recs.get(t.id, {}),
+                "project_name": pnames.get(t.project_id),
                 "assigned_to_name": names.get(t.assigned_to) if t.assigned_to is not None else None}
                for t in tasks])
 
