@@ -256,6 +256,8 @@ export interface EdgeMetrics {
   split?: string;
   agree_with_sklearn?: number;
   agree_with_float?: number;
+  /** cnn：量化量程用的分位数（100 = min/max） */
+  quant_percentile?: number;
   footprint?: EdgeFootprint;
 }
 
