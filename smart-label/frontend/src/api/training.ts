@@ -209,6 +209,8 @@ export const submitTrain = (body: {
     edge_filters?: number[] | null;
     missing_strategy?: string | null;
     skip_syn?: boolean;
+    /** 类别均衡：none / min / cap:N，只砍训练集 */
+    balance?: string | null;
     source_hz?: number | null;
     hz?: number | null;
     clean?: boolean;
@@ -282,6 +284,33 @@ export interface EdgeFootprint {
 }
 
 /** 端侧源码包下载地址（走同一个 /api/v1 前缀，浏览器直接开） */
+/** 训练集统计（训练开始时算，metrics.dataset） */
+export interface DatasetStats {
+  window_s: number; stride_s: number; n_tasks: number; n_days: number;
+  total_seconds: number; total_windows: number;
+  rows: { label: string; segments: number; seconds: number; windows: number; share: number; n_tasks: number; n_days: number; short_segments: number }[];
+  dropped: { label: string; segments: number; seconds: number }[];
+  per_day: Record<string, number | string>[];
+  hints: string[];
+}
+
+/** 训练完回放（metrics.review 是前几百条，全量走 trainReview） */
+export interface ReviewRow {
+  task_id: number; sample_code: string | null; day: string; kind: string;
+  human: string | null; pred: string; start_ms: number; end_ms: number; seconds: number;
+  conf: number; p_human: number | null; n_windows: number; votes: Record<string, number>;
+}
+export interface TrainReview {
+  model_tag: string | null; job_id: number;
+  n_tasks: number; n_tasks_ok: number; n_tasks_failed: number;
+  n_segments: number; n_wrong: number; by_kind: Record<string, number>; event_labels: string[];
+  confusion: { classes: string[]; matrix: number[][] };
+  per_class: Record<string, { segments: number; correct: number; recall: number | null; precision: number | null }>;
+  rows: ReviewRow[]; n_rows_total: number; errors: string[]; note?: string;
+}
+export const trainReview = (id: number) => request.get<never, TrainReview>(`/model-versions/${id}/review`);
+export const rerunTrainReview = (id: number) => request.post<never, { ok: boolean }>(`/model-versions/${id}/review/rerun`);
+
 export const edgeBundleUrl = (id: number) => `/api/v1/model-versions/${id}/edge-bundle`;
 
 /** 导出到端侧：算法机转成板上那份 C、算端侧 F1、端侧服务重新加载。要几十秒到一两分钟 */
