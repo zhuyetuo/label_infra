@@ -80,8 +80,8 @@ export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?:
         <Descriptions.Item label="源码包（硬盘）" span={2}>
           <Space>
             <span>{KB(fp.source_bundle?.total)}，{files.length} 个文件</span>
-            {onDownload && <Button size="small" type="primary" onClick={onDownload}>下载源码包（zip）</Button>}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>core/ 运行时 + 模型导出的 C + README（占用、调用顺序、编译选项）</Typography.Text>
+            {onDownload && <Button size="small" type="primary" onClick={onDownload}>下载端侧包（源码 + libtinyml.a）</Button>}
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>源码（core/ + model/）+ 预编的 lib/libtinyml.a（Cortex-M4F softfp，跟 GR551x SDK 一致）+ include/ + README（两种接法、占用、调用顺序、编译选项）</Typography.Text>
           </Space>
         </Descriptions.Item>
       </Descriptions>
