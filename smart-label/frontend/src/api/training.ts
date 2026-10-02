@@ -271,6 +271,13 @@ export interface EdgeFootprint {
   source_bundle: { files: Record<string, number>; total: number };
   per_file: Record<"runtime" | "model" | "tables", Record<string, { text?: number; data?: number; bss?: number; error?: string }>>;
   chip?: { name: string; flash_total: number; ram_available: number; ble_baseline_flash: number; ble_baseline_ram: number; note?: string };
+  /** 可选加速路线（-DTM_USE_CMSIS）同一份模型再编一遍的占用；导出时 third_party/cmsis 不在就是 null */
+  accel?: {
+    name: string; define: string; bit_exact: boolean; note?: string; errors?: string[];
+    flash: { runtime: number; cmsis: number; linked?: boolean; total_without_golden: number; delta: number };
+    ram: { runtime_bss: number; scratch: number; total_without_post: number; delta: number };
+    host_us_per_window?: number; agree_with_plain?: number;
+  } | null;
   measured_at?: number;
 }
 

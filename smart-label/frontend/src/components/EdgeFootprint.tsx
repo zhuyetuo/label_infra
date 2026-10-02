@@ -77,11 +77,27 @@ export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?:
             </div>
           )}
         </Descriptions.Item>
+        {fp.accel && (
+          <Descriptions.Item label={<Tooltip title="同一份模型、同一套接口，编译时加一个开关把热点换成 Arm 官方 CMSIS 内核：RF 是 FFT 和向量统计（CMSIS-DSP），CNN 是卷积/池化/全连接（CMSIS-NN）。默认关，开了不再逐位一致。包里两条路各一个 .a。"><span style={{ cursor: "help" }}>可选加速（{fp.accel.name}）</span></Tooltip>} span={2}>
+            <Space direction="vertical" size={2} style={{ fontSize: 12 }}>
+              <span>
+                flash <b>{KB(fp.accel.flash.total_without_golden)}</b>（{fp.accel.flash.delta >= 0 ? "+" : ""}{B(fp.accel.flash.delta)}）
+                · RAM <b>{KB(fp.accel.ram.total_without_post)}</b>（{fp.accel.ram.delta >= 0 ? "+" : ""}{B(fp.accel.ram.delta)}）
+                {fp.accel.host_us_per_window != null && fp.inference.host_us_per_window != null && (
+                  <span> · x86 每窗 {fp.accel.host_us_per_window} µs（朴素 {fp.inference.host_us_per_window} µs；M4F 上 CMSIS 用 SIMD，差距会更大）</span>
+                )}
+                {fp.accel.agree_with_plain != null && <span> · 判决跟朴素实现一致 {(fp.accel.agree_with_plain * 100).toFixed(1)}%</span>}
+              </span>
+              <span style={{ color: "#888" }}>{fp.accel.note}。编译加 <code>{fp.accel.define}</code>，或直接链 lib/libtinyml_cmsis.a</span>
+              {(fp.accel.errors?.length ?? 0) > 0 && <Typography.Text type="danger">CMSIS 那条有文件没编过：{fp.accel.errors!.join("、")}</Typography.Text>}
+            </Space>
+          </Descriptions.Item>
+        )}
         <Descriptions.Item label="源码包（硬盘）" span={2}>
           <Space>
             <span>{KB(fp.source_bundle?.total)}，{files.length} 个文件</span>
             {onDownload && <Button size="small" type="primary" onClick={onDownload}>下载端侧包（源码 + libtinyml.a）</Button>}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>源码（core/ + model/）+ 预编的 lib/libtinyml.a（Cortex-M4F softfp，跟 GR551x SDK 一致）+ include/ + README（两种接法、占用、调用顺序、编译选项）</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>源码（core/ + model/ + third_party/cmsis 子集）+ 预编的 lib/libtinyml.a 和 libtinyml_cmsis.a（Cortex-M4F softfp，跟 GR551x SDK 一致）+ include/ + README（两种接法、可选加速、占用、调用顺序、编译选项）</Typography.Text>
           </Space>
         </Descriptions.Item>
       </Descriptions>
