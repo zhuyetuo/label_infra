@@ -745,8 +745,8 @@ export default function Training() {
                   },
                   {
                     title: (
-                      <Tooltip title="「导出到端侧」之后才有：用板上那份 C（float32 特征、量化过的叶子）在留出集上跑出来的成绩。跟左边 sklearn 的数不是一回事——这个才是项圈上会有的效果">
-                        端侧 F1
+                      <Tooltip title="「导出到端侧」之后才有：用板上那份 C 在留出集上跑出来的成绩——rf 是 float32 特征 + 量化过的叶子，cnn 是 int8 量化后的网络。跟左边服务器上的数不是一回事，这个才是项圈上会有的效果">
+                        端侧 F1（板上 C · int8）
                       </Tooltip>
                     ),
                     render: (_, v: ModelVersion) => {
@@ -755,7 +755,7 @@ export default function Training() {
                       const pc = Object.entries(e.per_class ?? {}).map(([cls, m]) => ({ cls, f1: m["f1-score"] ?? 0, p: m.precision ?? 0, r: m.recall ?? 0 }));
                       return (
                         <Space size={2} wrap>
-                          <Tooltip title={`端侧 macro-F1 ${e.macro_f1.toFixed(3)}，准确率 ${e.accuracy.toFixed(3)}，留出集 ${e.n_windows} 窗${e.flash_bytes ? `，模型 ${(e.flash_bytes / 1024).toFixed(1)} KB` : ""}${typeof e.agree_with_sklearn === "number" ? `，跟 sklearn 判决一致 ${(e.agree_with_sklearn * 100).toFixed(1)}%` : ""}`}>
+                          <Tooltip title={`端侧${v.model_type === "cnn" ? "（int8）" : ""} macro-F1 ${e.macro_f1.toFixed(3)}，准确率 ${e.accuracy.toFixed(3)}，留出集 ${e.n_windows} 窗${e.flash_bytes ? `，模型 ${(e.flash_bytes / 1024).toFixed(1)} KB` : ""}${typeof e.agree_with_sklearn === "number" ? `，跟 sklearn 判决一致 ${(e.agree_with_sklearn * 100).toFixed(1)}%` : ""}${typeof e.agree_with_float === "number" ? `，跟 float 判决一致 ${(e.agree_with_float * 100).toFixed(1)}%` : ""}${e.quant_percentile != null ? `，量程取 ${e.quant_percentile} 百分位` : ""}`}>
                             <b>{e.macro_f1.toFixed(3)}</b>
                           </Tooltip>
                           {pc.map((c) => (
