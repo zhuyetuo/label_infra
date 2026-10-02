@@ -1832,6 +1832,66 @@ export default function Training() {
                 </Typography.Text>
               </Descriptions.Item>
             )}
+            {edgeOf(detail) && (
+              <Descriptions.Item label={detail.model_type === "cnn" ? "float32 vs int8（端侧）" : "服务器 vs 端侧 C"}>
+                {/* 同一个模型两种跑法并排：左边是训练机上的数，右边是板上那份 C 跑出来的。
+                    差太多就是导出/量化有问题，不是模型的问题 */}
+                {(() => {
+                  const e = edgeOf(detail)!;
+                  const srv = Object.fromEntries(perClassOf(detail).map((c) => [c.cls, c]));
+                  const rows = Object.entries(e.per_class ?? {}).map(([cls, m]) => ({
+                    cls,
+                    sp: srv[cls]?.p, sr: srv[cls]?.r, sf: srv[cls]?.f1,
+                    ep: m.precision ?? 0, er: m.recall ?? 0, ef: m["f1-score"] ?? 0,
+                  }));
+                  const leftName = detail.model_type === "cnn" ? "float32（训练机）" : "sklearn（训练机）";
+                  const rightName = detail.model_type === "cnn" ? "int8（板上 C）" : "板上 C（float32 特征 · 量化叶子）";
+                  const diff = (a?: number, b?: number) =>
+                    a == null || b == null ? "-" : (
+                      <span style={{ color: b - a < -0.03 ? "#f5222d" : b - a > 0.03 ? "#52c41a" : "#888" }}>
+                        {b - a >= 0 ? "+" : ""}{(b - a).toFixed(3)}
+                      </span>
+                    );
+                  return (
+                    <>
+                      <Table
+                        size="small"
+                        rowKey="cls"
+                        pagination={false}
+                        dataSource={rows}
+                        columns={[
+                          { title: "类别", dataIndex: "cls", width: 110 },
+                          {
+                            title: leftName, children: [
+                              { title: "P", dataIndex: "sp", width: 64, render: (x?: number) => x?.toFixed(3) ?? "-" },
+                              { title: "R", dataIndex: "sr", width: 64, render: (x?: number) => x?.toFixed(3) ?? "-" },
+                              { title: "F1", dataIndex: "sf", width: 70, render: (x?: number) => x == null ? "-" : <Tag color={f1Color(x)}>{x.toFixed(3)}</Tag> },
+                            ],
+                          },
+                          {
+                            title: rightName, children: [
+                              { title: "P", dataIndex: "ep", width: 64, render: (x: number) => x.toFixed(3) },
+                              { title: "R", dataIndex: "er", width: 64, render: (x: number) => x.toFixed(3) },
+                              { title: "F1", dataIndex: "ef", width: 70, render: (x: number) => <Tag color={f1Color(x)}>{x.toFixed(3)}</Tag> },
+                            ],
+                          },
+                          { title: "F1 差", width: 70, render: (_, r) => diff(r.sf, r.ef) },
+                        ]}
+                      />
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        macro-F1：{leftName} {(f1Of(detail) ?? 0).toFixed(3)} → {rightName} {e.macro_f1.toFixed(3)}
+                        （{diff(f1Of(detail) ?? undefined, e.macro_f1)}）
+                        {typeof e.agree_with_float === "number" && `；逐窗口判决一致 ${(e.agree_with_float * 100).toFixed(1)}%`}
+                        {typeof e.agree_with_sklearn === "number" && `；逐窗口判决一致 ${(e.agree_with_sklearn * 100).toFixed(1)}%`}
+                        {e.quant_percentile != null && `；量程取 ${e.quant_percentile} 百分位`}
+                        {e.split && `；留出集 ${e.split} ${e.n_windows} 窗`}
+                        。差在 ±0.03 内是正常的量化/实现差异；红的是端侧明显掉了，先查导出不是查模型。
+                      </Typography.Text>
+                    </>
+                  );
+                })()}
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="训练设置">
               {(() => {
                 const sp = specOf(detail);
