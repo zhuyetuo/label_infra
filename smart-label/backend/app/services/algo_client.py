@@ -310,6 +310,19 @@ async def size_curve(algo_job_id: int, trees: list[int] | None = None, depths: l
     return resp.json()
 
 
+async def edge_bundle(algo_job_id: int) -> bytes:
+    """端侧源码包 zip（core/ 运行时 + 模型导出 + README），给嵌入式打 lib 用。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/edge_bundle"
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.get(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务打源码包失败（{resp.status_code}）：{resp.text[:300]}")
+    return resp.content
+
+
 async def export_edge(algo_job_id: int) -> dict:
     """把这一版导成端侧模型（算法机上跑 algo_tinyml 的导出脚本，要编译 C、在留出集上
     跑一遍，几十秒到一两分钟）。返回 {tag, spec, edge:{macro_f1, per_class, ...}}。"""

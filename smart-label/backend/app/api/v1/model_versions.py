@@ -228,6 +228,22 @@ async def size_curve(version_id: int, body: SizeCurveIn | None = None, db: Async
     return ok(res)
 
 
+@router.get("/{version_id}/edge-bundle")
+async def edge_bundle(version_id: int, db: AsyncSession = Depends(get_db)):
+    """下载这一版的端侧源码包（zip）：core/ 运行时 + 模型导出的 C + README（占用、调用顺序、编译选项）。"""
+    from fastapi.responses import Response
+
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        data = await algo_client.edge_bundle(row.algo_job_id)
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="edge_train{row.algo_job_id}_v{row.id}.zip"'})
+
+
 @router.post("/{version_id}/export-edge")
 async def export_edge(version_id: int, db: AsyncSession = Depends(get_db)):
     """导出到端侧：算法机把这一版随机森林转成板上那份 C，在留出集上算「端侧 F1」，

@@ -13,6 +13,7 @@ import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import TrainLogModal from "@/components/TrainLogModal";
 import SizeCurveModal from "@/components/SizeCurveModal";
+import EdgeFootprint from "@/components/EdgeFootprint";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import ModelCompare from "@/components/ModelCompare";
 import type { LabelDefinition, Task } from "@/types";
@@ -24,7 +25,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, edgeBundleUrl, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -1859,6 +1860,14 @@ export default function Training() {
                 <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.metrics || "-"}</pre>
               </details>
             </Descriptions.Item>
+            {edgeOf(detail)?.footprint && (
+              <Descriptions.Item label="端侧资源占用">
+                <EdgeFootprint
+                  fp={edgeOf(detail)!.footprint!}
+                  onDownload={() => window.open(edgeBundleUrl(detail.id), "_blank")}
+                />
+              </Descriptions.Item>
+            )}
             {detail.error && (
               <Descriptions.Item label="错误">
                 <Typography.Text type="danger">{detail.error}</Typography.Text>
