@@ -323,6 +323,36 @@ async def edge_bundle(algo_job_id: int) -> bytes:
     return resp.content
 
 
+async def train_review(algo_job_id: int) -> dict:
+    """训练完回放的完整结果（错例全量）。训练记录 metrics.review 里只带前几百条。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/review"
+    try:
+        async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
+            resp = await client.get(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 404:
+        raise AlgoServiceError("这一版还没有回放结果（训练完会自动跑；老版本可以点「重跑回放」）")
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务取回放结果失败（{resp.status_code}）：{resp.text[:300]}")
+    return resp.json()
+
+
+async def rerun_train_review(algo_job_id: int) -> dict:
+    """再跑一次回放（后台）。改完标注想看还剩多少错例时用——注意模型没重训。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/review"
+    try:
+        async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
+            resp = await client.post(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 409:
+        raise AlgoConflict("训练还没完成")
+    if resp.status_code != 200:
+        raise AlgoServiceError(f"算法服务重跑回放失败（{resp.status_code}）：{resp.text[:300]}")
+    return resp.json()
+
+
 async def export_edge(algo_job_id: int) -> dict:
     """把这一版导成端侧模型（算法机上跑 algo_tinyml 的导出脚本，要编译 C、在留出集上
     跑一遍，几十秒到一两分钟）。返回 {tag, spec, edge:{macro_f1, per_class, ...}}。"""

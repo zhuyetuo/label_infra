@@ -228,6 +228,34 @@ async def size_curve(version_id: int, body: SizeCurveIn | None = None, db: Async
     return ok(res)
 
 
+@router.get("/{version_id}/review")
+async def train_review(version_id: int, db: AsyncSession = Depends(get_db)):
+    """训练完回放：这一版模型把训练集再预测一遍，跟人标的对不上的段（全量）。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        return ok(await algo_client.train_review(row.algo_job_id))
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@router.post("/{version_id}/review/rerun")
+async def rerun_train_review(version_id: int, db: AsyncSession = Depends(get_db)):
+    """再跑一次回放（改完标注之后看还剩多少错例；模型不重训）。跑完刷新列表就能看到。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    if row.status != ModelTrainStatus.done:
+        raise HTTPException(status_code=400, detail="训练还没完成")
+    try:
+        return ok(await algo_client.rerun_train_review(row.algo_job_id))
+    except algo_client.AlgoConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 @router.get("/{version_id}/edge-bundle")
 async def edge_bundle(version_id: int, db: AsyncSession = Depends(get_db)):
     """下载这一版的端侧源码包（zip）：core/ 运行时 + 模型导出的 C + README（占用、调用顺序、编译选项）。"""

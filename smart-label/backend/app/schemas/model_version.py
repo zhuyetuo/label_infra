@@ -41,6 +41,9 @@ class DatasetSpecIn(BaseModel):
     edge_filters: list[int] | None = None
     missing_strategy: str | None = None
     skip_syn: bool = False
+    # 类别均衡：none（默认）/ min（多的类砍到跟最少的一样多）/ cap:N（每类最多 N 个训练窗口）。
+    # 只砍训练集的窗口。先看训练集统计和回放，确认是"量少"不是"标错"再开
+    balance: str | None = None
     # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。
     # AI 服务会把它整理成 data/raw_custom/<date>/merged_tmp.json 再跑 train_custom.sh
     export_json: str | None = None

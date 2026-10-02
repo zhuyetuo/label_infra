@@ -6,6 +6,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
+import TrainReviewModal from "@/components/TrainReviewModal";
 import { getSavedRange, saveRange } from "@/utils/persistedSize";
 import { useAuthStore } from "@/stores/authStore";
 import { claimTask, getTask } from "@/api/tasks";
@@ -28,6 +29,8 @@ import {
   activateModel, cancelModelVersion, edgeBundleUrl, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
+  type DatasetStats,
+  type TrainReview,
 } from "@/api/training";
 
 /**
@@ -76,6 +79,7 @@ type TrainOpts = {
   edgeDepth?: number | null;
   edgeFilters?: string;
   skipSyn?: boolean;
+  balance?: string;
   extraDs?: string[];
   extraHz?: Record<string, number>;
   remapEdits?: Record<string, string>;
@@ -104,8 +108,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
     if (names.length > 30) {
       for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
     }
-    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters } = opts;
-    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters };
+    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance };
     localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
   } catch {
     // 存不了就算了，不影响这次提交
@@ -215,6 +219,9 @@ export default function Training() {
   const [curveFor, setCurveFor] = useState<ModelVersion | null>(null);
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
+  // 类别均衡：none / min / cap:N。默认不动——砍数据会丢多样性，先看训练集统计和回放再决定
+  const [balance, setBalance] = useState<string>("none");
+  const [reviewFor, setReviewFor] = useState<ModelVersion | null>(null);
   const [tag, setTag] = useState("");
   const [scope, setScope] = useState<"approved" | "reviewed">("approved");
   // 互斥轨的折叠：默认按 行为 > 运动 > 姿态 折成一个时刻一个标签（RF 单标签）；
@@ -444,6 +451,7 @@ export default function Training() {
       if (base.hz) setHz(base.hz);
       if (base.axes) setAxes(base.axes);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
+      setBalance(base.balance || "none");
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
       setEdgeTrees(base.edgeTrees ?? null);
       setEdgeDepth(base.edgeDepth ?? null);
@@ -487,13 +495,14 @@ export default function Training() {
           edge_depth: edgeSize && modelType !== "cnn" ? edgeDepth : null,
           edge_filters: edgeSize && modelType === "cnn" ? parseFilters(edgeFilters) : null,
           skip_syn: skipSyn,
+          balance: balance === "none" ? null : balance,
           clean: true,
         },
         model_type: modelType,
         tag: tag.trim() || null,
       });
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters,
+        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -766,6 +775,34 @@ export default function Training() {
                             </Tooltip>
                           ))}
                         </Space>
+                      );
+                    },
+                  },
+                  {
+                    title: (
+                      <Tooltip title="训练集：这次喂了什么（每类多少、来自几天）。回放：训练完用这一版把训练集再预测一遍，对不上的段列出来，点进去看是标错了还是模型弱">
+                        数据 · 回放
+                      </Tooltip>
+                    ),
+                    width: 150,
+                    render: (_, v: ModelVersion) => {
+                      const m = metricsOf(v);
+                      const ds = m?.dataset as DatasetStats | undefined;
+                      const rv = m?.review as TrainReview | undefined;
+                      if (!ds && !rv) return <span style={{ color: "#999" }}>—</span>;
+                      const miss = rv?.by_kind?.["漏识别"] ?? 0;
+                      const fp = (rv?.by_kind?.["误识别"] ?? 0) + (rv?.by_kind?.["未标注区报事件"] ?? 0);
+                      return (
+                        <a onClick={() => setReviewFor(v)} style={{ fontSize: 12 }}>
+                          {ds && <div>{ds.rows.length} 类 · {ds.total_windows.toLocaleString()} 窗{ds.hints.length ? <Tag color="orange" style={{ marginLeft: 4 }}>{ds.hints.length} 提示</Tag> : null}</div>}
+                          {rv ? (
+                            <div>
+                              {rv.n_segments} 段 · 错 {rv.n_wrong}
+                              {miss ? <Tag color="red" style={{ marginLeft: 4, marginInlineEnd: 0 }}>漏 {miss}</Tag> : null}
+                              {fp ? <Tag color="volcano" style={{ marginLeft: 4, marginInlineEnd: 0 }}>误 {fp}</Tag> : null}
+                            </div>
+                          ) : v.status === "done" ? <div style={{ color: "#999" }}>回放未跑</div> : null}
+                        </a>
                       );
                     },
                   },
@@ -1561,6 +1598,30 @@ export default function Training() {
             <Checkbox checked={skipSyn} onChange={(e) => setSkipSyn(e.target.checked)}>
               跳过合成数据（只训练纯标注那一版，快一些）
             </Checkbox>
+            <Space wrap>
+              <Tooltip title="只砍训练集的窗口，验证集不动，指标还是在原分布上算的。砍数据会丢多样性——先看上一版的「训练集」统计和「回放」，确认少的类别是量少不是标错，再开这个对比一版">
+                <span style={{ cursor: "help" }}>类别均衡</span>
+              </Tooltip>
+              <Select
+                size="small"
+                style={{ width: 300 }}
+                value={balance.startsWith("cap:") ? "cap" : balance}
+                onChange={(v) => setBalance(v === "cap" ? "cap:2000" : v)}
+                options={[
+                  { value: "none", label: "不动（默认，靠类别权重补）" },
+                  { value: "min", label: "多的类砍到跟最少的一样多" },
+                  { value: "cap", label: "每类最多 N 个窗口" },
+                ]}
+              />
+              {balance.startsWith("cap:") && (
+                <InputNumber
+                  size="small" min={100} step={100}
+                  value={Number(balance.slice(4)) || 2000}
+                  onChange={(v) => setBalance(`cap:${v ?? 2000}`)}
+                  addonAfter="窗"
+                />
+              )}
+            </Space>
 
             {/* ── 一起训练的其它数据集 ──────────────────────────────
                 单独一份常常训不了：按片段取只收人确认过的片段，而没人会去
@@ -1797,6 +1858,16 @@ export default function Training() {
               : `已按 ${spec.edge_trees} 棵 × 深 ${spec.edge_depth} 填好，确认后提交`,
           );
         }}
+      />
+
+      <TrainReviewModal
+        versionId={reviewFor?.id ?? null}
+        title={`数据 · 回放 · 训练记录 #${reviewFor?.id ?? ""}${reviewFor?.model_version ? `（${reviewFor.model_version}）` : ""}`}
+        stats={(reviewFor && (metricsOf(reviewFor)?.dataset as DatasetStats | undefined)) || null}
+        review={(reviewFor && (metricsOf(reviewFor)?.review as TrainReview | undefined)) || null}
+        modelDone={reviewFor?.status === "done"}
+        onClose={() => setReviewFor(null)}
+        onRefresh={() => void qc.invalidateQueries({ queryKey: ["model-versions"] })}
       />
 
       <Modal title={`训练详情 #${detail?.id ?? ""}`} open={detail != null} onCancel={() => setDetail(null)} footer={null} width={720}>
