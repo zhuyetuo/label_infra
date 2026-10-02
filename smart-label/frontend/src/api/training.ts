@@ -255,7 +255,25 @@ export interface EdgeMetrics {
   flash_bytes?: number;
   split?: string;
   agree_with_sklearn?: number;
+  agree_with_float?: number;
+  footprint?: EdgeFootprint;
 }
+
+/** 端侧资源占用（导出时交叉编译量出来的） */
+export interface EdgeFootprint {
+  toolchain: string;
+  cross_compiled: boolean;
+  flash: { model: number; tables: number; runtime: number; golden: number; total_without_golden: number; total: number };
+  ram: { runtime_bss: number; window_buffer: number; arena: number; post_state: number; total: number; total_without_post: number; note?: string };
+  inference: { note?: string; host_us_per_window?: number; macs_per_window?: number; fft_per_window?: number; tree_compares_max?: number };
+  source_bundle: { files: Record<string, number>; total: number };
+  per_file: Record<"runtime" | "model" | "tables", Record<string, { text?: number; data?: number; bss?: number; error?: string }>>;
+  chip?: { name: string; flash_total: number; ram_available: number; ble_baseline_flash: number; ble_baseline_ram: number; note?: string };
+  measured_at?: number;
+}
+
+/** 端侧源码包下载地址（走同一个 /api/v1 前缀，浏览器直接开） */
+export const edgeBundleUrl = (id: number) => `/api/v1/model-versions/${id}/edge-bundle`;
 
 /** 导出到端侧：算法机转成板上那份 C、算端侧 F1、端侧服务重新加载。要几十秒到一两分钟 */
 export const exportModelEdge = (id: number) =>
