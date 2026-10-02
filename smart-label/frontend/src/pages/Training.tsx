@@ -683,7 +683,9 @@ export default function Training() {
                 loading={loadingV}
                 dataSource={versions ?? []}
                 pagination={{ pageSize: 20 }}
-                scroll={{ x: "max-content" }}
+                // 不要横向滚动条：列都允许换行，操作按钮折成多行。宁可一行高一点，
+                // 也别让人左右拖着找「删除」在哪
+                tableLayout="auto"
                 columns={[
                   { title: "ID", dataIndex: "id", width: 50 },
                   {
@@ -767,20 +769,23 @@ export default function Training() {
                       );
                     },
                   },
-                  { title: "标签", dataIndex: "model_version", width: 110, render: (t: string | null) => t || "-" },
                   {
-                    title: "提交时间",
-                    dataIndex: "created_at",
-                    width: 150,
-                    render: (t: string) => t?.replace("T", " ").slice(0, 16),
+                    title: "标签 / 时间",
+                    width: 120,
+                    render: (_, v: ModelVersion) => (
+                      <div style={{ fontSize: 12 }}>
+                        <div>{v.model_version || "-"}</div>
+                        <div style={{ color: "#888" }}>{v.created_at?.replace("T", " ").slice(5, 16)}</div>
+                      </div>
+                    ),
                   },
                   {
                     title: "操作",
-                    fixed: "right",
+                    width: 230,
                     render: (_, v: ModelVersion) => {
                       const busy = v.status === "queued" || v.status === "running";
                       return (
-                        <Space size={0}>
+                        <Space size={0} wrap>
                           <Button size="small" type="link" onClick={() => setLogFor(v.id)}>
                             {busy ? "看进度" : "日志"}
                           </Button>
