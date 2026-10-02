@@ -32,6 +32,11 @@ export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?:
         {fp.cross_compiled ? "用 " : "⚠ 没装交叉编译器，用 "}{fp.toolchain} 编出来的数
         {fp.cross_compiled ? "，跟固件同一套选项（-Os、-ffp-contract=off）" : ""}
       </Typography.Text>
+      {Object.values(fp.per_file.runtime).some((v) => v.error) && (
+        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+          工程代码有文件没编过，「工程代码」那一项不可信——下面文件表里悬停看报错；多半是交叉编译器缺 C 库，重新部署算法机后「重导端侧」
+        </Typography.Text>
+      )}
 
       <Descriptions size="small" bordered column={2}>
         <Descriptions.Item label="模型（flash）">
@@ -93,7 +98,7 @@ export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?:
         columns={[
           { title: "文件", dataIndex: "name" },
           { title: "", dataIndex: "group", width: 80, render: (g: string) => <Tag>{g}</Tag> },
-          { title: "flash (text+data)", width: 140, render: (_, r: FileRow) => (r.error ? <span style={{ color: "#f5222d" }}>编译失败</span> : B((r.text ?? 0) + (r.data ?? 0))) },
+          { title: "flash (text+data)", width: 140, render: (_, r: FileRow) => (r.error ? <Tooltip title={r.error}><span style={{ color: "#f5222d", cursor: "help" }}>编译失败（悬停看原因）</span></Tooltip> : B((r.text ?? 0) + (r.data ?? 0))) },
           { title: "RAM (bss)", width: 110, render: (_, r: FileRow) => B(r.bss ?? 0) },
         ]}
       />
