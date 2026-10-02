@@ -203,6 +203,10 @@ export const submitTrain = (body: {
     axes?: number;
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
+    /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */
+    edge_trees?: number | null;
+    edge_depth?: number | null;
+    edge_filters?: number[] | null;
     missing_strategy?: string | null;
     skip_syn?: boolean;
     source_hz?: number | null;
@@ -260,6 +264,35 @@ export const exportModelEdge = (id: number) =>
     undefined,
     { timeout: 1_900_000 }
   );
+
+/** 体积曲线：rf 是 棵数 × 深度 的网格（剪枝不重训，紧凑编码算 flash，板上那套特征算 F1）；
+ *  cnn 是 filters 预设的 int8 体积（换 filters 要重训才有 F1） */
+export interface SizeCurveRow {
+  trees?: number;
+  depth?: number;
+  nodes?: number;
+  filters?: number[];
+  flash_bytes: number;
+  macs?: number;
+  macro_f1: number | null;
+  accuracy?: number;
+  per_class?: Record<string, number> | null;
+  current: boolean;
+}
+export interface SizeCurve {
+  kind: "rf" | "cnn";
+  rows: SizeCurveRow[];
+  classes: string[];
+  holdout_n?: number;
+  split?: string;
+  current: { trees?: number; depth?: number; filters?: number[] };
+  n_channels: number;
+  window: number;
+  note?: string;
+  computed_at?: number;
+}
+export const sizeCurve = (id: number, body?: { trees?: number[]; depths?: number[] }) =>
+  request.post<never, SizeCurve>(`/model-versions/${id}/size-curve`, body ?? {}, { timeout: 3_700_000 });
 
 export const setModelListed = (id: number, on: boolean) =>
   request.post<never, { id: number; listed: boolean }>(`/model-versions/${id}/listed`, undefined, { params: { on } });

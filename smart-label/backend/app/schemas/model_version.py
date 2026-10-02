@@ -35,6 +35,10 @@ class DatasetSpecIn(BaseModel):
     # 端侧尺寸：用 imu_train 的 configs/ml_edge.yaml（限深限棵数），模型才塞得进
     # 板子给模型留的约 128KB flash。默认那份是 200 棵不限深的森林，几十 MB
     edge_size: bool = False
+    # 端侧尺寸里具体填的规格（体积曲线那页「按这个规格重训」会带过来）；不填用默认
+    edge_trees: int | None = None
+    edge_depth: int | None = None
+    edge_filters: list[int] | None = None
     missing_strategy: str | None = None
     skip_syn: bool = False
     # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。
