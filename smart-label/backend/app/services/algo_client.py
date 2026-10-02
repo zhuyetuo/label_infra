@@ -285,6 +285,31 @@ class AlgoConflict(AlgoServiceError):
     """算法服务说这一版现在不能删（还在跑 / 正在用）。原因要原样给人看。"""
 
 
+async def size_curve(algo_job_id: int, trees: list[int] | None = None, depths: list[int] | None = None) -> dict:
+    """体积曲线：rf 扫 棵数 × 深度（剪枝不重训）算 flash 和每类 F1；cnn 按 filters 预设算 int8 体积。
+    要几十秒到几分钟。"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/size_curve"
+    body = {k: v for k, v in (("trees", trees), ("depths", depths)) if v}
+    try:
+        async with httpx.AsyncClient(timeout=3600.0) as client:
+            resp = await client.post(url, json=body)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code == 409:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:300]
+        raise AlgoConflict(str(detail))
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:800]
+        raise AlgoServiceError(f"算法服务算体积曲线失败（{resp.status_code}）：{detail}")
+    return resp.json()
+
+
 async def export_edge(algo_job_id: int) -> dict:
     """把这一版导成端侧模型（算法机上跑 algo_tinyml 的导出脚本，要编译 C、在留出集上
     跑一遍，几十秒到一两分钟）。返回 {tag, spec, edge:{macro_f1, per_class, ...}}。"""

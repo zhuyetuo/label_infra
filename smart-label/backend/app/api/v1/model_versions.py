@@ -197,6 +197,37 @@ async def set_listed(version_id: int, on: bool = True, db: AsyncSession = Depend
     return ok(out)
 
 
+class SizeCurveIn(BaseModel):
+    trees: list[int] | None = None
+    depths: list[int] | None = None
+
+
+@router.post("/{version_id}/size-curve")
+async def size_curve(version_id: int, body: SizeCurveIn | None = None, db: AsyncSession = Depends(get_db)):
+    """体积曲线：这一版剪到多小、F1 掉多少（rf：棵数 × 深度网格，不重训；cnn：filters 预设的 int8 体积）。
+    结果存进 metrics.size_curve，再点就直接显示，带 refresh 才重算。"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    if row.status != ModelTrainStatus.done or not row.model_path:
+        raise HTTPException(status_code=400, detail="这条记录还没有模型文件（训练没完成或失败）")
+    body = body or SizeCurveIn()
+    try:
+        res = await algo_client.size_curve(row.algo_job_id, body.trees, body.depths)
+    except algo_client.AlgoConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    try:
+        metrics = json.loads(row.metrics) if row.metrics else {}
+    except ValueError:
+        metrics = {}
+    metrics["size_curve"] = res
+    row.metrics = json.dumps(metrics, ensure_ascii=False)
+    await db.commit()
+    return ok(res)
+
+
 @router.post("/{version_id}/export-edge")
 async def export_edge(version_id: int, db: AsyncSession = Depends(get_db)):
     """导出到端侧：算法机把这一版随机森林转成板上那份 C，在留出集上算「端侧 F1」，

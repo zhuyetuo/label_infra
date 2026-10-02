@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -12,6 +12,7 @@ import { claimTask, getTask } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import TrainLogModal from "@/components/TrainLogModal";
+import SizeCurveModal from "@/components/SizeCurveModal";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import ModelCompare from "@/components/ModelCompare";
 import type { LabelDefinition, Task } from "@/types";
@@ -23,7 +24,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, exportModelEdge, setModelListed, type EdgeMetrics, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
 } from "@/api/training";
@@ -41,7 +42,8 @@ const STATUS_META: Record<ModelVersion["status"], { color: string; label: string
   failed: { color: "error", label: "失败" },
 };
 
-const MODEL_TYPES = ["rf", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
+const MODEL_TYPES = ["rf", "cnn", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
+const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", cnn: "cnn（1D-CNN）" };
 
 /**
  * 这一段到底是什么类别——取**叶子**（抓挠-躯干），不是根（抓挠）。
@@ -69,6 +71,9 @@ type TrainOpts = {
   hz?: number;
   axes?: number;
   edgeSize?: boolean;
+  edgeTrees?: number | null;
+  edgeDepth?: number | null;
+  edgeFilters?: string;
   skipSyn?: boolean;
   extraDs?: string[];
   extraHz?: Record<string, number>;
@@ -98,8 +103,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
     if (names.length > 30) {
       for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
     }
-    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn } = opts;
-    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn };
+    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters };
     localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
   } catch {
     // 存不了就算了，不影响这次提交
@@ -109,6 +114,12 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
 /** 「不参与训练」那一项的值。存进表里是空字符串，但空字符串当不了 Select 的
  *  value（antd 当成"没选"），所以下拉里用这个哨兵 */
 const DROP = "__drop__";
+
+/** "32,64,128" / "32/64/128" → [32,64,128]；填得不对就 null（用默认） */
+function parseFilters(s: string): number[] | null {
+  const xs = s.split(/[,，/\s]+/).map((x) => parseInt(x, 10)).filter((x) => Number.isFinite(x) && x > 0);
+  return xs.length === 3 ? xs : null;
+}
 
 export default function Training() {
   const qc = useQueryClient();
@@ -195,6 +206,12 @@ export default function Training() {
   const [axes, setAxes] = useState<number>(6);
   // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
   const [edgeSize, setEdgeSize] = useState(false);
+  // 端侧尺寸里具体的规格。空 = 默认（rf 20 棵 × 深 10；cnn filters 32/64/128）。
+  // 体积曲线那页点一格会把它填进来
+  const [edgeTrees, setEdgeTrees] = useState<number | null>(null);
+  const [edgeDepth, setEdgeDepth] = useState<number | null>(null);
+  const [edgeFilters, setEdgeFilters] = useState<string>("");
+  const [curveFor, setCurveFor] = useState<ModelVersion | null>(null);
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
   const [tag, setTag] = useState("");
@@ -427,6 +444,9 @@ export default function Training() {
       if (base.axes) setAxes(base.axes);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
+      setEdgeTrees(base.edgeTrees ?? null);
+      setEdgeDepth(base.edgeDepth ?? null);
+      setEdgeFilters(base.edgeFilters ?? "");
     }
     // 一起训练的那几份：删掉了的数据集别再选着——选择框里会出现一个认不出的名字
     const alive = new Set((datasets ?? []).map((x) => x.name));
@@ -462,6 +482,9 @@ export default function Training() {
           hz,
           axes,
           edge_size: edgeSize,
+          edge_trees: edgeSize && modelType !== "cnn" ? edgeTrees : null,
+          edge_depth: edgeSize && modelType !== "cnn" ? edgeDepth : null,
+          edge_filters: edgeSize && modelType === "cnn" ? parseFilters(edgeFilters) : null,
           skip_syn: skipSyn,
           clean: true,
         },
@@ -469,7 +492,7 @@ export default function Training() {
         tag: tag.trim() || null,
       });
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz,
+        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -784,7 +807,14 @@ export default function Training() {
                               </Button>
                             </Tooltip>
                           )}
-                          {v.status === "done" && v.model_path && v.model_type === "rf" && (
+                          {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
+                            <Tooltip title="这一版剪到多小、F1 掉多少。rf 是棵数 × 深度的网格（不重训直接剪）；cnn 是各档 filters 的 int8 体积。看中哪一格直接按那个规格重训">
+                              <Button size="small" type="link" onClick={() => setCurveFor(v)}>
+                                体积曲线
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
                             <Tooltip
                               title={
                                 edgeOf(v)
@@ -1442,7 +1472,7 @@ export default function Training() {
                 style={{ width: 140 }}
                 value={modelType}
                 onChange={setModelType}
-                options={MODEL_TYPES.map((m) => ({ value: m, label: m }))}
+                options={MODEL_TYPES.map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
               />
               <Typography.Text>标签</Typography.Text>
               <Input style={{ width: 160 }} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="可选" />
@@ -1480,20 +1510,39 @@ export default function Training() {
             </Space>
             <Space>
               <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
-                <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB，板子上装不下。勾上之后：rf = 20 棵 × 深 10，跟板上现在跑的 edge_rf_d10 同规格；xgb = 50 轮 × 深 6">
+                <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB，板子上装不下。勾上之后：rf = 20 棵 × 深 10（约 100 KB），跟板上现在跑的 edge_rf_d10 同规格；cnn = filters 32/64/128（int8 约 35 KB）；xgb = 50 轮 × 深 6。要更小的，在后面填具体规格，或者训完看「体积曲线」挑">
                   <span style={{ borderBottom: "1px dashed #666" }}>端侧尺寸（要烧进项圈就勾）</span>
                 </Tooltip>
               </Checkbox>
-              {edgeSize && (
-                // 写清楚这次用的是哪个规格：端侧尺寸训出来的跟不限深的大模型不能直接
-                // 比分数，人得知道自己训的是多大的
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {modelType === "rf"
-                    ? "rf：20 棵 × 深 10，跟板上 edge_rf_d10 同规格"
-                    : modelType === "xgb"
-                      ? "xgb：50 轮 × 深 6"
-                      : `${modelType} 用端侧那套超参（configs/ml_edge.yaml），能不能导到板上要看 algo_tinyml 支不支持这种模型`}
-                </Typography.Text>
+              {edgeSize && modelType === "cnn" && (
+                <Space size={4}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>filters</Typography.Text>
+                  <Input
+                    size="small"
+                    style={{ width: 120 }}
+                    value={edgeFilters}
+                    onChange={(e) => setEdgeFilters(e.target.value)}
+                    placeholder="32,64,128"
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    三层卷积的通道数；空 = 32/64/128（int8 约 35 KB）。16/32/64 约 9 KB
+                  </Typography.Text>
+                </Space>
+              )}
+              {edgeSize && modelType !== "cnn" && (
+                <Space size={4}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>棵数</Typography.Text>
+                  <InputNumber size="small" min={1} max={200} style={{ width: 70 }} value={edgeTrees} onChange={(v) => setEdgeTrees(v ?? null)} placeholder="20" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>深度</Typography.Text>
+                  <InputNumber size="small" min={2} max={30} style={{ width: 70 }} value={edgeDepth} onChange={(v) => setEdgeDepth(v ?? null)} placeholder="10" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {modelType === "rf"
+                      ? "空 = 20 棵 × 深 10（约 100 KB，板上 edge_rf_d10 同规格）；体积大致跟 棵数 × 2^深度 走"
+                      : modelType === "xgb"
+                        ? "空 = 50 轮 × 深 6"
+                        : `${modelType} 用端侧那套超参（configs/ml_edge.yaml），能不能导到板上要看 algo_tinyml 支不支持这种模型`}
+                  </Typography.Text>
+                </Space>
               )}
             </Space>
             {axes === 3 && (
@@ -1708,6 +1757,40 @@ export default function Training() {
         versionId={logFor}
         onClose={() => setLogFor(null)}
         onFinished={() => qc.invalidateQueries({ queryKey: ["model-versions"] })}
+      />
+
+      <SizeCurveModal
+        versionId={curveFor?.id ?? null}
+        modelType={curveFor?.model_type ?? "rf"}
+        cached={(curveFor && (metricsOf(curveFor)?.size_curve as SizeCurve | undefined)) || null}
+        onClose={() => {
+          qc.invalidateQueries({ queryKey: ["model-versions"] });
+          setCurveFor(null);
+        }}
+        onRetrain={(spec) => {
+          // 带着这一格的规格打开训练弹窗：同一份数据集、同样的轴数/采样率/归并表，只换尺寸
+          if (!curveFor) return;
+          const sp = specOf(curveFor);
+          const ds = (datasets ?? []).find((d) => d.name === sp.date);
+          if (!ds) {
+            message.warning(`数据集「${String(sp.date)}」已经不在了，没法按它重训`);
+            return;
+          }
+          openTrain(ds);
+          setModelType(curveFor.model_type);
+          setEdgeSize(true);
+          if (typeof sp.axes === "number") setAxes(sp.axes);
+          setEdgeTrees(spec.edge_trees ?? null);
+          setEdgeDepth(spec.edge_depth ?? null);
+          setEdgeFilters(spec.edge_filters ? spec.edge_filters.join(",") : "");
+          qc.invalidateQueries({ queryKey: ["model-versions"] });
+          setCurveFor(null);
+          message.info(
+            spec.edge_filters
+              ? `已按 filters ${spec.edge_filters.join("/")} 填好，确认后提交`
+              : `已按 ${spec.edge_trees} 棵 × 深 ${spec.edge_depth} 填好，确认后提交`,
+          );
+        }}
       />
 
       <Modal title={`训练详情 #${detail?.id ?? ""}`} open={detail != null} onCancel={() => setDetail(null)} footer={null} width={720}>
