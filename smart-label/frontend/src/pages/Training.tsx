@@ -1526,7 +1526,7 @@ export default function Training() {
                     placeholder="32,64,128"
                   />
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    三层卷积的通道数；空 = 32/64/128（int8 约 35 KB）。16/32/64 约 9 KB
+                    三层卷积的通道数；空 = 32/64/128（int8 约 35 KB）。16/32/64 约 9 KB。cnn 会把含缺失值（蓝牙断联）的窗口丢掉
                   </Typography.Text>
                 </Space>
               )}
