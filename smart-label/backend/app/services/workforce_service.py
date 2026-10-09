@@ -36,7 +36,7 @@ from app.models.user import User
 from app.services.annotator_work_service import SCRATCH_PREFIX, local_offset, utc_to_local
 
 GAP_MAX = 10 * 60          # 相邻动作隔了 10 分钟以上，当作人离开了，这段不算工时
-CAND_CATEGORY = "疑似抓挠"
+CAND_CATEGORY = "疑似片段"
 SUBMIT_CATEGORY = "提交任务"
 
 

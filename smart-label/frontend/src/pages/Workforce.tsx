@@ -12,7 +12,7 @@ import { getWorkforce, type EffUser, type EstimateRow, type LedgerRow, type Unas
  *
  * 每条耗时的算法见后端 workforce_service：相邻两次动作的间隔归到后一个动作的类别上，
  * 隔太久（离开了）不算。片段的"动手时间"是新加的字段，部署前的片段没有，
- * 所以刚上线时抓挠那一列会是空的，做几天就有了；疑似抓挠一直有记录，立刻能看。
+ * 所以刚上线时抓挠那一列会是空的，做几天就有了；疑似片段一直有记录，立刻能看。
  */
 
 const fmtSec = (s: number | null | undefined) => {
@@ -41,11 +41,11 @@ export default function Workforce() {
   const to = range[1].format("YYYY-MM-DD");
   const { data, isLoading } = useQuery({ queryKey: ["workforce", from, to], queryFn: () => getWorkforce(from, to) });
 
-  // 效率表：所有人出现过的类别做列，抓挠 / 疑似抓挠 / 提交任务排前面
+  // 效率表：所有人出现过的类别做列，抓挠 / 疑似片段 / 提交任务排前面
   const categories = useMemo(() => {
     const set = new Set<string>();
     for (const u of data?.efficiency ?? []) for (const c of u.categories) set.add(c.category);
-    const front = ["抓挠", "疑似抓挠", "提交任务"].filter((c) => set.has(c));
+    const front = ["抓挠", "疑似片段", "提交任务"].filter((c) => set.has(c));
     const rest = [...set].filter((c) => !front.includes(c)).sort();
     return [...front, ...rest];
   }, [data]);
@@ -65,7 +65,7 @@ export default function Workforce() {
         showIcon
         style={{ marginBottom: 12 }}
         message="每条耗时 = 相邻两次动作的间隔归到后一个动作的类别上，隔 10 分钟以上当离开不计，取中位数"
-        description="片段的「动手时间」是新加的字段，部署之前确认过的片段没有，抓挠那一列要做几天才有数；疑似抓挠的判定时间一直有记录，立刻能看。"
+        description="片段的「动手时间」是新加的字段，部署之前确认过的片段没有，抓挠那一列要做几天才有数；疑似片段的判定时间一直有记录，立刻能看。"
       />
 
       <Card size="small" title="分配台账（启用中的项目）" style={{ marginBottom: 12 }}>
@@ -110,11 +110,11 @@ export default function Workforce() {
                 ) : "-",
             },
             {
-              title: <Tooltip title="他名下任务里的「疑似抓挠」候选：还剩几条没判 / 总共几条。判 = 确认成抓挠、排除、或标待定">疑似待判</Tooltip>,
+              title: <Tooltip title="他名下任务里的「疑似片段」候选：还剩几条没判 / 总共几条。判 = 确认成抓挠、排除、或标待定">疑似待判</Tooltip>,
               width: 110,
               render: (_, r: LedgerRow) =>
                 r.cand_total ? (
-                  <Tooltip title={`还剩 ${r.cand_pending} 条没判，共 ${r.cand_total} 条疑似抓挠（已判 ${r.cand_total - r.cand_pending}）`}>
+                  <Tooltip title={`还剩 ${r.cand_pending} 条没判，共 ${r.cand_total} 条疑似片段（已判 ${r.cand_total - r.cand_pending}）`}>
                     <Tag color={r.cand_pending ? "magenta" : "green"}>{r.cand_pending} / {r.cand_total}</Tag>
                   </Tooltip>
                 ) : "-",
@@ -155,7 +155,7 @@ export default function Workforce() {
         title="待分配的工作量（还没指派给人的任务）"
         extra={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            按全员中位速度算：抓挠 {fmtSec(rates["抓挠"])} / 段 · 疑似 {fmtSec(rates["疑似抓挠"])} / 条 · 每任务 {fmtSec(rates["提交任务"])}。分配前先看这里定给谁、给多少
+            按全员中位速度算：抓挠 {fmtSec(rates["抓挠"])} / 段 · 疑似 {fmtSec(rates["疑似片段"])} / 条 · 每任务 {fmtSec(rates["提交任务"])}。分配前先看这里定给谁、给多少
           </Typography.Text>
         }
         style={{ marginBottom: 12 }}
@@ -175,7 +175,7 @@ export default function Workforce() {
               render: (_, r: UnassignedRow) => (r.scratch_total ? `${r.scratch_pending} / ${r.scratch_total}` : "-"),
             },
             {
-              title: "疑似抓挠（待判 / 总）",
+              title: "疑似片段（待判 / 总）",
               width: 160,
               render: (_, r: UnassignedRow) => (r.cand_total ? `${r.cand_pending} / ${r.cand_total}` : "-"),
             },

@@ -7,8 +7,9 @@ import { formatMs } from "@/components/SegmentPanel";
 import { currentName, findLabel, flatten } from "@/utils/labelTree";
 
 /**
- * 疑似抓挠候选面板：正式片段（稳定版）为了准会滤掉一部分真抓挠，这里是低门槛
- * 再抽一遍的结果。人工点「跳转」或「循环」看两秒视频，确认就变成一条正式的人工
+ * 疑似片段候选面板：AI 挑出来、还没进正式片段的段，给人逐条确认。抓挠那一类是正式片段
+ * （稳定版）为了准滤掉的低门槛再抽一遍；舔 / 进食 / 饮水 / 吠叫是 IMU 规则挑的，让人不用
+ * 从零翻视频。人工点「跳转」或「循环」看两秒视频，确认就变成一条正式的人工
  * 片段，排除就记一笔——两种决定都是重训模型最有价值的数据。
  */
 
@@ -18,6 +19,11 @@ const REASON_LABEL: Record<AiCandidate["reason"], string> = {
   // 只靠加速度姿态挑出来的：头伸到某个部位并保持住。给「舔/啃哪个部位」攒标注用，
   // 人只看这几段，不用翻 24 小时视频
   grooming: "姿态像舔/啃",
+  // 同一批「头伸出去并保持」的姿态段，按节律猜成进食 / 饮水（见 imu_train behaviors.py）
+  eating: "姿态+节律像进食",
+  drinking: "姿态+节律像饮水",
+  // 加速度上一串孤立的尖脉冲，峰之间安静
+  barking: "冲击串像吠叫",
   // 视觉大模型看视频挑出来的：画面里狗在做这个动作。类别是项目里选的那几类（含部位）
   vision: "画面看像",
   // 画面向量索引：拿一帧样例（或一句话）在整个项目里找长得像的几秒。不问大模型，免费
@@ -28,6 +34,9 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   low_conf: "orange",
   spectral: "purple",
   grooming: "cyan",
+  eating: "volcano",
+  drinking: "blue",
+  barking: "red",
   vision: "magenta",
   similar: "geekblue",
 };
@@ -56,7 +65,7 @@ interface Props {
   onBeforeDecide?: () => Promise<void>;
   /**
    * 筛选/分页这排控件渲染到哪儿。给了就 portal 到折叠面板的标题行上，
-   * 跟「疑似抓挠（17 待确认 / 17）」拼一行——工作台里高度是最紧的资源，
+   * 跟「疑似片段（17 待确认 / 17）」拼一行——工作台里高度是最紧的资源，
    * 一排筛选、一排说明、一排分页三行下来，能看的片段就剩四五条
    */
   controlsPortalTarget?: HTMLElement | null;
@@ -110,6 +119,9 @@ export const SRC_CN: Record<string, string> = {
   low_conf: "AI 低置信",
   spectral: "频谱像抓挠",
   grooming: "姿态像舔/啃",
+  eating: "姿态+节律像进食",
+  drinking: "姿态+节律像饮水",
+  barking: "冲击串像吠叫",
   vision: "大模型看视频",
 };
 
@@ -373,12 +385,13 @@ export default function CandidatePanel({
       <Tooltip
         title={
           <div style={{ lineHeight: 1.7 }}>
-            正式片段之外、模型可能漏掉的抓挠。看一眼视频：
+            AI 挑出来、正式片段里还没有的段：模型可能漏掉的抓挠，以及规则猜的舔 / 进食 / 饮水 / 吠叫
+            （「线索」列写着是怎么挑出来的）。看一眼视频：
             <br />
-            是抓挠就「确认是抓挠」；
+            猜对了就「确认是 X」；
             <br />
             其实是别的动作就「改成别的」——比单纯排除有用，等于给了那个类别一个正例，
-            同时是抓挠最缺的难负样本；
+            同时是原类别最缺的难负样本；
             <br />
             都不是就「排除」；
             <br />

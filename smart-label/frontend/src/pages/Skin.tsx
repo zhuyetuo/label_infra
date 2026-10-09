@@ -694,7 +694,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   // 「挑一段复看」那张表同理，而且更需要——按待确认数排完，关掉再打开还是那个
   // 顺序，可以接着往下做
   const pickSort = usePersistedSort("skin-pick-sort");
-  // 「这一段还要不要看」现在得同时读两列（人工复看 + 疑似抓挠）自己在心里合并。
+  // 「这一段还要不要看」现在得同时读两列（人工复看 + 疑似片段）自己在心里合并。
   // 直接给个结论：抓挠都认过了、候选也没有待确认的，这一段就算复看完了
   const reviewDone = (t: TrackingRow["tasks_detail"][number]) =>
     (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) && t.cand_pending === 0;
@@ -770,7 +770,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       // 还按"标注中"渲染）
       setWsTask((cur) => (cur && cur.id === task.id ? { ...cur, status: "PENDING_ASSIGN", locked_by: null } : cur));
       // 0 段有好几种意思，含糊一句「之前就确认过了」看着像刚才白干了——
-      // 尤其是刚在「疑似抓挠」里改完一堆类别的时候。说清楚是哪一种，
+      // 尤其是刚在「疑似片段」里改完一堆类别的时候。说清楚是哪一种，
       // 并且明确这一段已经记成「抓挠已确认」了
       message.success(
         r.confirmed
@@ -1217,7 +1217,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   关掉工作台回到这个列表，接着看下一段。
                   <br />
                   <br />
-                  <b>抓挠确认无误</b>：只认这几段抓挠标得对。不碰活动/睡觉，也不碰「疑似抓挠」候选，任务还是待认领。
+                  <b>抓挠确认无误</b>：只认这几段抓挠标得对。不碰活动/睡觉，也不碰「疑似片段」候选，任务还是待认领。
                   <br />
                   <b>整份通过</b>：连活动/睡觉一起认，任务就此审核通过——跟踪表里「人工版」的次数/时长只有走这一步才会变。
                   <br />
@@ -1272,12 +1272,12 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               sorter: (a, b) => Number(reviewDone(a)) - Number(reviewDone(b)),
               render: (_: unknown, t) =>
                 reviewDone(t) ? (
-                  <Tooltip title="抓挠片段都确认过了，疑似抓挠也没有待确认的——这一段不用再看了">
+                  <Tooltip title="抓挠片段都确认过了，疑似片段也没有待确认的——这一段不用再看了">
                     <Tag color="success">已完成</Tag>
                   </Tooltip>
                 ) : t.cand_pending > 0 &&
                   (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) ? (
-                  <Tooltip title={`抓挠已经认过了，但还有 ${t.cand_pending} 条「疑似抓挠」没判断`}>
+                  <Tooltip title={`抓挠已经认过了，但还有 ${t.cand_pending} 条「疑似片段」没判断`}>
                     <Tag color="warning">还差候选</Tag>
                   </Tooltip>
                 ) : viewed.has(t.task_id) ? (
@@ -1388,7 +1388,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               },
             },
             {
-              title: "疑似抓挠",
+              title: "疑似片段",
               key: "cands",
               // 三种待定拆开写之后标签变多了，给宽一点，不然常年折成两行
               width: 250,

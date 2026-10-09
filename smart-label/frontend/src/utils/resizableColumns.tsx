@@ -132,7 +132,7 @@ export function useResizableColumns(storageKey: string) {
   const applyResize = <T,>(columns: ColumnsType<T>): ColumnsType<T> => {
     const sized = columns.map((c, i) => {
       // 很多列既没有 key 也没有 dataIndex（内容是 render 拼出来的，比如「人工复看」
-      // 「疑似抓挠」）——恰恰是这些列最需要调宽。退回用列的位置当 key：
+      // 「疑似片段」）——恰恰是这些列最需要调宽。退回用列的位置当 key：
       // 这几张表的列是写死的，顺序不会变
       const key = sortKeyOf(c as never) ?? `#${i}`;
       const base = (c as { width?: number }).width;

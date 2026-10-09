@@ -183,7 +183,7 @@ export interface TrackingRow {
     /** 是抓挠但起止要调/要拆细，暂时没时间弄 */
     uncertain_needs_split: number;
     relabeled: number;
-    /** 「疑似抓挠」候选的处理进度 */
+    /** 「疑似片段」候选的处理进度 */
     cand_pending: number;
     cand_confirmed: number;
     cand_relabeled: number;

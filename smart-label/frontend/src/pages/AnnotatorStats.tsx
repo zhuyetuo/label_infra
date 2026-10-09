@@ -17,7 +17,7 @@ import { useAuthStore } from "@/stores/authStore";
  *
  * 用来定每日任务量。两种工作量分开数：
  *   提交任务   一个任务的一轮提交算一条（驳回重标再交算第二条）
- *   判定候选   每判一条「疑似抓挠」算一次
+ *   判定候选   每判一条「疑似片段」算一次
  *
  * 「用时」是人第一次动手（加/改片段、判候选）到提交的时间差。中途去吃饭、下班
  * 第二天再交的会虚高，汇总时单条封顶 CAP_SEC，明细里照原样显示。
@@ -155,7 +155,7 @@ export default function AnnotatorStats() {
       <Card
         size="small"
         title="各项目完成情况"
-        extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>只看启用中的项目；每分钟刷新。要求是每天把抓挠片段确认完、疑似抓挠判完</Typography.Text>}
+        extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>只看启用中的项目；每分钟刷新。要求是每天把抓挠片段确认完、疑似片段判完</Typography.Text>}
         style={{ marginBottom: 12 }}
       >
         <Table
@@ -191,7 +191,7 @@ export default function AnnotatorStats() {
               ),
             },
             {
-              title: <Tooltip title="「疑似抓挠」候选还剩几条没判">疑似抓挠判定</Tooltip>,
+              title: <Tooltip title="「疑似片段」候选还剩几条没判">疑似片段判定</Tooltip>,
               width: 220,
               sorter: (a: ProjectProgress, b: ProjectProgress) => a.cand_pending - b.cand_pending,
               render: (_: unknown, p: ProjectProgress) =>
@@ -230,7 +230,7 @@ export default function AnnotatorStats() {
         <Typography.Text>标注员</Typography.Text>
         <Select allowClear placeholder="全部" style={{ minWidth: 140 }} options={users} value={userId} onChange={setUserId} />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          提交任务：一个任务的一轮提交算一条；判定候选：每判一条「疑似抓挠」算一次。
+          提交任务：一个任务的一轮提交算一条；判定候选：每判一条「疑似片段」算一次。
         </Typography.Text>
       </Space>
 
@@ -249,7 +249,7 @@ export default function AnnotatorStats() {
             { title: "提交任务", dataIndex: "tasks", width: 90, sorter: (a, b) => a.tasks - b.tasks },
             { title: "片段", dataIndex: "items", width: 70 },
             { title: <Tooltip title="交掉的任务里抓挠类片段合计">抓挠片段</Tooltip>, dataIndex: "scratch", width: 90 },
-            { title: <Tooltip title="判掉的「疑似抓挠」条数">判定候选</Tooltip>, dataIndex: "decisions", width: 90, sorter: (a, b) => a.decisions - b.decisions },
+            { title: <Tooltip title="判掉的「疑似片段」条数">判定候选</Tooltip>, dataIndex: "decisions", width: 90, sorter: (a, b) => a.decisions - b.decisions },
             {
               title: <Tooltip title="交掉的这些任务对应的视频总时长">视频时长</Tooltip>,
               dataIndex: "video", width: 110, render: (s: number) => formatDuration(s),

@@ -73,6 +73,9 @@ GROUPS: list[tuple[str, str, str, bool, list]] = [
 OLD_PARENT_NAMES = {"lick_body": "舔身体", "chew_body": "啃身体", "rub_body": "蹭身体"}
 NAME_ALIASES = {old: new for old, new in ((v, next(g[1] for g in GROUPS if g[0] == k)) for k, v in OLD_PARENT_NAMES.items())}
 NAME_ALIASES.update({v: k for k, v in list(NAME_ALIASES.items())})   # 两个方向都认
+# IMU 规则挑的疑似进食 / 饮水候选按「犬行为全量」模板的名字送上来（进食 / 饮水），
+# 项目里自己建的叫「吃饭 / 喝水」的也要认得
+NAME_ALIASES.update({"吃饭": "进食", "进食": "吃饭", "喝水": "饮水", "饮水": "喝水"})
 
 
 def alias_names(name: str) -> list[str]:

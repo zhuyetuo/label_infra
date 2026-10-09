@@ -78,12 +78,12 @@ export interface Task {
   draft_item_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
   label_counts?: Record<number, { n: number; ai_pending: number }>;
-  /** 「疑似抓挠」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
+  /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
   cand_count?: number;
   cand_pending?: number;
   /** 候选按类别分 {类别名: {n, pending}}。候选存的是名字，不是 label_id。
    *  项目页的「含类别」要连候选一起算（不然一句话找画面刚写的那条在项目页上找不着），
-   *  「疑似抓挠」的二级筛选选项也是它——只列实有的类别 */
+   *  「疑似片段」的二级筛选选项也是它——只列实有的类别 */
   cand_labels?: Record<string, { n: number; pending: number }>;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
@@ -113,7 +113,7 @@ export interface LabelItem {
   uncertain: boolean;
   /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
   uncertain_reason: string | null;
-  /** 从哪条「疑似抓挠」候选确认上来的；有值才能「退回候选」重新判断 */
+  /** 从哪条「疑似片段」候选确认上来的；有值才能「退回候选」重新判断 */
   from_candidate_id: number | null;
   created_by: number | null;
 }

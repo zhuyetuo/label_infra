@@ -76,7 +76,7 @@ def test_workforce(db, run):
     cats = {c["category"]: c for c in eff[0]["categories"]}
     assert cats["抓挠"]["n"] == 3 and cats["抓挠"]["median_seconds"] == 30.0     # 第一条没有前一个动作，两条间隔 30
     assert cats["静止/休息"]["median_seconds"] == 5.0
-    assert cats["疑似抓挠"]["median_seconds"] == 20.0
+    assert cats["疑似片段"]["median_seconds"] == 20.0
     assert cats["提交任务"]["n"] == 1 and cats["提交任务"]["median_seconds"] == 95.0
     assert eff[0]["days"][0]["actions"] == 7
     est = wf.estimate(led, eff)
@@ -106,6 +106,6 @@ def test_unassigned_and_pool(db, run):
     out = run(go())
     assert out == [{"project_id": out[0]["project_id"], "project_name": "2026-09-26", "tasks_left": 1,
                     "scratch_total": 0, "scratch_pending": 0, "cand_total": 1, "cand_pending": 1}]
-    rates = {"抓挠": 30.0, "疑似抓挠": 20.0, "提交任务": None}
+    rates = {"抓挠": 30.0, "疑似片段": 20.0, "提交任务": None}
     h = wf.hours_for(rates, 10, 6, 100)
     assert h["missing"] == ["tasks"] and h["hours_left"] == round((6 * 30 + 100 * 20) / 3600, 1)

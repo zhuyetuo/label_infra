@@ -139,7 +139,7 @@ export default function Tasks() {
   // 每个项目各自一套筛选，跟项目页一样：imu 目录 / 状态 / 搜索 / 含类别 / 只看有 AI 待确认。
   // 标注员、审核员平时只在这个页面干活，批量预标注完想专门标某一类（比如抓挠）全靠这些
   type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
-  // cand：只看还有「疑似抓挠」待判断的任务。候选不在片段里，一个"抓挠 0 段"的任务
+  // cand：只看还有「疑似片段」待判断的任务。候选不在片段里，一个"抓挠 0 段"的任务
   // 照样可能压着十几条候选，光按类别筛会整个漏掉
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; imu: string };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
@@ -196,7 +196,7 @@ export default function Tasks() {
       })
       .filter((x) => x.n > 0);
     const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
-    // 「疑似抓挠」候选跟上面那些类别并排显示：它不是一个 label，是另一张表，
+    // 「疑似片段」候选跟上面那些类别并排显示：它不是一个 label，是另一张表，
     // 但对"这个项目还剩多少活"来说是同一个问题
     const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
     const candPending = all.reduce((s, t) => s + (t.cand_pending ?? 0), 0);
@@ -300,7 +300,7 @@ export default function Tasks() {
             </Tooltip>
           ))}
           {candTotal > 0 && (
-            <Tooltip title={`${candTotal} 条疑似抓挠候选，分布在 ${candTasksN} 个任务里${candPending ? `，其中 ${candPending} 条还没判断` : "，都判断过了"}；点击只看还有待判断的任务`}>
+            <Tooltip title={`${candTotal} 条疑似片段候选，分布在 ${candTasksN} 个任务里${candPending ? `，其中 ${candPending} 条还没判断` : "，都判断过了"}；点击只看还有待判断的任务`}>
               <Tag
                 // 描边而不是实心：左边那些是已经成段的标注，这个是还没进片段的候选
                 color="magenta"
@@ -308,7 +308,7 @@ export default function Tasks() {
                 style={{ cursor: "pointer", background: "transparent", outline: f.cand ? "2px solid #1677ff" : undefined }}
                 onClick={() => setFilter(p.id, { cand: !f.cand })}
               >
-                疑似抓挠 {candTotal}
+                疑似片段 {candTotal}
                 {candPending ? <span style={{ opacity: 0.75 }}>（待判断 {candPending}）</span> : null}
                 <span style={{ opacity: 0.6 }}> · {candTasksN} 任务</span>
               </Tag>
@@ -415,12 +415,12 @@ export default function Tasks() {
                     <Tooltip
                       title={
                         (task.cand_pending ?? 0)
-                          ? `${candN} 条疑似抓挠候选，其中 ${task.cand_pending} 条还没判断——它们不算片段，打开工作台在「疑似抓挠」里逐条确认或排除`
-                          : `${candN} 条疑似抓挠候选，都判断过了`
+                          ? `${candN} 条疑似片段候选，其中 ${task.cand_pending} 条还没判断——它们不算片段，打开工作台在「疑似片段」里逐条确认或排除`
+                          : `${candN} 条疑似片段候选，都判断过了`
                       }
                     >
                       <Tag color="magenta" bordered style={{ marginRight: 0, background: "transparent" }}>
-                        疑似抓挠 {candN}
+                        疑似片段 {candN}
                         {(task.cand_pending ?? 0) ? <span style={{ opacity: 0.7 }}>/{task.cand_pending}待判断</span> : null}
                       </Tag>
                     </Tooltip>
