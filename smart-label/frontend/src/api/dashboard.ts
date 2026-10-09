@@ -49,6 +49,23 @@ export interface ProjectProgress {
   scratch_pending: number;
   cand_total: number;
   cand_pending: number;
+  /** 整个项目每个大类（子类算进父类）的片段：段数、秒数、人确认过的、AI 给的还没人看的、分布在几个任务里。
+   *  项目里有但一段都没有的大类也在（n=0） */
+  categories?: ProjectCategory[];
+  /** 疑似片段按类别 {类别名: {n, pending}} */
+  cand_labels?: Record<string, { n: number; pending: number }>;
+}
+
+export interface ProjectCategory {
+  name: string;
+  color: string | null;
+  n: number;
+  seconds: number;
+  confirmed: number;
+  pending: number;
+  tasks: number;
+  /** 细分到具体标签各几段（舔-前左爪 3…） */
+  sub: Record<string, number>;
 }
 
 export const listProjectProgress = () => request.get<never, ProjectProgress[]>("/dashboard/project-progress");
