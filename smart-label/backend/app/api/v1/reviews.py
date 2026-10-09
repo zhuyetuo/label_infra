@@ -42,6 +42,8 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
         for uid, dn, un in (await db.execute(
                 select(User.id, User.display_name, User.username).where(User.id.in_(uids)))).all():
             names[uid] = dn or un
+    # 每个任务各类别几段 / 各类候选几条：审核页按类别筛（只看含「饮水」的任务）要用
+    label_counts, cand_labels = await _per_task_kinds(db, [t.id for t in tasks])
     pnames: dict[int, str] = {}
     pids = {t.project_id for t in tasks}
     if pids:
@@ -49,8 +51,43 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
     return ok([{**TaskOut.model_validate(t).model_dump(), **briefs.get(t.sample_id, {}),
                 **recs.get(t.id, {}),
                 "project_name": pnames.get(t.project_id),
+                "label_counts": label_counts.get(t.id, {}),
+                "cand_labels": cand_labels.get(t.id, {}),
                 "assigned_to_name": names.get(t.assigned_to) if t.assigned_to is not None else None}
                for t in tasks])
+
+
+async def _per_task_kinds(db: AsyncSession, task_ids: list[int]):
+    """{task_id: {label_id: {n, ai_pending}}}、{task_id: {候选类别名: {n, pending}}}，当前轮。"""
+    from sqlalchemy import case, func
+
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+
+    lc: dict[int, dict[int, dict[str, int]]] = {}
+    cl: dict[int, dict[str, dict[str, int]]] = {}
+    if not task_ids:
+        return lc, cl
+    pending = ((AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
+               & AnnotationLabelItem.ai_confirmed.is_(False) & AnnotationLabelItem.is_modified.is_(False))
+    rows = await db.execute(
+        select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, func.count(AnnotationLabelItem.id),
+               func.sum(case((pending, 1), else_=0)))
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .join(Task, Task.id == AnnotationRecord.task_id)
+        .where(AnnotationRecord.task_id.in_(task_ids), AnnotationRecord.round_no == Task.round_no)
+        .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id))
+    for tid, lid, n, p in rows.all():
+        lc.setdefault(tid, {})[lid] = {"n": int(n), "ai_pending": int(p or 0)}
+    rows = await db.execute(
+        select(AiCandidate.task_id, AiCandidate.label_name, func.count(AiCandidate.id),
+               func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)))
+        .join(Task, Task.id == AiCandidate.task_id)
+        .where(AiCandidate.task_id.in_(task_ids), AiCandidate.round_no == Task.round_no)
+        .group_by(AiCandidate.task_id, AiCandidate.label_name))
+    for tid, name, n, p in rows.all():
+        cl.setdefault(tid, {})[name] = {"n": int(n), "pending": int(p or 0)}
+    return lc, cl
 
 
 @router.post("/{task_id}/claim")

@@ -25,6 +25,7 @@ import {
   message,
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   assignProject,
   createProject,
@@ -194,6 +195,7 @@ export default function Projects() {
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   // 打开工作台时带过去的类别筛选，见 openWorkspace
   const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
+  const [workspaceFocusCands, setWorkspaceFocusCands] = useState<string[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
@@ -852,8 +854,43 @@ export default function Projects() {
     // 初始筛选——否则进去看到的是全部类别，还得在片段面板里把同一个筛选再点一遍，
     // 而一份任务动辄几十段，要找的那 3 段抓挠就淹在里面
     setWorkspaceFocusLabels(filterOf(projectId).labels);
+    // 候选也一样：按「疑似饮水」筛进来的，疑似片段面板先只看饮水
+    setWorkspaceFocusCands(filterOf(projectId).cand ? filterOf(projectId).candLabels : []);
     setWorkspaceTask(task);
   };
+
+  // 从别的页（审核页「全部类别」）点某个类别跳过来：?project=ID&label=饮水 或 &cand=饮水。
+  // 展开那个项目，按这个类别筛（label 按大类：子类、没挂父类的「抓挠-头颈耳」都算），
+  // 打开任务时工作台的片段列表也就是这一类。只套一次，之后人自己改筛选不会被拉回来
+  const [urlParams, setUrlParams] = useSearchParams();
+  const urlFilterApplied = useRef(false);
+  useEffect(() => {
+    if (urlFilterApplied.current || !allTasks || !allLabels) return;
+    const pid = Number(urlParams.get("project"));
+    const label = urlParams.get("label");
+    const cand = urlParams.get("cand");
+    if (!pid || (!label && !cand)) return;
+    urlFilterApplied.current = true;
+    const patch: Partial<TaskFilter> = {};
+    if (label) {
+      const own = labelsOf(pid).filter((l) => l.display_name === label || l.display_name.startsWith(label + "-"));
+      patch.labels = own.map((l) => l.id);
+    }
+    if (cand) {
+      const names = new Set<string>();
+      for (const t of tasksOf(pid)) for (const n of Object.keys(t.cand_labels ?? {})) if (currentName(n) === cand || n === cand) names.add(n);
+      patch.cand = true;
+      patch.candLabels = [...names];
+    }
+    setFilter(pid, patch);
+    setExpandedKeys((prev) => (prev.includes(pid) ? prev : [...prev, pid]));
+    const next = new URLSearchParams(urlParams);
+    next.delete("project");
+    next.delete("label");
+    next.delete("cand");
+    setUrlParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTasks, allLabels, urlParams]);
 
   // 刷新页面还能回到打开着的任务（?task=ID），顺便把它所在的项目行展开
   useUrlTask(allTasks, workspaceTask?.id ?? null, (task) => {
@@ -2825,6 +2862,7 @@ export default function Projects() {
       <AnnotationWorkspace
         task={workspaceTask}
         focusLabelIds={workspaceFocusLabels}
+        focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         // 关掉也刷一遍：中途改过类别、删过段，不刷的话列表上的数还是进去之前那份

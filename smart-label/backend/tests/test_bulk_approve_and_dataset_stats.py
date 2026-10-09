@@ -100,3 +100,18 @@ def test_dataset_stats_counts_only_approved(db, run):
     assert [c["name"] for c in st["categories"]][0] == "静止/休息"   # 按时长排
     one = run(aw.dataset_stats(db, [projs[1].id]))
     assert one["n_tasks"] == 3 and {c["name"]: c["n"] for c in one["categories"]}["抓挠"] == 3
+
+
+def test_review_queue_carries_per_task_kinds(db, run):
+    """审核页按类别筛（只看含饮水的任务）要每个任务的各类段数 / 各类候选条数。"""
+    from app.api.v1.reviews import _per_task_kinds
+    from app.models.ai_candidate import AiCandidate
+
+    boss, admin, projs, tasks = _setup(db, run)
+    t = tasks[2]
+    db.add(AiCandidate(task_id=t.id, round_no=1, label_name="饮水", start_time_ms=0, end_time_ms=5, reason="drinking"))
+    run(db.commit())
+    lc, cl = run(_per_task_kinds(db, [t.id, tasks[3].id]))
+    assert sorted(v["n"] for v in lc[t.id].values()) == [1, 1]
+    assert sum(v["ai_pending"] for v in lc[t.id].values()) == 1      # 静止那段没人看
+    assert cl == {t.id: {"饮水": {"n": 1, "pending": 1}}}
