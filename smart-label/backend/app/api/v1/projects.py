@@ -172,7 +172,8 @@ async def start_ai_prelabel(project_id: int, body: ProjectPrelabelRequest, db: A
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
     started = await start_project_prelabel(
-        project_id, task_ids=body.task_ids, overwrite_ai=body.overwrite_ai, mode=body.mode
+        project_id, task_ids=body.task_ids, overwrite_ai=body.overwrite_ai, mode=body.mode,
+        keep_human=body.keep_human,
     )
     return ok({"started": started, "queued": not started})
 

@@ -47,6 +47,9 @@ class ProjectPrelabelRequest(BaseModel):
     overwrite_ai: bool = False
     # stable=稳定版 / raw=调试版，留空用 settings.algo_infer_mode
     mode: str | None = None
+    # 有人工标注/确认过片段的任务（实习生做了一半的）：不跳过，片段一条不动，只把这次跑出来的
+    # 疑似片段补进去（新加的进食 / 饮水 / 吠叫这类）。跟已有片段、已判候选重叠的同类候选不写
+    keep_human: bool = False
 
 
 class ProjectVisionSeekRequest(BaseModel):
