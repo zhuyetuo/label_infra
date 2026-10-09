@@ -10,6 +10,7 @@ import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { CandKindTags, ImuTag } from "@/components/TaskRowTags";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { useUrlTask } from "@/utils/urlTask";
@@ -338,11 +339,9 @@ export default function Tasks() {
                   {sampleName(task)}
                   {/* 按 imu 分组已经在上面的按钮条里了，这里补一句狗名：
                       同一天四只狗的时段长得一模一样，只看时间分不出是谁 */}
-                  {task.dog_label && (
-                    <Typography.Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
-                      {task.dog_label}
-                    </Typography.Text>
-                  )}
+                  <span style={{ marginLeft: 6 }}>
+                    <ImuTag task={task} sampleCode={String(sampleCode(task) ?? "")} />
+                  </span>
                 </span>
               </Tooltip>
             ),
@@ -425,6 +424,8 @@ export default function Tasks() {
                       </Tag>
                     </Tooltip>
                   )}
+                  {/* 疑似片段里各类别各几条，不用点进工作台就知道有没有舔 / 吠叫… */}
+                  <CandKindTags task={task} labels={projLabels} />
                 </Space>
               );
             },

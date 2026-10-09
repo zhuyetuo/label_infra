@@ -70,6 +70,7 @@ import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
+import { CandKindTags, ImuTag } from "@/components/TaskRowTags";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
@@ -1300,6 +1301,7 @@ export default function Projects() {
                           <Tooltip title={String(sampleCode(id))}>
                             <span>{sampleName(id)}</span>
                           </Tooltip>
+                          <ImuTag task={task} sampleCode={String(sampleCode(id) ?? "")} />
                           {noCsv(task) && (
                             <Tooltip title="IMU CSV 文件是空的，打开工作台会报「CSV 没有数据行」，没法标注，建议删除">
                               <Tag color="red" style={{ marginRight: 0 }}>无CSV</Tag>
@@ -1401,6 +1403,8 @@ export default function Projects() {
                               </Tag>
                             </Tooltip>
                           )}
+                          {/* 疑似片段里各类别各几条，不用点进工作台就知道有没有舔 / 吠叫… */}
+                          <CandKindTags task={task} labels={projLabels} />
                         </Space>
                       );
                     },
