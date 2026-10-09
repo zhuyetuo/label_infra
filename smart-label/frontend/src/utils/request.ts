@@ -36,6 +36,8 @@ async function doRefresh(): Promise<string | null> {
 
 request.interceptors.response.use(
   (response) => {
+    // 下载文件（zip 之类）：不是信封，原样交出 Blob
+    if (response.config.responseType === "blob") return response.data;
     const envelope = response.data as ApiEnvelope;
     if (envelope && typeof envelope === "object" && "code" in envelope && envelope.code !== 0) {
       message.error(envelope.msg || "请求失败");
@@ -60,7 +62,17 @@ request.interceptors.response.use(
       window.location.href = "/login";
       return Promise.reject(error);
     }
-    const msg = error.response?.data?.msg || error.message || "网络错误";
+    let msg = error.response?.data?.msg || error.message || "网络错误";
+    // responseType=blob 时出错，后端的 JSON 报错也被装成了 Blob，读出来才看得到原因
+    const blobData = error.response?.data as unknown;
+    if (blobData instanceof Blob) {
+      try {
+        const j = JSON.parse(await blobData.text());
+        msg = j.msg || j.detail || msg;
+      } catch {
+        /* 不是 JSON，就用默认的 */
+      }
+    }
     message.error(msg);
     return Promise.reject(error);
   }

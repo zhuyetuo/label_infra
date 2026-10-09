@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button, Descriptions, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { EdgeFootprint as FP } from "@/api/training";
 
@@ -11,7 +12,8 @@ const KB = (b: number | undefined | null) => (b == null ? "-" : `${(b / 1024).to
 const B = (b: number | undefined | null) => (b == null ? "-" : `${b.toLocaleString()} B`);
 type FileRow = { name: string; group: string; text?: number; data?: number; bss?: number; error?: string };
 
-export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?: () => void }) {
+export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?: () => Promise<void> | void }) {
+  const [downloading, setDownloading] = useState(false);
   const fl = fp.flash;
   const rm = fp.ram;
   const chip = fp.chip;
@@ -96,8 +98,28 @@ export default function EdgeFootprint({ fp, onDownload }: { fp: FP; onDownload?:
         <Descriptions.Item label="源码包（硬盘）" span={2}>
           <Space>
             <span>{KB(fp.source_bundle?.total)}，{files.length} 个文件</span>
-            {onDownload && <Button size="small" type="primary" onClick={onDownload}>下载端侧包（源码 + libtinyml.a）</Button>}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>源码（core/ + model/ + third_party/cmsis 子集）+ 预编的 lib/libtinyml.a 和 libtinyml_cmsis.a（Cortex-M4F softfp，跟 GR551x SDK 一致）+ include/ + README（两种接法、可选加速、占用、调用顺序、编译选项）</Typography.Text>
+            {onDownload && (
+              <Button
+                size="small"
+                type="primary"
+                loading={downloading}
+                onClick={async () => {
+                  setDownloading(true);
+                  try {
+                    await onDownload();
+                  } finally {
+                    setDownloading(false);
+                  }
+                }}
+              >
+                下载端侧包
+              </Button>
+            )}
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              自包含，直接给嵌入式：源码（core/ 运行时 + model/ 这版模型 + 8 通道输入映射 tm_imu.c）+ PC 参考实现
+              （Linux 上 <code>make test</code> 跑 golden 自检，<code>./edge_cli 采集.csv</code> 出逐窗口状态）+ 预编的
+              lib/libtinyml.a（Cortex-M4F softfp，跟 GR551x SDK 一致）+ README（编译、命令行测试、输入映射、调用顺序、占用）
+            </Typography.Text>
           </Space>
         </Descriptions.Item>
       </Descriptions>
