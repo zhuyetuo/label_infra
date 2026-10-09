@@ -52,10 +52,12 @@ export interface PrelabelProgress {
  *  写成联合类型的话每加一个端侧模型都要改前端代码。 */
 export type InferMode = string;
 
-export const startProjectPrelabel = (id: number, overwriteAi = false, mode: InferMode = "stable") =>
+/** keepHuman：有人工标注的任务不跳过——片段一条不动，只把这次跑出来的疑似片段补进去 */
+export const startProjectPrelabel = (id: number, overwriteAi = false, mode: InferMode = "stable", keepHuman = false) =>
   request.post<never, { started: boolean; queued: boolean }>(`/projects/${id}/ai-prelabel`, {
     overwrite_ai: overwriteAi,
     mode,
+    keep_human: keepHuman,
   });
 
 export const getProjectPrelabelStatus = (id: number) =>

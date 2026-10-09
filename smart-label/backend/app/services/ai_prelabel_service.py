@@ -157,20 +157,54 @@ def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str 
     return out
 
 
-async def replace_candidates(db: AsyncSession, task: Task, cands: list[CandidateItem]) -> int:
-    """整批换掉这个任务当前轮的候选；已经被人工决定过的（confirmed/rejected）留着不动。"""
-    old = (
+# AI 预标注自己产出的候选来源。重跑时只换这几种：大模型看视频（vision）和找相似（similar）
+# 是别的入口写的、有的还花了钱，预标注重跑不该顺手把它们没判的那些删掉
+PRELABEL_REASONS = ("low_conf", "spectral", "grooming", "eating", "drinking", "barking")
+
+
+def _same_kind(cand_label: str, other: str) -> bool:
+    """候选的类别跟一段已有的（片段 / 判过的候选）算不算同一类：同名、新旧别名、或它的子类
+    （「抓挠」候选 vs 已标的「抓挠-头颈耳」）。"""
+    from app.services.grooming_labels import alias_names
+
+    for n in alias_names(cand_label):
+        if other == n or other.startswith(n + "-"):
+            return True
+    return False
+
+
+async def replace_candidates(
+    db: AsyncSession, task: Task, cands: list[CandidateItem], existing_items: list[AnnotationLabelItem] | None = None
+) -> int:
+    """换掉这个任务当前轮**预标注产出的、还没判的**候选；人判过的（确认/排除/待定）留着不动，
+    别的入口（大模型看视频 / 找相似）写的也不动。
+
+    新候选跟「已经判过的同类候选」或「已有的同类片段」时间上重叠的不写：人已经看过/标过那一段了，
+    再冒出来一条一样的只会让人再判一遍（有人工标注的任务只补候选时尤其要紧）。返回写了几条。"""
+    rows = (
         await db.execute(
-            select(AiCandidate).where(
-                AiCandidate.task_id == task.id,
-                AiCandidate.round_no == task.round_no,
-                AiCandidate.status == CandidateStatus.pending,
-            )
+            select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no)
         )
     ).scalars().all()
-    for o in old:
-        await db.delete(o)
+    for o in rows:
+        if o.status == CandidateStatus.pending and o.reason in PRELABEL_REASONS:
+            await db.delete(o)
+    taken: list[tuple[str, int, int]] = [
+        (o.label_name, o.start_time_ms, o.end_time_ms)
+        for o in rows
+        if not (o.status == CandidateStatus.pending and o.reason in PRELABEL_REASONS)
+    ]
+    if existing_items:
+        ids = {i.label_id for i in existing_items}
+        names = dict((await db.execute(
+            select(LabelDefinition.id, LabelDefinition.display_name).where(LabelDefinition.id.in_(ids))
+        )).all()) if ids else {}
+        taken += [(names.get(i.label_id, ""), i.start_time_ms, i.end_time_ms) for i in existing_items]
+    written = 0
     for c in cands:
+        if any(_same_kind(c.label_name, lab) and c.start_time_ms < e and c.end_time_ms > s for lab, s, e in taken):
+            continue
+        written += 1
         db.add(
             AiCandidate(
                 task_id=task.id, round_no=task.round_no, label_name=c.label_name,
@@ -178,7 +212,7 @@ async def replace_candidates(db: AsyncSession, task: Task, cands: list[Candidate
                 confidence=c.confidence, spec=c.spec, reason=c.reason,
             )
         )
-    return len(cands)
+    return written
 
 
 async def _csv_start_of(sample: Sample) -> datetime:
@@ -486,33 +520,37 @@ def cancel_project_prelabel(project_id: int) -> bool:
 
 
 async def start_project_prelabel(
-    project_id: int, task_ids: list[int] | None = None, overwrite_ai: bool = False, mode: str | None = None
+    project_id: int, task_ids: list[int] | None = None, overwrite_ai: bool = False, mode: str | None = None,
+    keep_human: bool = False,
 ) -> bool:
     """
     后台开始给项目里的任务做 AI 预标注。task_ids 为空 = 项目下所有符合条件的任务。
     已经在跑则把这批请求排到后面（返回 False 表示"已在跑，已排队"）。
     """
     if project_id in _running:
-        q = _queued.setdefault(project_id, {"task_ids": set(), "all": False, "overwrite_ai": False, "mode": None})
+        q = _queued.setdefault(project_id, {"task_ids": set(), "all": False, "overwrite_ai": False, "mode": None,
+                                            "keep_human": False})
         if task_ids is None:
             q["all"] = True
         else:
             q["task_ids"].update(task_ids)
         q["overwrite_ai"] = q["overwrite_ai"] or overwrite_ai
         q["mode"] = mode or q["mode"]
+        q["keep_human"] = q.get("keep_human", False) or keep_human
         return False
     _running.add(project_id)
-    asyncio.create_task(_run(project_id, task_ids, overwrite_ai, mode))
+    asyncio.create_task(_run(project_id, task_ids, overwrite_ai, mode, keep_human))
     return True
 
 
-async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, mode: str | None = None) -> None:
+async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, mode: str | None = None,
+               keep_human: bool = False) -> None:
     progress = PrelabelProgress(status="running", project_id=project_id, started_at=time.time())
     _progress[project_id] = progress
     try:
         while True:
             async with SessionLocal() as db:
-                await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode)
+                await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode, keep_human)
             if project_id in _cancelled:
                 break
             nxt = _queued.pop(project_id, None)
@@ -521,6 +559,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
             task_ids = None if nxt["all"] else sorted(nxt["task_ids"])
             overwrite_ai = nxt["overwrite_ai"]
             mode = nxt.get("mode")
+            keep_human = nxt.get("keep_human", False)
         progress.status = "cancelled" if project_id in _cancelled else "done"
     except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩
         progress.status = "error"
@@ -623,6 +662,8 @@ class _Prepared:
     record: AnnotationRecord | None
     old_ai_items: list[AnnotationLabelItem]
     csv_start: datetime
+    # 有人工标注的任务：片段一条不动，只把这次跑出来的疑似片段补进去
+    candidates_only: bool = False
 
 
 async def _run_project(
@@ -632,6 +673,7 @@ async def _run_project(
     overwrite_ai: bool,
     progress: PrelabelProgress,
     mode: str | None = None,
+    keep_human: bool = False,
 ) -> None:
     # 只处理还在标注员手里之前的任务：待认领 / 标注中。已提交、已通过、被驳回的
     # 都是有人工介入过的成品或半成品，批量覆盖会把人家的活儿冲掉。
@@ -680,7 +722,7 @@ async def _run_project(
             sample = await db.get(Sample, task.sample_id)
             code = sample.sample_code if sample else f"sample#{task.sample_id}"
             try:
-                p = await _prepare(db, task, sample, overwrite_ai)
+                p = await _prepare(db, task, sample, overwrite_ai, keep_human)
             except PrelabelError as e:
                 progress.failed += 1
                 progress.processed += 1
@@ -753,6 +795,8 @@ async def _run_project(
                 outcome = await _apply(db, p, inf, by_name, unmatched)
                 if outcome is None:
                     progress.succeeded += 1
+                    if p.candidates_only:
+                        progress.log(f"任务 #{p.task.id} {code}：有人工标注，片段没动，只补了疑似片段")
                 else:
                     progress.skipped += 1
                     progress.log(f"任务 #{p.task.id} {code}：跳过（{outcome}）")
@@ -769,7 +813,8 @@ async def _run_project(
             progress.tick()
 
 
-async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrite_ai: bool) -> _Prepared | str:
+async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrite_ai: bool,
+                   keep_human: bool = False) -> _Prepared | str:
     """资格检查。返回 _Prepared = 可以跑；返回字符串 = 跳过原因。"""
     if sample is None:
         raise PrelabelError("样本不存在")
@@ -787,7 +832,12 @@ async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrit
             .all()
         )
     if any(i.source_type == LabelItemSource.human_added or i.is_modified or i.ai_confirmed for i in existing):
-        return "已有人工标注/确认过的片段，不覆盖"
+        if not keep_human:
+            return "已有人工标注/确认过的片段，不覆盖"
+        # 片段一条不碰（人工的、没人动过的 AI 片段都留着），只补疑似片段
+        csv_start = await _csv_start_of(sample)
+        return _Prepared(task=task, sample=sample, record=record, old_ai_items=existing, csv_start=csv_start,
+                         candidates_only=True)
     if existing and not overwrite_ai:
         return "已有 AI 片段"
 
@@ -799,6 +849,12 @@ async def _apply(
     db: AsyncSession, p: _Prepared, inf: SampleInference, by_name: dict[str, int], unmatched: set[str]
 ) -> str | None:
     """把一个样本的推理结果写进任务草稿。返回 None = 成功；字符串 = 跳过原因。"""
+    if p.candidates_only:
+        # 有人工标注的任务：草稿、样本上的 AI 结果路径都不动，只换没判的疑似片段。
+        # 跟已有片段 / 已判候选重叠的同类候选不写（见 replace_candidates）
+        await replace_candidates(db, p.task, inf.candidates, existing_items=p.old_ai_items)
+        await db.commit()
+        return None
     record = p.record
     if record is None:
         record = AnnotationRecord(task_id=p.task.id, round_no=p.task.round_no, source_type=RecordSourceType.ai_revised)

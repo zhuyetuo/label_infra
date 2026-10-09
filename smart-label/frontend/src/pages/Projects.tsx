@@ -87,6 +87,7 @@ const SEEK_LLM_KEY = "smart-label:seek-llm";
 // 「连已经有 AI 片段的也重跑」也记住：换了模型想全量刷新时，每个项目都要重勾
 // 一遍太烦，而这个选择在一轮刷新里通常是一致的
 const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
+const PRELABEL_KEEP_HUMAN_KEY = "smart-label:prelabel-keep-human";
 // 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
@@ -204,6 +205,9 @@ export default function Projects() {
   // 项目级批量 AI 预标注：每个项目各自一份进度，正在跑的每 2 秒轮询一次
   const [prelabelTarget, setPrelabelTarget] = useState<Project | null>(null);
   const [prelabelOverwrite, setPrelabelOverwrite] = useState(() => getSavedBool(PRELABEL_OVERWRITE_KEY, false));
+  // 有人工标注的任务只补疑似片段。默认开：不开的话这些任务整个跳过，算法加了新候选类别也补不上；
+  // 开了也不会动任何片段（见后端 keep_human）
+  const [prelabelKeepHuman, setPrelabelKeepHuman] = useState(() => getSavedBool(PRELABEL_KEEP_HUMAN_KEY, true));
   // 记住上次用的版本：用惯哪个就默认哪个，不用每次重选
   const [prelabelMode, setPrelabelMode] = useState<InferMode>(
     () => (getSavedText(PRELABEL_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
@@ -434,17 +438,20 @@ export default function Projects() {
   }, [runningIds]);
 
   // 项目里哪些任务会被批量预标注碰到：待认领/标注中，且还没存过任何片段
-  const prelabelEligible = (projectId: number, overwrite: boolean) =>
+  // keepHuman 时有片段的任务也可能被处理（有人工痕迹的只补疑似片段），但列表里分不出哪些有人工痕迹，
+  // 所以那种情况报的是上限
+  const prelabelEligible = (projectId: number, overwrite: boolean, keepHuman = false) =>
     tasksOf(projectId).filter(
       (t) =>
-        (t.status === "PENDING_ASSIGN" || t.status === "IN_PROGRESS") && (overwrite || !(t.draft_item_count ?? 0))
+        (t.status === "PENDING_ASSIGN" || t.status === "IN_PROGRESS") &&
+        (overwrite || keepHuman || !(t.draft_item_count ?? 0))
     ).length;
 
   const handleStartPrelabel = async () => {
     if (!prelabelTarget) return;
     setPrelabelStarting(true);
     try {
-      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite, prelabelMode);
+      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite, prelabelMode, prelabelKeepHuman);
       message.info(r.queued ? "这个项目已经有一批在跑，本次请求已排在后面" : "已开始，进度在项目行里看");
       await pollPrelabel([prelabelTarget.id]);
       setPrelabelTarget(null);
@@ -2233,7 +2240,7 @@ export default function Projects() {
         onOk={handleStartPrelabel}
         okText="开始"
         confirmLoading={prelabelStarting}
-        okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite) === 0 }}
+        okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman) === 0 }}
         // 里面有版本选择 + 一张历史记录表，默认 520 宽两边都挤
         width={880}
         destroyOnClose
@@ -2243,7 +2250,7 @@ export default function Projects() {
             <Typography.Paragraph style={{ marginBottom: 0 }}>
               会对这个项目里 <b>待认领 / 标注中</b> 且还没有人动过的任务逐个调用 AI 模型，把预测出来的行为片段
               直接写进任务草稿。标注员打开任务时就已经有 AI 框了，只需要确认或纠正。
-              已提交、已通过、被驳回、以及已经有人工标注的任务不会被碰。
+              已提交、已通过、被驳回的任务不会被碰；已经有人工标注的任务看下面那个勾。
             </Typography.Paragraph>
             {/* 三个按钮挤在一行文字旁边会被压得换行；Segmented 是一整条，
                 自己占一行，说明另起一行 */}
@@ -2277,10 +2284,24 @@ export default function Projects() {
             </Checkbox>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               不勾：已经有 AI 片段的任务直接跳过（只跑还没跑过的），换模型想刷新就得勾上。
-              两种情况下<b>有人改过/确认过/标了待定的任务都不会被碰</b>——那是复看的成果。
+              两种情况下<b>有人改过/确认过/标了待定的片段都不会被覆盖</b>——那是复看的成果。
+            </Typography.Text>
+            <Checkbox
+              checked={prelabelKeepHuman}
+              onChange={(e) => {
+                setPrelabelKeepHuman(e.target.checked);
+                saveBool(PRELABEL_KEEP_HUMAN_KEY, e.target.checked);
+              }}
+            >
+              已有人工标注的任务（标注员做了一半的）：<b>片段一条不动，只补新的疑似片段</b>
+            </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              算法新加了候选类别（进食 / 饮水 / 吠叫…）时用这个。标注员确认过的、改过的、自己画的片段，
+              以及他已经判过的疑似片段都原样保留；跟这些重叠的同类候选不会再冒出来；大模型看视频 / 找相似给的候选也不动。
+              不勾：这类任务整个跳过。已提交 / 已通过 / 被驳回的任务两种情况都不碰。
             </Typography.Text>
             <Typography.Text>
-              本次将处理 <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite)}</b> 个任务。AI 服务按文件多进程并行跑，
+              本次将处理{prelabelKeepHuman ? "最多" : ""} <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman)}</b> 个任务。AI 服务按文件多进程并行跑，
               整个过程在后台进行，项目行里能看到进度和预计剩余时间。
             </Typography.Text>
             {(() => {
