@@ -1514,10 +1514,12 @@ export default function AnnotationWorkspace({
       // 就是两根挤在一起；wrap 的滚动禁掉（见 .ws-modal-wrap）
       wrapClassName="ws-modal-wrap"
       style={{ top: 0, paddingBottom: 0, maxWidth: "100vw" }}
-      // body 高度卡死在一屏，视频/波形按这一屏分配；片段列表展开后超出的部分
-      // 让 body 自己滚（overflow:auto），不再裁掉——外层页面滚动条是 antd 弹窗
-      // 容器的，被视频/波形区域的滚轮事件拦住滚不动，靠它没用。
-      styles={{ body: { height: "calc(100vh - 108px)", overflowY: "auto", overflowX: "hidden", paddingTop: 8 } }}
+      // body 高度 = 一屏减去标题栏和底栏（见 .ws-modal-wrap 的 flex），视频/波形按这个分配；
+      // 片段列表展开后超出的部分让 body 自己滚（overflow:auto），不再裁掉——外层页面
+      // 滚动条是 antd 弹窗容器的，被视频/波形区域的滚轮事件拦住滚不动，靠它没用。
+      // 原来写死 calc(100vh - 108px)（按有底栏算的），只读又没按钮时没有底栏，
+      // 弹窗底下就空出一条，透出后面页面的任务行
+      styles={{ body: { overflowY: "auto", overflowX: "hidden", paddingTop: 8 } }}
       destroyOnClose
       footer={
         readOnly ? (

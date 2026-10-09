@@ -43,6 +43,23 @@
 .ws-modal-wrap .ant-modal {
   max-height: 100vh;
 }
+/* 弹窗整体正好一屏：标题栏、底栏（有没有都行）按内容高度，body 吃掉剩下的。
+   不能给 body 写死高度——底栏有没有、标题栏折不折行都会变，写死就会在底下
+   空出一条（透出后面的页面）或者顶出屏幕 */
+.ws-modal-wrap .ant-modal-content {
+  height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+.ws-modal-wrap .ant-modal-header,
+.ws-modal-wrap .ant-modal-footer {
+  flex: 0 0 auto;
+}
+.ws-modal-wrap .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 /* IMU 波形这块也用 Collapse，跟下面两个面板长一样。它跟它们不同的是内部要能
    撑开（展开全部波形时波形区要吃掉剩余高度），所以 Collapse 的内容层也得是 flex，
