@@ -20,6 +20,7 @@ import {
 } from "@/api/reviews";
 import { listLabels } from "@/api/labels";
 import { listProjectProgress, type ProjectProgress } from "@/api/dashboard";
+import { currentName } from "@/utils/labelTree";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { useAuthStore } from "@/stores/authStore";
 import { useUrlTask } from "@/utils/urlTask";
@@ -361,6 +362,15 @@ export default function Reviews() {
             },
           },
           {
+            title: (
+              <Tooltip title="整个项目（含还没交的任务）每个大类标了多少：段数 · 总时长，鼠标移上去看人确认了几段、细分到哪些子类。灰色的是项目里有这个类别但一段都没有——比如舔一直是 0，就该让标注员去补">
+                全部类别（整个项目）
+              </Tooltip>
+            ),
+            width: 420,
+            render: (_, g: Group) => <CategoryOverview p={progressOf.get(g.project_id)} />,
+          },
+          {
             title: "标注员",
             render: (_, g: Group) =>
               [...new Set(g.tasks.map((t) => t.assigned_to_name ?? "-"))].join(
@@ -412,5 +422,60 @@ export default function Reviews() {
         />
       </Modal>
     </div>
+  );
+}
+
+const fmtDur = (sec: number) =>
+  sec >= 3600 ? `${(sec / 3600).toFixed(1)}h` : sec >= 60 ? `${Math.round(sec / 60)}分` : `${Math.round(sec)}秒`;
+
+/** 审核页一行项目的「全部类别」：有片段的按段数从多到少，没有的灰着列在后面，疑似片段按类别再一排 */
+function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
+  if (!p?.categories) return <span>-</span>;
+  const has = p.categories.filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
+  const none = p.categories.filter((c) => c.n === 0);
+  const cands = Object.entries(p.cand_labels ?? {}).filter(([, v]) => v.n > 0).sort(([, a], [, b]) => b.n - a.n);
+  return (
+    <Space size={[4, 4]} wrap>
+      {has.map((c) => (
+        <Tooltip
+          key={c.name}
+          title={
+            <div style={{ lineHeight: 1.7 }}>
+              {c.name}：{c.n} 段，共 {fmtDur(c.seconds)}，分布在 {c.tasks} 个任务里
+              <br />
+              人确认 / 改过 / 自己加的 {c.confirmed} 段；AI 给的还没人看 {c.pending} 段
+              {Object.keys(c.sub).length > 1 && (
+                <>
+                  <br />
+                  {Object.entries(c.sub)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([k, v]) => `${k} ${v}`)
+                    .join("，")}
+                </>
+              )}
+            </div>
+          }
+        >
+          <Tag color={c.color ?? undefined} style={{ marginInlineEnd: 0 }}>
+            {c.name} {c.n}
+            <span style={{ opacity: 0.75 }}> · {fmtDur(c.seconds)}</span>
+          </Tag>
+        </Tooltip>
+      ))}
+      {none.length > 0 && (
+        <Tooltip title="项目里有这些类别，但整个项目一段都没标">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            没有：{none.map((c) => c.name).join("、")}
+          </Typography.Text>
+        </Tooltip>
+      )}
+      {cands.map(([name, v]) => (
+        <Tooltip key={name} title={`疑似${currentName(name)} ${v.n} 条，还没判 ${v.pending} 条`}>
+          <Tag bordered style={{ marginInlineEnd: 0, borderStyle: "dashed", background: "transparent" }}>
+            疑似{currentName(name)} {v.pending}/{v.n}
+          </Tag>
+        </Tooltip>
+      ))}
+    </Space>
   );
 }

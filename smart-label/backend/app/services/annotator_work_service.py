@@ -269,6 +269,17 @@ async def project_progress(db: AsyncSession, only_active: bool = True) -> list[d
         .group_by(Task.project_id))).all()
     cands = {pid: (int(n), int(p or 0)) for pid, n, p in cand_rows}
 
+    cats = await _category_stats(db, pids, pending)
+    cand_kind_rows = (await db.execute(
+        select(Task.project_id, AiCandidate.label_name, func.count(AiCandidate.id),
+               func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)))
+        .select_from(AiCandidate).join(Task, Task.id == AiCandidate.task_id)
+        .where(Task.project_id.in_(pids), AiCandidate.round_no == Task.round_no)
+        .group_by(Task.project_id, AiCandidate.label_name))).all()
+    cand_kinds: dict[int, dict[str, dict[str, int]]] = {}
+    for pid, name, n_c, p_c in cand_kind_rows:
+        cand_kinds.setdefault(pid, {})[name] = {"n": int(n_c), "pending": int(p_c or 0)}
+
     out = []
     for p in projects:
         n, done, approved = tasks.get(p.id, (0, 0, 0))
@@ -281,5 +292,66 @@ async def project_progress(db: AsyncSession, only_active: bool = True) -> list[d
             "tasks_total": n, "tasks_submitted": done, "tasks_approved": approved,
             "scratch_total": s_total, "scratch_pending": s_pending,
             "cand_total": c_total, "cand_pending": c_pending,
+            "categories": cats.get(p.id, []),
+            "cand_labels": cand_kinds.get(p.id, {}),
         })
     return out
+
+
+async def _category_stats(db: AsyncSession, pids: list[int], pending) -> dict[int, list[dict]]:
+    """每个项目、每个大类（顶层类别）的片段：几段、多少秒、人确认过几段、AI 给的还没人看几段、在几个任务里。
+
+    审核页要看「整个项目各类标得怎么样」——比如舔几乎没有，就去要求标注员补。按大类汇总：
+    子类（舔-前左爪）算进父类（舔）；没挂父类、但名字是「抓挠-头颈耳」这种的，按「-」前面那截归类。
+    项目里有、但一段都没有的大类也列出来（n=0）——"没有"本身就是要看的信息。"""
+    labels = (await db.execute(
+        select(LabelDefinition).where(LabelDefinition.project_id.in_(pids))
+    )).scalars().all()
+    by_id = {l.id: l for l in labels}
+
+    def cat_of(lid: int) -> str:
+        cur, seen = by_id.get(lid), set()
+        while cur is not None and cur.parent_id is not None and cur.parent_id in by_id and cur.id not in seen:
+            seen.add(cur.id)
+            cur = by_id[cur.parent_id]
+        return (cur.display_name if cur else str(lid)).split("-")[0]
+
+    confirmed = ((AnnotationLabelItem.source_type == LabelItemSource.human_added)
+                 | AnnotationLabelItem.ai_confirmed.is_(True) | AnnotationLabelItem.is_modified.is_(True))
+    rows = (await db.execute(
+        select(Task.project_id, AnnotationLabelItem.label_id, func.count(AnnotationLabelItem.id),
+               func.sum(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms),
+               func.sum(case((confirmed & AnnotationLabelItem.uncertain.is_(False), 1), else_=0)),
+               func.sum(case((pending, 1), else_=0)),
+               func.count(func.distinct(Task.id)))
+        .select_from(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .join(Task, Task.id == AnnotationRecord.task_id)
+        .where(Task.project_id.in_(pids), AnnotationRecord.round_no == Task.round_no)
+        .group_by(Task.project_id, AnnotationLabelItem.label_id))).all()
+
+    out: dict[int, dict[str, dict]] = {}
+    # 先把每个项目里启用的大类都放上（n=0），顺序按标签的排序号
+    for l in sorted(labels, key=lambda x: (x.sort_order, x.id)):
+        if not l.is_active:
+            continue
+        c = cat_of(l.id)
+        d = out.setdefault(l.project_id, {})
+        if c not in d:
+            color = next((x.color for x in labels if x.project_id == l.project_id and x.display_name == c), None)
+            d[c] = {"name": c, "color": color or l.color, "n": 0, "seconds": 0.0, "confirmed": 0, "pending": 0,
+                    "tasks": 0, "sub": {}}
+    for pid, lid, n, ms, conf, pend, ntask in rows:
+        c = cat_of(lid)
+        d = out.setdefault(pid, {}).setdefault(c, {"name": c, "color": by_id[lid].color if lid in by_id else None,
+                                                  "n": 0, "seconds": 0.0, "confirmed": 0, "pending": 0,
+                                                  "tasks": 0, "sub": {}})
+        d["n"] += int(n)
+        d["seconds"] += float(ms or 0) / 1000.0
+        d["confirmed"] += int(conf or 0)
+        d["pending"] += int(pend or 0)
+        # 同一个任务里好几个子类各算一次，这里是上限；够用来看"分布在多少任务里"
+        d["tasks"] += int(ntask)
+        name = by_id[lid].display_name if lid in by_id else str(lid)
+        d["sub"][name] = d["sub"].get(name, 0) + int(n)
+    return {pid: [{**v, "seconds": round(v["seconds"], 1)} for v in d.values()] for pid, d in out.items()}

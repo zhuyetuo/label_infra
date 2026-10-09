@@ -27,6 +27,12 @@ def test_annotator_work_rows(db, run):
         other = LabelDefinition(project_id=p.id, code="rest", display_name="静止/休息", created_by=u.id)
         db.add(lab)
         db.add(other)
+        # 项目里有「舔」但一段都没标：审核页要看得到"没有"
+        lick = LabelDefinition(project_id=p.id, code="lick", display_name="舔", created_by=u.id, sort_order=5)
+        db.add(lick)
+        await db.flush()
+        db.add(LabelDefinition(project_id=p.id, code="lick_fore", display_name="舔-前爪", parent_id=lick.id,
+                               created_by=u.id, sort_order=6))
         await db.flush()
         s = Sample(sample_code="s1", video_cam1_path="v", imu_csv_path="c", video_duration_sec=3599, created_by=u.id)
         db.add(s)
@@ -77,7 +83,16 @@ def test_annotator_work_rows(db, run):
     assert len(work["candidate_decisions"]) == 1 and work["candidate_decisions"][0]["decided_at"] == "2026-09-30T09:05:00"
     b = briefs[tid]
     assert b["work_seconds"] == 720 and b["scratch_pending"] == 1 and b["cand_pending"] == 1
+    cats = {c["name"]: c for c in prog[0].pop("categories")}
+    cand_labels = prog[0].pop("cand_labels")
     assert prog == [{"project_id": r["project_id"], "project_name": "2026-09-23",
                      "tasks_total": 1, "tasks_submitted": 1, "tasks_approved": 0,
                      "scratch_total": 3, "scratch_pending": 1, "cand_total": 2, "cand_pending": 1}]
+    # 各大类：抓挠-头颈耳 归到「抓挠」；人确认 1 + 人加 1 = 2，AI 待确认 1，共 1.5 秒
+    assert cats["抓挠"]["n"] == 3 and cats["抓挠"]["confirmed"] == 2 and cats["抓挠"]["pending"] == 1
+    assert cats["抓挠"]["seconds"] == 1.5 and cats["抓挠"]["sub"] == {"抓挠-头颈耳": 3}
+    assert cats["静止/休息"]["n"] == 1 and cats["静止/休息"]["pending"] == 1
+    # 舔（含子类舔-前爪）一段都没有，也要列出来
+    assert cats["舔"]["n"] == 0 and "舔-前爪" not in cats
+    assert cand_labels == {"疑似抓挠": {"n": 2, "pending": 1}}
     assert run(aw.annotator_work(db, date(2026, 10, 2), date(2026, 10, 3)))["submissions"] == []
