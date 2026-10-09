@@ -579,7 +579,7 @@ export default function Training() {
         showIcon
         style={{ marginBottom: 12 }}
         message="AI 辅助标注闭环"
-        description="AI 预标注（稳定版）→ 人工在工作台确认/纠正片段、逐条处理「疑似抓挠」→ 这里把审核通过的标注导成数据集 → 提交训练 → 训练完「启用」，下一轮预标注就用新模型。"
+        description="AI 预标注（稳定版）→ 人工在工作台确认/纠正片段、逐条处理「疑似片段」→ 这里把审核通过的标注导成数据集 → 提交训练 → 训练完「启用」，下一轮预标注就用新模型。"
       />
       <Tabs
         items={[
@@ -1001,7 +1001,7 @@ export default function Training() {
       >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            把这段日期里的标注导成训练数据。人工纠正过的 AI 片段、人工新增的、从「疑似抓挠」里确认或
+            把这段日期里的标注导成训练数据。人工纠正过的 AI 片段、人工新增的、从「疑似片段」里确认或
             改成别的类别的，都算数；标了「待定」的和采集掉数据的时段会挖掉。下面选按什么范围取。
           </Typography.Paragraph>
           {/* 标签 + 输入框占一行，两个次要操作另起一行。
@@ -1084,7 +1084,7 @@ export default function Training() {
                 </Tooltip>
               </Radio>
               <Radio value="reviewed">
-                <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似抓挠」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
+                <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似片段」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
                   <span style={{ borderBottom: "1px dashed #bbb" }}>
                     按片段取：人确认过的（审了一半也能用）
                   </span>
@@ -1166,7 +1166,7 @@ export default function Training() {
                     「通过」、改过、或者自己画的。下面「跳过没人看过的 AI 片段」
                     那一栏就是被这条规则挡下来的数量 */}
                 {dsDetail.scope === "reviewed" ? (
-                  <Tooltip title="三种算数：点过「通过」的、改过的（换了标签或拖过起止）、人自己画的（含从「疑似抓挠」确认上来的）。只是打开看过、没点的不算——那些就是下面「跳过没人看过的 AI 片段」的数量">
+                  <Tooltip title="三种算数：点过「通过」的、改过的（换了标签或拖过起止）、人自己画的（含从「疑似片段」确认上来的）。只是打开看过、没点的不算——那些就是下面「跳过没人看过的 AI 片段」的数量">
                     <span style={{ borderBottom: "1px dashed #bbb" }}>按片段取（人确认过的）</span>
                   </Tooltip>
                 ) : (
@@ -1198,7 +1198,7 @@ export default function Training() {
                 </Descriptions.Item>
               )}
               <Descriptions.Item label="同类别重叠并掉">
-                <Tooltip title="「疑似抓挠」补上来的段常跟已有 AI 段覆盖同一次动作，只是起止差几百毫秒。不并的话重叠那部分会被导两遍，等于偷偷加权">
+                <Tooltip title="「疑似片段」补上来的段常跟已有 AI 段覆盖同一次动作，只是起止差几百毫秒。不并的话重叠那部分会被导两遍，等于偷偷加权">
                   <span style={{ cursor: "help" }}>{dsDetail.n_merged_overlaps ?? 0} 段</span>
                 </Tooltip>
               </Descriptions.Item>

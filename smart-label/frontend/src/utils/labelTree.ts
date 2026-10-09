@@ -127,13 +127,18 @@ const NAME_ALIASES: Record<string, string> = {
   蹭身体: "蹭",
 };
 
+/** IMU 规则送上来的疑似进食 / 饮水用的是「犬行为全量」模板的名字；项目里自己建的可能叫吃饭 / 喝水。
+ *  只用来找标签，不改显示名（跟后端 grooming_labels.NAME_ALIASES 同一套） */
+const SYNONYMS: Record<string, string> = { 进食: "吃饭", 吃饭: "进食", 饮水: "喝水", 喝水: "饮水" };
+
 /** 一个（可能是旧名的）标签名对应项目里的哪条标签。找不到返回 undefined */
 export function findLabel<T extends { display_name: string }>(
   labels: T[],
   name: string,
 ): T | undefined {
   return labels.find((l) => l.display_name === name)
-    ?? (NAME_ALIASES[name] ? labels.find((l) => l.display_name === NAME_ALIASES[name]) : undefined);
+    ?? (NAME_ALIASES[name] ? labels.find((l) => l.display_name === NAME_ALIASES[name]) : undefined)
+    ?? (SYNONYMS[name] ? labels.find((l) => l.display_name === SYNONYMS[name]) : undefined);
 }
 
 /** 这个名字现在该显示成什么（旧名换成新名，其余原样） */

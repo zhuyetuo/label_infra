@@ -41,7 +41,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
-import { TRACKS, TRACK_NAME, chainOf, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
+import { TRACKS, TRACK_NAME, chainOf, currentName, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -129,6 +129,18 @@ const PANELS_KEY = "smart-label:ws-panels";
 
 // 标注工作台：视频 + IMU 波形 + 打标签。选个标签直接在波形上拖出一段即可，
 // 时间点不用手填毫秒，所见即所得。
+/** 「疑似片段」标题上按类别报待判条数：抓挠 3 · 进食 1 · 吠叫 2（只列还有没判的类别） */
+function candKindSummary(cands: AiCandidate[]) {
+  const n = new Map<string, number>();
+  for (const c of cands) if (c.status === "pending") n.set(currentName(c.label_name), (n.get(currentName(c.label_name)) ?? 0) + 1);
+  if (n.size === 0) return null;
+  return (
+    <span style={{ color: "#888", fontSize: 12 }}>
+      {[...n.entries()].map(([k, v]) => `疑似${k} ${v}`).join(" · ")}
+    </span>
+  );
+}
+
 export default function AnnotationWorkspace({
   task,
   focusLabelName,
@@ -168,7 +180,7 @@ export default function AnnotationWorkspace({
   const [videoNote, setVideoNote] = useState<string | null>(null);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
-  // 「疑似抓挠」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
+  // 「疑似片段」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
   const [candControlsHost, setCandControlsHost] = useState<HTMLSpanElement | null>(null);
   // 「已标注片段」那排筛选同理
   const [segControlsHost, setSegControlsHost] = useState<HTMLSpanElement | null>(null);
@@ -212,7 +224,7 @@ export default function AnnotationWorkspace({
   const [panelHidden, setPanelHidden] = useState<PanelKey[]>(loadHidden);
 
   const [items, setItems] = useState<LabelItem[]>([]);
-  // 疑似抓挠候选：不在草稿里，单独一张表，人工逐条确认/排除
+  // 疑似片段候选：不在草稿里，单独一张表，人工逐条确认/排除
   const [candidates, setCandidates] = useState<AiCandidate[]>([]);
   // 现在这份 AI 结果是哪个版本/哪个模型跑的
   const [aiInfo, setAiInfo] = useState<AiLabelInfo | null>(null);
@@ -1078,12 +1090,9 @@ export default function AnnotationWorkspace({
     key: "cands",
     label: (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        {candidates.some((c) => c.reason === "vision")
-          ? "疑似片段"
-          : candidates.some((c) => c.reason === "grooming")
-            ? "疑似抓挠 / 舔啃"
-            : "疑似抓挠"}（
-        {candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
+        疑似片段（{candidates.filter((c) => c.status === "pending").length} 待确认 / {candidates.length}）
+        {/* 里面混着好几类（抓挠 / 舔 / 进食 / 饮水 / 吠叫…），标题上就按类别报还剩几条没判 */}
+        {candKindSummary(candidates)}
         <span ref={setCandControlsHost} style={{ display: "inline-flex" }} />
       </span>
     ),
@@ -1579,7 +1588,7 @@ export default function AnnotationWorkspace({
                 </Popconfirm>
               )}
               {onConfirmScratch && (
-                <Tooltip title="只把这一类的 AI 片段标成已确认；别的类别、「疑似抓挠」候选和任务状态都不动">
+                <Tooltip title="只把这一类的 AI 片段标成已确认；别的类别、「疑似片段」候选和任务状态都不动">
                   <Button
                     disabled={!!onClaim}
                     type={onClaim ? "default" : "primary"}

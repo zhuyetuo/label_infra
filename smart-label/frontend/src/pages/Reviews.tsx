@@ -209,7 +209,7 @@ export default function Reviews() {
             ),
         },
         {
-          title: <Tooltip title="疑似抓挠候选：还没判的 / 总共">疑似</Tooltip>,
+          title: <Tooltip title="疑似片段候选：还没判的 / 总共">疑似</Tooltip>,
           dataIndex: "cand_pending",
           width: 80,
           sorter: (a: Task, b: Task) =>
@@ -330,7 +330,7 @@ export default function Reviews() {
           },
           {
             title: (
-              <Tooltip title="疑似抓挠候选：还没判的 / 总共">疑似抓挠</Tooltip>
+              <Tooltip title="疑似片段候选：还没判的 / 总共">疑似片段</Tooltip>
             ),
             width: 120,
             render: (_, g: Group) =>
@@ -343,7 +343,7 @@ export default function Reviews() {
               ),
           },
           {
-            title: <Tooltip title="整个项目（含标注员手里还没交的任务）：还有几个任务没交、抓挠片段还剩几段没确认、疑似抓挠还剩几条没判。三个都到 0 这一天才算做完">项目整体还剩</Tooltip>,
+            title: <Tooltip title="整个项目（含标注员手里还没交的任务）：还有几个任务没交、抓挠片段还剩几段没确认、疑似片段还剩几条没判。三个都到 0 这一天才算做完">项目整体还剩</Tooltip>,
             render: (_, g: Group) => {
               const p = progressOf.get(g.project_id);
               if (!p) return "-";

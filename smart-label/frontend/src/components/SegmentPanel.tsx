@@ -975,7 +975,7 @@ export default function SegmentPanel({
                   {!readOnly && i.from_candidate_id != null && onReturnToCandidate && (
                     <Popconfirm
                       title="退回候选重新判断？"
-                      description="删掉这条片段，对应的「疑似抓挠」回到待确认"
+                      description="删掉这条片段，对应的「疑似片段」回到待确认"
                       onConfirm={() => onReturnToCandidate(i)}
                     >
                       <Button size="small" type="link">

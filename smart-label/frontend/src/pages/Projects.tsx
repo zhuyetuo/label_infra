@@ -178,9 +178,9 @@ export default function Projects() {
   // labels：只看含这些类别片段的任务；aiPending：只看还有 AI 待确认片段的任务——
   // 批量预标注完想专门审某一类（比如抓挠），靠这两个直接挑出要看的任务
   // noCsv：只看 IMU CSV 是空的任务（打开就报"CSV 没有数据行"），管理员筛出来一键删掉，别分给别人
-  // cand：只看还有「疑似抓挠」待判断的任务。它跟 labels 是两回事——候选不在片段里，
+  // cand：只看还有「疑似片段」待判断的任务。它跟 labels 是两回事——候选不在片段里，
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
-  // candLabels：「疑似抓挠」里的二级筛选——只看某几类候选。选项只列**这批候选里
+  // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
@@ -926,9 +926,9 @@ export default function Projects() {
     return ids.reduce((sum, id) => sum + (lc[id]?.n ?? 0), 0);
   };
 
-  // 「片段」列的排序键。候选（疑似抓挠）不算片段，只按段数排的话，一个项目里
+  // 「片段」列的排序键。候选（疑似片段）不算片段，只按段数排的话，一个项目里
   // 全是"0 段 + N 条候选"的任务就全部并列，点表头看着毫无反应。所以段数相同再
-  // 比待判断的候选数、再比候选总数；点了「疑似抓挠」筛选时候选优先。
+  // 比待判断的候选数、再比候选总数；点了「疑似片段」筛选时候选优先。
   const segmentsOrder = (a: Task, b: Task, labelIds: number[], candFirst: boolean) => {
     const keys = (t: Task) => {
       const seg = segCount(t, labelIds);
@@ -1011,7 +1011,7 @@ export default function Projects() {
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
               // 「含类别」只认**片段**。曾经把候选也算进来过（为了让"一句话找画面
-              // 刚写的候选"能被搜到），结果更糟：疑似抓挠的候选 label_name 就是
+              // 刚写的候选"能被搜到），结果更糟：疑似片段的候选 label_name 就是
               // 「抓挠」，236 个任务全有，筛「抓挠」等于筛了大半个项目，
               // 「哪些任务有抓挠片段」这个问题反而问不出来了。
               // 候选按类别筛是旁边那个「候选类别」的活儿——两件事，两个控件。
@@ -1055,7 +1055,7 @@ export default function Projects() {
               })
               .filter((x) => x.n > 0);
             const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
-            // 「疑似抓挠」候选跟上面那些类别并排显示。它不是一个 label，是另一张表，
+            // 「疑似片段」候选跟上面那些类别并排显示。它不是一个 label，是另一张表，
             // 但对"这个项目还剩多少活"来说是同一个问题，分开放两处反而要人自己去合
             const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
             const candPending = all.reduce((s, t) => s + (t.cand_pending ?? 0), 0);
@@ -1131,7 +1131,7 @@ export default function Projects() {
                   value={f.q}
                   onChange={(e) => setFilter(p.id, { q: e.target.value })}
                 />
-                <Tooltip title="按片段的类别筛。选父类连子类一起算——选「抓挠」也会带上「抓挠-头颈耳」，跟工作台里那个筛选同一个口径。候选（疑似抓挠）不在这里，走旁边的「候选类别」">
+                <Tooltip title="按片段的类别筛。选父类连子类一起算——选「抓挠」也会带上「抓挠-头颈耳」，跟工作台里那个筛选同一个口径。候选（疑似片段）不在这里，走旁边的「候选类别」">
                   <Select
                     size="small"
                     mode="multiple"
@@ -1207,7 +1207,7 @@ export default function Projects() {
                     </Tooltip>
                   ))}
                   {candTotal > 0 && (
-                    <Tooltip title={`${candTotal} 条疑似抓挠候选，分布在 ${candTasksN} 个任务里${candPending ? `，其中 ${candPending} 条还没判断` : "，都判断过了"}；点击只看还有待判断的任务`}>
+                    <Tooltip title={`${candTotal} 条疑似片段候选，分布在 ${candTasksN} 个任务里${candPending ? `，其中 ${candPending} 条还没判断` : "，都判断过了"}；点击只看还有待判断的任务`}>
                       <Tag
                         // 描边而不是实心：它跟左边那些实心的类别 Tag 不是一回事，
                         // 那些是已经成段的标注，这个是还没进片段的候选
@@ -1220,16 +1220,16 @@ export default function Projects() {
                         }}
                         onClick={() => setFilter(p.id, { cand: !f.cand })}
                       >
-                        疑似抓挠 {candTotal}
+                        疑似片段 {candTotal}
                         {candPending ? <span style={{ opacity: 0.75 }}>（待判断 {candPending}）</span> : null}
                         <span style={{ opacity: 0.6 }}> · {candTasksN} 任务</span>
                       </Tag>
                     </Tooltip>
                   )}
-                  {/* 疑似抓挠的二级筛选。选项**只列这批候选里实有的类别**——项目全量
+                  {/* 疑似片段的二级筛选。选项**只列这批候选里实有的类别**——项目全量
                       标签里大半一条候选都没有，摆出来只能让人一个个试 */}
                   {candLabelTotals.length > 1 && (
-                    <Tooltip title="只看含某几类候选的任务。列出来的就是「疑似抓挠」里实有的类别和条数，加起来等于候选总数">
+                    <Tooltip title="只看含某几类候选的任务。列出来的就是「疑似片段」里实有的类别和条数，加起来等于候选总数">
                       <Select
                         size="small"
                         mode="multiple"
@@ -1384,12 +1384,12 @@ export default function Projects() {
                             <Tooltip
                               title={
                                 (task.cand_pending ?? 0)
-                                  ? `${candN} 条疑似抓挠候选，其中 ${task.cand_pending} 条还没判断——它们不算片段，打开工作台在「疑似抓挠」里逐条确认或排除`
-                                  : `${candN} 条疑似抓挠候选，都判断过了`
+                                  ? `${candN} 条疑似片段候选，其中 ${task.cand_pending} 条还没判断——它们不算片段，打开工作台在「疑似片段」里逐条确认或排除`
+                                  : `${candN} 条疑似片段候选，都判断过了`
                               }
                             >
                               <Tag color="magenta" bordered style={{ marginRight: 0, background: "transparent" }}>
-                                疑似抓挠 {candN}
+                                疑似片段 {candN}
                                 {(task.cand_pending ?? 0) ? <span style={{ opacity: 0.7 }}>/{task.cand_pending}待判断</span> : null}
                               </Tag>
                             </Tooltip>

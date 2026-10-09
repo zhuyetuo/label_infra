@@ -18,7 +18,8 @@ class CandidateStatus(str, enum.Enum):
 
 class AiCandidate(Base):
     """
-    疑似抓挠候选：AI 预标注（稳定版/v2）为了准把一部分真抓挠也滤掉了，label_service
+    疑似片段候选（界面上叫「疑似片段」，以前叫「疑似抓挠」）：抓挠 / 舔 / 进食 / 饮水 / 吠叫……
+    最早只有抓挠这一类——AI 预标注（稳定版/v2）为了准把一部分真抓挠也滤掉了，label_service
     用低门槛再抽一遍（模型低置信 / 频谱像抓挠）给人工看。不进任务草稿，单独一张表：
     人工在工作台里「确认」就变成正式片段，「排除」记下来当负反馈。两种决定都是
     以后重训模型最有价值的数据（确认 = 模型漏检的正样本，排除 = 误报）。
@@ -34,7 +35,7 @@ class AiCandidate(Base):
     end_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     spec: Mapped[float | None] = mapped_column(Float, nullable=True, comment="陀螺仪 4–8Hz 能量占比")
-    reason: Mapped[str] = mapped_column(String(20), nullable=False, comment="low_conf / spectral / grooming / vision")
+    reason: Mapped[str] = mapped_column(String(20), nullable=False, comment="low_conf / spectral / grooming / eating / drinking / barking / vision / similar")
     # 画面候选（reason=vision）是哪家哪个模型给的，如 anthropic:claude-opus-5。
     # 同一批任务用两个模型各跑一遍，就能按这个对比谁更准。IMU 来的候选为空
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
