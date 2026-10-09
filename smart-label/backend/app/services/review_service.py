@@ -182,3 +182,35 @@ async def decide_review(
     await db.commit()
     await db.refresh(task)
     return task
+
+
+async def bulk_approve(db: AsyncSession, operator: User, project_id: int | None = None) -> dict:
+    """超级管理员一键通过：把待审核（SUBMITTED）的任务全部通过，可以只限一个项目。
+
+    没人审核的时候用。跟逐条通过一样每条写一条 review_records（审核人 = 操作的人，备注「批量通过」），
+    另记一条 audit_log。别的审核员已经认领、正在审的跳过，不抢人家手里的。"""
+    if operator.role != UserRole.super_admin:
+        raise ReviewConflictError("只有超级管理员能一键通过")
+    q = select(Task).where(Task.status == TaskStatus.SUBMITTED)
+    if project_id is not None:
+        q = q.where(Task.project_id == project_id)
+    tasks = (await db.execute(q)).scalars().all()
+    approved, skipped = [], 0
+    for t in tasks:
+        if t.locked_by is not None and t.locked_by != operator.id:
+            skipped += 1
+            continue
+        db.add(ReviewRecord(task_id=t.id, round_no=t.round_no, reviewer_id=operator.id,
+                            decision=ReviewDecision.approved, comment="批量通过"))
+        t.status = TaskStatus.APPROVED
+        t.reviewer_id = operator.id
+        t.locked_by = None
+        t.lock_expires_at = None
+        approved.append(t.id)
+    db.add(AuditLog(user_id=operator.id, action="review.bulk_approve",
+                    target_type="project" if project_id is not None else "all",
+                    target_id=project_id,
+                    detail=json.dumps({"n": len(approved), "skipped": skipped, "task_ids": approved[:500]},
+                                      ensure_ascii=False)))
+    await db.commit()
+    return {"approved": len(approved), "skipped": skipped}

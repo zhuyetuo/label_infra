@@ -151,3 +151,15 @@ export interface Workforce {
 }
 export const getWorkforce = (dateFrom: string, dateTo: string) =>
   request.get<never, Workforce>("/dashboard/workforce", { params: { date_from: dateFrom, date_to: dateTo } });
+
+export interface DatasetStats {
+  projects: { id: number; name: string }[];
+  /** 审核通过的任务数 */
+  n_tasks: number;
+  /** 按时长从多到少；confirmed_seconds = 其中人确认 / 改过 / 自己加的部分 */
+  categories: (ProjectCategory & { confirmed_seconds: number })[];
+}
+
+/** 可用数据（审核通过）的类别统计。projectIds 空 = 全部启用中的项目（跟导出训练集同一口径） */
+export const getDatasetStats = (projectIds: number[] = []) =>
+  request.get<never, DatasetStats>("/dashboard/dataset-stats", { params: { project_ids: projectIds.join(",") } });

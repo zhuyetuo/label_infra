@@ -12,7 +12,7 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
-from app.services.review_service import ReviewConflictError, claim_review, decide_review, release_review
+from app.services.review_service import ReviewConflictError, bulk_approve, claim_review, decide_review, release_review
 from app.services.annotator_work_service import record_briefs
 from app.services.task_scope import exclude_own_annotation, exclude_sensitive
 from app.services.task_service import sample_brief
@@ -84,3 +84,14 @@ async def decision(
     except ReviewConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/bulk-approve", dependencies=[Depends(require_role(UserRole.super_admin))])
+async def bulk_approve_api(body: dict | None = None, db: AsyncSession = Depends(get_db),
+                           user: User = Depends(get_current_user)):
+    """超级管理员一键通过待审核的任务。body: {"project_id": 项目ID}，不给就是全部项目。"""
+    pid = (body or {}).get("project_id")
+    try:
+        return ok(await bulk_approve(db, user, int(pid) if pid is not None else None))
+    except ReviewConflictError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc

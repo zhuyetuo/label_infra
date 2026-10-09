@@ -11,7 +11,7 @@ from app.db.session import get_db
 from app.models.user import UserRole
 from app.schemas.envelope import ok
 from app.services import workforce_service as wf
-from app.services.annotator_work_service import annotator_work, project_progress
+from app.services.annotator_work_service import annotator_work, dataset_stats, project_progress
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 # 审核页也要显示项目整体进度，审核员得能读这一条；单独一个 router，不放宽整个 /dashboard
@@ -36,6 +36,13 @@ async def get_annotator_work(date_from: _dt.date, date_to: _dt.date, user_id: in
 async def get_project_progress(db: AsyncSession = Depends(get_db)):
     """每个启用中的项目：任务交了几个、抓挠片段还有几段没确认、疑似候选还有几条没判。"""
     return ok(await project_progress(db))
+
+
+@progress_router.get("/dataset-stats")
+async def get_dataset_stats(project_ids: str = "", db: AsyncSession = Depends(get_db)):
+    """审核通过的数据各大类多少段、多长（看类别均衡）。project_ids 逗号分隔，空 = 全部启用中的项目。"""
+    ids = [int(x) for x in project_ids.split(",") if x.strip().isdigit()]
+    return ok(await dataset_stats(db, ids or None))
 
 
 @router.get("/workforce")

@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import {
   Button,
+  Collapse,
   Input,
+  Popconfirm,
   Modal,
   Space,
   Table,
@@ -13,6 +15,7 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  bulkApprove,
   claimReview,
   decideReview,
   releaseReview,
@@ -22,6 +25,7 @@ import { listLabels } from "@/api/labels";
 import { listProjectProgress, type ProjectProgress } from "@/api/dashboard";
 import { currentName } from "@/utils/labelTree";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import DatasetStats from "@/components/DatasetStats";
 import { useAuthStore } from "@/stores/authStore";
 import { useUrlTask } from "@/utils/urlTask";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
@@ -91,6 +95,19 @@ export default function Reviews() {
   useUrlTask(data, viewTask?.id ?? null, setViewTask);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["review-queue"] });
+
+  // 超级管理员一键通过（没人审核的时候用）。通过后可用数据统计、项目进度都要刷新
+  const isSuper = role === "super_admin";
+  const handleBulkApprove = async (projectId?: number) => {
+    const r = await bulkApprove(projectId);
+    message.success(`已通过 ${r.approved} 个任务${r.skipped ? `；${r.skipped} 个别的审核员正在审，跳过了` : ""}`);
+    refresh();
+    qc.invalidateQueries({ queryKey: ["project-progress"] });
+    qc.invalidateQueries({ queryKey: ["dataset-stats"] });
+  };
+  const bulkWarn =
+    "一次性全部标为「已通过」，不逐条看。注意：通过的任务里没人看过的纯 AI 片段，导出训练集选「整份取：审核通过」时会一起带进去——" +
+    "下面「可用数据类别统计」里切到「只算人确认过的」能看到差多少。通过后要改可以在任务上「退回重标」。";
 
   const handleClaim = async (id: number) => {
     await claimReview(id);
@@ -280,6 +297,30 @@ export default function Reviews() {
 
   return (
     <div>
+      <Collapse
+        style={{ marginBottom: 12 }}
+        items={[
+          {
+            key: "stats",
+            label: "可用数据类别统计（审核通过的任务：各类别多少段、多长、占比，看类别均不均衡）",
+            children: <DatasetStats />,
+          },
+        ]}
+      />
+      {isSuper && groups.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <Popconfirm
+            title="所有项目的待审任务一键通过？"
+            description={<div style={{ maxWidth: 360 }}>{bulkWarn}</div>}
+            onConfirm={() => handleBulkApprove()}
+          >
+            <Button type="primary">全部一键通过</Button>
+          </Popconfirm>
+          <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+            超级管理员才有；也可以在项目行里只通过那一个项目
+          </Typography.Text>
+        </div>
+      )}
       <Table
         rowKey="project_id"
         loading={isLoading}
@@ -301,8 +342,24 @@ export default function Reviews() {
           },
           {
             title: "待审任务",
-            width: 100,
-            render: (_, g: Group) => g.tasks.length,
+            width: isSuper ? 170 : 100,
+            render: (_, g: Group) => (
+              <Space size={6}>
+                {g.tasks.length}
+                {isSuper && (
+                  // 行是点击展开的，按钮上的点击别冒泡上去
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <Popconfirm
+                      title={`${g.name} 的待审任务一键通过？`}
+                      description={<div style={{ maxWidth: 360 }}>{bulkWarn}</div>}
+                      onConfirm={() => handleBulkApprove(g.project_id)}
+                    >
+                      <Button size="small">一键通过</Button>
+                    </Popconfirm>
+                  </span>
+                )}
+              </Space>
+            ),
           },
           {
             title: (
