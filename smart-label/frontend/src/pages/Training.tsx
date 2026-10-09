@@ -26,7 +26,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, edgeBundleUrl, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, downloadEdgeBundle, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
   type DatasetStats,
@@ -554,6 +554,23 @@ export default function Training() {
     return e && typeof e.macro_f1 === "number" ? e : null;
   };
   const [exportingEdge, setExportingEdge] = useState<number | null>(null);
+  const [downloadingEdge, setDownloadingEdge] = useState<number | null>(null);
+  const edgeZipName = (v: ModelVersion) => `edge_${v.model_type || "rf"}_train${v.algo_job_id}_v${v.id}.zip`;
+  /** 一键下载端侧包：还没导过端侧就先导（算端侧 F1、挂端侧服务），再打包下载 */
+  const oneClickEdgeBundle = async (v: ModelVersion) => {
+    setDownloadingEdge(v.id);
+    try {
+      if (!edgeOf(v)) {
+        message.info("这一版还没导出到端侧，先导出（几十秒到一两分钟），导完自动下载", 6);
+        await exportModelEdge(v.id);
+        qc.invalidateQueries({ queryKey: ["model-versions"] });
+        qc.invalidateQueries({ queryKey: ["edge-models"] });
+      }
+      await downloadEdgeBundle(v.id, edgeZipName(v));
+    } finally {
+      setDownloadingEdge(null);
+    }
+  };
 
   return (
     <div>
@@ -888,6 +905,19 @@ export default function Training() {
                                 }}
                               >
                                 {edgeOf(v) ? "重导端侧" : "导出到端侧"}
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
+                            <Tooltip title="给嵌入式的端侧包（zip）：板上 C 源码 + 这版模型 + 8 通道输入映射 + PC 命令行测试程序 + README。Linux 上解压后 make test 就能跑。还没导出到端侧的会先自动导出">
+                              <Button
+                                size="small"
+                                type="link"
+                                loading={downloadingEdge === v.id}
+                                disabled={(downloadingEdge != null && downloadingEdge !== v.id) || exportingEdge === v.id}
+                                onClick={() => oneClickEdgeBundle(v)}
+                              >
+                                下载端侧包
                               </Button>
                             </Tooltip>
                           )}
@@ -2000,7 +2030,7 @@ export default function Training() {
               <Descriptions.Item label="端侧资源占用">
                 <EdgeFootprint
                   fp={edgeOf(detail)!.footprint!}
-                  onDownload={() => window.open(edgeBundleUrl(detail.id), "_blank")}
+                  onDownload={() => downloadEdgeBundle(detail.id, edgeZipName(detail))}
                 />
               </Descriptions.Item>
             )}

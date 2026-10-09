@@ -311,7 +311,22 @@ export interface TrainReview {
 export const trainReview = (id: number) => request.get<never, TrainReview>(`/model-versions/${id}/review`);
 export const rerunTrainReview = (id: number) => request.post<never, { ok: boolean }>(`/model-versions/${id}/review/rerun`);
 
-export const edgeBundleUrl = (id: number) => `/api/v1/model-versions/${id}/edge-bundle`;
+/** 下载端侧包（zip）：要带登录 token，所以不能直接 window.open 那个地址（会 401），
+ *  先用 axios 拿成 Blob 再存盘。打包在算法机上现编，要十几秒 */
+export async function downloadEdgeBundle(id: number, filename = `edge_v${id}.zip`) {
+  const blob = await request.get<never, Blob>(`/model-versions/${id}/edge-bundle`, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
 
 /** 导出到端侧：算法机转成板上那份 C、算端侧 F1、端侧服务重新加载。要几十秒到一两分钟 */
 export const exportModelEdge = (id: number) =>
