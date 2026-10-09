@@ -75,6 +75,8 @@ interface Props {
   focusMs?: number | null;
   /** 打开时先筛哪一档（从找相似的链接进来默认只看「画面相似」） */
   initialFilter?: "pending" | "all" | "similar";
+  /** 打开时先只看这几类候选（从列表页按「疑似饮水」之类筛进来的） */
+  initialLabelFilter?: string[];
   /** 清掉全部还没判过的「画面相似」候选；返回删了几条。给了才显示按钮 */
   onClearSimilar?: () => Promise<number>;
 }
@@ -148,6 +150,7 @@ export default function CandidatePanel({
   onClearSimilar,
   focusMs,
   initialFilter,
+  initialLabelFilter,
 }: Props) {
   const [filter, setFilter] = useState<"pending" | "all" | "similar">(initialFilter ?? "pending");
   useEffect(() => {
@@ -155,7 +158,10 @@ export default function CandidatePanel({
   }, [initialFilter]);
   const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
   // 只看某一类：找相似 / 找片段常常一次落好几个类别，混在一起没法逐类核对
-  const [labelFilter, setLabelFilter] = useState<string[]>([]);
+  const [labelFilter, setLabelFilter] = useState<string[]>(initialLabelFilter ?? []);
+  useEffect(() => {
+    if (initialLabelFilter?.length) setLabelFilter(initialLabelFilter);
+  }, [initialLabelFilter]);
   const labelCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of candidates) m.set(c.label_name, (m.get(c.label_name) ?? 0) + 1);

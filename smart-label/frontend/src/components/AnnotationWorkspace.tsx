@@ -68,6 +68,8 @@ interface Props {
    * 混进去会让候选面板把睡觉当成抓挠。这个字段只影响片段列表的初始筛选。
    */
   focusLabelIds?: number[];
+  /** 「疑似片段」面板打开时先只看这几类候选（候选按名字存，所以是名字不是 id） */
+  focusCandLabels?: string[];
   labels: LabelDefinition[];
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
@@ -145,6 +147,7 @@ export default function AnnotationWorkspace({
   task,
   focusLabelName,
   focusLabelIds,
+  focusCandLabels,
   labels,
   readOnly,
   onClose,
@@ -1102,6 +1105,7 @@ export default function AnnotationWorkspace({
         candidates={candidates}
         labels={labels}
         focusMs={initialSeekMs}
+        initialLabelFilter={focusCandLabels}
         initialFilter={initialCandFilter ?? undefined}
         onFindSimilar={
           readOnly

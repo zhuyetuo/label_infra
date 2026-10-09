@@ -4,6 +4,7 @@ import {
   Collapse,
   Input,
   Popconfirm,
+  Select,
   Modal,
   Space,
   Table,
@@ -27,6 +28,7 @@ import { currentName } from "@/utils/labelTree";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import DatasetStats from "@/components/DatasetStats";
 import { useAuthStore } from "@/stores/authStore";
+import { useNavigate } from "react-router-dom";
 import { useUrlTask } from "@/utils/urlTask";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import type { Task } from "@/types";
@@ -44,6 +46,60 @@ export default function Reviews() {
     queryFn: () => listLabels(),
   });
 
+  // 按类别筛：「seg:饮水」= 含饮水片段的任务，「cand:饮水」= 含疑似饮水候选的任务。
+  // 筛了之后打开任务，工作台的片段列表 / 疑似片段面板也先只看这一类
+  const [kind, setKind] = useState<string | null>(null);
+  const kindType = kind?.split(":")[0] ?? null;
+  const kindName = kind ? kind.slice(kind.indexOf(":") + 1) : null;
+  // 标签 id → 大类名：沿父链走到顶，再按「-」取前一截（没挂父类的「抓挠-头颈耳」也归抓挠），跟后端统计同一口径
+  const catOf = useMemo(() => {
+    const byId = new Map((labels ?? []).map((l) => [l.id, l]));
+    const out = new Map<number, string>();
+    for (const l of labels ?? []) {
+      let cur = l;
+      const seen = new Set<number>();
+      while (cur.parent_id != null && byId.has(cur.parent_id) && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        cur = byId.get(cur.parent_id)!;
+      }
+      out.set(l.id, cur.display_name.split("-")[0]);
+    }
+    return out;
+  }, [labels]);
+  const kindHits = (t: Task) => {
+    if (!kindName) return { seg: 0, cand: 0, candPending: 0 };
+    let seg = 0;
+    for (const [id, c] of Object.entries(t.label_counts ?? {})) if (catOf.get(Number(id)) === kindName) seg += c.n;
+    let cand = 0;
+    let candPending = 0;
+    for (const [n, c] of Object.entries(t.cand_labels ?? {}))
+      if (currentName(n) === kindName || n === kindName) {
+        cand += c.n;
+        candPending += c.pending;
+      }
+    return { seg, cand, candPending };
+  };
+  const kindMatch = (t: Task) => {
+    if (!kind) return true;
+    const h = kindHits(t);
+    return kindType === "seg" ? h.seg > 0 : h.cand > 0;
+  };
+  const kindOptions = useMemo(() => {
+    const seg = new Map<string, number>();
+    const cand = new Map<string, number>();
+    for (const t of data ?? []) {
+      for (const [id, c] of Object.entries(t.label_counts ?? {})) {
+        const k = catOf.get(Number(id));
+        if (k && c.n) seg.set(k, (seg.get(k) ?? 0) + 1);
+      }
+      for (const [n, c] of Object.entries(t.cand_labels ?? {})) if (c.n) cand.set(currentName(n), (cand.get(currentName(n)) ?? 0) + 1);
+    }
+    return [
+      { label: "片段", options: [...seg].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ value: `seg:${k}`, label: `${k}（${n} 个任务）` })) },
+      { label: "疑似片段", options: [...cand].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ value: `cand:${k}`, label: `疑似${k}（${n} 个任务）` })) },
+    ];
+  }, [data, catOf]);
+
   // 一天一个项目，按项目分组展示：外层一行一个项目（几个待审、抓挠几段、疑似待判几条），
   // 展开看任务。以前是平铺一张大表，标注员一天标好几个日期的话根本看不出哪天审完了
   type Group = {
@@ -58,6 +114,7 @@ export default function Reviews() {
   const groups = useMemo<Group[]>(() => {
     const m = new Map<number, Group>();
     for (const t of data ?? []) {
+      if (!kindMatch(t)) continue;
       let g = m.get(t.project_id);
       if (!g) {
         g = {
@@ -78,7 +135,8 @@ export default function Reviews() {
       g.candTotal += t.cand_total ?? 0;
     }
     return [...m.values()].sort((a, b) => b.name.localeCompare(a.name));
-  }, [data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, kind, catOf]);
   const [expanded, setExpanded] = useState<number[]>([]);
   // 整个项目还剩多少没做（不只是已提交的这些）：抓挠待确认、疑似待判、还没交的任务。
   // 审核队列只看得到交上来的，标注员手里那 200 多个任务里压着的待确认根本不在这里
@@ -146,6 +204,18 @@ export default function Reviews() {
       }
       columns={[
         { title: "任务ID", dataIndex: "id", width: 80 },
+        ...(kind
+          ? [
+              {
+                title: kindType === "seg" ? kindName : `疑似${kindName}`,
+                width: 110,
+                render: (_: unknown, t: Task) => {
+                  const h = kindHits(t);
+                  return kindType === "seg" ? `${h.seg} 段` : `${h.candPending} / ${h.cand} 待判`;
+                },
+              },
+            ]
+          : []),
         {
           title: "样本",
           dataIndex: "sample_id",
@@ -307,6 +377,23 @@ export default function Reviews() {
           },
         ]}
       />
+      <Space style={{ marginBottom: 8, marginRight: 16 }} wrap>
+        <Typography.Text type="secondary">按类别筛：</Typography.Text>
+        <Select
+          allowClear
+          showSearch
+          style={{ width: 240 }}
+          placeholder="只看含某类别的待审任务（如 饮水）"
+          value={kind ?? undefined}
+          onChange={(v) => setKind(v ?? null)}
+          options={kindOptions}
+        />
+        {kind && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            打开任务时片段列表 / 疑似片段面板会先只显示这一类
+          </Typography.Text>
+        )}
+      </Space>
       {isSuper && groups.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <Popconfirm
@@ -425,7 +512,12 @@ export default function Reviews() {
               </Tooltip>
             ),
             width: 420,
-            render: (_, g: Group) => <CategoryOverview p={progressOf.get(g.project_id)} />,
+            render: (_, g: Group) => (
+              // 行是点击展开的，点标签跳转别连带展开
+              <span onClick={(e) => e.stopPropagation()}>
+                <CategoryOverview p={progressOf.get(g.project_id)} />
+              </span>
+            ),
           },
           {
             title: "标注员",
@@ -443,6 +535,17 @@ export default function Reviews() {
       <AnnotationWorkspace
         task={viewTask}
         labels={labels ?? []}
+        // 按类别筛着进来的：片段列表 / 疑似片段面板先只看这一类
+        focusLabelIds={
+          kindType === "seg" && viewTask
+            ? (labels ?? []).filter((l) => l.project_id === viewTask.project_id && catOf.get(l.id) === kindName).map((l) => l.id)
+            : undefined
+        }
+        focusCandLabels={
+          kindType === "cand" && viewTask
+            ? Object.keys(viewTask.cand_labels ?? {}).filter((n) => currentName(n) === kindName || n === kindName)
+            : undefined
+        }
         readOnly
         onClose={() => setViewTask(null)}
         // 只有自己认领了的才给下结论的按钮，跟列表里的判断保持一致
@@ -487,7 +590,10 @@ const fmtDur = (sec: number) =>
 
 /** 审核页一行项目的「全部类别」：有片段的按段数从多到少，没有的灰着列在后面，疑似片段按类别再一排 */
 function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
+  const navigate = useNavigate();
   if (!p?.categories) return <span>-</span>;
+  // 点类别 → 项目页展开这个项目、按这一类筛好（含已通过的任务，不只是待审的），进任务就只看这一类
+  const go = (q: string) => navigate(`/projects?project=${p.project_id}&${q}`);
   const has = p.categories.filter((c) => c.n > 0).sort((a, b) => b.n - a.n);
   const none = p.categories.filter((c) => c.n === 0);
   const cands = Object.entries(p.cand_labels ?? {}).filter(([, v]) => v.n > 0).sort(([, a], [, b]) => b.n - a.n);
@@ -498,7 +604,7 @@ function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
           key={c.name}
           title={
             <div style={{ lineHeight: 1.7 }}>
-              {c.name}：{c.n} 段，共 {fmtDur(c.seconds)}，分布在 {c.tasks} 个任务里
+              {c.name}：{c.n} 段，共 {fmtDur(c.seconds)}，分布在 {c.tasks} 个任务里（点击去项目页只看这一类）
               <br />
               人确认 / 改过 / 自己加的 {c.confirmed} 段；AI 给的还没人看 {c.pending} 段
               {Object.keys(c.sub).length > 1 && (
@@ -513,7 +619,8 @@ function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
             </div>
           }
         >
-          <Tag color={c.color ?? undefined} style={{ marginInlineEnd: 0 }}>
+          <Tag color={c.color ?? undefined} style={{ marginInlineEnd: 0, cursor: "pointer" }}
+               onClick={() => go(`label=${encodeURIComponent(c.name)}`)}>
             {c.name} {c.n}
             <span style={{ opacity: 0.75 }}> · {fmtDur(c.seconds)}</span>
           </Tag>
@@ -527,8 +634,9 @@ function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
         </Tooltip>
       )}
       {cands.map(([name, v]) => (
-        <Tooltip key={name} title={`疑似${currentName(name)} ${v.n} 条，还没判 ${v.pending} 条`}>
-          <Tag bordered style={{ marginInlineEnd: 0, borderStyle: "dashed", background: "transparent" }}>
+        <Tooltip key={name} title={`疑似${currentName(name)} ${v.n} 条，还没判 ${v.pending} 条（点击去项目页只看这一类）`}>
+          <Tag bordered style={{ marginInlineEnd: 0, borderStyle: "dashed", background: "transparent", cursor: "pointer" }}
+               onClick={() => go(`cand=${encodeURIComponent(currentName(name))}`)}>
             疑似{currentName(name)} {v.pending}/{v.n}
           </Tag>
         </Tooltip>
