@@ -298,12 +298,16 @@ async def project_progress(db: AsyncSession, only_active: bool = True) -> list[d
     return out
 
 
-async def _category_stats(db: AsyncSession, pids: list[int], pending) -> dict[int, list[dict]]:
+async def _category_stats(db: AsyncSession, pids: list[int], pending,
+                          statuses: list[TaskStatus] | None = None) -> dict[int, list[dict]]:
     """每个项目、每个大类（顶层类别）的片段：几段、多少秒、人确认过几段、AI 给的还没人看几段、在几个任务里。
 
     审核页要看「整个项目各类标得怎么样」——比如舔几乎没有，就去要求标注员补。按大类汇总：
     子类（舔-前左爪）算进父类（舔）；没挂父类、但名字是「抓挠-头颈耳」这种的，按「-」前面那截归类。
-    项目里有、但一段都没有的大类也列出来（n=0）——"没有"本身就是要看的信息。"""
+    项目里有、但一段都没有的大类也列出来（n=0）——"没有"本身就是要看的信息。
+
+    statuses 给了就只算这些状态的任务（数据集统计只看审核通过的）。
+    confirmed_seconds：人确认 / 改过 / 自己加、且不是待定的那部分时长（导出 scope=reviewed 只取这些）。"""
     labels = (await db.execute(
         select(LabelDefinition).where(LabelDefinition.project_id.in_(pids))
     )).scalars().all()
@@ -323,11 +327,14 @@ async def _category_stats(db: AsyncSession, pids: list[int], pending) -> dict[in
                func.sum(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms),
                func.sum(case((confirmed & AnnotationLabelItem.uncertain.is_(False), 1), else_=0)),
                func.sum(case((pending, 1), else_=0)),
-               func.count(func.distinct(Task.id)))
+               func.count(func.distinct(Task.id)),
+               func.sum(case((confirmed & AnnotationLabelItem.uncertain.is_(False),
+                              AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms), else_=0)))
         .select_from(AnnotationLabelItem)
         .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
         .join(Task, Task.id == AnnotationRecord.task_id)
-        .where(Task.project_id.in_(pids), AnnotationRecord.round_no == Task.round_no)
+        .where(Task.project_id.in_(pids), AnnotationRecord.round_no == Task.round_no,
+               *([Task.status.in_(statuses)] if statuses else []))
         .group_by(Task.project_id, AnnotationLabelItem.label_id))).all()
 
     out: dict[int, dict[str, dict]] = {}
@@ -340,18 +347,57 @@ async def _category_stats(db: AsyncSession, pids: list[int], pending) -> dict[in
         if c not in d:
             color = next((x.color for x in labels if x.project_id == l.project_id and x.display_name == c), None)
             d[c] = {"name": c, "color": color or l.color, "n": 0, "seconds": 0.0, "confirmed": 0, "pending": 0,
-                    "tasks": 0, "sub": {}}
-    for pid, lid, n, ms, conf, pend, ntask in rows:
+                    "tasks": 0, "sub": {}, "confirmed_seconds": 0.0}
+    for pid, lid, n, ms, conf, pend, ntask, conf_ms in rows:
         c = cat_of(lid)
         d = out.setdefault(pid, {}).setdefault(c, {"name": c, "color": by_id[lid].color if lid in by_id else None,
                                                   "n": 0, "seconds": 0.0, "confirmed": 0, "pending": 0,
-                                                  "tasks": 0, "sub": {}})
+                                                  "tasks": 0, "sub": {}, "confirmed_seconds": 0.0})
         d["n"] += int(n)
         d["seconds"] += float(ms or 0) / 1000.0
         d["confirmed"] += int(conf or 0)
         d["pending"] += int(pend or 0)
+        d["confirmed_seconds"] += float(conf_ms or 0) / 1000.0
         # 同一个任务里好几个子类各算一次，这里是上限；够用来看"分布在多少任务里"
         d["tasks"] += int(ntask)
         name = by_id[lid].display_name if lid in by_id else str(lid)
         d["sub"][name] = d["sub"].get(name, 0) + int(n)
-    return {pid: [{**v, "seconds": round(v["seconds"], 1)} for v in d.values()] for pid, d in out.items()}
+    return {pid: [{**v, "seconds": round(v["seconds"], 1), "confirmed_seconds": round(v["confirmed_seconds"], 1)}
+                  for v in d.values()] for pid, d in out.items()}
+
+
+async def dataset_stats(db: AsyncSession, project_ids: list[int] | None = None) -> dict:
+    """可用数据的类别统计：审核通过的任务里各大类多少段、多长、占比——看这批数据类别均不均衡。
+
+    跟导出训练集同一个口径：没指定项目就取全部启用中的项目（停用的是「按日期拆分」后留着对照的原项目，
+    算进来会重复）。同时给「其中人确认过」的那部分：审核通过的任务里还可能有没人看过的纯 AI 片段，
+    导出时 scope=approved 会带上它们、scope=reviewed 不带。"""
+    pq = select(Project.id, Project.name)
+    pq = pq.where(Project.id.in_(project_ids)) if project_ids else pq.where(Project.is_active.is_(True))
+    projects = (await db.execute(pq)).all()
+    pids = [p for p, _ in projects]
+    if not pids:
+        return {"projects": [], "n_tasks": 0, "categories": []}
+    n_tasks = int((await db.execute(
+        select(func.count(Task.id)).where(Task.project_id.in_(pids), Task.status == TaskStatus.APPROVED)
+    )).scalar() or 0)
+    pending = ((AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
+               & (AnnotationLabelItem.ai_confirmed.is_(False))
+               & (AnnotationLabelItem.is_modified.is_(False))
+               & (AnnotationLabelItem.uncertain.is_(False)))
+    per = await _category_stats(db, pids, pending, statuses=[TaskStatus.APPROVED])
+    merged: dict[str, dict] = {}
+    for cats in per.values():
+        for c in cats:
+            m = merged.setdefault(c["name"], {**c, "n": 0, "seconds": 0.0, "confirmed": 0, "pending": 0,
+                                              "tasks": 0, "confirmed_seconds": 0.0, "sub": {}})
+            m["color"] = m["color"] or c["color"]
+            for k in ("n", "seconds", "confirmed", "pending", "tasks", "confirmed_seconds"):
+                m[k] += c[k]
+            for k, v in c["sub"].items():
+                m["sub"][k] = m["sub"].get(k, 0) + v
+    cats = sorted(merged.values(), key=lambda c: -c["seconds"])
+    for c in cats:
+        c["seconds"] = round(c["seconds"], 1)
+        c["confirmed_seconds"] = round(c["confirmed_seconds"], 1)
+    return {"projects": [{"id": p, "name": n} for p, n in projects], "n_tasks": n_tasks, "categories": cats}
