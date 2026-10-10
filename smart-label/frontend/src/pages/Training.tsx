@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -319,6 +319,32 @@ export default function Training() {
   // 但「训练记录」里引用过它的话，那条记录指向的就不是当初训练用的数据了。
   // 所以不拦着，只说清楚。
   const nameExists = (datasets ?? []).some((d) => d.name === name.trim());
+
+  // 导出前先预览：同一套挑法跑一遍、只算统计不落盘。弹窗里的选项一改，旧的预览就作废
+  const [preview, setPreview] = useState<TrainDataset | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const exportBody = () => ({
+    name: name.trim() || "preview",
+    date_from: range ? range[0].format("YYYY-MM-DD") : null,
+    date_to: range ? range[1].format("YYYY-MM-DD") : null,
+    project_ids: projectIds,
+    include_submitted: includeSubmitted,
+    scope,
+    flatten,
+    track_priority: trackPriority,
+  });
+  useEffect(() => {
+    setPreview(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range?.[0]?.valueOf(), range?.[1]?.valueOf(), JSON.stringify(projectIds), includeSubmitted, scope, flatten, JSON.stringify(trackPriority), exportOpen]);
+  const doPreview = async () => {
+    setPreviewing(true);
+    try {
+      setPreview(await exportDataset({ ...exportBody(), dry_run: true }));
+    } finally {
+      setPreviewing(false);
+    }
+  };
 
   const doExport = async () => {
     setExporting(true);
@@ -998,6 +1024,18 @@ export default function Training() {
         okText="导出"
         confirmLoading={exporting}
         okButtonProps={{ disabled: !name.trim() }}
+        width={preview ? 760 : 520}
+        footer={(_, { OkBtn, CancelBtn }) => (
+          <>
+            <Tooltip title="按上面的选项把数据挑一遍，只看统计（各类别多少段、多长、占比，跳过了多少），不导出">
+              <Button onClick={doPreview} loading={previewing} style={{ float: "left" }}>
+                预览统计
+              </Button>
+            </Tooltip>
+            <CancelBtn />
+            <OkBtn />
+          </>
+        )}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -1123,6 +1161,7 @@ export default function Training() {
               </Typography.Text>
             )}
           </Space>
+          {preview && <ExportPreview meta={preview} />}
         </Space>
       </Modal>
 
@@ -2203,6 +2242,75 @@ export default function Training() {
           </>
         )}
       </Modal>
+    </div>
+  );
+}
+
+const fmtSecs = (sec: number) =>
+  sec >= 3600 ? `${(sec / 3600).toFixed(1)} 小时` : sec >= 60 ? `${(sec / 60).toFixed(1)} 分钟` : `${Math.round(sec)} 秒`;
+
+/** 导出弹窗里的「预览统计」：这批数据导出来会是什么样——各类别多少段、多长、占比，跳过 / 挖掉了多少 */
+function ExportPreview({ meta }: { meta: TrainDataset }) {
+  const secs = meta.label_seconds ?? {};
+  const rows = Object.keys({ ...meta.labels, ...secs })
+    .map((k) => ({ label: k, n: meta.labels[k] ?? 0, sec: secs[k] ?? 0 }))
+    .sort((a, b) => b.sec - a.sec || b.n - a.n);
+  const total = rows.reduce((n, r) => n + r.sec, 0);
+  const nz = rows.filter((r) => r.sec > 0);
+  const ratio = nz.length > 1 ? nz[0].sec / nz[nz.length - 1].sec : null;
+  return (
+    <div style={{ borderTop: "1px solid rgba(128,128,128,.3)", paddingTop: 8 }}>
+      <Typography.Text strong>预览（没有导出）</Typography.Text>
+      <Typography.Paragraph style={{ fontSize: 12, margin: "4px 0 8px", lineHeight: 1.8 }}>
+        <b>{meta.n_tasks}</b> 个任务 · <b>{meta.n_segments}</b> 段 · <b>{meta.total_hours}</b> 小时
+        {ratio != null && (
+          <>
+            {" "}· 最多的类别是最少的 <b style={{ color: ratio > 20 ? "#ff4d4f" : undefined }}>{ratio.toFixed(0)}</b> 倍
+            {ratio > 20 ? "（很不均衡，训练时可勾「类别均衡」）" : ""}
+          </>
+        )}
+        <br />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {meta.n_untouched_skipped ? `跳过没人看过的 AI 片段 ${meta.n_untouched_skipped} 段；` : ""}
+          {meta.n_uncertain_excluded ? `待定挖掉 ${meta.n_uncertain_excluded} 段；` : ""}
+          {meta.missing_excluded_min ? `掉数据挖掉 ${meta.missing_excluded_min} 分钟；` : ""}
+          {meta.n_label_conflicts ? `类别冲突 ${meta.n_label_conflicts} 处（挖掉 ${meta.label_conflict_excluded_sec ?? 0} 秒，要回工作台改）；` : ""}
+          {meta.flattened_sec ? `互斥轨折叠让出 ${fmtSecs(meta.flattened_sec)}；` : ""}
+        </Typography.Text>
+      </Typography.Paragraph>
+      <Table
+        size="small"
+        rowKey="label"
+        pagination={false}
+        scroll={{ y: 320 }}
+        dataSource={rows}
+        columns={[
+          { title: "类别", dataIndex: "label", width: 160 },
+          { title: "段数", dataIndex: "n", width: 80, align: "right" as const },
+          { title: "时长", dataIndex: "sec", width: 110, align: "right" as const, render: (s: number) => fmtSecs(s) },
+          {
+            title: "占比（按时长）",
+            render: (_, r) => {
+              const p = total ? (r.sec / total) * 100 : 0;
+              return (
+                <Progress
+                  percent={Math.round(p * 10) / 10}
+                  size="small"
+                  format={() => (p > 0 && p < 0.1 ? "<0.1%" : `${p.toFixed(1)}%`)}
+                />
+              );
+            },
+          },
+        ]}
+      />
+      {meta.warnings?.length > 0 && (
+        <details style={{ marginTop: 6, fontSize: 12 }}>
+          <summary style={{ cursor: "pointer" }}>提示 {meta.warnings.length} 条</summary>
+          {meta.warnings.map((w, i) => (
+            <div key={i}>{w}</div>
+          ))}
+        </details>
+      )}
     </div>
   );
 }
