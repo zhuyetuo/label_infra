@@ -97,11 +97,25 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
     for uid, t, cat, _tid in ev:
         u = per_user.setdefault(uid, {"user_id": uid, "user_name": names.get(uid, str(uid)),
                                       "categories": defaultdict(lambda: {"n": 0, "gaps": []}),
-                                      "days": defaultdict(lambda: {"actions": 0, "work_seconds": 0.0})})
+                                      "days": defaultdict(lambda: {"actions": 0, "work_seconds": 0.0, "segments": 0,
+                                                                   "cands": 0, "submits": 0, "first": None,
+                                                                   "last": None, "cats": defaultdict(int),
+                                                                   "tasks": set()})})
         c = u["categories"][cat]
         c["n"] += 1
         d = u["days"][t.date().isoformat()]
         d["actions"] += 1
+        # 这一天确认了多少：片段（确认 / 改 / 新加，按最后一次动手算，同一段不重复）、判了几条疑似、交了几个任务
+        if cat == CAND_CATEGORY:
+            d["cands"] += 1
+        elif cat == SUBMIT_CATEGORY:
+            d["submits"] += 1
+        else:
+            d["segments"] += 1
+            d["cats"][cat] += 1
+        d["tasks"].add(_tid)
+        d["first"] = d["first"] or t
+        d["last"] = t
         if uid in prev:
             gap = (t - prev[uid]).total_seconds()
             if 0 <= gap <= GAP_MAX:
@@ -114,7 +128,13 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
                  "mean_seconds": round(sum(v["gaps"]) / len(v["gaps"]), 1) if v["gaps"] else None,
                  "n_timed": len(v["gaps"])}
                 for k, v in sorted(u["categories"].items(), key=lambda kv: -kv[1]["n"])]
-        days = [{"day": k, "actions": v["actions"], "work_seconds": int(v["work_seconds"])}
+        days = [{"day": k, "actions": v["actions"], "work_seconds": int(v["work_seconds"]),
+                 "segments": v["segments"], "cands": v["cands"], "submits": v["submits"],
+                 "tasks": len(v["tasks"]),
+                 # 第一次 / 最后一次动手（本地时间），中间离开超过 10 分钟的不算进有效工时
+                 "first": v["first"].strftime("%H:%M") if v["first"] else None,
+                 "last": v["last"].strftime("%H:%M") if v["last"] else None,
+                 "categories": dict(sorted(v["cats"].items(), key=lambda kv: -kv[1]))}
                 for k, v in sorted(u["days"].items())]
         out.append({"user_id": u["user_id"], "user_name": u["user_name"], "categories": cats, "days": days,
                     "total_actions": sum(c["n"] for c in cats),

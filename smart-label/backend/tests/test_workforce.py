@@ -79,6 +79,11 @@ def test_workforce(db, run):
     assert cats["疑似片段"]["median_seconds"] == 20.0
     assert cats["提交任务"]["n"] == 1 and cats["提交任务"]["median_seconds"] == 95.0
     assert eff[0]["days"][0]["actions"] == 7
+    d = eff[0]["days"][0]
+    # 这一天：确认片段 4（抓挠 3 + 静止 1）、判疑似 2、交任务 1；09:00 开始、09:03 最后一次；间隔合计 200 秒
+    assert (d["segments"], d["cands"], d["submits"]) == (4, 2, 1)
+    assert d["categories"] == {"抓挠": 3, "静止/休息": 1}
+    assert (d["first"], d["last"], d["work_seconds"], d["tasks"]) == ("09:00", "09:03", 200, 1)
     est = wf.estimate(led, eff)
     assert est[0]["tasks_left"] == 1 and est[0]["hours_left"] is None
     # 每类不足 5 条实测的话，用全员中位数——这里全员就他一个，也不足 5 条 → 空着
