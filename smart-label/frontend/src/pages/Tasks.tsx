@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { currentName } from "@/utils/labelTree";
+import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
@@ -149,6 +150,9 @@ export default function Tasks() {
   // candLabels：「疑似片段」里只看某几类（疑似舔 / 疑似抓挠…），跟项目页那个二级筛选一样
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
+  // 记住点过的排序（项目列表、项目下的任务表各一份），下次进来还按上次排的
+  const projectSort = usePersistedSort("tasks-projects-sort");
+  const taskSort = usePersistedSort("tasks-tasks-sort");
   const filterOf = (projectId: number): TaskFilter =>
     taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL" };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
@@ -374,7 +378,8 @@ export default function Tasks() {
         sortDirections={["ascend", "descend", "ascend"]}
         pagination={rows.length > 10 ? { pageSize: 10 } : false}
         locale={{ emptyText: onlyMine ? "这个项目下没有指派给你的任务" : filtered ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
-        columns={[
+        onChange={taskSort.onTableChange}
+        columns={taskSort.applySort<Task>([
           { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
           {
             title: "样本",
@@ -554,7 +559,7 @@ export default function Tasks() {
               );
             },
           },
-        ]}
+        ])}
       />
       </>
     );
@@ -599,7 +604,8 @@ export default function Tasks() {
           // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
           rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
         }}
-        columns={[
+        onChange={projectSort.onTableChange}
+        columns={projectSort.applySort<Project>([
           { title: "项目ID", dataIndex: "id", width: 80, sorter: (a: Project, b: Project) => a.id - b.id },
           {
             title: "项目",
@@ -677,7 +683,7 @@ export default function Tasks() {
               );
             },
           },
-        ]}
+        ])}
       />
 
       <AnnotationWorkspace
