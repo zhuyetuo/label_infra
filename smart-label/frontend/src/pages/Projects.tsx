@@ -90,6 +90,7 @@ const SEEK_LLM_KEY = "smart-label:seek-llm";
 // 一遍太烦，而这个选择在一轮刷新里通常是一致的
 const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
 const PRELABEL_KEEP_HUMAN_KEY = "smart-label:prelabel-keep-human";
+const ASSIGN_USER_KEY = "smart-label:assign-user";
 // 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
@@ -744,9 +745,12 @@ export default function Projects() {
     refresh();
   };
 
+  // 指派项目：默认选上次指派给的那个人（一般连着好几个项目都分给同一个实习生）。
+  // 那个账号停用 / 删了就不预选，免得指派给一个已经不在的人
   const openAssign = (p: Project) => {
     setAssignTarget(p);
-    setAssignUserId(null);
+    const last = Number(getSavedText(ASSIGN_USER_KEY, "")) || null;
+    setAssignUserId(last != null && users?.some((u) => u.id === last && u.is_active) ? last : null);
     setIncludeClaimed(false);
   };
 
@@ -755,6 +759,8 @@ export default function Projects() {
     setAssigning(true);
     try {
       const r = await assignProject(assignTarget.id, assignUserId, includeClaimed);
+      // 只记"指派给了谁"；收回指派（留空）不覆盖，下次还是预选上次那个人
+      if (assignUserId != null) saveText(ASSIGN_USER_KEY, String(assignUserId));
       message.success(`已指派 ${r.assigned} 个任务${r.skipped ? `，跳过 ${r.skipped} 个` : ""}`);
       setAssignTarget(null);
       refresh();
