@@ -122,6 +122,8 @@ export interface EffDay {
   last: string | null;
   /** 片段按大类各几段 */
   categories: Record<string, number>;
+  /** 这天动了哪些项目，各做了多少（有效工时按"间隔归后一个动作"分到项目上），工时多的在前 */
+  projects: { project: string; segments: number; cands: number; submits: number; work_seconds: number; tasks: number }[];
 }
 export interface EffUser {
   user_id: number;

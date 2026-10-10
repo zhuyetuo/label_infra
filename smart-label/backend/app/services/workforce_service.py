@@ -92,6 +92,12 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
     if uids:
         names = {uid: (dn or un) for uid, dn, un in (await db.execute(
             select(User.id, User.display_name, User.username).where(User.id.in_(uids)))).all()}
+    # 任务 → 项目名：每天动了哪些项目、各做了多少
+    tids = {e[3] for e in ev if e[3] is not None}
+    task_proj: dict[int, str] = {}
+    if tids:
+        task_proj = {tid: pname for tid, pname in (await db.execute(
+            select(Task.id, Project.name).join(Project, Project.id == Task.project_id).where(Task.id.in_(tids)))).all()}
     per_user: dict[int, dict] = {}
     prev: dict[int, datetime] = {}
     for uid, t, cat, _tid in ev:
@@ -100,7 +106,10 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
                                       "days": defaultdict(lambda: {"actions": 0, "work_seconds": 0.0, "segments": 0,
                                                                    "cands": 0, "submits": 0, "first": None,
                                                                    "last": None, "cats": defaultdict(int),
-                                                                   "tasks": set()})})
+                                                                   "tasks": set(),
+                                                                   "projects": defaultdict(lambda: {
+                                                                       "segments": 0, "cands": 0, "submits": 0,
+                                                                       "work_seconds": 0.0, "tasks": set()})})})
         c = u["categories"][cat]
         c["n"] += 1
         d = u["days"][t.date().isoformat()]
@@ -114,6 +123,14 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
             d["segments"] += 1
             d["cats"][cat] += 1
         d["tasks"].add(_tid)
+        pj = d["projects"][task_proj.get(_tid, "?")]
+        pj["tasks"].add(_tid)
+        if cat == CAND_CATEGORY:
+            pj["cands"] += 1
+        elif cat == SUBMIT_CATEGORY:
+            pj["submits"] += 1
+        else:
+            pj["segments"] += 1
         d["first"] = d["first"] or t
         d["last"] = t
         if uid in prev:
@@ -121,6 +138,8 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
             if 0 <= gap <= GAP_MAX:
                 c["gaps"].append(gap)
                 d["work_seconds"] += gap
+                # 间隔归到后一个动作所在的项目上（跟归类别同一个规则）
+                pj["work_seconds"] += gap
         prev[uid] = t
     out = []
     for u in per_user.values():
@@ -134,7 +153,13 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
                  # 第一次 / 最后一次动手（本地时间），中间离开超过 10 分钟的不算进有效工时
                  "first": v["first"].strftime("%H:%M") if v["first"] else None,
                  "last": v["last"].strftime("%H:%M") if v["last"] else None,
-                 "categories": dict(sorted(v["cats"].items(), key=lambda kv: -kv[1]))}
+                 "categories": dict(sorted(v["cats"].items(), key=lambda kv: -kv[1])),
+                 # 这天动了哪些项目：各自确认片段 / 判疑似 / 交任务 / 有效工时 / 动过几个任务，工时多的在前
+                 "projects": sorted(
+                     [{"project": pn, "segments": x["segments"], "cands": x["cands"], "submits": x["submits"],
+                       "work_seconds": int(x["work_seconds"]), "tasks": len(x["tasks"])}
+                      for pn, x in v["projects"].items()],
+                     key=lambda x: -x["work_seconds"])}
                 for k, v in sorted(u["days"].items())]
         out.append({"user_id": u["user_id"], "user_name": u["user_name"], "categories": cats, "days": days,
                     "total_actions": sum(c["n"] for c in cats),
