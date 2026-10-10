@@ -51,9 +51,15 @@ def test_导出带整条链_父子不冲突_粗段挖掉细段(db, run, tmp_path
     monkeypatch.setattr(svc, "_csv_start_of", csv_start)
     monkeypatch.setattr(svc, "_read_ai_json", lambda _rel: None)
     monkeypatch.setattr(svc.settings, "nas_root", str(tmp_path))
+    import json, os
+    # 先预览：统计跟真导出一模一样，但什么都不落盘
+    pre = run(svc.export_dataset(db, "h1", project_ids=[p.id], dry_run=True))
+    assert pre["dry_run"] is True and pre["n_label_conflicts"] == 1
+    assert not os.path.exists(os.path.join(str(tmp_path), svc.TRAIN_DIR, "h1"))
     out = run(svc.export_dataset(db, "h1", project_ids=[p.id]))
     assert out["n_label_conflicts"] == 1                      # 只有活动 vs 舔 那一处，父子不算
-    import json, os
+    assert {k: v for k, v in pre.items() if k not in ("dry_run", "exported_at")} == \
+        {k: v for k, v in out.items() if k != "exported_at"}
     tasks = json.load(open(os.path.join(str(tmp_path), svc.TRAIN_DIR, "h1", "merged_tmp.json"), encoding="utf-8"))
     res = [(r["value"]["timeserieslabels"], r["value"]["start_ms"], r["value"]["end_ms"])
            for r in tasks[0]["annotations"][0]["result"]]

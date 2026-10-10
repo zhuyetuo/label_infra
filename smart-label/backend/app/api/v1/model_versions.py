@@ -71,6 +71,8 @@ class DatasetExportIn(BaseModel):
     # 不折叠就各轨原样导，给分轨训练用。没分轨的项目两种一样
     flatten: bool = True
     track_priority: list[str] | None = None
+    # 只预览：照常挑数据、算统计，不落盘（导出前先看类别分布）
+    dry_run: bool = False
 
 
 @router.get("/datasets")
@@ -91,6 +93,7 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
             (body.project_ids or ([body.project_id] if body.project_id is not None else None)),
             body.include_submitted,
             scope=body.scope, flatten=body.flatten, track_priority=body.track_priority,
+            dry_run=body.dry_run,
         )
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -116,8 +116,12 @@ async def export_dataset(
     project_ids: list[int] | None = None,
     include_submitted: bool = False, scope: str = "approved",
     flatten: bool = True, track_priority: list[str] | None = None,
+    dry_run: bool = False,
 ) -> dict:
-    """flatten：分了互斥轨的项目（姿态 / 运动 / 行为可以同时标）导出时按 track_priority
+    """dry_run=True：照常挑数据、算统计，但不落盘——导出前先看这批数据长什么样（类别时长、
+    跳过了多少没人看的 AI 片段、冲突…），返回的 meta 跟真导出完全一样。
+
+    flatten：分了互斥轨的项目（姿态 / 运动 / 行为可以同时标）导出时按 track_priority
     折叠成"一个时刻一个标签"——高优先级轨盖住的时间从低优先级轨的段里挖掉，模型侧照旧是
     单标签分类。每段另带 tracks={轨: 同时在标什么}，以后训分轨模型不用重标。
     设备轨（颈圈松动）不参与折叠，单独放在 annotations[0].aux.device 里。
@@ -537,6 +541,9 @@ async def export_dataset(
         with open(os.path.join(full_dir, "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
+    if dry_run:
+        meta["dry_run"] = True
+        return meta
     await asyncio.to_thread(_write)
     return meta
 

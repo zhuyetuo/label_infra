@@ -45,6 +45,10 @@ export interface TrainDataset {
   n_segments: number;
   total_hours: number;
   labels: Record<string, number>;
+  /** 每个类别的总时长（秒）。均不均衡按时长看 */
+  label_seconds?: Record<string, number>;
+  /** 只预览没落盘的那次返回 true */
+  dry_run?: boolean;
   warnings: string[];
   exported_at: string;
   export_json: string;
@@ -81,6 +85,8 @@ export const exportDataset = (body: {
   flatten?: boolean;
   /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */
   track_priority?: string[];
+  /** 只预览：照常挑数据、算统计，不落盘 */
+  dry_run?: boolean;
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
 
 /** 导出文件里的片段（用来核对这份数据集到底装了什么） */
