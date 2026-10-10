@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { currentName } from "@/utils/labelTree";
 import { usePersistedSort } from "@/utils/persistedSort";
-import { Button, Checkbox, Empty, Input, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Checkbox, Empty, Input, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
@@ -149,6 +149,19 @@ export default function Tasks() {
   // 照样可能压着十几条候选，光按类别筛会整个漏掉
   // candLabels：「疑似片段」里只看某几类（疑似舔 / 疑似抓挠…），跟项目页那个二级筛选一样
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string };
+  // 项目完成情况：片段总数 / 还没人确认的 AI 片段、疑似总数 / 没判的。按列表里的任务汇总
+  const progressOf = (projectId: number) => {
+    let segs = 0, segPending = 0, cands = 0, candPending = 0;
+    for (const t of tasksOf(projectId)) {
+      for (const c of Object.values(t.label_counts ?? {})) {
+        segs += c.n;
+        segPending += c.ai_pending;
+      }
+      cands += t.cand_count ?? 0;
+      candPending += t.cand_pending ?? 0;
+    }
+    return { segs, segPending, cands, candPending, left: segPending + candPending };
+  };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   // 记住点过的排序（项目列表、项目下的任务表各一份），下次进来还按上次排的
   const projectSort = usePersistedSort("tasks-projects-sort");
@@ -635,6 +648,40 @@ export default function Tasks() {
                       {TASK_STATUS_META[s]?.label ?? s} {counts[s]}
                     </Tag>
                   ))}
+                </Space>
+              );
+            },
+          },
+          {
+            title: (
+              <Tooltip title="这个项目里（你能看到的任务）：片段确认了多少——AI 给的还没人确认 / 改过的算待确认；疑似片段还有几条没判。都到 0 才算标完">
+                完成情况
+              </Tooltip>
+            ),
+            key: "progress",
+            width: 300,
+            // 按还剩多少活排：待确认片段 + 待判疑似
+            sorter: (a: Project, b: Project) => progressOf(a.id).left - progressOf(b.id).left,
+            render: (_, p: Project) => {
+              const g = progressOf(p.id);
+              if (!g.segs && !g.cands) return <Typography.Text type="secondary">-</Typography.Text>;
+              if (!g.left) return <Tag color="green">片段都确认了、疑似都判了</Tag>;
+              const pct = g.segs ? Math.floor(((g.segs - g.segPending) / g.segs) * 100) : 100;
+              return (
+                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                  <Tooltip title={`${g.segs} 段里已确认 ${g.segs - g.segPending} 段，还有 ${g.segPending} 段 AI 给的没人确认`}>
+                    <Progress percent={pct} size="small" status={pct >= 100 ? "success" : "active"} />
+                  </Tooltip>
+                  <Space size={4} wrap>
+                    <Tag color={g.segPending ? "orange" : "green"} style={{ marginInlineEnd: 0 }}>
+                      片段待确认 {g.segPending} / {g.segs}
+                    </Tag>
+                    {g.cands > 0 && (
+                      <Tag color={g.candPending ? "magenta" : "green"} style={{ marginInlineEnd: 0 }}>
+                        疑似待判 {g.candPending} / {g.cands}
+                      </Tag>
+                    )}
+                  </Space>
                 </Space>
               );
             },
