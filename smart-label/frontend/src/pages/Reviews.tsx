@@ -16,7 +16,9 @@ import {
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  approvedSummary,
   bulkApprove,
+  unapprove,
   claimReview,
   decideReview,
   releaseReview,
@@ -158,14 +160,37 @@ export default function Reviews() {
   const isSuper = role === "super_admin";
   const handleBulkApprove = async (projectId?: number) => {
     const r = await bulkApprove(projectId);
-    message.success(`已通过 ${r.approved} 个任务${r.skipped ? `；${r.skipped} 个别的审核员正在审，跳过了` : ""}`);
+    const why = [
+      r.skipped_unconfirmed ? `${r.skipped_unconfirmed} 个还有 AI 片段没人确认` : "",
+      r.skipped_cand_pending ? `${r.skipped_cand_pending} 个还有疑似没判` : "",
+      r.skipped_locked ? `${r.skipped_locked} 个别的审核员正在审` : "",
+    ].filter(Boolean);
+    message.success(`已通过 ${r.approved} 个任务${why.length ? `；跳过：${why.join("，")}` : ""}`, 8);
+    qc.invalidateQueries({ queryKey: ["approved-summary"] });
     refresh();
     qc.invalidateQueries({ queryKey: ["project-progress"] });
     qc.invalidateQueries({ queryKey: ["dataset-stats"] });
   };
   const bulkWarn =
-    "一次性全部标为「已通过」，不逐条看。注意：通过的任务里没人看过的纯 AI 片段，导出训练集选「整份取：审核通过」时会一起带进去——" +
-    "下面「可用数据类别统计」里切到「只算人确认过的」能看到差多少。通过后要改可以在任务上「退回重标」。";
+    "只通过「人都看完了」的待审任务：每段 AI 片段都确认 / 改过（或标了待定）、疑似片段都判了。" +
+    "还有没确认的片段、没判的疑似的跳过，标注中的任务本来就不在这里。" +
+    "通过后发现有问题，可以在下面「已通过」里退回待审核（原样，不改轮次不动片段），或在项目页单个任务上退回。";
+
+  // 已通过的：按项目看有多少、其中批量通过多少，可以整体退回待审核
+  const { data: approved } = useQuery({
+    queryKey: ["approved-summary"],
+    queryFn: approvedSummary,
+    enabled: role === "admin" || role === "super_admin",
+  });
+  const handleUnapprove = async (projectId?: number) => {
+    const r = await unapprove({ projectId, onlyBulk: true });
+    message.success(`已退回待审核 ${r.reverted} 个任务（原样）`);
+    refresh();
+    qc.invalidateQueries({ queryKey: ["approved-summary"] });
+    qc.invalidateQueries({ queryKey: ["project-progress"] });
+    qc.invalidateQueries({ queryKey: ["dataset-stats"] });
+  };
+  const bulkTotal = (approved ?? []).reduce((n, a) => n + a.bulk_approved, 0);
 
   const handleClaim = async (id: number) => {
     await claimReview(id);
@@ -375,6 +400,59 @@ export default function Reviews() {
             label: "可用数据类别统计（审核通过的任务：各类别多少段、多长、占比，看类别均不均衡）",
             children: <DatasetStats />,
           },
+          ...((approved ?? []).length
+            ? [
+                {
+                  key: "approved",
+                  label: `已通过（${(approved ?? []).reduce((n, a) => n + a.approved, 0)} 个任务，其中批量通过 ${bulkTotal} 个）——发现有问题可以退回待审核`,
+                  children: (
+                    <Space direction="vertical" style={{ width: "100%" }}>
+                      <Space wrap>
+                        <Popconfirm
+                          title={`全部 ${bulkTotal} 个批量通过的任务退回待审核？`}
+                          description="原样退回：轮次、片段、标注员都不变，只是从「已通过」回到「待审核」。逐条审过的不动。"
+                          disabled={!bulkTotal}
+                          onConfirm={() => handleUnapprove()}
+                        >
+                          <Button danger disabled={!bulkTotal}>
+                            全部批量通过的退回待审核
+                          </Button>
+                        </Popconfirm>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          单个任务：项目页里展开项目，已通过的任务上点「退回待审核」
+                        </Typography.Text>
+                      </Space>
+                      <Table
+                        size="small"
+                        rowKey="project_id"
+                        pagination={false}
+                        dataSource={approved}
+                        columns={[
+                          { title: "项目", dataIndex: "project_name", width: 160 },
+                          { title: "已通过", dataIndex: "approved", width: 100 },
+                          { title: "其中批量通过", dataIndex: "bulk_approved", width: 120 },
+                          {
+                            title: "操作",
+                            render: (_, a) => (
+                              <Popconfirm
+                                title={`${a.project_name} 的 ${a.bulk_approved} 个批量通过的任务退回待审核？`}
+                                description="原样退回，逐条审过的不动"
+                                disabled={!a.bulk_approved}
+                                onConfirm={() => handleUnapprove(a.project_id)}
+                              >
+                                <Button size="small" danger disabled={!a.bulk_approved}>
+                                  退回待审核
+                                </Button>
+                              </Popconfirm>
+                            ),
+                          },
+                        ]}
+                      />
+                    </Space>
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
       <Space style={{ marginBottom: 8, marginRight: 16 }} wrap>

@@ -48,15 +48,20 @@ def _setup(db, run):
                 r = AnnotationRecord(task_id=t.id, round_no=1, source_type=RecordSourceType.ai_revised)
                 db.add(r)
                 await db.flush()
-                # 每个任务：人确认的抓挠 10s、没人看的 AI 静止 100s
+                # 每个任务：人确认的抓挠 10s、AI 静止 100s（第 2 个项目的最后一个任务里这段没人确认）
                 db.add(AnnotationLabelItem(annotation_record_id=r.id, label_id=scratch.id, start_time_ms=0,
                                            end_time_ms=10_000, source_type=LabelItemSource.ai_generated, ai_confirmed=True))
                 db.add(AnnotationLabelItem(annotation_record_id=r.id, label_id=rest.id, start_time_ms=20_000,
-                                           end_time_ms=120_000, source_type=LabelItemSource.ai_generated))
+                                           end_time_ms=120_000, source_type=LabelItemSource.ai_generated,
+                                           ai_confirmed=not (name == "2026-09-22" and k == 2)))
         # 第 1 个项目里一个任务被审核员认领了、正在审；另一个还在标（不是待审）
         tasks[0].locked_by = rev.id
         tasks[0].reviewer_id = rev.id
         tasks[1].status = TaskStatus.IN_PROGRESS
+        # 第 2 个项目的第 2 个任务：片段都确认了，但还有一条疑似没判
+        from app.models.ai_candidate import AiCandidate
+        db.add(AiCandidate(task_id=tasks[4].id, round_no=1, label_name="舔", start_time_ms=0, end_time_ms=5,
+                           reason="grooming"))
         await db.commit()
         return boss, admin, projs, tasks
 
@@ -75,31 +80,67 @@ def test_only_super_admin_can_bulk_approve(db, run):
 def test_bulk_approve_one_project_then_all(db, run):
     boss, admin, projs, tasks = _setup(db, run)
     r = run(rs.bulk_approve(db, boss, projs[0].id))
-    # 项目 1：3 个任务里 1 个被审核员认领（跳过）、1 个还在标（不碰）、1 个通过
-    assert r == {"approved": 1, "skipped": 1}
+    # 项目 1：3 个任务里 1 个被审核员认领（跳过）、1 个还在标（不是待审，不碰）、1 个通过
+    assert r["approved"] == 1 and r["skipped_locked"] == 1 and r["skipped"] == 1
     st = {t.id: t.status for t in run(db.execute(select(Task))).scalars().all()}
     assert st[tasks[0].id] == TaskStatus.SUBMITTED and st[tasks[1].id] == TaskStatus.IN_PROGRESS
     assert st[tasks[2].id] == TaskStatus.APPROVED and st[tasks[3].id] == TaskStatus.SUBMITTED
     r = run(rs.bulk_approve(db, boss))
-    assert r == {"approved": 3, "skipped": 1}
+    # 项目 2：只有片段全确认、疑似全判的那个过；有疑似没判的、有 AI 片段没确认的都跳过
+    assert r["approved"] == 1 and r["skipped_cand_pending"] == 1 and r["skipped_unconfirmed"] == 1
+    st = {t.id: t.status for t in run(db.execute(select(Task))).scalars().all()}
+    assert st[tasks[3].id] == TaskStatus.APPROVED
+    assert st[tasks[4].id] == TaskStatus.SUBMITTED and st[tasks[5].id] == TaskStatus.SUBMITTED
     recs = run(db.execute(select(ReviewRecord))).scalars().all()
-    assert len(recs) == 4 and all(x.comment == "批量通过" and x.reviewer_id == boss.id for x in recs)
+    assert len(recs) == 2 and all(x.comment == "批量通过" and x.reviewer_id == boss.id for x in recs)
     assert len(run(db.execute(select(AuditLog).where(AuditLog.action == "review.bulk_approve"))).scalars().all()) == 2
+
+
+def test_unapprove_puts_back_as_is_and_can_be_approved_again(db, run):
+    boss, admin, projs, tasks = _setup(db, run)
+    run(rs.bulk_approve(db, boss))                       # 通过 tasks[2]、tasks[3]
+    items_before = sorted((i.id, i.ai_confirmed) for i in run(db.execute(select(AnnotationLabelItem))).scalars().all())
+    # 逐条审过的一条：only_bulk 的整体撤回不该碰它
+    t = tasks[1]
+    t.status = TaskStatus.APPROVED
+    db.add(ReviewRecord(task_id=t.id, round_no=1, reviewer_id=admin.id, decision=rs.ReviewDecision.approved,
+                        comment="看过了"))
+    run(db.commit())
+    # 单条
+    assert run(rs.unapprove(db, admin, task_ids=[tasks[2].id])) == {"reverted": 1}
+    # 全部（只退批量通过的）
+    assert run(rs.unapprove(db, admin)) == {"reverted": 1}
+    st = {x.id: (x.status, x.round_no, x.assigned_to) for x in run(db.execute(select(Task))).scalars().all()}
+    assert st[tasks[2].id][0] == TaskStatus.SUBMITTED and st[tasks[3].id][0] == TaskStatus.SUBMITTED
+    assert st[tasks[2].id][1] == 1 and st[tasks[2].id][2] == tasks[2].assigned_to     # 轮次、标注员不变
+    assert st[tasks[1].id][0] == TaskStatus.APPROVED                                  # 逐条审过的没动
+    items_after = sorted((i.id, i.ai_confirmed) for i in run(db.execute(select(AnnotationLabelItem))).scalars().all())
+    assert items_after == items_before                                                # 片段原样
+    # 退回来之后还能再通过一次（这一轮的审核记录删了，不撞唯一约束）
+    assert run(rs.bulk_approve(db, boss))["approved"] == 2
+    assert len(run(db.execute(select(AuditLog).where(AuditLog.action == "review.unapprove"))).scalars().all()) == 2
+    summ = {x["project_name"]: x for x in run(rs.approved_summary(db))}
+    assert summ["2026-09-21"] == {"project_id": projs[0].id, "project_name": "2026-09-21", "approved": 2, "bulk_approved": 1}
+    try:
+        run(rs.unapprove(db, User(username="x", password_hash="x", role=UserRole.annotator)))
+        raise AssertionError("标注员也能退回")
+    except rs.ReviewConflictError:
+        pass
 
 
 def test_dataset_stats_counts_only_approved(db, run):
     boss, admin, projs, tasks = _setup(db, run)
-    run(rs.bulk_approve(db, boss))                       # 通过 4 个（2 个跳过 / 不是待审）
+    run(rs.bulk_approve(db, boss))                       # 通过 2 个（tasks[2]、tasks[3]）
     st = run(aw.dataset_stats(db))
-    assert st["n_tasks"] == 4
+    assert st["n_tasks"] == 2
     cats = {c["name"]: c for c in st["categories"]}
-    assert cats["抓挠"]["n"] == 4 and cats["抓挠"]["seconds"] == 40.0 and cats["抓挠"]["confirmed_seconds"] == 40.0
-    assert cats["静止/休息"]["n"] == 4 and cats["静止/休息"]["seconds"] == 400.0
-    assert cats["静止/休息"]["confirmed_seconds"] == 0.0 and cats["静止/休息"]["pending"] == 4
+    assert cats["抓挠"]["n"] == 2 and cats["抓挠"]["seconds"] == 20.0 and cats["抓挠"]["confirmed_seconds"] == 20.0
+    assert cats["静止/休息"]["n"] == 2 and cats["静止/休息"]["seconds"] == 200.0
+    assert cats["静止/休息"]["confirmed_seconds"] == 200.0 and cats["静止/休息"]["pending"] == 0
     assert cats["舔"]["n"] == 0                          # 两个项目都有这个类别，一段都没有
     assert [c["name"] for c in st["categories"]][0] == "静止/休息"   # 按时长排
     one = run(aw.dataset_stats(db, [projs[1].id]))
-    assert one["n_tasks"] == 3 and {c["name"]: c["n"] for c in one["categories"]}["抓挠"] == 3
+    assert one["n_tasks"] == 1 and {c["name"]: c["n"] for c in one["categories"]}["抓挠"] == 1
 
 
 def test_review_queue_carries_per_task_kinds(db, run):
@@ -108,7 +149,7 @@ def test_review_queue_carries_per_task_kinds(db, run):
     from app.models.ai_candidate import AiCandidate
 
     boss, admin, projs, tasks = _setup(db, run)
-    t = tasks[2]
+    t = tasks[5]   # 静止那段没人确认的那个
     db.add(AiCandidate(task_id=t.id, round_no=1, label_name="饮水", start_time_ms=0, end_time_ms=5, reason="drinking"))
     run(db.commit())
     lc, cl = run(_per_task_kinds(db, [t.id, tasks[3].id]))
