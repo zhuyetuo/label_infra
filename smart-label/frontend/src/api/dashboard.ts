@@ -104,11 +104,30 @@ export interface EffCategory {
   median_seconds: number | null;
   mean_seconds: number | null;
 }
+/** 一个人一天：有效工时（动作间隔累加，离开超过 10 分钟不算）、确认了多少 */
+export interface EffDay {
+  day: string;
+  actions: number;
+  work_seconds: number;
+  /** 确认 / 改 / 新加的片段数（同一段按最后一次动手算一次） */
+  segments: number;
+  /** 判了几条疑似片段（确认 / 排除 / 待定） */
+  cands: number;
+  /** 交了几个任务 */
+  submits: number;
+  /** 动过几个任务 */
+  tasks: number;
+  /** 第一次 / 最后一次动手，HH:MM 本地时间 */
+  first: string | null;
+  last: string | null;
+  /** 片段按大类各几段 */
+  categories: Record<string, number>;
+}
 export interface EffUser {
   user_id: number;
   user_name: string;
   categories: EffCategory[];
-  days: { day: string; actions: number; work_seconds: number }[];
+  days: EffDay[];
   total_actions: number;
   total_work_seconds: number;
 }

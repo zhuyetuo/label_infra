@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Alert, Card, DatePicker, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
-import { getWorkforce, type EffUser, type EstimateRow, type LedgerRow, type UnassignedRow } from "@/api/dashboard";
+import { getWorkforce, type EffDay, type EffUser, type EstimateRow, type LedgerRow, type UnassignedRow } from "@/api/dashboard";
 
 /**
  * 人力管理：三张表回答三个问题。
@@ -41,6 +41,19 @@ export default function Workforce() {
   const to = range[1].format("YYYY-MM-DD");
   const { data, isLoading } = useQuery({ queryKey: ["workforce", from, to], queryFn: () => getWorkforce(from, to) });
 
+  // 每人每天一行：把 efficiency 里各人的 days 摊平，日期倒序（最近的在上）
+  type DayRow = EffDay & { user_id: number; user_name: string };
+  const perDay = useMemo<DayRow[]>(
+    () =>
+      (data?.efficiency ?? [])
+        .flatMap((u) => u.days.map((d) => ({ ...d, user_id: u.user_id, user_name: u.user_name })))
+        .sort((a, b) => b.day.localeCompare(a.day) || a.user_name.localeCompare(b.user_name)),
+    [data]
+  );
+  const userFilters = useMemo(
+    () => [...new Set(perDay.map((r) => r.user_name))].map((n) => ({ text: n, value: n })),
+    [perDay]
+  );
   // 效率表：所有人出现过的类别做列，抓挠 / 疑似片段 / 提交任务排前面
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -210,6 +223,99 @@ export default function Workforce() {
           }}
         />
       </Space>
+
+      <Card
+        size="small"
+        title={
+          <Tooltip title="有效工时 = 相邻两次动作的间隔累加，隔了 10 分钟以上当作离开不算；所以它比「第一次~最后一次」短，差的就是中间离开的时间。确认片段 = 这天确认 / 改 / 新加的片段（同一段只算一次）">
+            每人每天：工作时长、确认了多少
+          </Tooltip>
+        }
+        style={{ marginBottom: 12 }}
+      >
+        <Table
+          rowKey={(r) => `${r.user_id}-${r.day}`}
+          size="small"
+          loading={isLoading}
+          dataSource={perDay}
+          pagination={perDay.length > 30 ? { pageSize: 30, showSizeChanger: false } : false}
+          columns={[
+            { title: "日期", dataIndex: "day", width: 110, sorter: (a: DayRow, b: DayRow) => a.day.localeCompare(b.day), defaultSortOrder: "descend" as const },
+            { title: "标注员", dataIndex: "user_name", width: 120, filters: userFilters, onFilter: (v, r: DayRow) => r.user_name === v },
+            {
+              title: "有效工时",
+              dataIndex: "work_seconds",
+              width: 100,
+              sorter: (a: DayRow, b: DayRow) => a.work_seconds - b.work_seconds,
+              render: (s: number) => <b>{fmtHours(s)}</b>,
+            },
+            {
+              title: "第一次 ~ 最后一次",
+              width: 140,
+              render: (_, r: DayRow) => (r.first ? `${r.first} ~ ${r.last}` : "-"),
+            },
+            {
+              title: "确认片段",
+              dataIndex: "segments",
+              width: 100,
+              sorter: (a: DayRow, b: DayRow) => a.segments - b.segments,
+              render: (n: number, r: DayRow) => (
+                <Tooltip
+                  title={Object.entries(r.categories)
+                    .map(([k, v]) => `${k} ${v}`)
+                    .join("，") || "没有"}
+                >
+                  <b>{n}</b>
+                </Tooltip>
+              ),
+            },
+            { title: "判疑似", dataIndex: "cands", width: 80, sorter: (a: DayRow, b: DayRow) => a.cands - b.cands },
+            { title: "交任务", dataIndex: "submits", width: 80 },
+            { title: "动过的任务", dataIndex: "tasks", width: 90 },
+            {
+              title: <Tooltip title="（确认片段 + 判疑似）÷ 有效工时">每小时确认</Tooltip>,
+              width: 100,
+              render: (_, r: DayRow) => (r.work_seconds ? ((r.segments + r.cands) / (r.work_seconds / 3600)).toFixed(0) : "-"),
+            },
+            {
+              title: "片段按类别",
+              render: (_, r: DayRow) => (
+                <Space size={2} wrap>
+                  {Object.entries(r.categories).map(([k, v]) => (
+                    <Tag key={k} style={{ marginInlineEnd: 0 }}>
+                      {k} {v}
+                    </Tag>
+                  ))}
+                </Space>
+              ),
+            },
+          ]}
+          summary={(rows) => {
+            const sum = (k: "work_seconds" | "segments" | "cands" | "submits") => rows.reduce((n, r) => n + r[k], 0);
+            return rows.length > 1 ? (
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={2}>
+                  <b>合计（这一页）</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={2}>
+                  <b>{fmtHours(sum("work_seconds"))}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={3} />
+                <Table.Summary.Cell index={4}>
+                  <b>{sum("segments")}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={5}>
+                  <b>{sum("cands")}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={6}>
+                  <b>{sum("submits")}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={7} colSpan={3} />
+              </Table.Summary.Row>
+            ) : null;
+          }}
+        />
+      </Card>
 
       <Card size="small" title="效率：每条中位耗时（括号里是动作数）" style={{ marginBottom: 12 }}>
         <Table
