@@ -26,6 +26,7 @@ import {
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
+import { unapprove } from "@/api/reviews";
 import {
   assignProject,
   createProject,
@@ -1500,6 +1501,21 @@ export default function Projects() {
                                 </Button>
                               </Popconfirm>
                             )}
+                          {isAdmin && task.status === "APPROVED" && (
+                            <Popconfirm
+                              title="退回待审核"
+                              description="原样退回：轮次、片段、标注员都不变，只是从「已通过」回到「待审核」，可以重新审 / 驳回"
+                              onConfirm={async () => {
+                                await unapprove({ taskIds: [task.id] });
+                                message.success("已退回待审核");
+                                refresh();
+                              }}
+                            >
+                              <Button size="small" type="link">
+                                退回待审核
+                              </Button>
+                            </Popconfirm>
+                          )}
                           {isAdmin && (
                             <Popconfirm
                               title="删除任务"

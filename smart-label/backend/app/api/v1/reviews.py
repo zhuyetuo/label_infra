@@ -12,7 +12,9 @@ from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.review import ReviewDecisionRequest
 from app.schemas.task import TaskOut
-from app.services.review_service import ReviewConflictError, bulk_approve, claim_review, decide_review, release_review
+from app.services.review_service import (
+    ReviewConflictError, approved_summary, bulk_approve, claim_review, decide_review, release_review, unapprove,
+)
 from app.services.annotator_work_service import record_briefs
 from app.services.task_scope import exclude_own_annotation, exclude_sensitive
 from app.services.task_service import sample_brief
@@ -132,3 +134,24 @@ async def bulk_approve_api(body: dict | None = None, db: AsyncSession = Depends(
         return ok(await bulk_approve(db, user, int(pid) if pid is not None else None))
     except ReviewConflictError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+
+@router.post("/unapprove", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def unapprove_api(body: dict | None = None, db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """已通过的退回待审核，原样（不改轮次、不动片段）。
+    body: {"task_ids": [...]} 指定几条；或 {"project_id": N, "only_bulk": true}；都不给 = 全部项目里批量通过的。"""
+    b = body or {}
+    ids = [int(x) for x in (b.get("task_ids") or [])]
+    pid = b.get("project_id")
+    try:
+        return ok(await unapprove(db, user, ids or None, int(pid) if pid is not None else None,
+                                  bool(b.get("only_bulk", True))))
+    except ReviewConflictError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+
+@router.get("/approved-summary", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def approved_summary_api(db: AsyncSession = Depends(get_db)):
+    """每个项目已通过几个、其中批量通过的几个。"""
+    return ok(await approved_summary(db))
