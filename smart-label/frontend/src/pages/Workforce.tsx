@@ -50,6 +50,13 @@ export default function Workforce() {
         .sort((a, b) => b.day.localeCompare(a.day) || a.user_name.localeCompare(b.user_name)),
     [data]
   );
+  const projectFilters = useMemo(
+    () =>
+      [...new Set(perDay.flatMap((r) => (r.projects ?? []).map((p) => p.project)))]
+        .sort((a, b) => b.localeCompare(a))
+        .map((n) => ({ text: n, value: n })),
+    [perDay]
+  );
   const userFilters = useMemo(
     () => [...new Set(perDay.map((r) => r.user_name))].map((n) => ({ text: n, value: n })),
     [perDay]
@@ -278,6 +285,31 @@ export default function Workforce() {
               render: (_, r: DayRow) => (r.work_seconds ? ((r.segments + r.cands) / (r.work_seconds / 3600)).toFixed(0) : "-"),
             },
             {
+              title: <Tooltip title="这天动了哪些项目：有效工时 · 确认片段 · 判疑似 · 交任务。悬停看动了几个任务">动了哪些项目</Tooltip>,
+              width: 330,
+              filters: projectFilters,
+              onFilter: (v, r: DayRow) => (r.projects ?? []).some((p) => p.project === v),
+              render: (_, r: DayRow) => (
+                <Space direction="vertical" size={2}>
+                  {(r.projects ?? []).map((p) => (
+                    <Tooltip key={p.project} title={`${p.project}：动了 ${p.tasks} 个任务`}>
+                      <span style={{ whiteSpace: "nowrap" }}>
+                        <Tag color="blue" style={{ marginInlineEnd: 4 }}>
+                          {p.project}
+                        </Tag>
+                        <b>{fmtHours(p.work_seconds)}</b>
+                        <span style={{ color: "#888" }}>
+                          {" "}
+                          · 片段 {p.segments} · 疑似 {p.cands}
+                          {p.submits ? ` · 交 ${p.submits}` : ""}
+                        </span>
+                      </span>
+                    </Tooltip>
+                  ))}
+                </Space>
+              ),
+            },
+            {
               title: "片段按类别",
               render: (_, r: DayRow) => (
                 <Space size={2} wrap>
@@ -310,7 +342,7 @@ export default function Workforce() {
                 <Table.Summary.Cell index={6}>
                   <b>{sum("submits")}</b>
                 </Table.Summary.Cell>
-                <Table.Summary.Cell index={7} colSpan={3} />
+                <Table.Summary.Cell index={7} colSpan={4} />
               </Table.Summary.Row>
             ) : null;
           }}
