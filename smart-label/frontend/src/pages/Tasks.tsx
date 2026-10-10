@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { currentName } from "@/utils/labelTree";
 import { Button, Checkbox, Empty, Input, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
@@ -42,6 +43,7 @@ export default function Tasks() {
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
   // 打开工作台时带过去的类别筛选，见 openWorkspace
   const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
+  const [workspaceFocusCands, setWorkspaceFocusCands] = useState<string[]>([]);
   // 打开工作台时把该任务所属项目的标签带进去
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
   // 带 ?task=ID&seg=抓挠 直接打开某个任务并把片段筛到该标签（分享链接/外部跳转用；
@@ -93,6 +95,8 @@ export default function Tasks() {
     setWorkspaceReadOnly(readOnly);
     // 跟项目页同理：列表已经按类别筛过，带进去当片段列表的初始筛选
     setWorkspaceFocusLabels(filterOf(task.project_id).labels);
+    // 按候选类别筛着进来的：疑似片段面板先只看这几类
+    setWorkspaceFocusCands(filterOf(task.project_id).candLabels);
     setWorkspaceTask(task);
   };
 
@@ -142,10 +146,11 @@ export default function Tasks() {
   type StatusFilter = TaskStatus | "ALL" | "IN_PROGRESS_STARTED" | "IN_PROGRESS_EMPTY";
   // cand：只看还有「疑似片段」待判断的任务。候选不在片段里，一个"抓挠 0 段"的任务
   // 照样可能压着十几条候选，光按类别筛会整个漏掉
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; imu: string };
+  // candLabels：「疑似片段」里只看某几类（疑似舔 / 疑似抓挠…），跟项目页那个二级筛选一样
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, imu: "ALL" };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL" };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
 
@@ -167,6 +172,7 @@ export default function Tasks() {
       const lc = t.label_counts ?? {};
       if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
       if (f.cand && !(t.cand_pending ?? 0)) return false;
+      if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
       if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
       return true;
     };
@@ -202,7 +208,21 @@ export default function Tasks() {
     const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
     const candPending = all.reduce((s, t) => s + (t.cand_pending ?? 0), 0);
     const candTasksN = all.filter((t) => (t.cand_count ?? 0) > 0).length;
-    const filtered = f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL";
+    // 候选里实有哪些类别、各多少条：二级筛选的选项就是它，条数多的排前面
+    const candLabelTotals = (() => {
+      const m = new Map<string, { n: number; pending: number }>();
+      for (const t of all) {
+        for (const [name, c] of Object.entries(t.cand_labels ?? {})) {
+          const e = m.get(name) ?? { n: 0, pending: 0 };
+          e.n += c.n ?? 0;
+          e.pending += c.pending ?? 0;
+          m.set(name, e);
+        }
+      }
+      return [...m.entries()].sort((a, b) => b[1].n - a[1].n);
+    })();
+    const filtered =
+      f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.candLabels.length > 0 || f.imu !== "ALL";
     return (
       <>
       {imuCounts.size > 1 && (
@@ -313,6 +333,35 @@ export default function Tasks() {
                 {candPending ? <span style={{ opacity: 0.75 }}>（待判断 {candPending}）</span> : null}
                 <span style={{ opacity: 0.6 }}> · {candTasksN} 任务</span>
               </Tag>
+            </Tooltip>
+          )}
+          {/* 疑似片段的二级筛选，只列这批候选里实有的类别。选了之后打开任务，疑似片段面板也先只看这几类 */}
+          {candLabelTotals.length > 1 && (
+            <Tooltip title="只看含某几类候选的任务（比如只看有疑似舔的）。列出来的就是「疑似片段」里实有的类别和条数">
+              <Select
+                size="small"
+                mode="multiple"
+                allowClear
+                maxTagCount={1}
+                placeholder="候选类别…"
+                style={{ width: 190 }}
+                value={f.candLabels}
+                onChange={(v) => setFilter(p.id, { candLabels: v })}
+                optionLabelProp="title"
+                options={candLabelTotals.map(([name, c]) => ({
+                  value: name,
+                  title: currentName(name),
+                  label: (
+                    <span>
+                      {currentName(name)}{" "}
+                      <span style={{ color: "#999", fontSize: 12 }}>
+                        {c.n}
+                        {c.pending ? ` / 待判断 ${c.pending}` : ""}
+                      </span>
+                    </span>
+                  ),
+                }))}
+              />
             </Tooltip>
           )}
         </Space>
@@ -635,6 +684,7 @@ export default function Tasks() {
         task={workspaceTask}
         focusLabelName={focusLabelName}
         focusLabelIds={workspaceFocusLabels}
+        focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         initialSeekMs={urlSeekMs}
