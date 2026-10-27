@@ -34,7 +34,7 @@ from app.services import vision_scan_service as vscan
 #:
 #: 影棚**不在**这个名单里，而且不能加进来：一个大空间四到八只狗同时在场，
 #: 三路摄像头都可能拍到任意一只，"有狗"跟"是哪只狗"完全是两回事。
-ONE_DOG_PER_CAM_SITES = ("gouchang", "狗场")
+ONE_DOG_PER_CAM_SITES = ("bolangwang", "gouchang", "狗场")
 
 PRESENT = "present"        # 那只狗在画面里
 ABSENT = "absent"          # 那只狗不在画面里

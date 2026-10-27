@@ -170,7 +170,7 @@ def day_dir_of(sample: Sample) -> str | None:
 
 # 日期目录尾巴上的场地字样（2026_9_16_gouchang2 → gouchang2）
 _SITE_TAIL = re.compile(r"_([a-z]+\d*)$", re.IGNORECASE)
-_SITE_CN = {"gouchang": "狗场", "yingpeng": "影棚"}
+_SITE_CN = {"bolangwang": "佛山博朗旺", "gouchang": "深圳雷诺", "yingpeng": "公司影棚"}
 
 
 def scope_of(path: str, day_dir: str | None) -> tuple[str, str]:
@@ -210,8 +210,8 @@ def usable_cams(sample: Sample) -> list[str]:
         if not path:
             continue
         kind = site_layout.classify(path, sample.sample_code, day_dir_of(sample))
-        if kind == "public" and site_layout.site_of(sample.sample_code, day_dir_of(sample), path) == "gouchang":
-            continue        # 狗场公共区：不用
+        if kind == "public" and site_layout.site_of(sample.sample_code, day_dir_of(sample), path) in ("gouchang", "bolangwang"):
+            continue        # 一间一狗的场地，别人家的 / 公共区那一路：不用
         out.append(c)
     return out
 

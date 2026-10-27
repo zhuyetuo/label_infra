@@ -45,13 +45,48 @@ def test_狗场按机位号分档_公共区单独一档_影棚一处():
     """
     from app.services.site_layout import site_part
 
-    assert [site_part("gouchang", c) for c in (1, 2, 3)] == ["狗场·1号机"] * 3
-    assert [site_part("gouchang", c) for c in (4, 5, 6)] == ["狗场·2号机"] * 3
+    assert [site_part("gouchang", c) for c in (1, 2, 3)] == ["深圳雷诺·1号机"] * 3
+    assert [site_part("gouchang", c) for c in (4, 5, 6)] == ["深圳雷诺·2号机"] * 3
     # cam7 单独一档：它插在 2 号机上，但拍的是全部六间，算成「2 号机的」
     # 会让人以为前三间没有公共区画面
-    assert site_part("gouchang", 7) == "狗场·公共区"
-    assert [site_part("yingpeng", c) for c in (1, 2, 3)] == ["影棚"] * 3
+    assert site_part("gouchang", 7) == "深圳雷诺·公共区"
+    assert [site_part("yingpeng", c) for c in (1, 2, 3)] == ["公司影棚"] * 3
     # 认不出来就 None，不猜
     assert site_part("gouchang", 9) is None
     assert site_part("gouchang", None) is None
     assert site_part(None, 1) is None
+
+
+# ── 佛山博朗旺：同一批项圈（imu9~20），换了狗，没有公共区 ──────────────────
+
+
+def test_博朗旺布局跟采集端配置一致():
+    b = L.LAYOUT["bolangwang"]
+    assert set(b["imu"]) == set(range(9, 21)) and b["public_cams"] == set()
+    rooms = {imu: room for imu, (room, _d) in b["imu"].items()}
+    assert rooms[9] == rooms[10] == 1 and rooms[19] == rooms[20] == 6
+    assert len({d for _r, d in b["imu"].values()}) == 6
+
+
+def test_博朗旺按日期目录认出来_不会被认成深圳():
+    """「佛山博朗旺狗场」里也有「狗场」两个字，site_of 是按子串认的。"""
+    day = "2026_10_27_bolangwang"
+    assert L.site_of(f"data_raw/{day}/x_cam1_imu9_raw.mp4") == "bolangwang"
+    assert L.site_key_of_name("佛山博朗旺狗场") == "bolangwang"
+    assert L.site_key_of_name("深圳雷诺狗场") == "gouchang"
+    assert L.site_key_of_name("狗场") == "gouchang"            # 迁移前的老值
+    assert L.site_key_of_name("公司影棚") == L.site_key_of_name("影棚") == "yingpeng"
+    assert L.site_key_of_name("") is None and L.site_key_of_name("别的地方") is None
+    # 同一个 imu9，两个场地是两只狗
+    assert L.dog_code_of("multicam_1_imu9", day) == "dongde"
+    assert L.dog_code_of("multicam_1_imu9", "2026_9_13_gouchang") == "xiaobai"
+    # 一间一狗：自己那间 own，别人家的 public；没有公共区
+    assert L.classify(f"data_raw/{day}/a_cam1_imu9_raw.mp4", "a_imu9", day) == "own"
+    assert L.classify(f"data_raw/{day}/a_cam2_imu9_raw.mp4", "a_imu9", day) == "public"
+    assert L.expected_cams("bolangwang", 17) == {5}
+    assert [L.site_part("bolangwang", c) for c in (1, 4)] == ["佛山博朗旺·1号机", "佛山博朗旺·2号机"]
+
+
+def test_深圳暂停合作_博朗旺和影棚在合作():
+    assert not L.is_active_site("gouchang")
+    assert L.is_active_site("bolangwang") and L.is_active_site("yingpeng")

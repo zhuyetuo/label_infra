@@ -17,7 +17,6 @@ import pytest
 
 from app.services.dog_name_service import imu_keys_of_dog, merge_imu_map, sort_imu_map
 
-
 # ── 一只狗登记的设备号怎么解析 ──────────────────────────────────────────
 
 @pytest.mark.parametrize("imu_field,dog_code,expected", [
@@ -113,3 +112,39 @@ def test_没填名字的狗不进表():
     m = _merge({}, [("5", "  ", "IMU9"), ("6", "旺财", "IMU15")])
     assert "IMU9" not in m
     assert m["IMU15"] == "旺财"
+
+
+
+# ── 跨场地撞号：深圳那 12 个项圈搬到了佛山博朗旺，戴在另一批狗身上 ──────────
+
+from app.services.dog_name_service import dog_label, site_imu_map
+
+_SZ = [("5", "小白", "IMU9,IMU10", "深圳雷诺狗场"), ("10", "东德", "IMU19,IMU20", "深圳雷诺狗场")]
+_FS = [("11", "东德牧羊犬", "IMU9,IMU10", "佛山博朗旺狗场"), ("16", "拳师犬七月母", "IMU19,IMU20", "佛山博朗旺狗场")]
+
+
+def test_全局表撞号时在合作的场地优先_跟查库顺序无关():
+    for rows in (_SZ + _FS, _FS + _SZ):
+        m = _merge({}, rows)
+        assert m["IMU9"] == "东德牧羊犬" and m["IMU20"] == "拳师犬七月母", rows
+
+
+def test_跨场地撞号不告警_同场地撞号照样告警(caplog):
+    _merge({}, _SZ + _FS)
+    assert "同一个场地" not in caplog.text
+    _merge({}, [("1", "甲", "IMU9", "公司影棚"), ("2", "乙", "IMU9", "公司影棚")])
+    assert "同一个场地" in caplog.text
+
+
+def test_样本按日期目录里的场地对上当时那只狗():
+    """老的深圳样本不能因为项圈搬走了就显示成新狗。"""
+    rows = _SZ + _FS
+    g, s = _merge({}, rows), site_imu_map(rows)
+    sz = "data_raw/2026_9_20_gouchang/multicam_20260920_030016038_cam1_imu9_raw.mp4"
+    fs = "data_raw/2026_10_27_bolangwang/multicam_20261027_030016038_cam1_imu9_raw.mp4"
+    assert dog_label("multicam_20260920_030016038_imu9", g, s, sz) == "小白（IMU9）"
+    assert dog_label("multicam_20261027_030016038_imu9", g, s, fs) == "东德牧羊犬（IMU9）"
+    # 认不出场地（没给路径）→ 全局表，也就是在合作的那只
+    assert dog_label("multicam_x_imu9", g, s) == "东德牧羊犬（IMU9）"
+    # 老调用：三元组、不带 site_map，行为不变
+    assert dog_label("x_imu15", _merge({}, [("8", "旺财", "IMU15")])) == "旺财（IMU15）"

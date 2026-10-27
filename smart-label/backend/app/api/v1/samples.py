@@ -509,7 +509,7 @@ def _video_note(sample: Sample, cam_paths: list[str | None], by_path: dict) -> s
     want = _sl.expected_cams(site, _sl.imu_of(sample.sample_code))
     if not want:
         return None
-    site_name = "影棚" if site == "yingpeng" else "狗场"
+    site_name = _sl.SITES.get(_sl.SITE_KEYS.get(site, site), {}).get("name", "狗场")
     listed = [p for p in cam_paths if p]
     playable = [p for p in listed if p in by_path]
     if len(playable) >= len(want):

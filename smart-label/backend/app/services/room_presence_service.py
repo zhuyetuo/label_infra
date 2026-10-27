@@ -113,7 +113,7 @@ def in_region(box: list[float], region: tuple[float, float, float, float]) -> bo
 def _site_key(sample: Sample) -> str | None:
     day_dir = os.path.dirname(sample.video_cam1_path or "")
     site = site_of(sample.sample_code) or site_of(day_dir)
-    return "gouchang" if site in ("gouchang", "狗场") else site
+    return {"狗场": "gouchang"}.get(site, site)
 
 
 async def load_regions(db: AsyncSession) -> dict[tuple[str, int], dict[int, tuple[float, float, float, float]]]:

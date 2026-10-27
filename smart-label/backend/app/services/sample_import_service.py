@@ -97,7 +97,7 @@ MISSING_FILES_PREFIX = "NAS 上文件已不存在："
 # 采集端按 PAIRS 给每只狗单独配了摄像头，文件名里的 _camN_imuM 是真的配对关系。
 # 只有这些目录走按 IMU 配对的逻辑；其余目录（影棚、以及所有旧数据）一律保持
 # 原来的「三路共用」行为，已导入的样本不会因为这次改动而变。
-_PAIRED_SITE_SUFFIXES = ("_gouchang",)
+_PAIRED_SITE_SUFFIXES = ("_gouchang", "_bolangwang")
 
 
 def _is_paired_site_dir(data_raw_dir: str, root: str) -> bool:

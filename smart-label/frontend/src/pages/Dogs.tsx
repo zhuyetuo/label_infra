@@ -30,8 +30,12 @@ interface FormValues {
   birth_date?: import("dayjs").Dayjs | null;
 }
 
-// 现在就这两个场所，做成可选可填：以后开新场地直接输，不用改代码
-const SITES = ["影棚", "狗场"];
+// 场所存全称（跟后端 site_layout.SITES 一致）。「狗场」两个字已经分不清是哪个了
+const SITES = ["佛山博朗旺狗场", "公司影棚", "深圳雷诺狗场"];
+// 暂停合作的场地：档案和历史样本都留着，标签页排到后面、标上「暂停」
+const PAUSED_SITES = new Set(["深圳雷诺狗场"]);
+const siteLabel = (x: string) => (PAUSED_SITES.has(x) ? `${x}（暂停）` : x);
+const SITE_OPTIONS = SITES.map((x) => ({ value: x, label: siteLabel(x) }));
 // 体型只有这三档，不做成可自由填的：分档就是为了能按它归类，选项一多就归不成类了。
 // 也不按体重自动算——同样 13kg，法斗是中型，小体金毛是大型幼犬，光看数字分不出来
 const SIZES = ["大", "中", "小"] as const;
@@ -136,8 +140,8 @@ export default function Dogs() {
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
   const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
 
-  // 当前看哪个场所（all / 影棚 / 狗场…）。记住选择：管狗场的人不该每次都先切一下
-  const [siteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
+  // 当前看哪个场所（all / 公司影棚 / 佛山博朗旺狗场…）。记住选择：管狗场的人不该每次都先切一下
+  const [savedSiteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
   const [open, setOpen] = useState(false);
   // 正在改的是哪一格。一次只有一格是输入框——整行一起变输入框的话，
   // 每一列的宽度都跟着变，一行的排版全乱
@@ -159,12 +163,6 @@ export default function Dogs() {
 
   const samplesOf = (dogId: number) => samples?.filter((s) => s.dog_id === dogId) ?? [];
 
-  // 当前标签页要显示哪些狗
-  const shown = useMemo(
-    () => (siteTab === "all" ? dogs ?? [] : (dogs ?? []).filter((d) => ((d.site || "").trim() || "未填场所") === siteTab)),
-    [dogs, siteTab]
-  );
-
   const overview = useMemo(() => {
     const list = dogs ?? [];
     const bySite = new Map<string, Dog[]>();
@@ -178,11 +176,24 @@ export default function Dogs() {
     return {
       all: stat(list),
       sites: [...bySite.entries()]
-        // 未填的排最后，其余按狗多的在前
-        .sort((a, b) => (a[0] === "未填场所" ? 1 : b[0] === "未填场所" ? -1 : b[1].length - a[1].length))
+        // 未填的排最后，暂停合作的排在它前面，其余按狗多的在前
+        .sort((a, b) => {
+          const rank = (k: string) => (k === "未填场所" ? 2 : PAUSED_SITES.has(k) ? 1 : 0);
+          return rank(a[0]) - rank(b[0]) || b[1].length - a[1].length;
+        })
         .map(([site, ds]) => ({ site, ...stat(ds) })),
     };
   }, [dogs, samples]);
+  // 记住的那个标签现在没有了（比如改名前存的「狗场」）→ 回到「全部」，别停在一个空表上
+  const siteTab =
+    savedSiteTab === "all" || !dogs || overview.sites.some((s) => s.site === savedSiteTab) ? savedSiteTab : "all";
+
+  // 当前标签页要显示哪些狗
+  const shown = useMemo(
+    () => (siteTab === "all" ? dogs ?? [] : (dogs ?? []).filter((d) => ((d.site || "").trim() || "未填场所") === siteTab)),
+    [dogs, siteTab]
+  );
+
   const tasksOfSample = (sampleId: number) => tasks?.filter((t) => t.sample_id === sampleId) ?? [];
 
   const openCreate = () => {
@@ -270,7 +281,7 @@ export default function Dogs() {
         </Button>
         {/* 说明收进问号里：原来是页头两段小字 + 三张统计卡片，占掉小半屏，而这些话
             看一次就够了，天天来的人每次都要越过它们才看到表格。狗数量下面的标签页
-            本来就有（全部 10 / 狗场 6 / 影棚 4），卡片是重复的 */}
+            本来就有（全部 / 各场所的只数），卡片是重复的 */}
         <Tooltip
           styles={{ root: { maxWidth: 460 } }}
           title={
@@ -308,7 +319,7 @@ export default function Dogs() {
         }}
         items={[
           { key: "all", label: `全部 ${overview.all.total}` },
-          ...overview.sites.map((s) => ({ key: s.site, label: `${s.site} ${s.total}` })),
+          ...overview.sites.map((s) => ({ key: s.site, label: `${siteLabel(s.site)} ${s.total}` })),
         ]}
       />
 
@@ -596,7 +607,7 @@ export default function Dogs() {
           {
             title: "场所",
             dataIndex: "site",
-            width: 100,
+            width: 140,
             render: (v: string | null, d: Dog) =>
               cell(
                 d,
@@ -609,7 +620,7 @@ export default function Dogs() {
                   style={{ width: "100%" }}
                   value={v ?? undefined}
                   placeholder="场所"
-                  options={SITES.map((x) => ({ value: x, label: x }))}
+                  options={SITE_OPTIONS}
                   onChange={(x) => {
                     saveField(d, { site: x ?? null });
                     doneEditing();
@@ -699,7 +710,7 @@ export default function Dogs() {
             <Input placeholder="bibi, BB, 比比" />
           </Form.Item>
           <Form.Item name="site" label="场所" tooltip="这只狗在哪个场地。以前写在备注里，单独一列才能按场所筛选和统计">
-            <Select allowClear placeholder="影棚 / 狗场" options={SITES.map((x) => ({ value: x, label: x }))} />
+            <Select allowClear placeholder="佛山博朗旺狗场 / 公司影棚" options={SITE_OPTIONS} />
           </Form.Item>
           <Form.Item
             name="size"
