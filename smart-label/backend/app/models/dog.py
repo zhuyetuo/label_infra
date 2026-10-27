@@ -23,8 +23,8 @@ class Dog(Base):
     # 这只狗戴的是哪个机位（IMU1…）。样本编号里只有机位号，皮肤评估那边的
     # 「比熊-BB」又是另一套叫法，靠这一列把两边对上
     imu: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="机位号，如 IMU1")
-    # 这只狗在哪个场所：影棚 / 狗场。以前塞在备注里，没法按场所筛选和统计
-    site: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="场所：影棚 / 狗场")
+    # 这只狗在哪个场所，存全称（见 site_layout.SITES）。以前塞在备注里，没法按场所筛选和统计
+    site: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="场所：公司影棚 / 深圳雷诺狗场 / 佛山博朗旺狗场")
     # 体型：大 / 中 / 小。不按体重自动分——同样 13kg，法斗是中型，小体金毛是大型幼犬，
     # 光看数字分不出来；而抓挠的幅度和频率跟体型直接相关，得能按它分组看
     size: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="体型：大 / 中 / 小")

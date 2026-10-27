@@ -1,8 +1,8 @@
 """
 现场布局：哪个摄像头拍哪个单间、哪只狗（哪个 IMU）住哪间、哪个是公共区。
 
-来源是采集端 witmotion_imu 仓库里的 sites/狗场1.env、狗场2.env、影棚.env（CAMERAS /
-DEVICES / PAIRS），这里照抄成一张表。**改了那边的配对要同步改这里**——两边都是
+来源是采集端 witmotion_imu 仓库里的 sites/狗场1.env、狗场2.env、影棚.env、
+佛山博朗旺_狗场1.env、佛山博朗旺_狗场2.env（CAMERAS / DEVICES / PAIRS），这里照抄成一张表。**改了那边的配对要同步改这里**——两边都是
 人写死的，没有自动同步；测试里有一条守着"每个 IMU 都有归属"。
 
 用处：视频文件名里带 `_cam{N}_imu{M}`，一看就知道这一路是这只狗自己单间的摄像头
@@ -12,17 +12,48 @@ DEVICES / PAIRS），这里照抄成一张表。**改了那边的配对要同步
     狗场   6 个单间各一狗一摄像头（cam1~6），cam7 公共区俯拍（狗场2 那台电脑接的）
            每间两个 IMU 轮换（一个在狗身上、一个充电），归属同一只狗
     影棚   4 只狗共处，3 个摄像头全是公共的（cam1~3），IMU 1~8 两两轮换归 4 只狗
+    博朗旺 6 个单间各一狗一摄像头（cam1~6），没有公共区。项圈还是狗场那 12 个
+           （IMU9~20），**狗换了**——所以 IMU 号只在一个场地里唯一，查狗要带上场地
 """
 
 from __future__ import annotations
 
 import re
 
-# 场地别名（采集端 SITE_ALIAS / 日期目录后缀里出现的字样）→ 布局键
+# 布局键 → 给人看的全称、还在不在合作。狗档案的「场所」列存的就是这个全称。
+# 暂停合作的场地不删：它的历史样本还在，照样要能认出来、对上当时的狗。
+SITES: dict[str, dict] = {
+    "bolangwang": {"name": "佛山博朗旺狗场", "active": True},
+    "yingpeng": {"name": "公司影棚", "active": True},
+    "gouchang": {"name": "深圳雷诺狗场", "active": False},     # 2026-10 起暂停合作
+}
+
+# 狗档案「场所」列以前存的短名，迁移之后还可能从老接口、老导出里进来
+LEGACY_SITE_NAMES = {"狗场": "gouchang", "影棚": "yingpeng"}
+
+# 场地别名（采集端 SITE_ALIAS / 日期目录后缀里出现的字样）→ 布局键。
+# site_of 是按**子串**认的，所以顺序要紧：bolangwang 放最前，「佛山博朗旺狗场」
+# 里也有「狗场」两个字，放后面就会被认成深圳那个。
 SITE_KEYS = {
-    "gouchang": "gouchang", "狗场": "gouchang",
+    "bolangwang": "bolangwang", "博朗旺": "bolangwang",
+    "gouchang": "gouchang", "雷诺": "gouchang", "狗场": "gouchang",
     "yingpeng": "yingpeng", "影棚": "yingpeng",
 }
+
+
+def site_key_of_name(name: str | None) -> str | None:
+    """狗档案「场所」那一列（全称 / 老短名 / 别名都认）→ 布局键。认不出 None。"""
+    n = (name or "").strip()
+    if not n:
+        return None
+    for k, v in SITES.items():
+        if v["name"] == n:
+            return k
+    return LEGACY_SITE_NAMES.get(n) or SITE_KEYS.get(n.lower())
+
+
+def is_active_site(key: str | None) -> bool:
+    return bool(key and SITES.get(key, {}).get("active"))
 
 # imu 号 → (所在单间的摄像头号, 狗代号)。摄像头号是采集端 CAMERAS 里的机位号，
 # 也就是视频文件名里 _cam{N}_ 的 N。None = 没有自己的单间（影棚）
@@ -36,6 +67,19 @@ LAYOUT: dict[str, dict] = {
             15: (4, "wangcai"), 16: (4, "wangcai"),     # 旺财 法斗       4 号单间
             17: (5, "dajinmao"), 18: (5, "dajinmao"),   # 大金毛 金毛     5 号单间
             19: (6, "dongde"), 20: (6, "dongde"),       # 东德            6 号单间
+        },
+    },
+    # 佛山博朗旺：两台电脑各 3 间，没有公共区。项圈号跟深圳那批重了（同一批
+    # 设备搬过来的），狗不一样——查狗名一定要带场地，见 dog_name_service
+    "bolangwang": {
+        "public_cams": set(),
+        "imu": {
+            9: (1, "dongde"), 10: (1, "dongde"),                  # 东德牧羊犬     1 号单间
+            11: (2, "labuladuo"), 12: (2, "labuladuo"),           # 拉布拉多       2 号单间
+            13: (3, "quanshi_gong7m"), 14: (3, "quanshi_gong7m"), # 拳师犬 公 7月  3 号单间
+            15: (4, "quanshi_mu6m"), 16: (4, "quanshi_mu6m"),     # 拳师犬 母 6月  4 号单间
+            17: (5, "kasiluo"), 18: (5, "kasiluo"),               # 卡斯罗         5 号单间
+            19: (6, "quanshi_mu7m"), 20: (6, "quanshi_mu7m"),     # 拳师犬 母 7月  6 号单间
         },
     },
     "yingpeng": {
@@ -65,8 +109,9 @@ SITE_PARTS: dict[str, list[tuple[str, set[int]]]] = {
     # cam7 单独一档：**它拍的是全部六间**（画面里 1~6 号都在），只是插在 2 号机上。
     # 归到「狗场2」等于说它只属于后三间，而那正是现在 imu9~14 看不到公共区的
     # 由来——2026-09-22 实测：imu14 的样本只有一路，imu20 的有两路
-    "gouchang": [("狗场·1号机", {1, 2, 3}), ("狗场·2号机", {4, 5, 6}), ("狗场·公共区", {7})],
-    "yingpeng": [("影棚", {1, 2, 3})],
+    "gouchang": [("深圳雷诺·1号机", {1, 2, 3}), ("深圳雷诺·2号机", {4, 5, 6}), ("深圳雷诺·公共区", {7})],
+    "bolangwang": [("佛山博朗旺·1号机", {1, 2, 3}), ("佛山博朗旺·2号机", {4, 5, 6})],
+    "yingpeng": [("公司影棚", {1, 2, 3})],
 }
 
 

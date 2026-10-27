@@ -35,7 +35,7 @@ from app.schemas.task import (
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
-from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map
+from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map, site_imu_dog_map
 from app.services.task_service import (
     TaskConflictError,
     claim_all_in_project,
@@ -331,13 +331,14 @@ async def list_tasks(
     brief_rows = await db.execute(
         select(
             Sample.id, Sample.sample_code, Sample.video_duration_sec,
-            Sample.imu_row_count, Sample.dog_id,
+            Sample.imu_row_count, Sample.dog_id, Sample.video_cam1_path,
         )
         .join(Task, Task.sample_id == Sample.id)
         .join(scope, scope.c.id == Task.id)
         .distinct()
     )
     dog_map = await imu_dog_map()
+    site_map = await site_imu_dog_map()
     _brief_rows = brief_rows.all()
     dog_names = await dog_names_by_id(db, {r[4] for r in _brief_rows if r[4] is not None})
     briefs = {
@@ -345,9 +346,9 @@ async def list_tasks(
             "sample_code": code,
             "video_duration_sec": dur,
             "imu_row_count": rows_n,
-            "dog_label": dog_label_of(code, dog_names.get(dog_id), dog_map),
+            "dog_label": dog_label_of(code, dog_names.get(dog_id), dog_map, site_map, cam1),
         }
-        for sid, code, dur, rows_n, dog_id in _brief_rows
+        for sid, code, dur, rows_n, dog_id, cam1 in _brief_rows
     }
     user_names: dict[int, str] = {}
     user_roles: dict[int, str] = {}
