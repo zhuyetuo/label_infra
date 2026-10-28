@@ -459,12 +459,21 @@ async def get_draft(task_id: int, db: AsyncSession = Depends(get_db), user: User
         .scalars()
         .all()
     )
-    return ok(
-        DraftOut(
-            round_no=task.round_no,
-            items=[LabelItemOut.model_validate(i).model_dump() for i in items],
-        ).model_dump()
-    )
+    # 从疑似片段确认来的：附上那条候选当初猜的类别和来源，界面上显示「疑似舔 → 活动」
+    cand_ids = {i.from_candidate_id for i in items if i.from_candidate_id}
+    cands = {}
+    if cand_ids:
+        cands = {cid: (name, reason) for cid, name, reason in (await db.execute(
+            select(AiCandidate.id, AiCandidate.label_name, AiCandidate.reason).where(AiCandidate.id.in_(cand_ids))
+        )).all()}
+    out = []
+    for i in items:
+        d = LabelItemOut.model_validate(i).model_dump()
+        if i.from_candidate_id in cands:
+            name, reason = cands[i.from_candidate_id]
+            d["cand_label_name"], d["cand_reason"] = name, getattr(reason, "value", reason)
+        out.append(d)
+    return ok(DraftOut(round_no=task.round_no, items=out).model_dump())
 
 
 @router.put("/{task_id}/draft")

@@ -99,6 +99,16 @@ class AnnotationLabelItem(Base):
         BigInteger, ForeignKey("ai_candidates.id"), nullable=True, comment="从哪条候选确认来的"
     )
 
+    # AI 当初给的判断（类别、起止）。AI 生成时写入，之后人怎么改都不动——
+    # 这样「AI 判的舔 → 人改成活动」才能一眼看出来。is_modified 只说"改过"，
+    # 说不出原来是什么。人工新画的、从疑似片段确认来的都是 NULL（后者的出处看
+    # from_candidate_id 那条候选）。加这几列之前改过的老数据也是 NULL，原值已经找不回来
+    ai_label_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("label_definitions.id"), nullable=True, comment="AI 原始类别"
+    )
+    ai_start_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="AI 原始开始")
+    ai_end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="AI 原始结束")
+
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列
     touched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

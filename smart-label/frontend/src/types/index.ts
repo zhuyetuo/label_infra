@@ -116,6 +116,13 @@ export interface LabelItem {
   /** 从哪条「疑似片段」候选确认上来的；有值才能「退回候选」重新判断 */
   from_candidate_id: number | null;
   created_by: number | null;
+  /** AI 当初给的类别和起止（AI 生成时记下、之后不变）；人工画的、老数据为空 */
+  ai_label_id?: number | null;
+  ai_start_ms?: number | null;
+  ai_end_ms?: number | null;
+  /** 从疑似片段确认来的：那条候选当初猜的类别和来源 */
+  cand_label_name?: string | null;
+  cand_reason?: string | null;
 }
 
 export interface Draft {

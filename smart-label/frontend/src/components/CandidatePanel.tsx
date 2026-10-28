@@ -4,6 +4,7 @@ import { Button, Dropdown, Empty, Popconfirm, Radio, Select, Space, Table, Tag, 
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
+import { REASON_LABEL } from "@/utils/candReason";
 import { currentName, findLabel, flatten } from "@/utils/labelTree";
 
 /**
@@ -12,23 +13,6 @@ import { currentName, findLabel, flatten } from "@/utils/labelTree";
  * 从零翻视频。人工点「跳转」或「循环」看两秒视频，确认就变成一条正式的人工
  * 片段，排除就记一笔——两种决定都是重训模型最有价值的数据。
  */
-
-const REASON_LABEL: Record<AiCandidate["reason"], string> = {
-  low_conf: "模型低置信",
-  spectral: "频谱像抓挠",
-  // 只靠加速度姿态挑出来的：头伸到某个部位并保持住。给「舔/啃哪个部位」攒标注用，
-  // 人只看这几段，不用翻 24 小时视频
-  grooming: "姿态像舔/啃",
-  // 同一批「头伸出去并保持」的姿态段，按节律猜成进食 / 饮水（见 imu_train behaviors.py）
-  eating: "姿态+节律像进食",
-  drinking: "姿态+节律像饮水",
-  // 加速度上一串孤立的尖脉冲，峰之间安静
-  barking: "冲击串像吠叫",
-  // 视觉大模型看视频挑出来的：画面里狗在做这个动作。类别是项目里选的那几类（含部位）
-  vision: "画面看像",
-  // 画面向量索引：拿一帧样例（或一句话）在整个项目里找长得像的几秒。不问大模型，免费
-  similar: "画面相似",
-};
 
 const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   low_conf: "orange",

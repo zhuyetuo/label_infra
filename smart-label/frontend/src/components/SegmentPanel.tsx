@@ -6,6 +6,7 @@ import type { SelectProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
+import { REASON_LABEL } from "@/utils/candReason";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -16,6 +17,8 @@ type SourceFilter =
   | "ai_pending"
   | "ai_confirmed"
   | "ai_modified"
+  | "ai_relabeled"
+  | "from_cand"
   | "human"
   | "uncertain"
   | "uncertain_no_view"
@@ -28,6 +31,8 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "ai_pending", label: "AI 待确认" },
   { value: "ai_confirmed", label: "AI 已确认" },
   { value: "ai_modified", label: "AI 已纠正" },
+  { value: "ai_relabeled", label: "AI 改了类别" },
+  { value: "from_cand", label: "来自疑似片段" },
   { value: "human", label: "人工" },
   { value: "uncertain", label: "待定（全部）" },
   { value: "uncertain_no_view", label: "待定·没画面" },
@@ -273,6 +278,8 @@ export default function SegmentPanel({
         if (filterSource === "ai_pending" && st !== "pending") return false;
         if (filterSource === "ai_confirmed" && st !== "confirmed") return false;
         if (filterSource === "ai_modified" && st !== "modified") return false;
+        if (filterSource === "ai_relabeled" && !(st === "modified" && i.ai_label_id != null && i.ai_label_id !== i.label_id)) return false;
+        if (filterSource === "from_cand" && !i.cand_label_name) return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
@@ -851,8 +858,12 @@ export default function SegmentPanel({
               ),
           },
           {
-            title: "来源",
-            width: 100,
+            title: (
+              <Tooltip title="这一段怎么来的：AI 判的、人确认了还是改成了别的；从疑似片段确认上来的写着当初猜的是什么">
+                来历
+              </Tooltip>
+            ),
+            width: 190,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
               // 刚改过的：说清楚它为什么还留在这儿（已经不符合当前筛选了）
@@ -893,8 +904,24 @@ export default function SegmentPanel({
                   ) : st === "modified" ? (
                     // 改过之后「通过」按钮就没了，这是对的——已经是人的结论了。
                     // 但界面上不说的话，看起来像"按钮怎么没了"，人会退出去重进
-                    <Tooltip title="你改过这条（换了标签或拖过起止），已经算你的结论，会进训练集——不用再点「通过」，那个按钮也因此不再出现">
-                      <Tag color="blue">AI 已纠正</Tag>
+                    i.ai_label_id != null && i.ai_label_id !== i.label_id ? (
+                      <Tooltip title={`AI 判的是「${nameOf(i.ai_label_id)}」，人改成了「${nameOf(i.label_id)}」。已经算人的结论，会进训练集`}>
+                        <Tag color="blue">AI {nameOf(i.ai_label_id)} → {nameOf(i.label_id)}</Tag>
+                      </Tooltip>
+                    ) : i.ai_label_id != null ? (
+                      <Tooltip title={`类别没改，起止从 ${formatMs(i.ai_start_ms ?? 0)} ~ ${formatMs(i.ai_end_ms ?? 0)} 调成了现在这样`}>
+                        <Tag color="blue">AI ✓ 改了起止</Tag>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="你改过这条（换了标签或拖过起止），已经算你的结论，会进训练集。这条是记录 AI 原始判断之前改的，原来是什么已经查不到">
+                        <Tag color="blue">AI 已纠正</Tag>
+                      </Tooltip>
+                    )
+                  ) : i.cand_label_name ? (
+                    <Tooltip title={`从「疑似片段」确认上来的：${REASON_LABEL[i.cand_reason as keyof typeof REASON_LABEL] ?? i.cand_reason ?? ""}，当初猜的是「${i.cand_label_name}」`}>
+                      <Tag color="cyan">
+                        疑似{i.cand_label_name} {nameOf(i.label_id) === i.cand_label_name ? "✓" : `→ ${nameOf(i.label_id)}`}
+                      </Tag>
                     </Tooltip>
                   ) : (
                     <Tooltip title="你自己画的，不是 AI 标的">

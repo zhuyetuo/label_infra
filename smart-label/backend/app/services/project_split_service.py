@@ -102,6 +102,8 @@ async def _copy_tasks(db: AsyncSession, task_ids: list[int], dst_project_id: int
                     start_time_ms=it.start_time_ms, end_time_ms=it.end_time_ms, source_type=it.source_type,
                     is_modified=it.is_modified, ai_confidence=it.ai_confidence, ai_confirmed=it.ai_confirmed,
                     uncertain=it.uncertain, uncertain_reason=it.uncertain_reason, created_by=it.created_by,
+                    ai_label_id=label_map.get(it.ai_label_id, it.ai_label_id) if it.ai_label_id else None,
+                    ai_start_ms=it.ai_start_ms, ai_end_ms=it.ai_end_ms,
                 ))
         await db.flush()
     return len(tasks)
