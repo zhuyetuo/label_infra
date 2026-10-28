@@ -367,3 +367,17 @@ def test_目录名大写OK也算整理好了(material):
     _put(material, "颈圈算法验证/皮肤瘙痒/视频问诊", "2026-10-24-OK", "bibi", "a.jpg")
     f = next(x for x in ts.list_photos("skin") if x["folder"] == "2026-10-24-OK")
     assert f["ok"] and f["date"] == "2026-10-24" and f["source"] == "视频问诊"
+
+
+def test_同一只狗的照片按编号顺序排(material):
+    """按字符串排会变成 (1) (10) (11) … (2) (3)，翻照片时顺序是乱的。"""
+    for i in (1, 2, 3, 7, 8, 9, 10, 11, 17):
+        _put(material, NEW_TREE, "博朗旺20261028", "001东德", "皮肤瘙痒-x", f"博朗旺20261028-001 ({i}).jpg")
+        _put(material, "颈圈算法验证/皮肤瘙痒/视频问诊", "2026-10-28-ok", "bibi", f"a ({i}).jpg")
+    ts._mixed_cache = None
+    want = [1, 2, 3, 7, 8, 9, 10, 11, 17]
+    for f in ts.list_photos("skin"):
+        if f["folder"] in (f"{NEW_TREE}/博朗旺20261028", "2026-10-28-ok"):
+            names = [p["filename"] for p in f["dogs"][0]["photos"]]
+            got = [int(n.rsplit("(", 1)[1].split(")")[0]) for n in names]
+            assert got == want, names
