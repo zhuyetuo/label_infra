@@ -186,12 +186,15 @@ async def vision_scan_status():
     return ok(await vision_sam_client.dog_status())
 
 
-@router.get("/{sample_id}/scratch-crosscheck")
+# 挂在 scoped_router 上：标注工作台一打开就会调它（顶部那条"IMU 在抓挠时画面里有没有狗"），
+# 挂在管理员路由上的话，标注员每进一个任务都弹一次「权限不足」。范围跟 /media 一样按任务校验
+@scoped_router.get("/{sample_id}/scratch-crosscheck")
 async def scratch_crosscheck(
     sample_id: int,
     cam: str | None = None,
     scratch_label: str = "抓挠",
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """这份样本的抓挠片段，逐段跟画面对一遍：IMU 说在抓挠的时候，画面里有狗吗。
 
@@ -205,6 +208,12 @@ async def scratch_crosscheck(
     sample = await db.get(Sample, sample_id)
     if sample is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    if user.role not in (UserRole.admin, UserRole.super_admin):
+        visible = (
+            await db.execute(apply_task_scope(select(Task.id).where(Task.sample_id == sample_id), user).limit(1))
+        ).scalar_one_or_none()
+        if visible is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该样本")
 
     scans = (
         await db.execute(select(SampleVisionScan).where(SampleVisionScan.sample_id == sample_id))

@@ -110,3 +110,21 @@ def test_接口返回列表_不认识的键改的时候直接拒():
     with pytest.raises(ValueError):
         UserUpdate(permissions=["没有这个"])
     assert UserUpdate(permissions=[]).permissions == []
+
+
+# ── 标注员打开任务时自动调的接口，不能是管理员专用 ─────────────────────────
+
+@pytest.mark.parametrize("path", [
+    "/api/v1/samples/1/media",
+    "/api/v1/samples/1/ai-label-info",
+    # 标注工作台一打开就调（顶部"IMU 在抓挠时画面里有没有狗"那条）。以前挂在管理员
+    # 路由上，标注员每进一个任务都弹「权限不足」
+    "/api/v1/samples/1/scratch-crosscheck",
+])
+def test_标注工作台自动调的接口_标注员不被角色挡掉(as_user, path):
+    """角色这一层放行；看不看得到这份样本，再按任务范围在接口里判（要查库，这里不测）。"""
+    assert as_user(_user()).get(path).status_code != 403
+
+
+def test_样本管理本身仍然只给管理员(as_user):
+    assert as_user(_user()).get("/api/v1/samples").status_code == 403
