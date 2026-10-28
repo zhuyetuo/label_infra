@@ -90,6 +90,19 @@ def _category_of_file(name: str) -> str | None:
     return hits.pop() if len(hits) == 1 else None
 
 
+_NUM_RE = re.compile(r"(\d+)")
+
+
+def natural_key(s: str) -> list:
+    """按「人数数」的顺序排：x (2).jpg 在 x (10).jpg 前面。按字符串排的话 (10)…(17) 会
+    插到 (2) 前面，同一只狗翻照片时顺序是乱的。数字段按数值比，其余按原文比。"""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in _NUM_RE.split(s) if t]
+
+
+def _natsorted(photos: list[dict]) -> list[dict]:
+    return sorted(photos, key=lambda p: natural_key(p["rel_path"]))
+
+
 def _is_ok(folder: str) -> bool:
     """日期目录整理好了没有：以 -ok 结尾，**不分大小写**（现场有 2026-10-24-OK 这种写法）。"""
     return folder.lower().endswith("-ok")
@@ -238,9 +251,9 @@ def list_photos_main(album: str) -> list[dict]:
                 p = os.path.join(dpath, fn)
                 photos.append({"rel_path": f"{folder}/{dog}/{fn}", "filename": fn, "size_bytes": os.path.getsize(p)})
             if photos:
-                dogs.append({"name": dog, "photos": photos})
+                dogs.append({"name": dog, "photos": _natsorted(photos)})
         if stray:
-            dogs.append({"name": "（未归类）", "photos": stray})
+            dogs.append({"name": "（未归类）", "photos": _natsorted(stray)})
         if dogs:
             out.append({"folder": folder, "date": m.group(1) if m else None, "ok": _is_ok(folder),
                         "source": _main_source(album), "dogs": dogs})
@@ -318,7 +331,7 @@ def _scan_tree(tree: str, album: str) -> tuple[list[dict], dict]:
                     elif got is None:
                         unclassified(rel)
             if photos:
-                dogs.append({"name": dog, "photos": photos})
+                dogs.append({"name": dog, "photos": _natsorted(photos)})
                 report["photos"] += len(photos)
         if dogs:
             out.append({"folder": f"{tree}/{folder}", "date": _mixed_date(folder),
