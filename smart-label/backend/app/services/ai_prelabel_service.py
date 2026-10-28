@@ -886,6 +886,9 @@ async def _apply(
                 is_modified=False,
                 ai_confidence=it.confidence,
                 ai_confirmed=False,
+                ai_label_id=label_id,
+                ai_start_ms=it.start_time_ms,
+                ai_end_ms=it.end_time_ms,
                 created_by=None,
             )
         )

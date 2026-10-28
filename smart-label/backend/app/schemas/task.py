@@ -94,6 +94,12 @@ class LabelItemOut(LabelItemIn):
     uncertain_reason: str | None
     from_candidate_id: int | None
     created_by: int | None
+    # AI 原始判断（见模型上的说明）；从疑似片段确认来的，附上那条候选的类别和来源
+    ai_label_id: int | None = None
+    ai_start_ms: int | None = None
+    ai_end_ms: int | None = None
+    cand_label_name: str | None = None
+    cand_reason: str | None = None
 
     @model_validator(mode="after")
     def _origin_is_self(self):

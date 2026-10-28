@@ -375,6 +375,10 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 ai_confirmed=bool(incoming.ai_confirmed) and incoming.source_type == LabelItemSource.ai_generated,
                 uncertain=bool(incoming.uncertain),
                 uncertain_reason=incoming.uncertain_reason if incoming.uncertain else None,
+                # 前端「AI 预标注」填进来的新条目：这一刻的样子就是 AI 的原始判断
+                **({"ai_label_id": incoming.label_id, "ai_start_ms": incoming.start_time_ms,
+                    "ai_end_ms": incoming.end_time_ms}
+                   if incoming.source_type == LabelItemSource.ai_generated else {}),
                 created_by=user.id,
                 touched_at=datetime.now(),
                 touched_by=user.id,
