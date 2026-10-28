@@ -15,6 +15,7 @@
 一个思路，只是绑定路径而不是 media_files.id——这批照片不是样本，不进 media_files）。
 """
 
+import fnmatch
 import hashlib
 import hmac
 import json
@@ -45,8 +46,34 @@ ALBUMS = {"oral": lambda: settings.oral_dir, "skin": lambda: settings.skin_photo
 MIXED_KEYWORDS = {"oral": ("口腔", "牙齿"), "skin": ("皮肤", "瘙痒")}
 
 
+_MIXED_TTL_S = 60.0
+_mixed_cache: tuple[float, tuple, list[str]] | None = None
+
+
 def mixed_dirs() -> list[str]:
-    return [d.strip() for d in (settings.mixed_photo_dirs or "").split(",") if d.strip()]
+    """混合树清单 = 配置里写明的 + 素材库根目录下按名字自动发现的。
+
+    自动发现要列一次 NAS 目录，而 resolve_photo 每张图都会问一遍，所以缓存 60 秒：
+    新建的狗场目录最多一分钟后出现。"""
+    global _mixed_cache
+    explicit = [d.strip() for d in (settings.mixed_photo_dirs or "").split(",") if d.strip()]
+    patterns = [p.strip() for p in (settings.mixed_photo_auto or "").split(",") if p.strip()]
+    key = (settings.material_root, tuple(explicit), tuple(patterns))
+    now = time.monotonic()
+    if _mixed_cache and _mixed_cache[1] == key and now - _mixed_cache[0] < _MIXED_TTL_S:
+        return list(_mixed_cache[2])
+    found = []
+    if patterns:
+        try:
+            names = os.listdir(settings.material_root)
+        except OSError:
+            names = []      # 素材库没挂上：只剩配置里写明的那几个，照旧往下走
+        found = [n for n in names
+                 if any(fnmatch.fnmatchcase(n, p) for p in patterns)
+                 and os.path.isdir(os.path.join(settings.material_root, n))]
+    out = sorted(set(explicit) | set(found))
+    _mixed_cache = (now, key, out)
+    return list(out)
 
 
 def _category_album(name: str) -> str | None:
@@ -189,10 +216,11 @@ def list_photos(album: str = "oral") -> list[dict]:
         if dogs:
             out.append({"folder": folder, "date": m.group(1) if m else None, "ok": folder.endswith("-ok"), "dogs": dogs})
     out.extend(_list_mixed(album))
-    # 日期目录名两棵树格式不一样（2026-09-01-ok vs 雷喏斯达20260912），
-    # 没有共同的可比字段，所以按 folder 字符串倒序——同一棵树内部是对的，
-    # 两棵树之间的先后无所谓（页面上本来就是按树分段看的）
-    out.sort(key=lambda x: x["folder"], reverse=True)
+    # 按日期倒序，最新的在最上面。不能只按 folder 字符串排：几棵树的名字不一样，
+    # 「博朗旺…」会排在「雷喏斯达…」后面，新狗场最新的数据落到列表最底下。
+    # 两种日期目录（2026-09-01-ok / 雷喏斯达20260912）都解析成了 YYYY-MM-DD，可以直接比；
+    # 解析不出日期的排最后，同一天按 folder 倒序
+    out.sort(key=lambda x: (x["date"] or "", x["folder"]), reverse=True)
     return out
 
 

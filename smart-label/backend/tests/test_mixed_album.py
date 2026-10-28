@@ -148,8 +148,9 @@ def test_老素材照常列出来(material):
 
 
 def test_关掉混合树就退回原来的样子(material, monkeypatch):
-    """mixed_photo_dirs 留空 = 这套适配没开，跟改之前一模一样。"""
+    """手写清单和自动发现都关掉 = 这套适配没开，跟改之前一模一样。"""
     monkeypatch.setattr(settings, "mixed_photo_dirs", "")
+    monkeypatch.setattr(settings, "mixed_photo_auto", "")
     paths = [p["rel_path"] for p in _all("oral")]
     assert paths == ["2026-09-01-ok/巴利/a.jpg", "2026-09-01-ok/散图.jpg"] or set(paths) == {
         "2026-09-01-ok/巴利/a.jpg", "2026-09-01-ok/散图.jpg"}
@@ -209,6 +210,7 @@ def test_没列在配置里的树读不到(material, monkeypatch):
     p = [x for x in _all("oral") if x["rel_path"].startswith(TREE)][0]["rel_path"]
     assert os.path.isfile(ts.resolve_photo(p, "oral"))
     monkeypatch.setattr(settings, "mixed_photo_dirs", "")
+    monkeypatch.setattr(settings, "mixed_photo_auto", "")
     with pytest.raises(ts.ToothError):
         ts.resolve_photo(p, "oral")
 
@@ -275,6 +277,7 @@ def test_关掉混合树之后混合树路径会被当成老形状(material, mon
     （虽然多半解不开文件），不能凭路径长得像就特殊对待。"""
     p = f"{TREE}/x/y.jpg"
     monkeypatch.setattr(settings, "mixed_photo_dirs", "")
+    monkeypatch.setattr(settings, "mixed_photo_auto", "")
     assert ts.material_rel(p, "oral").startswith("口腔验证/")
 
 
@@ -284,3 +287,47 @@ def test_路径不规范时不特殊对待(material, bad):
     但不能在这一层就炸掉整个请求。"""
     out = ts.material_rel(bad, "oral")
     assert out.startswith("口腔验证/")
+
+
+# ── 自动发现：新开一个狗场合作，照「<狗场名>-狗场合作」建目录就能看到 ──────────
+
+NEW_TREE = "博朗旺-狗场合作"
+
+
+def _put(root, *parts):
+    p = root.joinpath(*parts)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xd8\xff")
+
+
+def test_新狗场目录不用改配置就能扫到(material, monkeypatch):
+    """2026-10 博朗旺那批就是因为没写进 mixed_photo_dirs 才在皮肤照片里看不到。"""
+    _put(material, NEW_TREE, "博朗旺20261027", "001东德", "皮肤瘙痒-博朗旺20261027-001", "a.jpg")
+    _put(material, NEW_TREE, "博朗旺20261027", "001东德", "口腔牙齿-博朗旺20261027-001", "b.jpg")
+    ts._mixed_cache = None
+    monkeypatch.setattr(settings, "mixed_photo_dirs", "")       # 手写清单里一个都没有
+    skin = [p["rel_path"] for p in _all("skin")]
+    assert f"{NEW_TREE}/博朗旺20261027/001东德/皮肤瘙痒-博朗旺20261027-001/a.jpg" in skin
+    assert not any("口腔牙齿" in x for x in skin), "皮肤相册里混进了口腔照片"
+    for p in [x for x in skin if x.startswith(NEW_TREE)]:
+        assert os.path.isfile(ts.resolve_photo(p, "skin"))
+
+
+def test_不匹配名字的目录不会被当成混合树(material, monkeypatch):
+    """自动发现只认名字匹配的目录：颈圈算法验证 这类别的目录不能因此被
+    「相对素材库根」那条分支读到。"""
+    _put(material, "颈圈算法验证", "x.jpg")
+    ts._mixed_cache = None
+    assert "颈圈算法验证" not in ts.mixed_dirs()
+    with pytest.raises(ts.ToothError):
+        ts.resolve_photo("颈圈算法验证/x.jpg", "skin")
+
+
+def test_最新的日期排最上面_不管是哪个狗场(material):
+    """按目录名字符串排的话「博朗旺…」在「雷喏斯达…」后面，新狗场最新的数据落到最底下。"""
+    _put(material, NEW_TREE, "博朗旺20261027", "001东德", "皮肤瘙痒-博朗旺20261027-001", "a.jpg")
+    ts._mixed_cache = None
+    folders = [f["folder"] for f in ts.list_photos("skin")]
+    assert folders[0] == f"{NEW_TREE}/博朗旺20261027", folders
+    dates = [f["date"] for f in ts.list_photos("skin") if f["date"]]
+    assert dates == sorted(dates, reverse=True)
