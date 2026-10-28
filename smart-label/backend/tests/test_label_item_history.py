@@ -46,13 +46,13 @@ def test_AI片段改了类别和起止_原始判断还在(db, run):
 
 
 def test_人工画的没有AI原始判断(db, run):
-    u, p, lick, t = _world(db, run)
+    u, _p, lick, t = _world(db, run)
     rec = run(task_service.save_draft(db, t.id, u, [_in(lick.id, 1000, 5000)]))
     assert _one(db, run, rec.id).ai_label_id is None
 
 
 def test_草稿接口带上疑似片段当初猜的类别(db, run):
-    u, p, lick, t = _world(db, run)
+    u, _p, lick, t = _world(db, run)
     c = AiCandidate(task_id=t.id, round_no=1, label_name="舔", start_time_ms=1000, end_time_ms=5000,
                     reason="grooming", status=CandidateStatus.confirmed)
     db.add(c)
