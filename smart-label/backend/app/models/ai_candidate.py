@@ -57,4 +57,9 @@ class AiCandidate(Base):
     )
     decided_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 审核标的「这条判断有问题」（比如改成了活动，其实是舔）。跟已标注片段上的同一套：
+    # 开新一轮时跟着过去；标注员重新判断这条（确认 / 改类别 / 排除 / 待定）就清掉
+    review_note: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="审核标的问题")
+    review_flag_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    review_flag_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

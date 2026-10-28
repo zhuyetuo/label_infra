@@ -29,7 +29,7 @@ import SimilarHitsGrid from "@/components/SimilarHitsGrid";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
-import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, type AiCandidate, type SimilarHit } from "@/api/candidates";
+import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, setCandidateReviewNote, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -177,6 +177,7 @@ export default function AnnotationWorkspace({
   const [loading, setLoading] = useState(false);
   // 打开的任务里有审核标过「有问题」的片段、而且是来改的（不是只读看）：片段列表先只看那几条
   const [flagFocus, setFlagFocus] = useState(false);
+  const [candFlagFocus, setCandFlagFocus] = useState(false);
   const [videos, setVideos] = useState<VideoSrc[]>([]);
   // 没视频时用来解释是缺哪一步：样本上就没登记，还是登记了但媒体库里找不到
   const [videoWhy, setVideoWhy] = useState<string | null>(null);
@@ -374,20 +375,27 @@ export default function AnnotationWorkspace({
   // 不清的话循环会跟着带回来
   // 审核时按片段标「有问题」：管理员 / 审核员能标能清；标注员只能在自己正在改的任务里清掉
   const canFlag = role === "admin" || role === "super_admin" || role === "reviewer";
-  const flaggedCount = items.filter((it) => it.review_note).length;
+  const flaggedCount = items.filter((it) => it.review_note).length + candidates.filter((c) => c.review_note).length;
   const handleReviewNote = async (it: LabelItem, note: string | null) => {
     if (taskId == null) return;
     const saved = await setReviewNote(taskId, it.id, note);
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, review_note: saved.review_note, review_flag_by: saved.review_flag_by } : x)));
     message.success(note ? `已标为有问题：${note}` : "已清除问题标记");
   };
+  const handleCandReviewNote = async (c: AiCandidate, note: string | null) => {
+    const saved = await setCandidateReviewNote(c.id, note);
+    setCandidates((prev) => prev.map((x) => (x.id === c.id ? { ...x, review_note: saved.review_note, review_flag_by: saved.review_flag_by } : x)));
+    message.success(note ? `已标为有问题：${note}` : "已清除问题标记");
+  };
   // 已通过 / 已驳回的任务：标完直接退回，原因自动写上是哪几段
   const reopenFlagged = async () => {
     if (taskId == null) return;
-    const lines = items
-      .filter((it) => it.review_note)
-      .sort((a, b) => a.start_time_ms - b.start_time_ms)
-      .map((it) => `${formatMs(it.start_time_ms)} ${nameOf(it.label_id)}：${it.review_note}`);
+    const lines = [
+      ...items.filter((it) => it.review_note)
+        .map((it) => ({ t: it.start_time_ms, s: `${formatMs(it.start_time_ms)} ${nameOf(it.label_id)}：${it.review_note}` })),
+      ...candidates.filter((c) => c.review_note)
+        .map((c) => ({ t: c.start_time_ms, s: `${formatMs(c.start_time_ms)} 疑似${c.label_name}：${c.review_note}` })),
+    ].sort((a, b) => a.t - b.t).map((x) => x.s);
     await reopenTask(taskId, `${lines.length} 段有问题\n${lines.join("\n")}`.slice(0, 1000));
     message.success(`已退回重标，标注员打开时会先看到这 ${lines.length} 段`);
     onSaved?.();
@@ -484,9 +492,13 @@ export default function AnnotationWorkspace({
       listCandidates(taskId)
         .then((cs) => {
           setCandidates(cs);
+          const flaggedCands = cs.filter((c) => c.review_note).sort((a, b) => a.start_time_ms - b.start_time_ms);
+          setCandFlagFocus(!readOnly && flaggedCands.length > 0);
           if (autoJump && !readOnly && flagged.length) {
             // 被退回来改的：先看审核标了问题的那几条，比按类别筛更具体
-            jumpTo(flagged[0], `有问题：${flagged[0].review_note}`, flagged.length);
+            jumpTo(flagged[0], `有问题：${flagged[0].review_note}`, flagged.length + flaggedCands.length);
+          } else if (autoJump && !readOnly && flaggedCands.length) {
+            jumpTo(flaggedCands[0], `疑似${flaggedCands[0].label_name} 有问题：${flaggedCands[0].review_note}`, flaggedCands.length);
           } else if (autoJump) {
             // 候选类别优先：按「疑似进食」筛进来，要看的就是疑似片段；先挑还没判过的
             const want = new Set(focusCandLabels ?? []);
@@ -1164,6 +1176,9 @@ export default function AnnotationWorkspace({
         labels={labels}
         focusMs={initialSeekMs}
         initialLabelFilter={focusCandLabels}
+        onReviewNote={canFlag || !readOnly ? handleCandReviewNote : undefined}
+        reviewNoteClearOnly={!canFlag}
+        initialFlaggedOnly={candFlagFocus}
         initialFilter={initialCandFilter ?? undefined}
         onFindSimilar={
           readOnly
@@ -1561,7 +1576,7 @@ export default function AnnotationWorkspace({
         <Space wrap style={{ flex: 1, minWidth: 0 }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
           {flaggedCount > 0 && (
-            <Tooltip title="审核时标出来的有问题的片段。片段列表的来源筛选里选「被标有问题」只看这几条">
+            <Tooltip title="审核时标出来的有问题的片段（含疑似片段）。已标注片段的来源筛选选「被标有问题」、疑似片段选「有问题」只看这几条">
               <Tag color="red">{flaggedCount} 段标了有问题</Tag>
             </Tooltip>
           )}

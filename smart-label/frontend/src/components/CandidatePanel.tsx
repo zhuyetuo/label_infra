@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, Dropdown, Empty, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from "antd";
+import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from "antd";
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
@@ -63,7 +63,16 @@ interface Props {
   initialLabelFilter?: string[];
   /** 清掉全部还没判过的「画面相似」候选；返回删了几条。给了才显示按钮 */
   onClearSimilar?: () => Promise<number>;
+  /** 审核标「这条判断有问题」/ 清掉。不给就不显示那个按钮（没权限的人）。note=null 是清掉 */
+  onReviewNote?: (c: AiCandidate, note: string | null) => void;
+  /** 只有清掉的权限（标注员）：不显示「有问题」，只显示「已改好」 */
+  reviewNoteClearOnly?: boolean;
+  /** 打开时先只看被标有问题的（标注员拿到被退回的任务） */
+  initialFlaggedOnly?: boolean;
 }
+
+// 审核标「这条判断有问题」时的常见原因；不在里面的选「其他原因…」自己写
+const CAND_NOTE_PRESETS = ["判断错了", "不该排除", "应该确认", "改成的类别不对", "起止不准"];
 
 // 跟正式片段上的「待定」同一套三种：没画面的除非补拍否则永远定不了（可以直接
 // 跳过）、看不清的换个人/换个视角也许还能定（值得再看）、要细切的是已经确定
@@ -135,8 +144,18 @@ export default function CandidatePanel({
   focusMs,
   initialFilter,
   initialLabelFilter,
+  onReviewNote,
+  reviewNoteClearOnly,
+  initialFlaggedOnly,
 }: Props) {
-  const [filter, setFilter] = useState<"pending" | "all" | "similar">(initialFilter ?? "pending");
+  const [filter, setFilter] = useState<"pending" | "all" | "similar" | "flagged">(
+    initialFlaggedOnly ? "flagged" : initialFilter ?? "pending");
+  useEffect(() => {
+    if (initialFlaggedOnly) setFilter("flagged");
+  }, [initialFlaggedOnly]);
+  const flaggedCount = candidates.filter((c) => c.review_note).length;
+  const [noteFor, setNoteFor] = useState<AiCandidate | null>(null);
+  const [noteText, setNoteText] = useState("");
   useEffect(() => {
     if (initialFilter) setFilter(initialFilter);
   }, [initialFilter]);
@@ -173,7 +192,8 @@ export default function CandidatePanel({
   // 全处理完了就自动切到「全部」：不然这一块只剩一句"没有待确认的候选"，
   // 刚才确认/改类别/待定的那几条全看不见了，回头想核对只能靠猜
   useEffect(() => {
-    if (pendingCount === 0 && candidates.length > 0) setFilter("all");
+    // 只在停在「待确认」时切：停在「有问题」那档的人是来改那几条的，别把他拽走
+    if (pendingCount === 0 && candidates.length > 0) setFilter((f) => (f === "pending" ? "all" : f));
   }, [pendingCount, candidates.length]);
 
   // 从找相似的链接进来带的是 ?cand=similar，但那个任务的候选可能一条「画面相似」
@@ -188,6 +208,8 @@ export default function CandidatePanel({
     let list = candidates.filter((c) =>
       filter === "all"
         ? true
+        : filter === "flagged"
+          ? !!c.review_note || justDecided.has(c.id)
         : filter === "similar"
           ? c.reason === "similar" && (c.status === "pending" || justDecided.has(c.id))
           : c.status === "pending" || justDecided.has(c.id)
@@ -278,6 +300,7 @@ export default function CandidatePanel({
         onChange={(e) => setFilter(e.target.value)}
         options={[
           { label: `待确认 ${pendingCount}`, value: "pending" },
+          ...(flaggedCount > 0 || filter === "flagged" ? [{ label: `有问题 ${flaggedCount}`, value: "flagged" }] : []),
           ...(similarCount > 0 ? [{ label: `画面相似 ${similarCount}`, value: "similar" }] : []),
           { label: `全部 ${candidates.length}`, value: "all" },
         ]}
@@ -511,9 +534,17 @@ export default function CandidatePanel({
           {
             title: "状态",
             width: 130,
-            render: (_, c: AiCandidate) =>
-              // 改成别的类别的要写清楚改成了什么，不然「已确认」看着像确认成抓挠了
-              c.status === "confirmed" ? (
+            render: (_, c: AiCandidate) => (
+              <>
+              {c.review_note && (
+                <Tooltip title={`审核标的问题：${c.review_note}。重新判断这一条（确认 / 改类别 / 排除 / 待定，或先撤回）就算处理过`}>
+                  <Tag color="red" style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle" }}>
+                    有问题：{c.review_note}
+                  </Tag>
+                </Tooltip>
+              )}
+              {/* 改成别的类别的要写清楚改成了什么，不然「已确认」看着像确认成抓挠了 */}
+              {c.status === "confirmed" ? (
                 (() => {
                   const other = otherLabels.find((l) => l.id === c.decided_label_id);
                   return other ? <Tag color="blue">已改成 {other.display_name}</Tag> : <Tag color="green">已确认</Tag>;
@@ -532,7 +563,9 @@ export default function CandidatePanel({
                 })()
               ) : (
                 <Tag color="gold">待确认</Tag>
-              ),
+              )}
+              </>
+            ),
           },
           {
             title: "操作",
@@ -651,6 +684,26 @@ export default function CandidatePanel({
                     </Popconfirm>
                   </>
                 )}
+                {/* 审核：这一条判断不对就标出来，退回时标注员只需要重判这几条 */}
+                {onReviewNote && (c.review_note ? (
+                  <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onReviewNote(c, null)}>
+                    {reviewNoteClearOnly ? "已改好" : "清除问题"}
+                  </Button>
+                ) : !reviewNoteClearOnly && (
+                  <Dropdown
+                    menu={{
+                      items: [...CAND_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__other", label: "其他原因…" }],
+                      onClick: ({ key }) => {
+                        if (key === "__other") { setNoteFor(c); setNoteText(""); }
+                        else onReviewNote(c, key);
+                      },
+                    }}
+                  >
+                    <Button size="small" type="link" danger>
+                      有问题 <DownOutlined style={{ fontSize: 10 }} />
+                    </Button>
+                  </Dropdown>
+                ))}
                 {!readOnly && c.status !== "pending" && onUndo && (
                   <Popconfirm
                     title="撤回这次判断？"
@@ -671,6 +724,24 @@ export default function CandidatePanel({
           },
         ]}
       />
+      <Modal
+        title="这条判断有什么问题？"
+        open={noteFor != null}
+        okText="标为有问题"
+        okButtonProps={{ disabled: !noteText.trim() }}
+        onOk={() => { if (noteFor && onReviewNote) onReviewNote(noteFor, noteText.trim()); setNoteFor(null); }}
+        onCancel={() => setNoteFor(null)}
+        destroyOnClose
+      >
+        <Input.TextArea
+          autoFocus
+          maxLength={300}
+          rows={3}
+          value={noteText}
+          onChange={(e) => setNoteText(e.target.value)}
+          placeholder="写给标注员看的一句话，比如：其实是在舔后腿，不是活动"
+        />
+      </Modal>
     </div>
   );
 }

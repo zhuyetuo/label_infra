@@ -133,6 +133,7 @@ _REF_LABELS = {
     ("ai_candidates", "decided_by"): "AI 候选确认", ("annotation_label_items", "created_by"): "标注片段",
     ("annotation_label_items", "touched_by"): "标注片段修改",
     ("annotation_label_items", "review_flag_by"): "审核标出的问题片段",
+    ("ai_candidates", "review_flag_by"): "审核标出的问题疑似片段",
 }
 
 

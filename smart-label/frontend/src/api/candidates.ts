@@ -23,6 +23,9 @@ export interface AiCandidate {
   decided_label_id: number | null;
   /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
   uncertain_reason: string | null;
+  /** 审核标的「这条判断有问题」：原因；没有就是空 */
+  review_note?: string | null;
+  review_flag_by?: number | null;
   decided_by: number | null;
   decided_at: string | null;
 }
@@ -40,6 +43,10 @@ export const repairCandidateItems = (taskId: number) =>
 /** 把这个任务里还没判过的「画面相似」候选全删掉（已确认 / 排除 / 待定的不动） */
 export const clearSimilarCandidates = (taskId: number) =>
   request.delete<never, { deleted: number }>("/candidates/similar", { params: { task_id: taskId } });
+
+/** 给一条疑似片段的判断标「有问题」（审核 / 管理员）；note 传 null = 清掉 */
+export const setCandidateReviewNote = (id: number, note: string | null) =>
+  request.put<never, AiCandidate>(`/candidates/${id}/review-note`, { note });
 
 export const decideCandidate = (
   id: number,
