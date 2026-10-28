@@ -1,21 +1,16 @@
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import permissions as perms
 from app.core.deps import get_current_user, require_role
 from app.core.security import hash_password
+from app.db.base import Base
 from app.db.session import get_db
-from app.models.audit_log import AuditLog
-from app.models.label import LabelDefinition
-from app.models.project import Project
-from app.models.review import ReviewRecord
-from app.models.sample import Sample
-from app.models.task import Task
 from app.models.user import User, UserRole
-from app.models.vision_annotation import VisionAnnotation, VisionAssignment, VisionAsset
 from app.schemas.envelope import ok
 from app.schemas.user import UserCreate, UserCreateOut, UserOut, UserUpdate
 
@@ -80,38 +75,77 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db), me: User
         if admin_count <= 1:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "至少要保留一个启用中的管理员")
 
-    # 这些表用 NOT NULL 外键记着"是谁创建/审核的"，有引用就不能物理删除
+    # 哪些表引用了这个账号：**从表结构里现找**，不手写清单。手写的清单漏过一次——
+    # 删一个在皮肤评估里填过记录的账号，检查放行了，最后在 db.delete 撞外键报 500
+    # （IntegrityError）。以后加了新表也不用记得回来改这里。
     blockers: list[str] = []
-    for label, stmt in (
-        ("任务", select(func.count()).select_from(Task).where(
-            or_(Task.created_by == user_id, Task.assigned_to == user_id, Task.reviewer_id == user_id))),
-        ("样本", select(func.count()).select_from(Sample).where(Sample.created_by == user_id)),
-        ("项目", select(func.count()).select_from(Project).where(Project.created_by == user_id)),
-        ("标签", select(func.count()).select_from(LabelDefinition).where(LabelDefinition.created_by == user_id)),
-        ("审核记录", select(func.count()).select_from(ReviewRecord).where(ReviewRecord.reviewer_id == user_id)),
-        # 视觉标注的三张表也用外键记着是谁画的/谁审的。不列进来的话，删一个标注过
-        # 照片的账号会在下面 db.delete 那一步撞外键报 500，而不是那句友好的提示
-        ("视觉标注", select(func.count()).select_from(VisionAnnotation).where(VisionAnnotation.created_by == user_id)),
-        ("视觉标注状态", select(func.count()).select_from(VisionAsset).where(VisionAsset.updated_by == user_id)),
-        ("视觉标注指派", select(func.count()).select_from(VisionAssignment).where(
-            or_(VisionAssignment.assignee_id == user_id,
-                VisionAssignment.created_by == user_id,
-                VisionAssignment.reviewed_by == user_id))),
-    ):
-        count = (await db.execute(stmt)).scalar_one()
-        if count:
-            blockers.append(f"{label} {count} 条")
+    detach: list[tuple] = []
+    for table, col in _user_refs():
+        name = (table.name, col.name)
+        count = (await db.execute(select(func.count()).select_from(table).where(col == user_id))).scalar_one()
+        if not count:
+            continue
+        if name in _DETACH_REFS:
+            detach.append((table, col))
+        else:
+            blockers.append(f"{_REF_LABELS.get(name, table.name)} {count} 条")
     if blockers:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"该账号已产生工作记录（{'、'.join(blockers)}），删除会让历史无法追溯；请改用「禁用」",
         )
 
-    # 审计日志允许留痕但可空，断开引用即可
-    await db.execute(update(AuditLog).where(AuditLog.user_id == user_id).values(user_id=None))
+    # 只是"谁最后动过"的痕迹，不算工作成果：断开引用即可
+    for table, col in detach:
+        await db.execute(update(table).where(col == user_id).values({col.name: None}))
     await db.delete(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 兜底：上面没认出来的引用（比如数据库里有、模型里没声明的外键），
+        # 也别报 500，给出能照着做的那句话
+        await db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "该账号还被其他记录引用，删除会让历史无法追溯；请改用「禁用」") from None
     return ok(msg="账号已删除")
+
+
+# 删账号时直接断开引用、不拦着的：只记了"谁最后动过 / 谁临时占着"，不是工作成果。
+# 都是可空列（_user_refs 会核对，非空列放进来会在启动时报错）
+_DETACH_REFS = {
+    ("audit_logs", "user_id"),
+    ("tasks", "locked_by"),
+    ("llm_providers", "updated_by"),
+    ("clip_jobs", "requested_by"),
+}
+
+# 提示里给人看的名字；没列的显示表名，不影响判断
+_REF_LABELS = {
+    ("tasks", "created_by"): "创建的任务", ("tasks", "assigned_to"): "指派的任务",
+    ("tasks", "reviewer_id"): "审核的任务", ("samples", "created_by"): "样本",
+    ("projects", "created_by"): "项目", ("label_definitions", "created_by"): "标签",
+    ("label_templates", "created_by"): "标签模板", ("review_records", "reviewer_id"): "审核记录",
+    ("vision_annotations", "created_by"): "视觉标注", ("vision_assets", "updated_by"): "视觉标注状态",
+    ("vision_assignments", "assignee_id"): "视觉标注指派", ("vision_assignments", "reviewed_by"): "视觉标注审核",
+    ("vision_assignments", "created_by"): "视觉标注派发", ("skin_records", "created_by"): "皮肤评估记录",
+    ("skin_weekly_rows", "created_by"): "皮肤周报", ("model_versions", "created_by"): "模型版本",
+    ("dog_measurements", "created_by"): "狗体重/颈围记录", ("tooth_photo_results", "detected_by"): "牙齿检测结果",
+    ("ai_candidates", "decided_by"): "AI 候选确认", ("annotation_label_items", "created_by"): "标注片段",
+    ("annotation_label_items", "touched_by"): "标注片段修改",
+}
+
+
+def _user_refs() -> list[tuple]:
+    """所有外键指向 users.id 的 (表, 列)。app.models 的 __init__ 导入了全部模型，
+    所以这里拿到的表结构是全的（本文件导入 app.models.user 时就已经触发）。"""
+    out = []
+    for table in Base.metadata.sorted_tables:
+        for col in table.columns:
+            if any(fk.column.table.name == "users" for fk in col.foreign_keys):
+                if (table.name, col.name) in _DETACH_REFS and not col.nullable:
+                    raise RuntimeError(f"{table.name}.{col.name} 不可空，不能在删账号时断开")
+                out.append((table, col))
+    return out
 
 
 @router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
