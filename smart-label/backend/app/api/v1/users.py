@@ -132,6 +132,7 @@ _REF_LABELS = {
     ("dog_measurements", "created_by"): "狗体重/颈围记录", ("tooth_photo_results", "detected_by"): "牙齿检测结果",
     ("ai_candidates", "decided_by"): "AI 候选确认", ("annotation_label_items", "created_by"): "标注片段",
     ("annotation_label_items", "touched_by"): "标注片段修改",
+    ("annotation_label_items", "review_flag_by"): "审核标出的问题片段",
 }
 
 

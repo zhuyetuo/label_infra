@@ -98,6 +98,10 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 ai_start_ms=item.ai_start_ms,
                 ai_end_ms=item.ai_end_ms,
                 from_candidate_id=item.from_candidate_id,
+                # 审核时标的「这条有问题」带到新一轮：标注员拿回去就知道该改哪几条
+                review_note=item.review_note,
+                review_flag_by=item.review_flag_by,
+                review_flag_at=item.review_flag_at,
                 created_by=item.created_by,
             )
         )

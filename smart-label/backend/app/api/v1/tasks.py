@@ -5,6 +5,8 @@
 """
 
 import json
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +30,7 @@ from app.schemas.task import (
     LabelItemOut,
     ProjectScopeRequest,
     ReopenRequest,
+    ReviewNoteIn,
     TaskCreate,
     TaskIdsRequest,
     TaskOut,
@@ -163,6 +166,46 @@ async def bulk_create_tasks(
     return ok(
         BulkTaskCreateResult(created=created, skipped=len(skipped), skipped_sample_ids=skipped).model_dump()
     )
+
+
+@router.put("/{task_id}/items/{item_id}/review-note")
+async def set_review_note(
+    task_id: int,
+    item_id: int,
+    body: ReviewNoteIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """给当前这一轮的某条片段标「有问题」（或清掉）。
+
+    以前只能整个任务退回，标注员拿回去不知道该看哪几条。标了之后，驳回 / 退回重标
+    开新一轮时这些标记跟着过去，标注员默认只看这几条。
+
+    权限：管理员 / 审核员能标能清，任务什么状态都行（看已通过的任务时发现问题也能标）；
+    标注员只能在自己正在标的任务里**清掉**（表示改好了），不能给别人标。
+    不改片段本身，也不改任务状态——退回是另外一步。
+    """
+    task = (await db.execute(apply_task_scope(select(Task).where(Task.id == task_id), user))).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在或无权访问")
+    note = (body.note or "").strip() or None
+    privileged = user.role in (UserRole.admin, UserRole.super_admin, UserRole.reviewer)
+    if not privileged and not (note is None and task.locked_by == user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能标「有问题」；标注员只能在自己认领的任务里清掉")
+    item = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationLabelItem.id == item_id, AnnotationRecord.task_id == task_id,
+               AnnotationRecord.round_no == task.round_no)
+    )).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "这条片段不在当前这一轮里（任务已经进入新一轮？刷新一下）")
+    item.review_note = note
+    item.review_flag_by = user.id if note else None
+    item.review_flag_at = datetime.now(UTC).replace(tzinfo=None) if note else None
+    await db.commit()
+    await db.refresh(item)
+    return ok(LabelItemOut.model_validate(item).model_dump())
 
 
 @router.post("/{task_id}/reopen")

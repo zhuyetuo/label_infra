@@ -1,5 +1,5 @@
 import request from "@/utils/request";
-import type { Draft, Task, TaskType } from "@/types";
+import type { Draft, LabelItem, Task, TaskType } from "@/types";
 
 export const listTasks = (projectId?: number) =>
   request.get<never, Task[]>("/tasks", {
@@ -22,6 +22,10 @@ export const deleteTasksBatch = (task_ids: number[]) =>
   request.post<never, { count: number }>("/tasks/delete-batch", { task_ids });
 
 /** 已通过/已驳回的任务退回重标：轮次+1，上一轮标注内容原样带到新一轮 */
+/** 给一条片段标「有问题」（审核 / 管理员）；note 传 null = 清掉（标注员改好了也能清） */
+export const setReviewNote = (taskId: number, itemId: number, note: string | null) =>
+  request.put<never, LabelItem>(`/tasks/${taskId}/items/${itemId}/review-note`, { note });
+
 export const reopenTask = (id: number, comment?: string) =>
   request.post<never, Task>(`/tasks/${id}/reopen`, { comment });
 

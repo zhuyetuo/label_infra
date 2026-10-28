@@ -348,6 +348,10 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             if changed:
                 origin.is_modified = True
                 origin.created_by = user.id
+                # 审核标过「有问题」的，改了就算处理过了
+                origin.review_note = None
+                origin.review_flag_by = None
+                origin.review_flag_at = None
                 # 改过之后原来的"确认正确"不再成立，除非这次请求明确再确认
                 origin.ai_confirmed = bool(incoming.ai_confirmed)
             elif incoming.ai_confirmed is not None:
