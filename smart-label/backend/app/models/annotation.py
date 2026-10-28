@@ -109,6 +109,14 @@ class AnnotationLabelItem(Base):
     ai_start_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="AI 原始开始")
     ai_end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="AI 原始结束")
 
+    # 审核时标出来的「这一条有问题」：原因（类别错了 / 起止不准…）、谁标的、什么时候。
+    # 以前只能整个任务退回，标注员拿回去不知道该看哪几条；有了这个，退回时只需要
+    # 改这几条。驳回 / 退回重标开新一轮时跟着带过去；标注员改了这条（类别或起止）
+    # 就自动清掉，也可以手动标「已改好」清掉
+    review_note: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="审核标的问题")
+    review_flag_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    review_flag_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列
     touched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

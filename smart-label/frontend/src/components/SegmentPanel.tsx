@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
-import { Button, Dropdown, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { SelectProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
@@ -19,6 +19,7 @@ type SourceFilter =
   | "ai_modified"
   | "ai_relabeled"
   | "from_cand"
+  | "flagged"
   | "human"
   | "uncertain"
   | "uncertain_no_view"
@@ -27,6 +28,7 @@ type SourceFilter =
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
+  { value: "flagged", label: "被标有问题" },
   { value: "ai", label: "AI 全部" },
   { value: "ai_pending", label: "AI 待确认" },
   { value: "ai_confirmed", label: "AI 已确认" },
@@ -72,6 +74,9 @@ export function formatMs(ms: number): string {
 }
 
 const fmtDur = (ms: number) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}min` : `${(ms / 1000).toFixed(2)}s`);
+
+// 审核标「有问题」时的常见原因，点一下就行；不在里面的选「其他原因…」自己写
+const REVIEW_NOTE_PRESETS = ["类别错了", "起止不准", "不是这个动作", "附近还有漏标", "应该拆成几段"];
 
 const isAi = (i: LabelItem) => i.source_type === "ai_generated";
 // 「待定」压过 AI 的确认状态：人已经看过并给了结论（只是结论是"拿不准"），
@@ -141,6 +146,12 @@ interface Props {
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
   /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
   initialFilterLabels?: number[];
+  /** 审核标「有问题」/ 清掉。不给就不显示那个按钮（没权限的人）。note=null 是清掉 */
+  onReviewNote?: (item: LabelItem, note: string | null) => void;
+  /** 只有清掉的权限（标注员改好了）：不显示「有问题」，只显示「已改好」 */
+  reviewNoteClearOnly?: boolean;
+  /** 打开时先只看被标有问题的（标注员拿到被退回的任务） */
+  initialFlaggedOnly?: boolean;
   /**
    * 筛选那一排渲染到哪儿。给了就 portal 到折叠面板的标题行上，跟
    * 「已标注片段（38）」拼一行——工作台里高度是最紧的资源，这排单独占一行不值当
@@ -170,6 +181,9 @@ export default function SegmentPanel({
   dupIds,
   onCreate,
   initialFilterLabels,
+  onReviewNote,
+  reviewNoteClearOnly,
+  initialFlaggedOnly,
   controlsPortalTarget,
   focusMs,
   projectKey,
@@ -202,7 +216,13 @@ export default function SegmentPanel({
   }, [initialFilterLabels]);
   // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注
   const [viewGaps, setViewGaps] = useState(false);
-  const [filterSource, setFilterSource] = useState<SourceFilter>("all");
+  const [filterSource, setFilterSource] = useState<SourceFilter>(initialFlaggedOnly ? "flagged" : "all");
+  useEffect(() => {
+    if (initialFlaggedOnly) setFilterSource("flagged");
+  }, [initialFlaggedOnly]);
+  // 「其他原因…」时弹框写一句
+  const [noteFor, setNoteFor] = useState<LabelItem | null>(null);
+  const [noteText, setNoteText] = useState("");
   const [minConf, setMinConf] = useState<number | null>(null);
   const [maxConf, setMaxConf] = useState<number | null>(null);
   const [showStats, setShowStats] = useState(false);
@@ -280,12 +300,13 @@ export default function SegmentPanel({
         if (filterSource === "ai_modified" && st !== "modified") return false;
         if (filterSource === "ai_relabeled" && !(st === "modified" && i.ai_label_id != null && i.ai_label_id !== i.label_id)) return false;
         if (filterSource === "from_cand" && !i.cand_label_name) return false;
+        if (filterSource === "flagged" && !i.review_note) return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
         if (filterSource === "uncertain_needs_split" && i.uncertain_reason !== "needs_split") return false;
         // 「待定」是单独一类，别混进别的来源的筛选结果里
-        if (!filterSource.startsWith("uncertain") && filterSource !== "all" && i.uncertain) return false;
+        if (!filterSource.startsWith("uncertain") && filterSource !== "all" && filterSource !== "flagged" && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
@@ -874,6 +895,13 @@ export default function SegmentPanel({
                   <Tag color="volcano" style={{ marginLeft: 4 }}>疑似重复</Tag>
                 </Tooltip>
               ) : null;
+              const flagTag = i.review_note ? (
+                <Tooltip title={`审核标的问题：${i.review_note}。改了这条（类别或起止）就自动算处理过；没改也确认没问题的，点右边「已改好」`}>
+                  <Tag color="red" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle" }}>
+                    有问题：{i.review_note}
+                  </Tag>
+                </Tooltip>
+              ) : null;
               const justTag = justEdited.has(i.id) ? (
                 <Tooltip title="刚改过，暂时不受筛选影响，方便你核对">
                   <Tag color="gold" style={{ marginLeft: 4 }}>刚改</Tag>
@@ -883,6 +911,7 @@ export default function SegmentPanel({
                 const k = kindOf(i.uncertain_reason);
                 return (
                   <>
+                    {flagTag}
                     <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
                       <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
                     </Tooltip>
@@ -893,6 +922,7 @@ export default function SegmentPanel({
               }
               return (
                 <>
+                  {flagTag}
                   {st === "pending" ? (
                     <Tooltip title="AI 标的，你还没表态。点右边「通过」认可它，或者直接改标签/拖起止——改了就算你的结论，不用再点通过">
                       <Tag color="orange">AI 待确认</Tag>
@@ -945,6 +975,29 @@ export default function SegmentPanel({
                     跳转
                   </Button>
                   {loopButton(i.start_time_ms, i.end_time_ms)}
+                  {/* 审核：看到哪条不对就标哪条，退回时标注员只需要改这几条。
+                      还没存进库的新片段（id 为负）标不了——先存草稿 */}
+                  {onReviewNote && i.id > 0 && (i.review_note ? (
+                    <Tooltip title={reviewNoteClearOnly ? "改好了，或者看过确认没问题" : "清掉这条的问题标记"}>
+                      <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onReviewNote(i, null)}>
+                        {reviewNoteClearOnly ? "已改好" : "清除问题"}
+                      </Button>
+                    </Tooltip>
+                  ) : !reviewNoteClearOnly && (
+                    <Dropdown
+                      menu={{
+                        items: [...REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__other", label: "其他原因…" }],
+                        onClick: ({ key }) => {
+                          if (key === "__other") { setNoteFor(i); setNoteText(""); }
+                          else onReviewNote(i, key);
+                        },
+                      }}
+                    >
+                      <Button size="small" type="link" danger>
+                        有问题 <DownOutlined style={{ fontSize: 10 }} />
+                      </Button>
+                    </Dropdown>
+                  ))}
                   {/* 夜里那几路黑得看不出狗在干嘛。按这一段的中点取一刻，
                       三张并排（原样 / 拉伸 / 多帧堆栈）让人自己判断 */}
                   {onLowlight && (
@@ -1100,6 +1153,24 @@ export default function SegmentPanel({
             {editEnd <= editStart && <Typography.Text type="danger">结束必须晚于开始</Typography.Text>}
           </Space>
         )}
+      </Modal>
+      <Modal
+        title="这条片段有什么问题？"
+        open={noteFor != null}
+        okText="标为有问题"
+        okButtonProps={{ disabled: !noteText.trim() }}
+        onOk={() => { if (noteFor && onReviewNote) onReviewNote(noteFor, noteText.trim()); setNoteFor(null); }}
+        onCancel={() => setNoteFor(null)}
+        destroyOnClose
+      >
+        <Input.TextArea
+          autoFocus
+          maxLength={300}
+          rows={3}
+          value={noteText}
+          onChange={(e) => setNoteText(e.target.value)}
+          placeholder="写给标注员看的一句话，比如：12 秒后是在走路，不是抓挠"
+        />
       </Modal>
     </div>
   );

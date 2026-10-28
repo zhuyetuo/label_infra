@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.annotation import LabelItemSource
 from app.models.task import TaskStatus, TaskType
@@ -100,6 +100,9 @@ class LabelItemOut(LabelItemIn):
     ai_end_ms: int | None = None
     cand_label_name: str | None = None
     cand_reason: str | None = None
+    # 审核标的「这条有问题」（原因），没有就是 None
+    review_note: str | None = None
+    review_flag_by: int | None = None
 
     @model_validator(mode="after")
     def _origin_is_self(self):
@@ -155,6 +158,12 @@ class BulkTaskCreateResult(BaseModel):
     created: int
     skipped: int
     skipped_sample_ids: list[int]
+
+
+class ReviewNoteIn(BaseModel):
+    """给一条片段标「有问题」：note 是原因；传 null 或空串 = 清掉（已改好 / 标错了）。"""
+
+    note: str | None = Field(None, max_length=300)
 
 
 class ReopenRequest(BaseModel):

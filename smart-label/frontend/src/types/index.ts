@@ -123,6 +123,9 @@ export interface LabelItem {
   /** 从疑似片段确认来的：那条候选当初猜的类别和来源 */
   cand_label_name?: string | null;
   cand_reason?: string | null;
+  /** 审核标的「这条有问题」：原因；没有就是空 */
+  review_note?: string | null;
+  review_flag_by?: number | null;
 }
 
 export interface Draft {
