@@ -21,7 +21,9 @@ _CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/pn
 @router.get("/{album}/photos")
 async def list_photos(album: str):
     try:
-        return ok({"root": svc.album_root(album), "folders": svc.list_photos(album)})
+        # sources：每个来源扫到多少张、多少张分不出品类——页面靠它说清「这个狗场为什么一张都没有」
+        return ok({"root": svc.album_root(album), "folders": svc.list_photos(album),
+                   "sources": svc.scan_report(album)})
     except svc.ToothError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
 
