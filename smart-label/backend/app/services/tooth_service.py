@@ -290,23 +290,11 @@ def _scan_tree(tree: str, album: str) -> tuple[list[dict], dict]:
         if not os.path.isdir(fpath):
             continue
         dogs = []
-        # 狗那一层的候选：(相对日期目录的前缀, 狗目录名)。现场出过日期目录里又套一个同名
-        # 日期目录的（博朗旺20261027/博朗旺20261027/001…，拷贝时拖进了同名文件夹），
-        # 那一层被当成"狗"、真正的狗被当成"品类"，结果一张都扫不到。
-        # 所以名字里带 8 位日期的目录不当狗，往里再进一层
-        cands = []
-        for name in sorted(os.listdir(fpath)):
-            npath = os.path.join(fpath, name)
-            if os.path.isdir(npath) and _MIXED_DATE_RE.search(name):
-                cands += [(f"{name}/", sub) for sub in sorted(os.listdir(npath))
-                          if os.path.isdir(os.path.join(npath, sub))]
-            else:
-                cands.append(("", name))
-        for pre, dog in cands:
-            dpath = os.path.join(fpath, pre, dog)
+        for dog in sorted(os.listdir(fpath)):
+            dpath = os.path.join(fpath, dog)
             if not os.path.isdir(dpath):
                 if _is_image(dog):
-                    unclassified(f"{tree}/{folder}/{pre}{dog}")  # 散在日期目录下，分不出是哪只狗
+                    unclassified(f"{tree}/{folder}/{dog}")      # 散在日期目录下，分不出是哪只狗
                 continue
             photos = []
             for entry in sorted(os.listdir(dpath)):
@@ -316,14 +304,14 @@ def _scan_tree(tree: str, album: str) -> tuple[list[dict], dict]:
                     for fn in sorted(os.listdir(epath)):
                         if not _is_image(fn):
                             continue
-                        rel = f"{tree}/{folder}/{pre}{dog}/{entry}/{fn}"
+                        rel = f"{tree}/{folder}/{dog}/{entry}/{fn}"
                         got = cat or _category_of_file(fn)
                         if got == album:
                             photos.append(_photo(rel, os.path.join(epath, fn)))
                         elif got is None:
                             unclassified(rel)
                 elif _is_image(entry):
-                    rel = f"{tree}/{folder}/{pre}{dog}/{entry}"
+                    rel = f"{tree}/{folder}/{dog}/{entry}"
                     got = _category_of_file(entry)
                     if got == album:
                         photos.append(_photo(rel, epath))
