@@ -60,7 +60,13 @@ async def release_review(db: AsyncSession, task_id: int, reviewer: User) -> Task
 
 
 async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int) -> None:
-    """驳回重标：把当前轮次的标注内容拷贝到新一轮，标注员重新认领后能接着改，不用从空白开始（决策⑧）。"""
+    """驳回重标：把当前轮次的标注内容拷贝到新一轮，标注员重新认领后能接着改，不用从空白开始（决策⑧）。
+
+    疑似片段（候选）也是按轮次存的，一起拷过去，连判断结果和审核标的问题——
+    原来只拷片段不拷候选，一退回，疑似片段面板就空了，之前「已改成 活动」这些
+    判断在新一轮里全看不到，审核标了问题的那条也找不着。
+    """
+    cand_map = await _clone_candidates_forward(db, task, new_round_no)
     old_record = (
         await db.execute(
             select(AnnotationRecord).where(
@@ -97,7 +103,8 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 ai_label_id=item.ai_label_id,
                 ai_start_ms=item.ai_start_ms,
                 ai_end_ms=item.ai_end_ms,
-                from_candidate_id=item.from_candidate_id,
+                # 指向新一轮里拷过去的那条候选（「退回候选」「补回确认过的候选」都按当前轮认）
+                from_candidate_id=cand_map.get(item.from_candidate_id, item.from_candidate_id),
                 # 审核时标的「这条有问题」带到新一轮：标注员拿回去就知道该改哪几条
                 review_note=item.review_note,
                 review_flag_by=item.review_flag_by,
@@ -105,6 +112,25 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 created_by=item.created_by,
             )
         )
+
+
+async def _clone_candidates_forward(db: AsyncSession, task: Task, new_round_no: int) -> dict[int, int]:
+    """当前轮的候选原样拷到新一轮，返回 {旧 id: 新 id}。"""
+    from app.models.ai_candidate import AiCandidate
+
+    old = (await db.execute(
+        select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no)
+    )).scalars().all()
+    skip = {"id", "round_no", "created_at"}
+    pairs = []
+    for c in old:
+        n = AiCandidate(**{col.key: getattr(c, col.key) for col in AiCandidate.__table__.columns if col.key not in skip},
+                        round_no=new_round_no)
+        db.add(n)
+        pairs.append((c, n))
+    if pairs:
+        await db.flush()
+    return {c.id: n.id for c, n in pairs}
 
 
 async def reopen_task(db: AsyncSession, task_id: int, operator: User, comment: str | None) -> Task:

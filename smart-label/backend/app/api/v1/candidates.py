@@ -43,6 +43,9 @@ def _out(c: AiCandidate) -> dict:
         "decided_label_id": c.decided_label_id,
         "uncertain_reason": c.uncertain_reason,
         "decided_at": c.decided_at.isoformat() if c.decided_at else None,
+        # 审核标的「这条判断有问题」
+        "review_note": c.review_note,
+        "review_flag_by": c.review_flag_by,
     }
 
 
@@ -187,6 +190,37 @@ async def repair_items(task_id: int, db: AsyncSession = Depends(get_db), user: U
     return ok({"repaired": n})
 
 
+class ReviewNoteIn(BaseModel):
+    note: str | None = Field(None, max_length=300)
+
+
+@router.put("/{candidate_id}/review-note")
+async def set_review_note(
+    candidate_id: int,
+    body: ReviewNoteIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """给一条疑似片段的判断标「有问题」（或清掉）。规则跟已标注片段上的一样：
+    管理员 / 审核员能标能清；标注员只能在自己认领的任务里清掉。不改判断本身。"""
+    cand = await db.get(AiCandidate, candidate_id)
+    if cand is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "候选不存在")
+    task = await _visible_task(db, cand.task_id, user)
+    if cand.round_no != task.round_no:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "这条候选不在当前这一轮里（任务已经进入新一轮？刷新一下）")
+    note = (body.note or "").strip() or None
+    privileged = user.role in (UserRole.admin, UserRole.super_admin, UserRole.reviewer)
+    if not privileged and not (note is None and task.locked_by == user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能标「有问题」；标注员只能在自己认领的任务里清掉")
+    cand.review_note = note
+    cand.review_flag_by = user.id if note else None
+    cand.review_flag_at = datetime.now(UTC).replace(tzinfo=None) if note else None
+    await db.commit()
+    await db.refresh(cand)
+    return ok(_out(cand))
+
+
 @router.post("/{candidate_id}/decide")
 async def decide(
     candidate_id: int,
@@ -271,6 +305,8 @@ async def decide(
             # 按片段取的导出会把它跳过，等于白确认一场
             dup.ai_confirmed = True
             cand.status = CandidateStatus(body.decision)
+            # 重新判断过了：审核标的问题算处理过
+            cand.review_note = cand.review_flag_by = cand.review_flag_at = None
             cand.decided_label_id = label_id
             cand.uncertain_reason = None
             cand.decided_by = user.id
@@ -297,6 +333,8 @@ async def decide(
         )
 
     cand.status = CandidateStatus(body.decision)
+    # 重新判断过了：审核标的问题算处理过
+    cand.review_note = cand.review_flag_by = cand.review_flag_at = None
     # 记下确认成了哪个类别：抓挠以外的说明是"人纠正过的误报"，统计里要分开看
     cand.decided_label_id = label_id if body.decision == "confirmed" else None
     # 待定原因；不是待定就清掉，别留个孤零零的原因在库里
