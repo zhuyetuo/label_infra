@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Collapse, Empty, Image, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Button, Collapse, Empty, Image, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
+import { getSavedText, saveText } from "@/utils/persistedSize";
 
 // 素材库相册只读浏览：按 日期目录 > 狗 折叠，缩略图网格，点开大图（antd Image 预览，
 // 同一只狗同一天的照片可以左右翻）。皮肤评估页的「皮肤照片」用；牙齿识别页有自己带
@@ -9,15 +10,32 @@ import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album
 
 export default function PhotoGallery({ album, hint, filterDate, filterDog }: { album: Album; hint?: string; filterDate?: string; filterDog?: string }) {
   const { data: raw, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
-  // 每日跟踪表里点「N 张」时只看那一天那只狗的；不传就是全部
+  // 来源（视频问诊 / 雷喏斯达 / 博朗旺…）和狗：几个地方很多天混在一起没法看，先按来源分开。
+  // 从外面带了日期/狗进来（每日跟踪表里点「N 张」）时不显示这两个筛选，只看那一格
+  const pinned = !!(filterDate || filterDog);
+  const sourceKey = `smart-label:photos-source:${album}`;
+  const [source, setSourceState] = useState(() => getSavedText(sourceKey, "all"));
+  const setSource = (k: string) => { setSourceState(k); saveText(sourceKey, k); setDog(undefined); };
+  const [dog, setDog] = useState<string | undefined>(undefined);
+  const sources = raw?.sources ?? [];
+  // 记住的来源这次没扫到（比如那个狗场目录改名了）→ 回到全部，别停在空页上
+  const curSource = source === "all" || sources.some((s) => s.source === source) ? source : "all";
+  const inSource = useMemo(
+    () => (raw?.folders ?? []).filter((f) => curSource === "all" || f.source === curSource),
+    [raw, curSource]
+  );
+  const dogNames = useMemo(() => [...new Set(inSource.flatMap((f) => f.dogs.map((d) => d.name)))].sort(), [inSource]);
   const data = useMemo(() => {
-    if (!raw || (!filterDate && !filterDog)) return raw;
-    const folders = raw.folders
-      .filter((f) => !filterDate || f.folder.slice(0, 10) === filterDate)
-      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => !filterDog || d.name === filterDog) }))
+    if (!raw) return raw;
+    const wantDate = filterDate, wantDog = filterDog ?? (pinned ? undefined : dog);
+    const base = pinned ? raw.folders : inSource;
+    const folders = base
+      // 按解析出来的日期比：狗场那几棵树的目录名开头是树名，按前 10 个字符比永远对不上
+      .filter((f) => !wantDate || f.date === wantDate)
+      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => !wantDog || d.name === wantDog) }))
       .filter((f) => f.dogs.length > 0);
     return { ...raw, folders };
-  }, [raw, filterDate, filterDog]);
+  }, [raw, inSource, filterDate, filterDog, dog, pinned]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
 
@@ -49,7 +67,57 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog }: { a
     return <Alert type="error" showIcon message="照片目录读不到" description={`${(error as Error).message}。确认素材库 NAS 已挂到 /home/toky/alg_material 并在 docker-compose 里挂进了容器。`} />;
   }
   if (isLoading) return <Spin />;
-  if (!data?.folders.length) return <Empty description="还没有照片" />;
+
+  // 扫到了目录却没出照片的来源：把原因摆出来，不然人只会看到"这个狗场的数据不见了"
+  const problems = sources.filter((s) => (curSource === "all" || s.source === curSource) && (s.photos === 0 || s.unclassified > 0));
+  const problemAlert = !pinned && problems.length > 0 && (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      message="有照片没显示出来"
+      description={
+        <div>
+          {problems.map((s) => (
+            <div key={s.path} style={{ marginBottom: 4 }}>
+              <b>{s.source}</b>（{s.path}）：显示 {s.photos} 张
+              {s.unclassified > 0 && <>，另有 {s.unclassified} 张分不出是皮肤还是口腔，没放进来。例：{s.examples.map((e) => <code key={e} style={{ marginLeft: 4 }}>{e}</code>)}</>}
+              {s.photos === 0 && s.unclassified === 0 && <>，一张都没扫到。目录要按「日期（含8位数字）/ 狗 / 品类 / 照片」放</>}
+            </div>
+          ))}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            狗场目录里，品类子目录名或照片文件名要带「皮肤 / 瘙痒」或「口腔 / 牙齿」，平台才知道放进哪个相册。
+          </Typography.Text>
+        </div>
+      }
+    />
+  );
+  const filters = !pinned && sources.length > 1 && (
+    <>
+      <Tabs
+        size="small"
+        activeKey={curSource}
+        onChange={setSource}
+        items={[
+          { key: "all", label: `全部 ${sources.reduce((n, s) => n + s.photos, 0)}` },
+          ...sources.map((s) => ({ key: s.source, label: `${s.source} ${s.photos}` })),
+        ]}
+      />
+      <Space style={{ marginBottom: 12 }}>
+        <Select
+          allowClear
+          showSearch
+          size="small"
+          style={{ width: 200 }}
+          placeholder="全部狗"
+          value={dog}
+          onChange={setDog}
+          options={dogNames.map((n) => ({ value: n, label: n }))}
+        />
+      </Space>
+    </>
+  );
+  if (!data?.folders.length) return <div>{filters}{problemAlert}<Empty description="还没有照片" /></div>;
 
   // 缩略图只渲染（不带预览），预览统一由外层一个 PreviewGroup 接管，这样整页的图
   // 在放大状态下能一路左右翻，不用关掉再点下一张；工具栏里加两个明显的左右按钮
@@ -71,6 +139,8 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog }: { a
 
   return (
     <div>
+      {filters}
+      {problemAlert}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。点图放大，工具栏左右按钮或键盘方向键翻上一张/下一张。
       </Typography.Paragraph>
@@ -100,6 +170,7 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog }: { a
         }}
       />
       <Collapse
+        key={`${curSource}|${dog ?? ""}`}
         defaultActiveKey={[data.folders[0].folder]}
         items={data.folders.map((f) => ({
           key: f.folder,

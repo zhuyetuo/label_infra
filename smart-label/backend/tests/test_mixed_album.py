@@ -331,3 +331,39 @@ def test_最新的日期排最上面_不管是哪个狗场(material):
     assert folders[0] == f"{NEW_TREE}/博朗旺20261027", folders
     dates = [f["date"] for f in ts.list_photos("skin") if f["date"]]
     assert dates == sorted(dates, reverse=True)
+
+
+# ── 目录放法放宽 + 来源 + 扫描报告 ─────────────────────────────────────────
+
+def test_照片直接放在狗目录下_按文件名认品类(material):
+    _put(material, NEW_TREE, "博朗旺20261028", "001东德", "皮肤瘙痒-博朗旺20261028-001 (1).jpg")
+    _put(material, NEW_TREE, "博朗旺20261028", "001东德", "口腔牙齿-博朗旺20261028-001 (1).jpg")
+    _put(material, NEW_TREE, "博朗旺20261028", "001东德", "IMG_0001.jpg")          # 认不出
+    ts._mixed_cache = None
+    skin = [p["rel_path"] for p in _all("skin") if p["rel_path"].startswith(NEW_TREE)]
+    assert skin == [f"{NEW_TREE}/博朗旺20261028/001东德/皮肤瘙痒-博朗旺20261028-001 (1).jpg"]
+    assert os.path.isfile(ts.resolve_photo(skin[0], "skin"))
+    rep = next(r for r in ts.scan_report("skin") if r["source"] == "博朗旺")
+    assert rep["photos"] == 1 and rep["unclassified"] == 1
+    assert rep["examples"] == [f"{NEW_TREE}/博朗旺20261028/001东德/IMG_0001.jpg"]
+
+
+def test_品类目录名认不出时看文件名(material):
+    _put(material, NEW_TREE, "博朗旺20261028", "002拉布拉多", "照片", "皮肤-1.jpg")
+    ts._mixed_cache = None
+    assert any(p["rel_path"].endswith("002拉布拉多/照片/皮肤-1.jpg") for p in _all("skin"))
+
+
+def test_每个日期目录带来源_报告列出每个来源(material):
+    _put(material, NEW_TREE, "博朗旺20261028", "001东德", "皮肤瘙痒-x", "a.jpg")
+    ts._mixed_cache = None
+    srcs = {f["source"] for f in ts.list_photos("skin")}
+    assert {"雷喏斯达", "博朗旺"} <= srcs
+    rep = {r["source"]: r for r in ts.scan_report("skin")}
+    assert rep["雷喏斯达"]["photos"] == 2 * 6 * 2 and rep["博朗旺"]["photos"] == 1
+
+
+def test_目录名大写OK也算整理好了(material):
+    _put(material, "颈圈算法验证/皮肤瘙痒/视频问诊", "2026-10-24-OK", "bibi", "a.jpg")
+    f = next(x for x in ts.list_photos("skin") if x["folder"] == "2026-10-24-OK")
+    assert f["ok"] and f["date"] == "2026-10-24" and f["source"] == "视频问诊"

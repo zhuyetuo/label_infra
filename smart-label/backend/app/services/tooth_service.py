@@ -84,6 +84,17 @@ def _category_album(name: str) -> str | None:
     return None
 
 
+def _category_of_file(name: str) -> str | None:
+    """文件名 → 属于哪个相册（照片没放进品类目录时用）。同样只认关键字，两组都沾或都不沾就 None。"""
+    hits = {album for album, kws in MIXED_KEYWORDS.items() if any(k in name for k in kws)}
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _is_ok(folder: str) -> bool:
+    """日期目录整理好了没有：以 -ok 结尾，**不分大小写**（现场有 2026-10-24-OK 这种写法）。"""
+    return folder.lower().endswith("-ok")
+
+
 def album_root(album: str = "oral") -> str:
     if album not in ALBUMS:
         raise ToothError(f"未知相册: {album}")
@@ -184,8 +195,25 @@ def list_photos(album: str = "oral") -> list[dict]:
     if not os.path.isdir(root):
         mixed = _list_mixed(album)
         if mixed:
-            return mixed
+            return _sorted(mixed)
         raise ToothError(f"照片目录不存在: {root}（素材库 NAS 还没挂载？）")
+    return _sorted(list_photos_main(album) + _list_mixed(album))
+
+
+def _sorted(out: list[dict]) -> list[dict]:
+    # 按日期倒序，最新的在最上面。不能只按 folder 字符串排：几棵树的名字不一样，
+    # 「博朗旺…」会排在「雷喏斯达…」后面，新狗场最新的数据落到列表最底下。
+    # 两种日期目录（2026-09-01-ok / 雷喏斯达20260912）都解析成了 YYYY-MM-DD，可以直接比；
+    # 解析不出日期的排最后，同一天按 folder 倒序
+    out.sort(key=lambda x: (x["date"] or "", x["folder"]), reverse=True)
+    return out
+
+
+def list_photos_main(album: str) -> list[dict]:
+    """主相册目录（口腔验证 / 视频问诊）：<日期>/<狗>/*.jpg。目录不在返回空表。"""
+    root = album_root(album)
+    if not os.path.isdir(root):
+        return []
     out = []
     for folder in sorted(os.listdir(root), reverse=True):
         fpath = os.path.join(root, folder)
@@ -214,57 +242,109 @@ def list_photos(album: str = "oral") -> list[dict]:
         if stray:
             dogs.append({"name": "（未归类）", "photos": stray})
         if dogs:
-            out.append({"folder": folder, "date": m.group(1) if m else None, "ok": folder.endswith("-ok"), "dogs": dogs})
-    out.extend(_list_mixed(album))
-    # 按日期倒序，最新的在最上面。不能只按 folder 字符串排：几棵树的名字不一样，
-    # 「博朗旺…」会排在「雷喏斯达…」后面，新狗场最新的数据落到列表最底下。
-    # 两种日期目录（2026-09-01-ok / 雷喏斯达20260912）都解析成了 YYYY-MM-DD，可以直接比；
-    # 解析不出日期的排最后，同一天按 folder 倒序
-    out.sort(key=lambda x: (x["date"] or "", x["folder"]), reverse=True)
+            out.append({"folder": folder, "date": m.group(1) if m else None, "ok": _is_ok(folder),
+                        "source": _main_source(album), "dogs": dogs})
     return out
 
 
-def _list_mixed(album: str) -> list[dict]:
-    """扫「一棵树里两种品类都有」的素材：<树>/<日期>/<狗>/<品类>/*.jpg。
+def _main_source(album: str) -> str:
+    """主相册目录在页面上叫什么：取目录名最后一段（视频问诊 / 口腔验证）。"""
+    return ALBUMS[album]().rstrip("/").split("/")[-1]
 
-    rel_path 带上树名，因为这批归不到任何一个相册目录下——resolve_photo 那边
-    据此走「相对素材库根」的分支。
+
+def tree_source(tree: str) -> str:
+    """混合树在页面上叫什么：雷喏斯达-狗场合作 → 雷喏斯达。"""
+    return tree.removesuffix("-狗场合作")
+
+
+def _photo(rel: str, full: str) -> dict:
+    return {"rel_path": rel, "filename": os.path.basename(rel), "size_bytes": os.path.getsize(full)}
+
+
+def _is_image(fn: str) -> bool:
+    return os.path.splitext(fn)[1].lower() in IMAGE_EXTS
+
+
+def _scan_tree(tree: str, album: str) -> tuple[list[dict], dict]:
+    """扫一棵混合树：<树>/<日期>/<狗>/... 返回 (日期目录列表, 扫描报告)。
+
+    照片属于哪个相册，按这个顺序认，认不出就**不放进任何相册**（只计入报告）：
+      1. 在品类子目录里：看子目录名（口腔|牙齿 / 皮肤|瘙痒）
+      2. 子目录名不带关键字、或照片直接放在狗目录下：看文件名
+    猜错的后果是口腔相册里混进皮肤照片，标注员按牙齿那套标签去标，标完才发现——
+    所以宁可不放，也不猜；报告里写清楚有多少张、举几个例子，人一看就知道怎么改目录。
     """
+    troot = os.path.join(settings.material_root, tree)
+    report = {"source": tree_source(tree), "path": tree, "photos": 0, "unclassified": 0, "examples": []}
+    out = []
+    if not os.path.isdir(troot):
+        return out, report
+
+    def unclassified(rel: str) -> None:
+        report["unclassified"] += 1
+        if len(report["examples"]) < 3:
+            report["examples"].append(rel)
+
+    for folder in sorted(os.listdir(troot), reverse=True):
+        fpath = os.path.join(troot, folder)
+        if not os.path.isdir(fpath):
+            continue
+        dogs = []
+        for dog in sorted(os.listdir(fpath)):
+            dpath = os.path.join(fpath, dog)
+            if not os.path.isdir(dpath):
+                if _is_image(dog):
+                    unclassified(f"{tree}/{folder}/{dog}")      # 散在日期目录下，分不出是哪只狗
+                continue
+            photos = []
+            for entry in sorted(os.listdir(dpath)):
+                epath = os.path.join(dpath, entry)
+                if os.path.isdir(epath):
+                    cat = _category_album(entry)
+                    for fn in sorted(os.listdir(epath)):
+                        if not _is_image(fn):
+                            continue
+                        rel = f"{tree}/{folder}/{dog}/{entry}/{fn}"
+                        got = cat or _category_of_file(fn)
+                        if got == album:
+                            photos.append(_photo(rel, os.path.join(epath, fn)))
+                        elif got is None:
+                            unclassified(rel)
+                elif _is_image(entry):
+                    rel = f"{tree}/{folder}/{dog}/{entry}"
+                    got = _category_of_file(entry)
+                    if got == album:
+                        photos.append(_photo(rel, epath))
+                    elif got is None:
+                        unclassified(rel)
+            if photos:
+                dogs.append({"name": dog, "photos": photos})
+                report["photos"] += len(photos)
+        if dogs:
+            out.append({"folder": f"{tree}/{folder}", "date": _mixed_date(folder),
+                        "ok": True, "source": tree_source(tree), "dogs": dogs})
+    return out, report
+
+
+def _list_mixed(album: str) -> list[dict]:
+    """扫「一棵树里两种品类都有」的素材。rel_path 带上树名，因为这批归不到任何一个
+    相册目录下——resolve_photo 那边据此走「相对素材库根」的分支。"""
     out = []
     for tree in mixed_dirs():
-        troot = os.path.join(settings.material_root, tree)
-        if not os.path.isdir(troot):
-            continue
-        for folder in sorted(os.listdir(troot), reverse=True):
-            fpath = os.path.join(troot, folder)
-            if not os.path.isdir(fpath):
-                continue
-            dogs = []
-            for dog in sorted(os.listdir(fpath)):
-                dpath = os.path.join(fpath, dog)
-                if not os.path.isdir(dpath):
-                    continue
-                photos = []
-                for cat in sorted(os.listdir(dpath)):
-                    cpath = os.path.join(dpath, cat)
-                    # 品类目录认不出来就跳过，不猜：猜错的后果是口腔相册里
-                    # 混进皮肤照片，标注员按牙齿那套标签去标，标完才发现
-                    if not os.path.isdir(cpath) or _category_album(cat) != album:
-                        continue
-                    for fn in sorted(os.listdir(cpath)):
-                        if os.path.splitext(fn)[1].lower() not in IMAGE_EXTS:
-                            continue
-                        fp = os.path.join(cpath, fn)
-                        photos.append({
-                            "rel_path": f"{tree}/{folder}/{dog}/{cat}/{fn}",
-                            "filename": fn,
-                            "size_bytes": os.path.getsize(fp),
-                        })
-                if photos:
-                    dogs.append({"name": dog, "photos": photos})
-            if dogs:
-                out.append({"folder": f"{tree}/{folder}", "date": _mixed_date(folder),
-                            "ok": True, "dogs": dogs})
+        out.extend(_scan_tree(tree, album)[0])
+    return out
+
+
+def scan_report(album: str) -> list[dict]:
+    """每个来源扫到多少张、有多少张分不出品类。页面上据此提示「这个狗场为什么一张都没有」。"""
+    out = []
+    root = album_root(album)
+    if os.path.isdir(root):
+        n = sum(len(d["photos"]) for f in list_photos_main(album) for d in f["dogs"])
+        out.append({"source": _main_source(album), "path": ALBUMS[album](), "photos": n,
+                    "unclassified": 0, "examples": []})
+    for tree in mixed_dirs():
+        out.append(_scan_tree(tree, album)[1])
     return out
 
 
