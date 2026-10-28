@@ -1,7 +1,7 @@
 """
 牙齿识别页：浏览素材库 NAS 上的口腔照片（按 日期目录/狗 归类）、看图、跑 YOLO 检测、
 看检测结果。检测本身在 imu_train/label_service（tooth_health 那套 YOLO），这边只是
-目录浏览 + 转发 + 结果落库。管理员/超管可用。
+目录浏览 + 转发 + 结果落库。管理员/超管，或单独开了「牙齿识别」的账号可用。
 """
 
 import json
@@ -11,15 +11,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_role
+from app.core.deps import get_current_user, require_feature
 from app.db.session import get_db
 from app.models.tooth_photo import ToothPhotoResult
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.envelope import ok
 from app.services import tooth_service as svc
 from app.services.range_stream import stream_file
 
-router = APIRouter(prefix="/tooth", tags=["tooth"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+router = APIRouter(prefix="/tooth", tags=["tooth"], dependencies=[Depends(require_feature("tooth"))])
 # <img> 标签带不了 Authorization 头，图片流走 URL 上的短期路径签名 token（跟 media stream 一样）
 stream_router = APIRouter(prefix="/tooth", tags=["tooth"])
 

@@ -134,5 +134,13 @@ export interface AppUser {
   must_change_password: boolean;
   /** 管理员之间的备注（外包/实习/入离职时间等），纯人事记录 */
   remark: string | null;
+  /** 单独开的功能键（管理员不需要，什么都能用） */
+  permissions: string[];
   created_at: string;
+}
+
+export interface FeatureDef {
+  key: string;
+  name: string;
+  description: string;
 }
