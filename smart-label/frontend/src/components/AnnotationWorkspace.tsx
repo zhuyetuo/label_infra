@@ -445,9 +445,28 @@ export default function AnnotationWorkspace({
 
       const draft = await getDraft(taskId);
       setItems(draft.items);
+      // 从筛过类别的列表点进来（项目页筛了「进食」/候选类别「进食」），又没指定具体时刻：
+      // 直接停到第一段对得上的，循环播放。不然进来还是从 0 秒开始，几十段里要自己去找
+      const autoJump = initialSeekMs == null;
+      const jumpTo = (r: { start_time_ms: number; end_time_ms: number }, what: string, n: number) => {
+        bus.seek(r.start_time_ms / 1000);
+        setLoop({ startMs: r.start_time_ms, endMs: r.end_time_ms });
+        message.info(`已跳到第一段「${what}」${formatMs(r.start_time_ms)}（共 ${n} 段）`, 3);
+      };
+      const segSet = new Set(initialSegmentFilter);
+      const segHits = [...draft.items].filter((it) => segSet.has(it.label_id))
+        .sort((a, b) => a.start_time_ms - b.start_time_ms);
       listCandidates(taskId)
         .then((cs) => {
           setCandidates(cs);
+          if (autoJump) {
+            // 候选类别优先：按「疑似进食」筛进来，要看的就是疑似片段；先挑还没判过的
+            const want = new Set(focusCandLabels ?? []);
+            const hits = cs.filter((c) => want.has(c.label_name))
+              .sort((a, b) => Number(a.status !== "pending") - Number(b.status !== "pending") || a.start_time_ms - b.start_time_ms);
+            if (hits.length) jumpTo(hits[0], `疑似${hits[0].label_name}`, hits.length);
+            else if (segHits.length) jumpTo(segHits[0], labelById.get(segHits[0].label_id)?.display_name ?? "片段", segHits.length);
+          }
           // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找。
           // 「先看命中」跳来的还没写候选，那就循环命中前 2 秒到后 4 秒
           if (initialSeekMs != null && initialCandFilter != null) {
@@ -458,7 +477,10 @@ export default function AnnotationWorkspace({
             setLoop(hit ? { startMs: hit.start_time_ms, endMs: hit.end_time_ms } : { startMs: Math.max(0, initialSeekMs - 2000), endMs: initialSeekMs + 4000 });
           }
         })
-        .catch(() => setCandidates([]));
+        .catch(() => {
+          setCandidates([]);
+          if (autoJump && segHits.length) jumpTo(segHits[0], labelById.get(segHits[0].label_id)?.display_name ?? "片段", segHits.length);
+        });
       getAiLabelInfo(sampleId).then(setAiInfo).catch(() => setAiInfo(null));
       setLoading(false);
     })();
