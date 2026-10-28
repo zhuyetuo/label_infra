@@ -1,7 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.core import permissions as perms
 from app.models.user import UserRole
 
 
@@ -17,8 +18,15 @@ class UserOut(BaseModel):
     is_active: bool
     must_change_password: bool
     remark: str | None
+    # 单独开的功能（不含管理员的"全部"——管理员前端按角色判断）
+    permissions: list[str] = []
     last_login_at: datetime | None
     created_at: datetime
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def _split(cls, v):
+        return perms.parse(v) if isinstance(v, str) or v is None else v
 
 
 class UserCreate(BaseModel):
@@ -44,3 +52,11 @@ class UserUpdate(BaseModel):
     is_outsourced: bool | None = None
     is_active: bool | None = None
     remark: str | None = None
+    permissions: list[str] | None = None
+
+    @field_validator("permissions")
+    @classmethod
+    def _known(cls, v):
+        if v is not None:
+            perms.dump(v)          # 有不认识的键直接 422，别存进去
+        return v

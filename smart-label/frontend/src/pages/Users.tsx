@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createUser, deleteUser, listUsers, resetUserPassword, updateUser } from "@/api/users";
+import { createUser, deleteUser, listFeatures, listUsers, resetUserPassword, updateUser } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
 import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
@@ -17,6 +17,7 @@ export default function Users() {
   const qc = useQueryClient();
   const isSuperAdmin = useAuthStore((s) => s.userInfo?.role) === "super_admin";
   const { data, isLoading } = useQuery({ queryKey: ["users"], queryFn: listUsers });
+  const { data: features } = useQuery({ queryKey: ["user-features"], queryFn: listFeatures });
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
   const [tempPassword, setTempPassword] = useState<string | null>(null);
@@ -79,6 +80,13 @@ export default function Users() {
     if (!trimmed || trimmed === u[field]) return;
     await updateUser(u.id, { [field]: trimmed });
     message.success(field === "username" ? `用户名已改为 ${trimmed}，对方下次用它登录` : "显示名已更新");
+    refresh();
+  };
+
+  // 单独开的功能：勾一项存一项，对方切回页面菜单就会出来，不用重新登录
+  const handlePermissionsChange = async (u: AppUser, permissions: string[]) => {
+    await updateUser(u.id, { permissions });
+    message.success("功能权限已更新");
     refresh();
   };
 
@@ -156,6 +164,38 @@ export default function Users() {
                 onChange={(role) => handleRoleChange(u, role)}
               />
             ),
+          },
+          {
+            title: (
+              <Tooltip title="在角色之外，单独给这个账号开几样功能（比如实习生只开狗档案和牙齿识别）。管理员本来就什么都能用，不用勾">
+                额外功能
+              </Tooltip>
+            ),
+            dataIndex: "permissions",
+            width: 280,
+            render: (keys: string[] | undefined, u: AppUser) =>
+              u.role === "admin" || u.role === "super_admin" ? (
+                <Typography.Text type="secondary">全部（管理员）</Typography.Text>
+              ) : (
+                <Select
+                  mode="multiple"
+                  size="small"
+                  allowClear
+                  style={{ width: "100%" }}
+                  placeholder="未开额外功能"
+                  value={keys ?? []}
+                  options={(features ?? []).map((f) => ({ value: f.key, label: f.name, title: f.description }))}
+                  optionRender={(opt) => (
+                    <div>
+                      <div>{opt.label}</div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "normal" }}>
+                        {features?.find((f) => f.key === opt.value)?.description}
+                      </Typography.Text>
+                    </div>
+                  )}
+                  onChange={(v: string[]) => handlePermissionsChange(u, v)}
+                />
+              ),
           },
           {
             title: "外包",

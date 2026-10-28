@@ -31,6 +31,9 @@ class User(Base):
     # 管理员之间的备注，比如外包/实习/兼职身份、入离职时间——只给管理员看，
     # 跟登录/权限逻辑无关，纯人事记录
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 单独开的功能权限，逗号分隔的功能键（见 app/core/permissions.py）。
+    # 管理员不看这一列；其他角色靠它在本角色之外多用几样
+    permissions: Mapped[str | None] = mapped_column(String(500), nullable=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # 每次强制下线（改密码/管理员踢人）时 +1，refresh token 里带的 version 与此不符即失效，
     # 免去维护 Redis 黑名单

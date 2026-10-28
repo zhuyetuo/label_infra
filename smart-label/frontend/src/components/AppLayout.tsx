@@ -1,6 +1,9 @@
+import { useEffect } from "react";
 import { Layout, Menu, Space, Tag, Typography } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useAuthStore } from "@/stores/authStore";
+import { getMe } from "@/api/auth";
+import { hasFeature, useAuthStore } from "@/stores/authStore";
 import { RoleTag } from "@/utils/taskStatus";
 
 const { Header, Content, Sider } = Layout;
@@ -10,8 +13,9 @@ const ALL_ITEMS = [
   { key: "/tasks", label: "任务", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/reviews", label: "审核", roles: ["super_admin", "admin", "reviewer"] },
   { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
-  { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"] },
-  { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"] },
+  // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
+  { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
+  { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"], feature: "tooth" },
   { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin"] },
   { key: "/daily-stats", label: "日常统计", roles: ["super_admin", "admin"] },
   { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
@@ -21,16 +25,30 @@ const ALL_ITEMS = [
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
   { key: "/llm-providers", label: "模型服务", roles: ["super_admin", "admin"] },
   { key: "/users", label: "账号管理", roles: ["super_admin", "admin"] },
-];
+] as { key: string; label: string; roles: string[]; feature?: string }[];
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { accessToken, userInfo, clearAuth } = useAuthStore();
+  const { accessToken, userInfo, clearAuth, setUserInfo } = useAuthStore();
+
+  // 账号信息登录时取一次就存下了；管理员后来给开了功能，不重新拿的话菜单不会变，
+  // 人只能退出重登才看得到。切回这个页面时顺手刷一下
+  const { data: me } = useQuery({
+    queryKey: ["me"],
+    queryFn: getMe,
+    enabled: !!accessToken,
+    refetchOnWindowFocus: true,
+  });
+  useEffect(() => {
+    if (me) setUserInfo(me);
+  }, [me, setUserInfo]);
 
   if (!accessToken) return <Navigate to="/login" replace />;
 
-  const items = ALL_ITEMS.filter((i) => !userInfo || i.roles.includes(userInfo.role));
+  const items = ALL_ITEMS.filter(
+    (i) => !userInfo || i.roles.includes(userInfo.role) || (i.feature && hasFeature(userInfo, i.feature)),
+  );
 
   return (
     <Layout style={{ height: "100vh" }}>

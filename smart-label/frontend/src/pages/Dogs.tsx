@@ -15,6 +15,7 @@ import { TASK_STATUS_META } from "@/utils/taskStatus";
 import { getSavedText, saveText } from "@/utils/persistedSize";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
+import { hasFeature, useAuthStore } from "@/stores/authStore";
 import type { Sample, TaskStatus } from "@/types";
 
 interface FormValues {
@@ -137,8 +138,13 @@ function InlineNumber({
 export default function Dogs() {
   const qc = useQueryClient();
   const { data: dogs, isLoading } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
-  const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
-  const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
+  // 不是管理员、只单独开了「狗档案」的账号（比如实习生）：样本和任务接口进不去，
+  // 别去调，调了满屏 403；能不能改看有没有开「狗档案·编辑」
+  const userInfo = useAuthStore((s) => s.userInfo);
+  const isAdmin = userInfo?.role === "admin" || userInfo?.role === "super_admin";
+  const canEdit = hasFeature(userInfo, "dogs_edit");
+  const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
+  const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), enabled: isAdmin });
 
   // 当前看哪个场所（all / 公司影棚 / 佛山博朗旺狗场…）。记住选择：管狗场的人不该每次都先切一下
   const [savedSiteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));
@@ -222,6 +228,7 @@ export default function Dogs() {
    * 这一行展开/收起，正在填的东西跟着跳走。
    */
   const cell = (d: Dog, field: string, editor: React.ReactNode, view: React.ReactNode) => {
+    if (!canEdit) return view;
     if (editingCell?.id === d.id && editingCell.field === field) {
       return <span onClick={(e) => e.stopPropagation()}>{editor}</span>;
     }
@@ -276,9 +283,11 @@ export default function Dogs() {
   return (
     <div>
       <Space style={{ marginBottom: 8 }}>
-        <Button type="primary" onClick={openCreate}>
-          新建狗档案
-        </Button>
+        {canEdit && (
+          <Button type="primary" onClick={openCreate}>
+            新建狗档案
+          </Button>
+        )}
         {/* 说明收进问号里：原来是页头两段小字 + 三张统计卡片，占掉小半屏，而这些话
             看一次就够了，天天来的人每次都要越过它们才看到表格。狗数量下面的标签页
             本来就有（全部 / 各场所的只数），卡片是重复的 */}
@@ -338,7 +347,7 @@ export default function Dogs() {
                 体重 / 颈围记录
               </Typography.Text>
               <div style={{ marginTop: 6, marginBottom: 12 }}>
-                <DogMeasurements dogId={d.id} />
+                <DogMeasurements dogId={d.id} readOnly={!canEdit} />
               </div>
               {samplesOf(d.id).length > 0 && (
                 <>
@@ -658,20 +667,22 @@ export default function Dogs() {
                     已保存
                   </Typography.Text>
                 )}
-                <Popconfirm
-                  // 把是哪一只写进标题：这一列每行长得一模一样，只说"删除狗档案"
-                  // 的话点错了行也看不出来
-                  title={`删掉「${d.name || d.dog_code}」的档案？`}
-                  description="删了不能撤销。还有样本关联着的话删不掉"
-                  okText="确认删除"
-                  cancelText="不删"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => handleDelete(d.id)}
-                >
-                  <Button size="small" danger type="link">
-                    删除
-                  </Button>
-                </Popconfirm>
+                {isAdmin && (
+                  <Popconfirm
+                    // 把是哪一只写进标题：这一列每行长得一模一样，只说"删除狗档案"
+                    // 的话点错了行也看不出来
+                    title={`删掉「${d.name || d.dog_code}」的档案？`}
+                    description="删了不能撤销。还有样本关联着的话删不掉"
+                    okText="确认删除"
+                    cancelText="不删"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => handleDelete(d.id)}
+                  >
+                    <Button size="small" danger type="link">
+                      删除
+                    </Button>
+                  </Popconfirm>
+                )}
               </Space>
             ),
           },
@@ -750,6 +761,7 @@ export default function Dogs() {
         {photoDog && (
           <DogPhotos
             dogId={photoDog.id}
+            readOnly={!canEdit}
             // 传/删完刷新档案列表，那一列的张数才跟着变
             onChange={() => qc.invalidateQueries({ queryKey: ["dogs"] })}
           />

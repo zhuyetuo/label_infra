@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import date
 
-from app.core.deps import get_current_user, require_role
+from app.core.deps import get_current_user, require_feature, require_role
 from app.db.session import get_db
 from app.models.dog import Dog
 from app.models.dog_measurement import DogMeasurement
@@ -24,9 +24,9 @@ from app.schemas.envelope import ok
 from app.services import dog_photo_service as dog_photos
 from app.services.range_stream import stream_file
 
-router = APIRouter(
-    prefix="/dogs", tags=["dogs"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))]
-)
+# 管理员，或单独开了「狗档案」的账号（见 app/core/permissions.py）。只读接口挂在这层；
+# 改东西的接口再要求 dogs_edit，删狗只给管理员
+router = APIRouter(prefix="/dogs", tags=["dogs"], dependencies=[Depends(require_feature("dogs_view"))])
 # 图片流不能挂在需要 Bearer 的路由上：<img src> 带不了请求头，靠 URL 里的签名 token
 stream_router = APIRouter(prefix="/dogs", tags=["dogs"])
 
@@ -104,7 +104,7 @@ async def list_dog_photos(dog_id: int, db: AsyncSession = Depends(get_db)):
     return ok(await asyncio.to_thread(dog_photos.list_photos, dog.dog_code))
 
 
-@router.post("/{dog_id}/photos")
+@router.post("/{dog_id}/photos", dependencies=[Depends(require_feature("dogs_edit"))])
 async def upload_dog_photo(dog_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
     dog = await db.get(Dog, dog_id)
     if dog is None:
@@ -142,7 +142,7 @@ def _unlink_quietly(path: str) -> None:
         pass
 
 
-@router.delete("/{dog_id}/photos/{filename}")
+@router.delete("/{dog_id}/photos/{filename}", dependencies=[Depends(require_feature("dogs_edit"))])
 async def delete_dog_photo(dog_id: int, filename: str, db: AsyncSession = Depends(get_db)):
     dog = await db.get(Dog, dog_id)
     if dog is None:
@@ -186,7 +186,7 @@ async def list_measurements(dog_id: int, db: AsyncSession = Depends(get_db)):
     return ok([MeasurementOut.model_validate(r).model_dump() for r in rows])
 
 
-@router.post("/{dog_id}/measurements")
+@router.post("/{dog_id}/measurements", dependencies=[Depends(require_feature("dogs_edit"))])
 async def add_measurement(
     dog_id: int, body: MeasurementIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -218,7 +218,7 @@ async def add_measurement(
     return ok(MeasurementOut.model_validate(row).model_dump())
 
 
-@router.delete("/{dog_id}/measurements/{measurement_id}")
+@router.delete("/{dog_id}/measurements/{measurement_id}", dependencies=[Depends(require_feature("dogs_edit"))])
 async def delete_measurement(dog_id: int, measurement_id: int, db: AsyncSession = Depends(get_db)):
     row = await db.get(DogMeasurement, measurement_id)
     if row is None or row.dog_id != dog_id:
@@ -236,7 +236,7 @@ async def list_dogs(db: AsyncSession = Depends(get_db)):
     return ok(await _decorate(db, list(result.scalars().all())))
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_feature("dogs_edit"))])
 async def create_dog(body: DogCreate, db: AsyncSession = Depends(get_db)):
     exists = await db.execute(select(Dog).where(Dog.dog_code == body.dog_code))
     if exists.scalar_one_or_none() is not None:
@@ -248,7 +248,7 @@ async def create_dog(body: DogCreate, db: AsyncSession = Depends(get_db)):
     return ok(DogOut.model_validate(dog).model_dump())
 
 
-@router.patch("/{dog_id}")
+@router.patch("/{dog_id}", dependencies=[Depends(require_feature("dogs_edit"))])
 async def update_dog(dog_id: int, body: DogUpdate, db: AsyncSession = Depends(get_db)):
     dog = await db.get(Dog, dog_id)
     if dog is None:
@@ -260,7 +260,7 @@ async def update_dog(dog_id: int, body: DogUpdate, db: AsyncSession = Depends(ge
     return ok(DogOut.model_validate(dog).model_dump())
 
 
-@router.delete("/{dog_id}")
+@router.delete("/{dog_id}", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def delete_dog(dog_id: int, db: AsyncSession = Depends(get_db)):
     dog = await db.get(Dog, dog_id)
     if dog is None:

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.deps import get_current_user, require_role
 from app.core.security import hash_password
 from app.db.session import get_db
@@ -171,6 +172,9 @@ async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends
     if new_outsourced and new_role != UserRole.annotator:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "外包账号只能是 annotator 角色")
 
+    if "permissions" in updates:
+        updates["permissions"] = perms.dump(updates["permissions"])
+
     for field, value in updates.items():
         setattr(user, field, value)
     if "is_active" in updates and not updates["is_active"]:
@@ -179,6 +183,12 @@ async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends
     await db.commit()
     await db.refresh(user)
     return ok(UserOut.model_validate(user).model_dump())
+
+
+@router.get("/features", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def list_features():
+    """能单独开给账号的功能清单，账号管理页拿它出勾选框。"""
+    return ok([{"key": k, "name": n, "description": d} for k, (n, d) in perms.FEATURES.items()])
 
 
 @router.get("/me")

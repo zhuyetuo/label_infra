@@ -16,7 +16,7 @@ import { deleteMeasurement, listMeasurements, type DogMeasurement } from "@/api/
  * 数据没地方填了；真要补，先在列表里填上今天的，再回来把日期改掉的路子也没有，
  * 等真碰上再说，比留着一整块重复的表单划算。
  */
-export default function DogMeasurements({ dogId }: { dogId: number }) {
+export default function DogMeasurements({ dogId, readOnly = false }: { dogId: number; readOnly?: boolean }) {
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["dog-measurements", dogId],
     queryFn: () => listMeasurements(dogId),
@@ -67,19 +67,20 @@ export default function DogMeasurements({ dogId }: { dogId: number }) {
             {
               title: "",
               width: 60,
-              render: (_, r) => (
-                <Popconfirm
-                  title="删掉这条记录？"
-                  onConfirm={async () => {
-                    await deleteMeasurement(dogId, r.id);
-                    refetch();
-                  }}
-                >
-                  <Button size="small" type="link" danger>
-                    删除
-                  </Button>
-                </Popconfirm>
-              ),
+              render: (_, r) =>
+                readOnly ? null : (
+                  <Popconfirm
+                    title="删掉这条记录？"
+                    onConfirm={async () => {
+                      await deleteMeasurement(dogId, r.id);
+                      refetch();
+                    }}
+                  >
+                    <Button size="small" type="link" danger>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                ),
             },
           ]}
         />

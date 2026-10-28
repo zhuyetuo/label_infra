@@ -1,5 +1,5 @@
 import request from "@/utils/request";
-import type { AppUser } from "@/types";
+import type { AppUser, FeatureDef } from "@/types";
 
 export const listUsers = () => request.get<never, AppUser[]>("/users");
 
@@ -14,8 +14,11 @@ export const createUser = (body: {
 
 export const updateUser = (
   id: number,
-  body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced" | "remark" | "username" | "display_name">>
+  body: Partial<Pick<AppUser, "is_active" | "role" | "is_outsourced" | "remark" | "username" | "display_name" | "permissions">>
 ) => request.patch<never, AppUser>(`/users/${id}`, body);
+
+/** 能单独开给账号的功能清单 */
+export const listFeatures = () => request.get<never, FeatureDef[]>("/users/features");
 
 export const deleteUser = (id: number) => request.delete<never, null>(`/users/${id}`);
 

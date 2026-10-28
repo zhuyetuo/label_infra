@@ -28,7 +28,16 @@ function namedForUpload(f: File, i: number): File {
  * 图片/视频本身不走登录态：<img>/<video> 带不了 Authorization 头，所以后端给每个
  * 文件签一个有时效的 token 拼在 URL 里。视频流支持 Range，能拖进度条。
  */
-export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange?: () => void }) {
+export default function DogPhotos({
+  dogId,
+  onChange,
+  readOnly = false,
+}: {
+  dogId: number;
+  onChange?: () => void;
+  /** 只开了「狗档案·查看」的账号：能看，不能传、不能删 */
+  readOnly?: boolean;
+}) {
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["dog-photos", dogId],
     queryFn: () => listDogPhotos(dogId),
@@ -81,6 +90,7 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
   // （复制文件时 clipboardData.files 就是那些文件本身）。
   // 组件是 destroyOnClose 挂载的，所以监听整个窗口不会串到别的页面上
   useEffect(() => {
+    if (readOnly) return;
     const onPaste = (e: ClipboardEvent) => {
       const files = Array.from(e.clipboardData?.files ?? []);
       if (!files.length) return;
@@ -89,7 +99,7 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [enqueue]);
+  }, [enqueue, readOnly]);
 
   const remove = async (p: DogPhoto) => {
     await deleteDogPhoto(dogId, p.filename);
@@ -101,26 +111,28 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
 
   return (
     <div>
-      <Upload.Dragger
-        multiple
-        accept="image/*,video/*"
-        showUploadList={false}
-        disabled={!!queue}
-        style={{ marginBottom: 12, padding: "8px 0" }}
-        // antd 每个文件调一次 beforeUpload，但每次都把整批 fileList 给我们——
-        // 只在第一个文件上整批入队，不然一批 10 个文件会排出 55 个任务
-        beforeUpload={(f, fileList) => {
-          if (f === fileList[0]) enqueue(fileList as unknown as File[]);
-          return false; // 我们自己传，antd 别再发一次
-        }}
-      >
-        <p style={{ margin: 0, fontSize: 15 }}>
-          <b>Ctrl+V 粘贴</b>，或者把文件拖进来，也可以点这里挑
-        </p>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          图片和视频可以混在一起一次传多个。图片 jpg/png/webp/bmp 单张 20MB；视频 mp4/mov/webm 单个 500MB
-        </Typography.Text>
-      </Upload.Dragger>
+      {!readOnly && (
+        <Upload.Dragger
+          multiple
+          accept="image/*,video/*"
+          showUploadList={false}
+          disabled={!!queue}
+          style={{ marginBottom: 12, padding: "8px 0" }}
+          // antd 每个文件调一次 beforeUpload，但每次都把整批 fileList 给我们——
+          // 只在第一个文件上整批入队，不然一批 10 个文件会排出 55 个任务
+          beforeUpload={(f, fileList) => {
+            if (f === fileList[0]) enqueue(fileList as unknown as File[]);
+            return false; // 我们自己传，antd 别再发一次
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 15 }}>
+            <b>Ctrl+V 粘贴</b>，或者把文件拖进来，也可以点这里挑
+          </p>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            图片和视频可以混在一起一次传多个。图片 jpg/png/webp/bmp 单张 20MB；视频 mp4/mov/webm 单个 500MB
+          </Typography.Text>
+        </Upload.Dragger>
+      )}
 
       {queue && (
         <Space style={{ marginBottom: 8 }} size={8}>
@@ -194,11 +206,13 @@ export default function DogPhotos({ dogId, onChange }: { dogId: number; onChange
                   <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>
                     {p.uploaded_at.slice(0, 10)} · {(p.size_bytes / 1024 / 1024).toFixed(1)}M
                   </Typography.Text>
-                  <Popconfirm title={`删掉这${p.kind === "video" ? "段视频" : "张照片"}？`} onConfirm={() => remove(p)}>
-                    <Button size="small" type="link" danger style={{ padding: 0 }}>
-                      删除
-                    </Button>
-                  </Popconfirm>
+                  {!readOnly && (
+                    <Popconfirm title={`删掉这${p.kind === "video" ? "段视频" : "张照片"}？`} onConfirm={() => remove(p)}>
+                      <Button size="small" type="link" danger style={{ padding: 0 }}>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  )}
                 </div>
               </div>
             ))}
