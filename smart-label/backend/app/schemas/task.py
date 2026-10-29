@@ -22,6 +22,9 @@ class TaskOut(BaseModel):
     reviewer_id: int | None
     locked_by: int | None
     lock_expires_at: datetime | None
+    # 超时收回前指派给谁、什么时候收回的（重新认领 / 指派后清空）
+    reclaimed_from: int | None = None
+    reclaimed_at: datetime | None = None
     created_at: datetime
     # 下面两个都只有 GET /tasks 列表接口会算，单条任务接口懒得为了这一两个
     # 字段多查一次
@@ -47,6 +50,7 @@ class TaskOut(BaseModel):
     # IMU CSV 数据行数，0 = 文件是空的，打开工作台会报"CSV 没有数据行"，这种任务管理员该删掉
     imu_row_count: int | None = None
     assigned_to_name: str | None = None
+    reclaimed_from_name: str | None = None
     # 审核队列带：这一轮什么时候交的、开始动手到提交用了多久、几段。别的列表不算
     submitted_at: datetime | None = None
     started_at: datetime | None = None

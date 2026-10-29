@@ -123,6 +123,8 @@ async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
             assigned_to=user.id,
             locked_by=user.id,
             lock_expires_at=lock_expires,
+            reclaimed_from=None,
+            reclaimed_at=None,
         )
     )
     # 敏感样本上的任务非管理员不能领（列表里本来就看不到，这里是防直接调接口）
@@ -181,6 +183,8 @@ async def claim_all_in_project(db: AsyncSession, project_id: int, user: User) ->
             assigned_to=user.id,
             locked_by=user.id,
             lock_expires_at=lock_expires,
+            reclaimed_from=None,
+            reclaimed_at=None,
         )
     )
     stmt = exclude_sensitive(stmt, user)

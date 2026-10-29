@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
 import { currentName, descendantIds } from "@/utils/labelTree";
@@ -187,11 +188,11 @@ export default function Projects() {
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean };
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -1007,7 +1008,8 @@ export default function Projects() {
     const ids = new Set(tasksOf(projectId).map((t) => t.assigned_to));
     const named = [...ids].filter((i): i is number => i != null).map((i) => ({ id: i, name: userName(i) ?? `#${i}`, role: roleOf(i) }));
     const hasUnassigned = ids.has(null);
-    return { named, hasUnassigned };
+    const unassignedN = tasksOf(projectId).filter((t) => t.assigned_to == null).length;
+    return { named, hasUnassigned, unassignedN };
   };
 
   return (
@@ -1085,10 +1087,12 @@ export default function Projects() {
             }
             const matchImu = (t: Task) => f.imu === "ALL" || imuOf(String(sampleCode(t.sample_id))) === f.imu;
             const noCsvTasks = all.filter(noCsv);
+            const unassignedN = all.filter((t) => t.assigned_to == null).length;
             const rows = all.filter(
               (t) =>
                 matchImu(t) &&
                 (!f.noCsv || noCsv(t)) &&
+                (!f.unassigned || t.assigned_to == null) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
@@ -1200,6 +1204,13 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
+                {unassignedN > 0 && (
+                  <Tooltip title="没指派给任何人的任务。多半是认领后超过 48 小时没打开、被自动收回的——行里「指派给」那一列写着原来是谁的">
+                    <Checkbox checked={f.unassigned} onChange={(e) => setFilter(p.id, { unassigned: e.target.checked })}>
+                      只看未指派 {unassignedN}
+                    </Checkbox>
+                  </Tooltip>
+                )}
                 {isAdmin && noCsvTasks.length > 0 && (
                   <>
                     <Checkbox checked={f.noCsv} onChange={(e) => setFilter(p.id, { noCsv: e.target.checked })}>
@@ -1229,7 +1240,7 @@ export default function Projects() {
                     </Button>
                   </Tooltip>
                 )}
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv) && (
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
@@ -1456,8 +1467,20 @@ export default function Projects() {
                   {
                     title: "指派给",
                     dataIndex: "assigned_to",
-                    render: (id: number | null) =>
-                      id == null ? <Typography.Text type="secondary">未指派</Typography.Text> : <UserTag name={userName(id) ?? `#${id}`} role={roleOf(id)} me={id === userId} />,
+                    render: (id: number | null, task: Task) => {
+                      if (id != null) return <UserTag name={userName(id) ?? `#${id}`} role={roleOf(id)} me={id === userId} />;
+                      // 认领后太久没打开被定时任务收回的：写清原来是谁的、什么时候收回的。
+                      // 只写「未指派」的话，人会以为是自己漏指派了
+                      if (task.reclaimed_from != null) {
+                        const who = task.reclaimed_from_name ?? userName(task.reclaimed_from) ?? `#${task.reclaimed_from}`;
+                        return (
+                          <Tooltip title={`原来是 ${who} 的，认领后 48 小时没打开，${task.reclaimed_at ? dayjs(task.reclaimed_at).format("MM-DD HH:mm") : ""} 被自动收回。草稿还在，重新认领或指派就能接着标`}>
+                            <Tag color="orange">超时收回 · 原 {who}</Tag>
+                          </Tooltip>
+                        );
+                      }
+                      return <Typography.Text type="secondary">未指派</Typography.Text>;
+                    },
                   },
                   {
                     title: "操作",
@@ -1777,14 +1800,28 @@ export default function Projects() {
             title: "指派给",
             width: 180,
             render: (_, p: Project) => {
-              const { named, hasUnassigned } = assigneeSummary(p.id);
+              const { named, hasUnassigned, unassignedN } = assigneeSummary(p.id);
               if (!named.length && !hasUnassigned) return "-";
               return (
                 <Space size={4} wrap>
                   {named.map((n) => (
                     <UserTag key={n.id} name={n.name} role={n.role} me={n.id === userId} />
                   ))}
-                  {hasUnassigned && <Tag>有未指派</Tag>}
+                  {hasUnassigned && (
+                    // 点一下展开项目、只看这几个
+                    <Tooltip title="点一下只看未指派的任务">
+                      <Tag
+                        style={{ cursor: "pointer" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFilter(p.id, { unassigned: true, status: "ALL" });
+                          setExpandedKeys((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                        }}
+                      >
+                        未指派 {unassignedN}
+                      </Tag>
+                    </Tooltip>
+                  )}
                 </Space>
               );
             },
