@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Slider, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -261,9 +261,9 @@ export default function Training() {
   // 不折叠 = 各轨原样导，给分轨训练用。没分轨的项目两种一样
   const [flatten, setFlatten] = useState(true);
   const [trackPriority, setTrackPriority] = useState<string[]>(["behavior", "motion", "posture"]);
-  // 减量：活动、静止/休息这种大头太多，选上它们，导出时按段抽掉一部分，
-  // 降到「其余最大类的 N 倍」以内——目标跟着数据量自己变，不用每次去算留几小时
-  const [reduceLabels, setReduceLabels] = useState<string[]>([]);
+  // 减量：预览表里每个大类一个滑块，拖到想留多少（秒）。导出时按段抽到这个量。
+  // 「自动」按钮按倍数先摆一遍，人再微调
+  const [reduceTargets, setReduceTargets] = useState<Record<string, number>>({});
   const [reduceFactor, setReduceFactor] = useState(3);
   const [submitting, setSubmitting] = useState(false);
   // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
@@ -345,7 +345,6 @@ export default function Training() {
         if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
         if (typeof v.flatten === "boolean") setFlatten(v.flatten);
         if (Array.isArray(v.trackPriority) && v.trackPriority.length) setTrackPriority(v.trackPriority);
-        if (Array.isArray(v.reduceLabels)) setReduceLabels(v.reduceLabels);
         if (typeof v.reduceFactor === "number" && v.reduceFactor > 0) setReduceFactor(v.reduceFactor);
       }
     } catch {
@@ -371,28 +370,24 @@ export default function Training() {
     scope,
     flatten,
     track_priority: trackPriority,
-    reduce_labels: reduceLabels,
-    reduce_factor: reduceFactor,
+    reduce_targets: activeTargets,
   });
-  // 选项一改旧预览就作废。**减量那两个不清**：减量的候选类别就是从预览里来的，
-  // 一清掉下拉就空了；改完再点一次「预览统计」看减完的样子
+  // 选项一改旧预览就作废，滑块也清掉：数据范围变了，原来拖的秒数对不上
   useEffect(() => {
     setPreview(null);
+    setReduceTargets({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range?.[0]?.valueOf(), range?.[1]?.valueOf(), JSON.stringify(projectIds), includeSubmitted, scope, flatten, JSON.stringify(trackPriority), exportOpen]);
-  // 减量的候选：预览里出现过的所有类别（大类、细类都行），按时长从多到少
-  const reduceOptions = useMemo(() => {
-    const out: { value: string; label: string; sec: number }[] = [];
-    const walk = (ns: LabelTreeNode[] | undefined) => {
-      for (const n of ns ?? []) {
-        out.push({ value: n.label, label: `${"　".repeat(n.depth - 1)}${n.label}（${fmtSecs(n.sec)}）`, sec: n.sec });
-        walk(n.children);
-      }
-    };
-    walk(preview?.label_tree);
-    for (const l of reduceLabels) if (!out.some((o) => o.value === l)) out.push({ value: l, label: l, sec: 0 });
-    return out;
-  }, [preview, reduceLabels]);
+  // 真要减的那几类：滑块拖到比原来少的才送。原来有多少看减量前的树
+  const origOf = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const n of preview?.label_tree_before ?? preview?.label_tree ?? []) m[n.label] = n.sec;
+    return m;
+  }, [preview]);
+  const activeTargets = useMemo(
+    () => Object.fromEntries(Object.entries(reduceTargets).filter(([k, v]) => origOf[k] != null && v < origOf[k] - 0.5)),
+    [reduceTargets, origOf]
+  );
   const doPreview = async () => {
     setPreviewing(true);
     try {
@@ -414,8 +409,7 @@ export default function Training() {
         scope,
         flatten,
         track_priority: trackPriority,
-        reduce_labels: reduceLabels,
-        reduce_factor: reduceFactor,
+        reduce_targets: activeTargets,
       });
       message.success(
         `已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时` +
@@ -424,7 +418,7 @@ export default function Training() {
       try {
         localStorage.setItem(
           EXPORT_FORM_KEY,
-          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority, reduceLabels, reduceFactor })
+          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority, reduceFactor })
         );
         // 「沿用上次」要指向刚导的这份，不然它还指着更早的那一份
         setLastName(name.trim());
@@ -1143,7 +1137,7 @@ export default function Training() {
         okText="导出"
         confirmLoading={exporting}
         okButtonProps={{ disabled: !name.trim() }}
-        width={preview ? 760 : 520}
+        width={preview ? 920 : 520}
         footer={(_, { OkBtn, CancelBtn }) => (
           <>
             <Tooltip title="按上面的选项把数据挑一遍，只看统计（各类别多少段、多长、占比，跳过了多少），不导出">
@@ -1280,39 +1274,15 @@ export default function Training() {
               </Typography.Text>
             )}
           </Space>
-          {/* 减量：大头类别太多时按段抽掉一部分。不是"智能"挑——按固定的乱序抽，
-              同一批数据每次抽到的一样，摊在所有狗、所有天上 */}
-          <Space wrap size={8}>
-            <Tooltip title="选上太多的类别（活动、静止/休息…），导出时按段随机抽掉一部分，降到「其余最大类」的 N 倍以内。数据量变了目标自己跟着变。同一批数据每次抽到的是同一些段，可复现；抽掉的段不导出，那段时间不参与训练，不会变成负样本">
-              <span style={{ borderBottom: "1px dashed #bbb", whiteSpace: "nowrap" }}>减量</span>
-            </Tooltip>
-            <Select
-              size="small"
-              mode="multiple"
-              allowClear
-              style={{ minWidth: 260 }}
-              value={reduceLabels}
-              onChange={setReduceLabels}
-              placeholder={preview ? "选太多的类别，如 活动、静止/休息" : "先点「预览统计」，再选太多的类别"}
-              options={reduceOptions.map(({ value, label }) => ({ value, label }))}
-              optionLabelProp="value"
-              popupMatchSelectWidth={false}
+          {preview && (
+            <ExportPreview
+              meta={preview}
+              targets={reduceTargets}
+              setTargets={setReduceTargets}
+              factor={reduceFactor}
+              setFactor={setReduceFactor}
             />
-            {reduceLabels.length > 0 && (
-              <InputNumber
-                size="small"
-                min={0.5}
-                max={100}
-                step={0.5}
-                value={reduceFactor}
-                onChange={(v) => setReduceFactor(v ?? 3)}
-                addonBefore="不超过其余最大类的"
-                addonAfter="倍"
-                style={{ width: 230 }}
-              />
-            )}
-          </Space>
-          {preview && <ExportPreview meta={preview} />}
+          )}
         </Space>
       </Modal>
 
@@ -2443,34 +2413,64 @@ export default function Training() {
 
 
 /** 导出弹窗里的「预览统计」：这批数据导出来会是什么样——各类别多少段、多长、占比，跳过 / 挖掉了多少 */
-function ExportPreview({ meta }: { meta: TrainDataset }) {
+function ExportPreview({
+  meta, targets, setTargets, factor, setFactor,
+}: {
+  meta: TrainDataset;
+  targets: Record<string, number>;
+  setTargets: (t: Record<string, number>) => void;
+  factor: number;
+  setFactor: (f: number) => void;
+}) {
   const secs = meta.label_seconds ?? {};
   const flat = Object.keys({ ...meta.labels, ...secs })
-    .map((k) => ({ label: k, n: meta.labels[k] ?? 0, sec: secs[k] ?? 0 }))
+    .map((k) => ({ label: k, n: meta.labels[k] ?? 0, sec: secs[k] ?? 0, depth: 1 }))
     .sort((a, b) => b.sec - a.sec || b.n - a.n);
-  // 有层级树就按树显示：先只看大类，点开再看细类（3、4 级那种很碎的放在最里面）。
-  // 老后端没有 label_tree，退回平铺
-  const tree = meta.label_tree;
-  const keyed = (ns: LabelTreeNode[], pre = ""): (LabelTreeNode & { key: string })[] =>
-    ns.map((n) => ({
-      ...n,
-      key: `${pre}/${n.label}`,
-      ...(n.children ? { children: keyed(n.children, `${pre}/${n.label}`) } : {}),
-    }));
-  const rows = tree ? keyed(tree) : flat.map((r) => ({ ...r, key: r.label, depth: 1 }));
-  const total = tree ? tree.reduce((n, r) => n + r.sec, 0) : flat.reduce((n, r) => n + r.sec, 0);
-  // 不均衡倍数按大类算：细类本来就小，拿它比没意义
-  const nz = (tree ?? flat).filter((r) => r.sec > 0);
-  const ratio = nz.length > 1 ? nz[0].sec / nz[nz.length - 1].sec : null;
+  // 按**减量前**的树显示：滑块的上限是原来有多少。先只看大类，点开再看细类。
+  // 老后端没有树，退回平铺
+  const tree = meta.label_tree_before ?? meta.label_tree;
+  const roots: LabelTreeNode[] = tree ?? flat;
+  // 每个大类留多少：滑块定的，没拖过就是全留
+  const keepOf = (r: LabelTreeNode) => Math.min(targets[r.label] ?? r.sec, r.sec);
+  type Row = LabelTreeNode & { key: string; ratio: number; isRoot: boolean; children?: Row[] };
+  // 细类按所属大类的保留比例估：抽的时候是按段随机抽，各细类大致同比例减少
+  const keyed = (ns: LabelTreeNode[], ratio: number | null, pre = ""): Row[] =>
+    ns.map((n) => {
+      const r = ratio ?? (n.sec ? keepOf(n) / n.sec : 1);
+      return {
+        ...n,
+        key: `${pre}/${n.label}`,
+        ratio: r,
+        isRoot: ratio == null,
+        ...(n.children ? { children: keyed(n.children, r, `${pre}/${n.label}`) } : {}),
+      } as Row;
+    });
+  const rows = keyed(roots, null);
+  const total = roots.reduce((n, r) => n + keepOf(r), 0);
+  // 不均衡倍数按大类、按留下来的算：拖滑块时跟着变
+  const kept = roots.map(keepOf).filter((v) => v > 0).sort((a, b) => b - a);
+  const ratio = kept.length > 1 ? kept[0] / kept[kept.length - 1] : null;
+  const changed = roots.some((r) => keepOf(r) < r.sec - 0.5);
+
+  // 自动：每个大类都不超过「大类时长中位数」的 N 倍。摆一遍，人再拖着调
+  const autoBalance = () => {
+    const v = roots.map((r) => r.sec).filter((x) => x > 0).sort((a, b) => a - b);
+    if (!v.length) return;
+    const med = v[Math.floor((v.length - 1) / 2)];
+    const cap = med * factor;
+    setTargets(Object.fromEntries(roots.filter((r) => r.sec > cap).map((r) => [r.label, Math.round(cap)])));
+  };
+
   return (
     <div style={{ borderTop: "1px solid rgba(128,128,128,.3)", paddingTop: 8 }}>
       <Typography.Text strong>预览（没有导出）</Typography.Text>
       <Typography.Paragraph style={{ fontSize: 12, margin: "4px 0 8px", lineHeight: 1.8 }}>
-        <b>{meta.n_tasks}</b> 个任务 · <b>{meta.n_segments}</b> 段 · <b>{meta.total_hours}</b> 小时
+        <b>{meta.n_tasks}</b> 个任务 · 留下 <b>{fmtSecs(total)}</b>
+        {changed && <Typography.Text type="secondary">（原 {fmtSecs(roots.reduce((n, r) => n + r.sec, 0))}）</Typography.Text>}
         {ratio != null && (
           <>
             {" "}· 最多的类别是最少的 <b style={{ color: ratio > 20 ? "#ff4d4f" : undefined }}>{ratio.toFixed(0)}</b> 倍
-            {ratio > 20 ? "（很不均衡，训练时可勾「类别均衡」）" : ""}
+            {ratio > 20 ? "（很不均衡：把多的往左拖，或训练时勾「类别均衡」）" : ""}
           </>
         )}
         <br />
@@ -2481,34 +2481,73 @@ function ExportPreview({ meta }: { meta: TrainDataset }) {
           {meta.n_label_conflicts ? `类别冲突 ${meta.n_label_conflicts} 处（挖掉 ${meta.label_conflict_excluded_sec ?? 0} 秒，要回工作台改）；` : ""}
           {meta.flattened_sec ? `互斥轨折叠让出 ${fmtSecs(meta.flattened_sec)}；` : ""}
         </Typography.Text>
-        {(meta.reduce?.result ?? []).length > 0 && (
-          <>
-            <br />
-            <Typography.Text style={{ fontSize: 12 }}>
-              减量（不超过其余最大类的 {meta.reduce!.factor} 倍）：
-              {meta.reduce!.result.map((r) => (
-                <Tag key={r.label} color={r.after_sec < r.before_sec ? "blue" : undefined} style={{ marginLeft: 4 }}>
-                  {r.label} {fmtSecs(r.before_sec)} → {fmtSecs(r.after_sec)}（{r.before_n} → {r.after_n} 段）
-                </Tag>
-              ))}
-            </Typography.Text>
-          </>
-        )}
       </Typography.Paragraph>
-      <Table
+      {tree && (
+        <Space wrap size={8} style={{ marginBottom: 6 }}>
+          <Tooltip title="拖「保留」那一列的滑块，决定每个大类导出多少。导出时按段随机抽到这个量：同一批数据每次抽到的是同一些段，摊在所有狗、所有天上；抽掉的段不导出，不会变成负样本。只能往少了拖——少的类别要补，训练时勾「类别均衡」">
+            <span style={{ borderBottom: "1px dashed #bbb", fontSize: 12 }}>数据量调整</span>
+          </Tooltip>
+          <InputNumber
+            size="small"
+            min={0.5}
+            max={100}
+            step={0.5}
+            value={factor}
+            onChange={(v) => setFactor(v ?? 3)}
+            addonBefore="自动：不超过中位数的"
+            addonAfter="倍"
+            style={{ width: 230 }}
+          />
+          <Button size="small" onClick={autoBalance}>自动摆一遍</Button>
+          {changed && <Button size="small" type="link" onClick={() => setTargets({})}>全部恢复</Button>}
+        </Space>
+      )}
+      <Table<Row>
         size="small"
         rowKey="key"
         pagination={false}
-        scroll={{ y: 320 }}
+        scroll={{ y: 360 }}
         dataSource={rows}
         columns={[
-          { title: tree ? "类别（点 + 看细类）" : "类别", dataIndex: "label", width: 220 },
-          { title: "段数", dataIndex: "n", width: 80, align: "right" as const },
-          { title: "时长", dataIndex: "sec", width: 110, align: "right" as const, render: (s: number) => fmtSecs(s) },
+          { title: tree ? "类别（点 + 看细类）" : "类别", dataIndex: "label", width: 190 },
+          {
+            title: "段数", width: 90, align: "right" as const,
+            render: (_, r) => (r.ratio < 1 ? `≈${Math.round(r.n * r.ratio)} / ${r.n}` : r.n),
+          },
+          {
+            title: "保留（拖动调整）", width: 260,
+            render: (_, r) => {
+              if (!r.isRoot || !tree) {
+                return (
+                  <Typography.Text type={r.ratio < 1 ? "secondary" : undefined} style={{ fontSize: 12 }}>
+                    {r.ratio < 1 ? `≈${fmtSecs(r.sec * r.ratio)} / ${fmtSecs(r.sec)}` : fmtSecs(r.sec)}
+                  </Typography.Text>
+                );
+              }
+              const keep = keepOf(r);
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Slider
+                    style={{ flex: 1, margin: "4px 0" }}
+                    min={0}
+                    max={Math.max(1, Math.round(r.sec))}
+                    step={Math.max(1, Math.round(r.sec / 200))}
+                    value={Math.round(keep)}
+                    tooltip={{ formatter: (v) => fmtSecs(v ?? 0) }}
+                    onChange={(v: number) => setTargets({ ...targets, [r.label]: v })}
+                  />
+                  <span style={{ fontSize: 12, whiteSpace: "nowrap", width: 110, textAlign: "right" }}>
+                    {keep < r.sec - 0.5 ? <b>{fmtSecs(keep)}</b> : fmtSecs(r.sec)}
+                    {keep < r.sec - 0.5 && <Typography.Text type="secondary"> /{Math.round((keep / r.sec) * 100)}%</Typography.Text>}
+                  </span>
+                </div>
+              );
+            },
+          },
           {
             title: "占比（按时长）",
             render: (_, r) => {
-              const p = total ? (r.sec / total) * 100 : 0;
+              const p = total ? ((r.sec * r.ratio) / total) * 100 : 0;
               return (
                 <Progress
                   percent={Math.round(p * 10) / 10}

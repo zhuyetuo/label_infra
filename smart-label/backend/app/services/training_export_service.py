@@ -192,7 +192,8 @@ def _tally(ls_tasks: list[dict]) -> tuple[Counter, Counter, int, float, list[dic
     return counter, secs, n_seg, total, build(())
 
 
-def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float) -> tuple[list[dict], list[str]]:
+def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float,
+            targets: dict[str, float] | None = None) -> tuple[list[dict], list[str]]:
     """把指定的几个大头类别（活动、静止/休息…）按段抽掉一部分，原地改 ls_tasks。
 
     降到多少是**自适应**的：不超过「其余（没选的）大类里最大那个」的 factor 倍。
@@ -201,8 +202,11 @@ def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float) -> tu
     抽哪些段：按 (任务, 起点) 的哈希排个固定的乱序，依次留到够数为止——
     **同一批数据每次导出抽到的是同一些段**（可复现），又是摊在所有狗、所有天上的，
     不会只留了前几天。最后一段超出的部分截掉。被抽掉的段整段不导出，那段时间
-    不参与训练（不会变成负样本：导出格式只取标注过的区间）。"""
-    want = [x for x in dict.fromkeys(reduce_labels) if x]
+    不参与训练（不会变成负样本：导出格式只取标注过的区间）。
+
+    targets：{类别: 留多少秒}，界面上拖滑块定的。给了就按它，不再按倍数算。"""
+    targets = {k: max(0.0, float(v)) for k, v in (targets or {}).items() if k}
+    want = [x for x in dict.fromkeys([*targets, *reduce_labels]) if x]
     if not want:
         return [], []
     warnings: list[str] = []
@@ -215,15 +219,21 @@ def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float) -> tu
                 segs.append((ti, seg, chain_))
                 root_sec[chain_[0]] += _seg_sec(seg["value"])
     # 选中的类别落在哪几个大类里：参照物要从**没被减量**的大类里找
-    hit_roots = {c[0] for _ti, _s, c in segs if any(x in c for x in want)}
-    others = [sec for r, sec in root_sec.items() if r not in hit_roots]
-    if not others:
-        return [], ["减量没做：选中的类别把所有大类都包了，找不到参照的类别"]
-    ref = max(others)
-    target = ref * factor
+    auto = [x for x in want if x not in targets]
+    auto_target: float | None = None
+    if auto:
+        hit_roots = {c[0] for _ti, _s, c in segs if any(x in c for x in want)}
+        others = [sec for r, sec in root_sec.items() if r not in hit_roots]
+        if others:
+            auto_target = max(others) * factor
+        else:
+            warnings.append("按倍数减量没做：选中的类别把所有大类都包了，找不到参照的类别")
     drop: set[int] = set()
     report: list[dict] = []
     for name in want:
+        target = targets[name] if name in targets else auto_target
+        if target is None:
+            continue
         mine = [(ti, s, c) for ti, s, c in segs if name in c and id(s) not in drop]
         before = sum(_seg_sec(s["value"]) for _ti, s, _c in mine)
         if not mine:
@@ -271,6 +281,7 @@ async def export_dataset(
     include_submitted: bool = False, scope: str = "approved",
     flatten: bool = True, track_priority: list[str] | None = None,
     reduce_labels: list[str] | None = None, reduce_factor: float = 3.0,
+    reduce_targets: dict[str, float] | None = None,
     dry_run: bool = False,
 ) -> dict:
     """dry_run=True：照常挑数据、算统计，但不落盘——导出前先看这批数据长什么样（类别时长、
@@ -641,7 +652,9 @@ async def export_dataset(
         raise TrainingExportError("没有可导出的任务；" + "；".join(warnings[:3]))
 
     # 减量放在最后：要知道各大类一共多少才定得出目标
-    reduced, w_reduce = _reduce(ls_tasks, reduce_labels or [], reduce_factor)
+    # 减量前的层级树也留一份：界面上滑块的上限是「原来有多少」，不是减完剩多少
+    tree_before = _tally(ls_tasks)[4] if (reduce_labels or reduce_targets) else None
+    reduced, w_reduce = _reduce(ls_tasks, reduce_labels or [], reduce_factor, reduce_targets)
     warnings[:0] = w_reduce
     if reduced:
         ls_tasks = [t for t in ls_tasks if t["annotations"][0]["result"]]
@@ -708,8 +721,10 @@ async def export_dataset(
         "label_seconds": {k: round(v, 1) for k, v in label_sec.items()},
         # 按层级汇总（大类 → 细类 → …），每层的段数 / 秒数含它底下所有细类
         "label_tree": label_tree,
+        "label_tree_before": tree_before or label_tree,
         # 减量：选了哪些类别、各从多少减到多少
-        "reduce": {"labels": reduce_labels or [], "factor": reduce_factor, "result": reduced},
+        "reduce": {"labels": reduce_labels or [], "factor": reduce_factor,
+                   "targets": reduce_targets or {}, "result": reduced},
         "warnings": warnings[:50],
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "export_json": os.path.join(rel_dir, "merged_tmp.json"),

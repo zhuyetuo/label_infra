@@ -51,3 +51,13 @@ def test_层级树_父类含子类():
     assert [c["label"] for c in top["静止/休息"]["children"]] == ["睡眠"]
     assert top["抓挠"]["children"][0]["sec"] == 100
     assert "children" not in top["活动"]
+
+
+def test_手动指定每类留多少秒():
+    t = _data()
+    rep, warn = _reduce(t, [], 3.0, {"静止/休息": 900, "抓挠": 50})
+    got = {r["label"]: r["after_sec"] for r in rep}
+    assert got == {"静止/休息": 900, "抓挠": 50} and warn == []
+    _c, secs, *_ = _tally(t)
+    assert secs["活动"] == 60                                    # 没给的不动
+    assert abs(secs["静止/休息"] + secs["睡眠"] - 900) < 1e-6
