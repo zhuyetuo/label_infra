@@ -7,6 +7,7 @@ import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, Warning
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
 import { REASON_LABEL, candTitle } from "@/utils/candReason";
+import BoundaryEditsTag from "@/components/BoundaryEditsTag";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -903,24 +904,7 @@ export default function SegmentPanel({
                 </Tooltip>
               ) : null;
               // 起止被人调过几次：鼠标停上去看每一次从哪改到哪、谁改的
-              const edits = i.boundary_edits ?? [];
-              const editsTag = edits.length ? (
-                <Tooltip
-                  title={
-                    <div style={{ fontSize: 12 }}>
-                      <div>起止调过 {edits.length} 次（最早的在上）：</div>
-                      {edits.map((e, k) => (
-                        <div key={k}>
-                          {k + 1}. {formatMs(e.from[0])}~{formatMs(e.from[1])} → {formatMs(e.to[0])}~{formatMs(e.to[1])}
-                          <span style={{ opacity: 0.7 }}>　{e.by_name ?? ""} {e.at?.replace("T", " ").slice(5, 16)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  }
-                >
-                  <Tag color="geekblue" style={{ marginLeft: 4 }}>起止调过 {edits.length} 次</Tag>
-                </Tooltip>
-              ) : null;
+              const editsTag = <BoundaryEditsTag edits={i.boundary_edits} />;
               const justTag = justEdited.has(i.id) ? (
                 <Tooltip title="刚改过，暂时不受筛选影响，方便你核对">
                   <Tag color="gold" style={{ marginLeft: 4 }}>刚改</Tag>

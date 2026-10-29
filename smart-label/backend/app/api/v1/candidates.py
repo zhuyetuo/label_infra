@@ -7,6 +7,7 @@
 数据：确认 = 模型漏检的正样本，排除 = 误报的负样本。
 """
 
+import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -46,7 +47,16 @@ def _out(c: AiCandidate) -> dict:
         # 审核标的「这条判断有问题」
         "review_note": c.review_note,
         "review_flag_by": c.review_flag_by,
+        "boundary_edits": _edits(c.boundary_edits),
     }
+
+
+def _edits(raw: str | None) -> list:
+    try:
+        v = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    return v if isinstance(v, list) else []
 
 
 async def _visible_task(db: AsyncSession, task_id: int, user: User) -> Task:
@@ -194,6 +204,44 @@ class ReviewNoteIn(BaseModel):
     note: str | None = Field(None, max_length=300)
 
 
+class SpanIn(BaseModel):
+    start_time_ms: int = Field(..., ge=0)
+    end_time_ms: int = Field(..., ge=0)
+
+
+@router.put("/{candidate_id}/span")
+async def set_span(
+    candidate_id: int,
+    body: SpanIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """在波形上调疑似片段的起止。跟改片段一个规矩：自己认领在标的任务能改，管理员都能改。
+    每改一次记一笔（从多少改到多少、谁、什么时候）。"""
+    from app.models.task import TaskStatus
+    from app.services.task_service import _append_boundary_edit
+
+    if body.end_time_ms - body.start_time_ms < 100:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束要比开始晚至少 0.1 秒")
+    cand = await db.get(AiCandidate, candidate_id)
+    if cand is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "候选不存在")
+    task = await _visible_task(db, cand.task_id, user)
+    if cand.round_no != task.round_no:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "这条候选不在当前这一轮里（任务已经进入新一轮？刷新一下）")
+    mine = task.status == TaskStatus.IN_PROGRESS and task.locked_by == user.id
+    if not mine and user.role not in (UserRole.admin, UserRole.super_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有正在标这个任务的人（或管理员）能改起止")
+    old = (cand.start_time_ms, cand.end_time_ms)
+    new = (body.start_time_ms, body.end_time_ms)
+    if old != new:
+        cand.boundary_edits = _append_boundary_edit(cand.boundary_edits, old, new, user)
+        cand.start_time_ms, cand.end_time_ms = new
+        await db.commit()
+        await db.refresh(cand)
+    return ok(_out(cand))
+
+
 @router.put("/{candidate_id}/review-note")
 async def set_review_note(
     candidate_id: int,
@@ -328,6 +376,8 @@ async def decide(
                 ai_confirmed=False,
                 # 记住出处，回头点错了能退回候选重新判断
                 from_candidate_id=cand.id,
+                # 候选阶段调过的起止也算这条的调整记录
+                boundary_edits=cand.boundary_edits,
                 created_by=user.id,
             )
         )

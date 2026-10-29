@@ -1,3 +1,4 @@
+import type { BoundaryEdit } from "@/types";
 import request from "@/utils/request";
 
 /** 疑似片段候选：AI 低门槛抽出来的、正式片段里没有的段，给人工确认/排除 */
@@ -26,6 +27,8 @@ export interface AiCandidate {
   /** 审核标的「这条判断有问题」：原因；没有就是空 */
   review_note?: string | null;
   review_flag_by?: number | null;
+  /** 起止调整记录（波形上调过的），最早的在前 */
+  boundary_edits?: BoundaryEdit[];
   decided_by: number | null;
   decided_at: string | null;
 }
@@ -47,6 +50,10 @@ export const clearSimilarCandidates = (taskId: number) =>
 /** 给一条疑似片段的判断标「有问题」（审核 / 管理员）；note 传 null = 清掉 */
 export const setCandidateReviewNote = (id: number, note: string | null) =>
   request.put<never, AiCandidate>(`/candidates/${id}/review-note`, { note });
+
+/** 在波形上调疑似片段的起止（每改一次后端记一笔） */
+export const setCandidateSpan = (id: number, startMs: number, endMs: number) =>
+  request.put<never, AiCandidate>(`/candidates/${id}/span`, { start_time_ms: startMs, end_time_ms: endMs });
 
 export const decideCandidate = (
   id: number,

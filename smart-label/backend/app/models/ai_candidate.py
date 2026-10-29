@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Integer, SmallInteger, String, func
+from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Integer, SmallInteger, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -62,4 +62,7 @@ class AiCandidate(Base):
     review_note: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="审核标的问题")
     review_flag_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     review_flag_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 起止每被人调一次记一笔（跟已标注片段上的 boundary_edits 同一个格式）。
+    # 确认成片段时带过去，片段上就能看到它在候选阶段就被调过几次
+    boundary_edits: Mapped[str | None] = mapped_column(Text, nullable=True, comment="起止调整记录 JSON")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
