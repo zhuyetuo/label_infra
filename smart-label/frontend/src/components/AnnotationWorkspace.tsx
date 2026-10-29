@@ -100,6 +100,17 @@ interface Props {
   onConfirmScratch?: () => void | Promise<void>;
   /** 上面那个按钮写什么 */
   confirmScratchText?: string;
+  /** 片段审核：打开就循环这一条，波形浮窗里给「通过 / 退回 / 下一条」（或标注员的「改好了」），
+   *  起止在浮窗里直接改（走 /segments 接口，不用认领整个任务） */
+  segReview?: SegReviewCtx;
+}
+
+export interface SegReviewCtx {
+  itemId: number;
+  /** 改这一条的起止（片段审核接口） */
+  onEdit: (startMs: number, endMs: number) => Promise<void>;
+  /** 浮窗底下那一栏：通过 / 退回 / 下一条 这些按钮，由片段审核页给 */
+  actions: React.ReactNode;
 }
 
 interface VideoSrc {
@@ -166,6 +177,7 @@ export default function AnnotationWorkspace({
   onReopen,
   onConfirmScratch,
   confirmScratchText,
+  segReview,
 }: Props) {
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
@@ -702,6 +714,28 @@ export default function AnnotationWorkspace({
     : task?.status === "SUBMITTED" || task?.status === "APPROVED"
       ? "这个任务已提交，不能再改起止（要改先退回重标）"
       : "这个任务不在你名下，只能看不能改";
+
+  // 片段审核：草稿拉回来之后循环那一条（不靠 initialSeekMs 去找——同一时刻往往还压着
+  // 别的轨的片段，按时刻找可能循环到「活动」那条上）
+  useEffect(() => {
+    if (!segReview) return;
+    const it = items.find((x) => x.id === segReview.itemId);
+    if (it) setLoop({ startMs: it.start_time_ms, endMs: it.end_time_ms });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segReview?.itemId, items.length > 0]);
+
+  // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
+  const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number) => {
+    if (segReview && target.kind === "item" && target.id === segReview.itemId && taskId != null) {
+      await segReview.onEdit(startMs, endMs);
+      const d = await getDraft(taskId);
+      setItems(d.items);
+      setLoop({ startMs, endMs });
+      message.success("起止已保存");
+      return;
+    }
+    await adjustBoundary(target, startMs, endMs);
+  };
 
   const updateItems = (ids: number[], patch: Partial<LabelItem>) => {
     const set = new Set(ids);
@@ -1321,7 +1355,12 @@ export default function AnnotationWorkspace({
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
       <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
-        onAdjust={readOnly ? undefined : adjustBoundary} readOnlyHint={readOnly ? readOnlyHint : undefined} />
+        onAdjust={readOnly && !segReview ? undefined : adjustFromWave}
+        // 片段审核时只有正在审的那一条能改，别的照旧只读
+        canAdjust={readOnly && segReview ? (t) => t.kind === "item" && t.id === segReview.itemId : undefined}
+        readOnlyHint={readOnly ? readOnlyHint : undefined}
+        forceOpen={!!segReview}
+        extra={segReview && loopInfo?.itemId === segReview.itemId ? segReview.actions : undefined} />
     )}
     <Modal
       title="找相似的画面 → 候选"

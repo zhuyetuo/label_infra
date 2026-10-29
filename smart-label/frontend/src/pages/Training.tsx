@@ -256,7 +256,7 @@ export default function Training() {
   const [balance, setBalance] = useState<string>("none");
   const [reviewFor, setReviewFor] = useState<ModelVersion | null>(null);
   const [tag, setTag] = useState("");
-  const [scope, setScope] = useState<"approved" | "reviewed">("approved");
+  const [scope, setScope] = useState<"approved" | "reviewed" | "seg_approved">("approved");
   // 互斥轨的折叠：默认按 行为 > 运动 > 姿态 折成一个时刻一个标签（RF 单标签）；
   // 不折叠 = 各轨原样导，给分轨训练用。没分轨的项目两种一样
   const [flatten, setFlatten] = useState(true);
@@ -341,7 +341,7 @@ export default function Training() {
         const v = JSON.parse(raw);
         if (typeof v.name === "string" && v.name) setLastName(v.name);
         if (Array.isArray(v.projectIds)) setProjectIds(v.projectIds);
-        if (v.scope === "approved" || v.scope === "reviewed") setScope(v.scope);
+        if (v.scope === "approved" || v.scope === "reviewed" || v.scope === "seg_approved") setScope(v.scope);
         if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
         if (typeof v.flatten === "boolean") setFlatten(v.flatten);
         if (Array.isArray(v.trackPriority) && v.trackPriority.length) setTrackPriority(v.trackPriority);
@@ -1238,6 +1238,13 @@ export default function Training() {
                 <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似片段」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
                   <span style={{ borderBottom: "1px dashed #bbb" }}>
                     按片段取：人确认过的（审了一半也能用）
+                  </span>
+                </Tooltip>
+              </Radio>
+              <Radio value="seg_approved">
+                <Tooltip title="只要在「片段审核」里一条条审过、点了「通过」的片段——起止准、类别对、没混别的动作。量少但质量最高；待审和退回的都不导出（那段时间不参与训练，不会变成负样本）">
+                  <span style={{ borderBottom: "1px dashed #bbb" }}>
+                    只要片段审核通过的（质量最高）
                   </span>
                 </Tooltip>
               </Radio>
@@ -2476,6 +2483,7 @@ function ExportPreview({
         <br />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {meta.n_untouched_skipped ? `跳过没人看过的 AI 片段 ${meta.n_untouched_skipped} 段；` : ""}
+          {meta.n_unapproved_skipped ? `没在片段审核里通过的 ${meta.n_unapproved_skipped} 段没导出；` : ""}
           {meta.n_uncertain_excluded ? `待定挖掉 ${meta.n_uncertain_excluded} 段；` : ""}
           {meta.missing_excluded_min ? `掉数据挖掉 ${meta.missing_excluded_min} 分钟；` : ""}
           {meta.n_label_conflicts ? `类别冲突 ${meta.n_label_conflicts} 处（挖掉 ${meta.label_conflict_excluded_sec ?? 0} 秒，要回工作台改）；` : ""}

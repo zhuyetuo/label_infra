@@ -110,6 +110,10 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 review_flag_by=item.review_flag_by,
                 review_flag_at=item.review_flag_at,
                 boundary_edits=item.boundary_edits,
+                # 片段审核的结论也带过去：通过了的不用因为开了新一轮再审一遍
+                seg_status=item.seg_status,
+                seg_reviewed_by=item.seg_reviewed_by,
+                seg_reviewed_at=item.seg_reviewed_at,
                 created_by=item.created_by,
             )
         )

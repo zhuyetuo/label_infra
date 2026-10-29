@@ -9,7 +9,7 @@ export interface TrainDataset {
   include_submitted: boolean;
   /** approved = 整份审完的任务；reviewed = 只取人确认过的片段
    *  （点过「通过」/ 改过 / 人自己画的。只是打开看过没点的不算） */
-  scope?: "approved" | "reviewed";
+  scope?: "approved" | "reviewed" | "seg_approved";
   /** reviewed 模式下跳过了多少条"没人看过的 AI 片段" */
   n_untouched_skipped?: number;
   /** 被判「待定」而挖掉的段数 */
@@ -47,6 +47,8 @@ export interface TrainDataset {
   labels: Record<string, number>;
   /** 每个类别的总时长（秒）。均不均衡按时长看 */
   label_seconds?: Record<string, number>;
+  /** 只要片段审核通过的：没通过（待审 / 退回）而没导出的条数 */
+  n_unapproved_skipped?: number;
   /** 按层级汇总：大类 → 细类 → …，每层含它底下所有细类（老数据集没有） */
   label_tree?: LabelTreeNode[];
   /** 减量前的层级树：滑块的上限（没减量时跟 label_tree 一样） */
@@ -98,7 +100,7 @@ export const exportDataset = (body: {
   date_to?: string | null;
   project_ids?: number[];
   include_submitted?: boolean;
-  scope?: "approved" | "reviewed";
+  scope?: "approved" | "reviewed" | "seg_approved";
   /** 分了互斥轨的项目：按优先级折叠成一个时刻一个标签（默认 true）；false = 各轨原样导，给分轨训练用 */
   flatten?: boolean;
   /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */

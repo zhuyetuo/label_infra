@@ -16,6 +16,7 @@ import Workforce from "@/pages/Workforce";
 import Skin from "@/pages/Skin";
 import Vision from "@/pages/Vision";
 import Training from "@/pages/Training";
+import SegmentReview from "@/pages/SegmentReview";
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/projects" element={<Projects />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/reviews" element={<Reviews />} />
+        <Route path="/segment-review" element={<SegmentReview />} />
         <Route path="/samples" element={<Samples />} />
         <Route path="/dogs" element={<Dogs />} />
         <Route path="/label-definitions" element={<Labels />} />

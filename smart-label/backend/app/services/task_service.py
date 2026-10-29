@@ -384,6 +384,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             if changed:
                 origin.is_modified = True
                 origin.created_by = user.id
+                # 改过的片段要重新审：通过的、退回的都回到待审
+                origin.seg_status = None
                 # 审核标过「有问题」的，改了就算处理过了
                 origin.review_note = None
                 origin.review_flag_by = None

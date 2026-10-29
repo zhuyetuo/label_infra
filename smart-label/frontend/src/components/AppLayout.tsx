@@ -12,6 +12,8 @@ const ALL_ITEMS = [
   { key: "/projects", label: "项目", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/tasks", label: "任务", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/reviews", label: "审核", roles: ["super_admin", "admin", "reviewer"] },
+  // 片段级审核：审核员按类别一条条审；标注员在这里看退回给自己的片段
+  { key: "/segment-review", label: "片段审核", roles: ["super_admin", "admin", "reviewer", "annotator"] },
   { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
   // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },

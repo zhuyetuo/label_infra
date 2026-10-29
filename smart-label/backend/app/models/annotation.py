@@ -123,6 +123,17 @@ class AnnotationLabelItem(Base):
     # 光一个 is_modified 看不出改过几次、从哪改到哪。开新一轮时跟着带过去
     boundary_edits: Mapped[str | None] = mapped_column(Text, nullable=True, comment="起止调整记录 JSON")
 
+    # 片段级审核（「片段审核」页）：不用等整个任务标完提交，按类别一条条审。
+    #   seg_status   空 = 待审 / approved = 通过 / returned = 退回（原因写在 review_note）
+    #   类别或起止被人改了就回到待审——改过的东西要重新看一眼
+    # 认领：审核员按类别领一批，领了别人看不到，过期（seg_claim_expires_at）自动放回
+    seg_status: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True,
+                                                   comment="片段审核：空=待审 / approved / returned")
+    seg_reviewed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    seg_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    seg_claimed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    seg_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列
     touched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

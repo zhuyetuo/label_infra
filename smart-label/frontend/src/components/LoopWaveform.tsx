@@ -485,7 +485,7 @@ const fmtMs = (ms: number) => {
 };
 
 export default function LoopWaveform({
-  sampleId, bus, info, onAdjust, readOnlyHint,
+  sampleId, bus, info, onAdjust, readOnlyHint, canAdjust, forceOpen, extra,
 }: {
   sampleId: number;
   bus: TimeBus;
@@ -496,6 +496,12 @@ export default function LoopWaveform({
   onAdjust?: (target: AdjustTarget, startMs: number, endMs: number) => Promise<void>;
   /** 只读时为什么不能改起止（给了就在浮窗里写出来） */
   readOnlyHint?: string;
+  /** 只有这些能改（片段审核：只读的任务里只放开正在审的那一条） */
+  canAdjust?: (t: AdjustTarget) => boolean;
+  /** 不管「循环时自动弹出」开没开都弹（片段审核：按钮都在浮窗里） */
+  forceOpen?: boolean;
+  /** 浮窗最底下再放一栏（片段审核的通过 / 退回 / 下一条） */
+  extra?: React.ReactNode;
 }) {
   const { token } = theme.useToken();
   const [cfg, setCfgState] = useState<Cfg>(loadCfg);
@@ -528,7 +534,7 @@ export default function LoopWaveform({
   const lastSeek = useRef(0);
   const target: AdjustTarget | null =
     info?.itemId != null ? { kind: "item", id: info.itemId } : info?.candId != null ? { kind: "cand", id: info.candId } : null;
-  const editable = !!(target && onAdjust);
+  const editable = !!(target && onAdjust && (!canAdjust || canAdjust(target)));
   const [resetKey, setResetKey] = useState(0);
   useEffect(() => bus.onTime((sec) => { lastSec.current = sec; }), [bus]);
 
@@ -591,7 +597,7 @@ export default function LoopWaveform({
     return [-pad, dur + pad];
   }, [cur, pins, cfg.follow, cfg.winSec]);
 
-  const show = (info && (cfg.auto ? !closed : opened)) || (!info && pins.length > 0);
+  const show = (info && (cfg.auto || forceOpen ? !closed : opened)) || (!info && pins.length > 0);
 
   // ── 调起止 ──
   // 拖的时候视频跟到那一帧（限 120ms 一次：每次 seek 都要等解码，拖得太勤会卡）。
@@ -822,6 +828,7 @@ export default function LoopWaveform({
             </div>
           )}
 
+          {info && extra && <div style={{ marginTop: 6 }}>{extra}</div>}
           {/* 只读：别让人拖半天没反应，直接说为什么改不了、要先做什么 */}
           {info && !editable && target && readOnlyHint && (
             <div style={{ marginTop: 4, padding: "4px 6px", borderRadius: 4, background: token.colorFillQuaternary, fontSize: 12 }}>
