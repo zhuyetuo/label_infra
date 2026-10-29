@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import { rerunTrainReview, trainReview, type DatasetStats, type ReviewRow, type TrainReview } from "@/api/training";
+import { fmtSecs } from "@/utils/fmtDuration";
 
 /**
  * 训练记录的「数据 · 回放」：
@@ -13,7 +14,7 @@ import { rerunTrainReview, trainReview, type DatasetStats, type ReviewRow, type 
  */
 
 const pct = (x: number | null | undefined) => (x == null ? "-" : `${(x * 100).toFixed(0)}%`);
-const sec = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(2)} 小时` : s >= 120 ? `${(s / 60).toFixed(1)} 分` : `${Math.round(s)} 秒`);
+const sec = fmtSecs;
 const KIND_COLOR: Record<string, string> = { 漏识别: "red", 误识别: "volcano", 混淆: "gold", 未标注区报事件: "blue" };
 const KIND_TIP: Record<string, string> = {
   漏识别: "人标了事件类（抓挠/甩身体），模型没认出来。最值钱的一类：点开看画面，真是抓挠就是模型弱，不是就是标错",

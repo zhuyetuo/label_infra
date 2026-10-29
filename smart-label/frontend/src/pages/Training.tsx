@@ -16,6 +16,7 @@ import TrainLogModal from "@/components/TrainLogModal";
 import SizeCurveModal from "@/components/SizeCurveModal";
 import EdgeFootprint from "@/components/EdgeFootprint";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
+import { fmtSecs } from "@/utils/fmtDuration";
 import ModelCompare from "@/components/ModelCompare";
 import type { LabelDefinition, Task } from "@/types";
 import {
@@ -1926,7 +1927,7 @@ export default function Training() {
                         const short = c.sec < 60;
                         const text = (
                           <Typography.Text type={fewSeg || short ? "warning" : undefined} style={{ fontSize: 12 }}>
-                            {c.n} 段 / {Math.round(c.sec)} 秒
+                            {c.n} 段 / {fmtSecs(c.sec)}
                           </Typography.Text>
                         );
                         if (!fewSeg && !short) return text;
@@ -2338,9 +2339,7 @@ export default function Training() {
                       {
                         title: "时长", width: 110,
                         render: (_, k) =>
-                          k.seconds >= 3600
-                            ? `${(k.seconds / 3600).toFixed(2)} 小时`
-                            : `${Math.round(k.seconds)} 秒`,
+                          fmtSecs(k.seconds),
                       },
                       {
                         title: "占本类", width: 200,
@@ -2361,8 +2360,8 @@ export default function Training() {
                         render: (_, k) => (
                           <Space size={4} wrap>
                             {Object.entries(k.by_dataset).map(([n, sec]) => (
-                              <Tooltip key={n} title={`${n}：${Math.round(sec)} 秒`}>
-                                <Tag>{n.replace(/^ds_/, "")} {(sec / 60).toFixed(1)}分</Tag>
+                              <Tooltip key={n} title={`${n}：${fmtSecs(sec)}`}>
+                                <Tag>{n.replace(/^ds_/, "")} {fmtSecs(sec)}</Tag>
                               </Tooltip>
                             ))}
                           </Space>
@@ -2394,7 +2393,7 @@ export default function Training() {
                   title: "时长", width: 110,
                   sorter: (a, b) => a.seconds - b.seconds,
                   render: (_, r) =>
-                    r.hours >= 1 ? `${r.hours} 小时` : `${Math.round(r.seconds)} 秒`,
+                    fmtSecs(r.seconds),
                 },
                 {
                   title: "占比", width: 200,
@@ -2418,8 +2417,8 @@ export default function Training() {
                   render: (_, r) => (
                     <Space size={4} wrap>
                       {Object.entries(r.by_dataset).map(([n, sec]) => (
-                        <Tooltip key={n} title={`${n}：${Math.round(sec)} 秒`}>
-                          <Tag>{n.replace(/^ds_/, "")} {(sec / 60).toFixed(1)}分</Tag>
+                        <Tooltip key={n} title={`${n}：${fmtSecs(sec)}`}>
+                          <Tag>{n.replace(/^ds_/, "")} {fmtSecs(sec)}</Tag>
                         </Tooltip>
                       ))}
                     </Space>
@@ -2442,8 +2441,6 @@ export default function Training() {
   );
 }
 
-const fmtSecs = (sec: number) =>
-  sec >= 3600 ? `${(sec / 3600).toFixed(1)} 小时` : sec >= 60 ? `${(sec / 60).toFixed(1)} 分钟` : `${Math.round(sec)} 秒`;
 
 /** 导出弹窗里的「预览统计」：这批数据导出来会是什么样——各类别多少段、多长、占比，跳过 / 挖掉了多少 */
 function ExportPreview({ meta }: { meta: TrainDataset }) {
