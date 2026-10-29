@@ -396,7 +396,8 @@ async def list_tasks(
     user_names: dict[int, str] = {}
     user_roles: dict[int, str] = {}
     if tasks:
-        uids = {t.assigned_to for t in tasks if t.assigned_to is not None}
+        uids = {t.assigned_to for t in tasks if t.assigned_to is not None} | {
+            t.reclaimed_from for t in tasks if t.reclaimed_from is not None}
         if uids:
             rows = await db.execute(select(User.id, User.display_name, User.username, User.role).where(User.id.in_(uids)))
             for uid, dn, un, role in rows.all():
@@ -419,6 +420,7 @@ async def list_tasks(
                 **briefs.get(t.sample_id, {}),
                 "assigned_to_name": user_names.get(t.assigned_to) if t.assigned_to is not None else None,
                 "assigned_to_role": user_roles.get(t.assigned_to) if t.assigned_to is not None else None,
+                "reclaimed_from_name": user_names.get(t.reclaimed_from) if t.reclaimed_from is not None else None,
             }
             for t in tasks
         ]

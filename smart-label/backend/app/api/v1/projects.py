@@ -143,7 +143,7 @@ async def assign_project(project_id: int, body: ProjectAssignRequest, db: AsyncS
         await db.execute(select(func.count()).select_from(Task).where(Task.project_id == project_id))
     ).scalar_one()
 
-    values: dict = {"assigned_to": body.user_id}
+    values: dict = {"assigned_to": body.user_id, "reclaimed_from": None, "reclaimed_at": None}
     if body.include_claimed:
         # 换人就得把旧的软锁一起清掉，否则新人认领不了（claim 要求 PENDING_ASSIGN）
         values.update({"status": TaskStatus.PENDING_ASSIGN, "locked_by": None, "lock_expires_at": None})

@@ -64,6 +64,11 @@ class Task(Base):
     # 软锁：认领时写入，超时未续期由定时任务回收
     locked_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 认领后太久没打开（annotation_timeout_hours）被定时任务收回时记一笔：原来是谁的、
+    # 什么时候。不记的话项目页上只看到一个「有未指派」，没人知道这几个是怎么来的。
+    # 重新认领 / 指派时清掉
+    reclaimed_from: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

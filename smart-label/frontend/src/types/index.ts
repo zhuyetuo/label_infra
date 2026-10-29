@@ -96,6 +96,10 @@ export interface Task {
   dog_label?: string | null;
   assigned_to_name?: string | null;
   assigned_to_role?: UserRole | null;
+  /** 超时收回前指派给谁、什么时候收回的（重新认领 / 指派后清空） */
+  reclaimed_from?: number | null;
+  reclaimed_from_name?: string | null;
+  reclaimed_at?: string | null;
 }
 
 export interface LabelItem {
