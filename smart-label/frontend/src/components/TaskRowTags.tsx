@@ -2,6 +2,7 @@ import { Tag, Tooltip } from "antd";
 import type { Task } from "@/types";
 import { currentName, findLabel } from "@/utils/labelTree";
 import { IMU_OTHER, imuOf } from "@/utils/imuOf";
+import { candTitle } from "@/utils/candReason";
 
 /**
  * 任务列表里一行的两种小标签，项目页和任务页共用。
@@ -43,14 +44,14 @@ export function CandKindTags({
         return (
           <Tooltip
             key={name}
-            title={v.pending ? `疑似${shown} ${v.n} 条，其中 ${v.pending} 条还没判断` : `疑似${shown} ${v.n} 条，都判断过了`}
+            title={v.pending ? `${candTitle(shown)} ${v.n} 条，其中 ${v.pending} 条还没判断` : `${candTitle(shown)} ${v.n} 条，都判断过了`}
           >
             <Tag
               color={findLabel(labels, name)?.color || undefined}
               bordered
               style={{ marginRight: 0, borderStyle: "dashed", opacity: v.pending ? 1 : 0.6 }}
             >
-              疑似{shown} {v.n}
+              {candTitle(shown)} {v.n}
               {v.pending ? <span style={{ opacity: 0.75 }}>/{v.pending}待判</span> : null}
             </Tag>
           </Tooltip>

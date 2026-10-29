@@ -6,7 +6,7 @@ import type { SelectProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
-import { REASON_LABEL } from "@/utils/candReason";
+import { REASON_LABEL, candTitle } from "@/utils/candReason";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -950,7 +950,7 @@ export default function SegmentPanel({
                   ) : i.cand_label_name ? (
                     <Tooltip title={`从「疑似片段」确认上来的：${REASON_LABEL[i.cand_reason as keyof typeof REASON_LABEL] ?? i.cand_reason ?? ""}，当初猜的是「${i.cand_label_name}」`}>
                       <Tag color="cyan">
-                        疑似{i.cand_label_name} {nameOf(i.label_id) === i.cand_label_name ? "✓" : `→ ${nameOf(i.label_id)}`}
+                        {candTitle(i.cand_label_name)} {nameOf(i.label_id) === i.cand_label_name ? "✓" : `→ ${nameOf(i.label_id)}`}
                       </Tag>
                     </Tooltip>
                   ) : (

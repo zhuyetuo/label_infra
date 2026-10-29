@@ -34,6 +34,7 @@ import { useNavigate } from "react-router-dom";
 import { useUrlTask } from "@/utils/urlTask";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import type { Task } from "@/types";
+import { candTitle } from "@/utils/candReason";
 
 export default function Reviews() {
   const qc = useQueryClient();
@@ -98,7 +99,7 @@ export default function Reviews() {
     }
     return [
       { label: "片段", options: [...seg].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ value: `seg:${k}`, label: `${k}（${n} 个任务）` })) },
-      { label: "疑似片段", options: [...cand].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ value: `cand:${k}`, label: `疑似${k}（${n} 个任务）` })) },
+      { label: "疑似片段", options: [...cand].sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ value: `cand:${k}`, label: `${candTitle(k)}（${n} 个任务）` })) },
     ];
   }, [data, catOf]);
 
@@ -232,7 +233,7 @@ export default function Reviews() {
         ...(kind
           ? [
               {
-                title: kindType === "seg" ? kindName : `疑似${kindName}`,
+                title: kindType === "seg" ? kindName : candTitle(kindName ?? ""),
                 width: 110,
                 render: (_: unknown, t: Task) => {
                   const h = kindHits(t);
@@ -712,10 +713,10 @@ function CategoryOverview({ p }: { p: ProjectProgress | undefined }) {
         </Tooltip>
       )}
       {cands.map(([name, v]) => (
-        <Tooltip key={name} title={`疑似${currentName(name)} ${v.n} 条，还没判 ${v.pending} 条（点击去项目页只看这一类）`}>
+        <Tooltip key={name} title={`${candTitle(currentName(name))} ${v.n} 条，还没判 ${v.pending} 条（点击去项目页只看这一类）`}>
           <Tag bordered style={{ marginInlineEnd: 0, borderStyle: "dashed", background: "transparent", cursor: "pointer" }}
                onClick={() => go(`cand=${encodeURIComponent(currentName(name))}`)}>
-            疑似{currentName(name)} {v.pending}/{v.n}
+            {candTitle(currentName(name))} {v.pending}/{v.n}
           </Tag>
         </Tooltip>
       ))}
