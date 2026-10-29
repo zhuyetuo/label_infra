@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Button, DatePicker, Input, InputNumber, Progress, Select, Space, Table, Tag, Tooltip, Typography, message,
 } from "antd";
@@ -7,10 +7,10 @@ import { useQuery } from "@tanstack/react-query";
 import { listLabels } from "@/api/labels";
 import { useInferModes } from "@/hooks/useInferModes";
 import {
-  compareModels, createEvalSet, getEvalRunProgress, listEdgeModels, listEvalRuns, listEvalSets,
+  compareModels, createEvalSet, getEvalRunProgress, listEvalRuns, listEvalSets,
   startEvalRun, type CompareResult, type VersionDiff, type VersionResult,
 } from "@/api/modelEval";
-import { INFER_MODE_LABEL } from "@/utils/inferMode";
+import { modeLabelOf } from "@/utils/inferMode";
 import ThresholdCurve from "@/components/ThresholdCurve";
 
 /**
@@ -25,12 +25,13 @@ import ThresholdCurve from "@/components/ThresholdCurve";
  *      ③ 出报告：P/R/F1、阈值曲线、以及"相对基准版本改进/回归了多少"
  */
 
-const MODES = ["stable", "viterbi", "raw"];
-/** 端侧模型的版本字符串前缀，跟后端 edge_client.EDGE_PREFIX 是同一个约定 */
-const EDGE_PREFIX = "edge:";
-const isEdge = (m: string) => m.startsWith(EDGE_PREFIX);
-const modeLabel = (m: string) =>
-  isEdge(m) ? `端侧 · ${m.slice(EDGE_PREFIX.length)}` : (INFER_MODE_LABEL[m] ?? m);
+// 版本显示名跟预标注那几处同一份：以前这里自己拼，服务端其它模型显示成 srv:xxx 原文
+const modeLabel = modeLabelOf;
+/** "model::mode" → 给人看的名字 */
+const keyLabel = (k: string) => {
+  const [tag, mode] = k.split("::");
+  return `${tag} · ${modeLabel(mode ?? "")}`;
+};
 
 export default function ModelCompare() {
   const [setId, setSetId] = useState<number | undefined>();
@@ -45,7 +46,9 @@ export default function ModelCompare() {
   // 评哪个类别。**以前写死「抓挠」**（前端根本没传这个字段），于是拆成
   // 二级标签之后没法回答"它能不能分出是头颈耳还是躯干"这个问题
   const [evalLabel, setEvalLabel] = useState("抓挠");
-  const { serverGroup } = useInferModes();
+  // 跑哪几个版本：跟预标注下拉同一份选项（含「不吞甩身体」、训练记录、端侧三种后处理）。
+  // 以前这里自己拼一份，漏了好几项，训出来的端侧模型也只能选其中一种后处理
+  const { options: modeOptions, edgeOffline } = useInferModes();
   // 候选类别从项目标签里来——这样拆出来的二级标签（抓挠-头颈耳）自动就在列表里，
   // 不用每加一个类别回来改一次代码
   const { data: allLabels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
@@ -58,35 +61,61 @@ export default function ModelCompare() {
   const [result, setResult] = useState<CompareResult | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data: runs, refetch: refetchRuns } = useQuery({ queryKey: ["eval-runs"], queryFn: listEvalRuns });
-  // 端侧服务挂着哪些模型。**问服务，不读前端写死的列表**——
-  // 写死的话服务换了模型，这里会出现一个选了就报错的选项
-  const { data: edge } = useQuery({ queryKey: ["edge-models"], queryFn: listEdgeModels });
+  const scope = () => (setId ? { set_id: setId } : { date_from: range[0], date_to: range[1] });
+  // 版本列表按当前这批样本数：显示「这批里跑了几个」，而不是全库。以前是全库，
+  // 选上一个在这批里根本没跑过的版本，报告里全是漏检，看起来像模型很差
+  const { data: runsResp, refetch: refetchRuns } = useQuery({
+    queryKey: ["eval-runs", setId ?? null, setId ? null : range],
+    queryFn: () => listEvalRuns(scope()),
+  });
+  const runs = runsResp?.runs;
+  const nScope = runsResp?.n_scope ?? null;
   const { data: sets, refetch: refetchSets } = useQuery({ queryKey: ["eval-sets"], queryFn: listEvalSets });
-  // 跑批期间轮询进度
-  const { data: prog } = useQuery({
+  // 跑批期间轮询进度。**点了「跑」之后要手动拉一次**：初始状态是 idle，
+  // refetchInterval 只在 running 时才转，以前不拉的话进度条永远不出来、
+  // 也不会提示跑完，看起来像点了没反应
+  const { data: prog, refetch: refetchProg } = useQuery({
     queryKey: ["eval-run-progress"],
     queryFn: getEvalRunProgress,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 3000 : false),
   });
+  // 跑完自动刷新版本列表，不用人再点一下
+  const lastStatus = useRef(prog?.status);
+  useEffect(() => {
+    if (lastStatus.current === "running" && prog?.status && prog.status !== "running") {
+      refetchRuns();
+      if (prog.status === "done") {
+        message[prog.failed ? "warning" : "success"](`跑完了：成功 ${prog.done}，失败 ${prog.failed}`);
+      }
+    }
+    lastStatus.current = prog?.status;
+  }, [prog?.status, prog?.done, prog?.failed, refetchRuns]);
 
   const options = useMemo(
     () =>
       (runs ?? []).map((r) => ({
         value: `${r.model_tag}::${r.mode}`,
-        label: `${r.model_tag} · ${modeLabel(r.mode)}（${r.n_samples} 个样本）`,
+        label:
+          `${r.model_tag} · ${modeLabel(r.mode)}` +
+          (nScope != null ? `（这批跑了 ${r.n_samples}/${nScope}）` : `（${r.n_samples} 个样本）`),
       })),
-    [runs]
+    [runs, nScope]
   );
-
-  const scope = () => (setId ? { set_id: setId } : { date_from: range[0], date_to: range[1] });
+  // 换了范围之后，已选的版本可能在新范围里没跑过，留着会一直报"没跑"
+  useEffect(() => {
+    if (!runs) return;
+    const ok = new Set(runs.map((r) => `${r.model_tag}::${r.mode}`));
+    setPicked((p) => (p.every((k) => ok.has(k)) ? p : p.filter((k) => ok.has(k))));
+  }, [runs]);
 
   const handleCreateSet = async () => {
     if (!setName.trim()) return message.warning("给评测集起个名字");
     const r = await createEvalSet({ name: setName.trim(), date_from: range[0], date_to: range[1] });
     message.success(`已冻结「${r.name}」，${r.n_samples} 个样本`);
     setSetName("");
-    refetchSets();
+    await refetchSets();
+    // 冻完直接选中：下一步就是拿它跑版本
+    setSetId(r.id);
   };
 
   const handleRun = async () => {
@@ -95,6 +124,7 @@ export default function ModelCompare() {
     message[r.started ? "success" : "warning"](
       r.started ? `开始跑：${r.n_samples} 个样本 × ${r.modes.length} 个版本` : "已经有一批在跑了，等它跑完"
     );
+    refetchProg();
   };
 
   const handleCompare = async () => {
@@ -131,7 +161,7 @@ export default function ModelCompare() {
             ① 先<b>冻一个评测集</b>（一批已经审过的样本）——以后每训完一个模型都拿这同一批跑，指标才可比；
             ② 让几个版本<b>各跑一遍</b>（只存结果，不动任何人的草稿）；
             ③ <b>出报告</b>看 P/R/F1、阈值曲线、以及相对基准版本改进/回归了多少。
-            人工标了「待定」的片段和采集掉数据的时段一律不计分——那些本来就没有正确答案。
+            只算<b>人工审过</b>、且<b>选中的版本都跑过</b>的样本；人工标了「待定」的片段和采集掉数据的时段也不计分——那些本来就没有正确答案。
           </>
         }
       />
@@ -172,22 +202,9 @@ export default function ModelCompare() {
           style={{ minWidth: 240 }}
           value={runModes}
           onChange={setRunModes}
-          options={[
-            { label: "算法服务（imu_train 的 label_service）", options: MODES.map((m) => ({ value: m, label: modeLabel(m) })) },
-            // 训练记录里训出来的那几版（显示成「训练记录 #N」）。以前这一组漏了，
-            // 训完的模型在这里选不到，也就没法跟线上那版在同一批样本上比
-            ...(serverGroup ? [serverGroup] : []),
-            // 端侧那组：服务没配/没起来时这一组是空的，antd 会自动不显示分组标题。
-            // 不写死在前端，是因为写死的话服务换了模型，这里会出现一个
-            // 选了就报错的选项，而错误是"没有这个端侧模型"
-            {
-              label: "端侧模型（跑的是烧进项圈的那份 C）",
-              options: (edge?.models ?? []).map((m) => ({
-                value: m.spec,
-                label: `${m.tag}（${m.window} 点 @${m.hz}Hz）`,
-              })),
-            },
-          ]}
+          placeholder="选要跑的版本"
+          options={modeOptions}
+          popupMatchSelectWidth={false}
           maxTagCount="responsive"
         />
         <Tooltip title="几个版本对这批样本各跑一遍，结果按 (模型, 版本) 分开存。不写任何草稿，标注员那边不受影响">
@@ -197,7 +214,7 @@ export default function ModelCompare() {
         </Tooltip>
         {/* 配了但连不上时下拉里那一组是空的，而人看不出为什么——
             "没开这个功能"和"开了但服务挂了"必须分得开，否则会以为是自己选错了 */}
-        {edge?.enabled && (edge?.models?.length ?? 0) === 0 && (
+        {edgeOffline && (
           <Tooltip title="后端配了 EDGE_SERVICE_URL，但连不上或者那边没挂模型。去跑 edge_service.py 那台看一下">
             <Tag color="warning">端侧服务连不上</Tag>
           </Tooltip>
@@ -214,18 +231,28 @@ export default function ModelCompare() {
             </Typography.Text>
           </Space>
         )}
-        {prog?.status === "done" && (
-          <Button size="small" type="link" onClick={() => refetchRuns()}>
-            跑完了，刷新版本列表
-          </Button>
-        )}
+        {prog?.status === "error" && <Tag color="error">跑批出错：{prog.current}</Tag>}
       </Space>
+      {/* 失败原因以前只存在后端，界面上看不到——全失败的时候人只会觉得"点了没用" */}
+      {prog && prog.status !== "idle" && prog.detail.length > 0 && (
+        <Alert
+          type={prog.failed ? "warning" : "info"}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`上一批：成功 ${prog.done}，失败 ${prog.failed}`}
+          description={
+            <div style={{ maxHeight: 120, overflow: "auto", fontSize: 12 }}>
+              {prog.detail.map((d, i) => <div key={i}>{d}</div>)}
+            </div>
+          }
+        />
+      )}
 
       <Space wrap style={{ marginBottom: 12 }}>
         <Select
           mode="multiple"
           style={{ minWidth: 420 }}
-          placeholder="选要对比的版本（第一个当基准）"
+          placeholder={runs && !runs.length ? "这批样本还没跑过任何版本，先点上面「跑这几个版本」" : "选要对比的版本（第一个当基准）"}
           value={picked}
           onChange={setPicked}
           options={options}
@@ -335,7 +362,7 @@ export default function ModelCompare() {
             ]}
           />
 
-          {result.diffs.length > 0 && (
+          {(result.diffs?.length ?? 0) > 0 && (
             <>
               <Typography.Text strong>相对基准（{result.versions[0]?.model_tag} · {modeLabel(result.versions[0]?.mode ?? "")}）</Typography.Text>
               <Table<VersionDiff>
@@ -345,7 +372,7 @@ export default function ModelCompare() {
                 style={{ marginTop: 4, marginBottom: 16 }}
                 dataSource={result.diffs}
                 columns={[
-                  { title: "版本", dataIndex: "other" },
+                  { title: "版本", dataIndex: "other", render: (k: string) => keyLabel(k) },
                   {
                     title: "新增命中",
                     width: 110,
