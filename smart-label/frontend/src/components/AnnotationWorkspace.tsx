@@ -29,7 +29,7 @@ import SimilarHitsGrid from "@/components/SimilarHitsGrid";
 import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
-import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, setCandidateReviewNote, type AiCandidate, type SimilarHit } from "@/api/candidates";
+import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, setCandidateReviewNote, setCandidateSpan, type AiCandidate, type SimilarHit } from "@/api/candidates";
 import { getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -54,7 +54,7 @@ import {
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
-import LoopWaveform, { type LoopInfo } from "@/components/LoopWaveform";
+import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
 
 interface Props {
   task: Task | null;
@@ -595,10 +595,18 @@ export default function AnnotationWorkspace({
     const { startMs, endMs } = loopRange;
     const near = (a: number, b: number) => Math.abs(a - b) <= 2;
     const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
-    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id), itemId: it.id };
-    const c = candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
-    if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}` };
-    return { startMs, endMs, title: "循环区间" };
+    const c = it ? undefined : candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
+    // 附近 1 分钟内别的片段 / 还没判的疑似片段：浮窗顶上画细色带，看得出前后挨着的是什么
+    const lo = startMs - 60000, hi = endMs + 60000;
+    const neighbors = [
+      ...items.filter((x) => x !== it && x.end_time_ms > lo && x.start_time_ms < hi)
+        .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: colorOf(x.label_id), label: nameOf(x.label_id) })),
+      ...candidates.filter((x) => x !== c && x.status === "pending" && x.end_time_ms > lo && x.start_time_ms < hi)
+        .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: "#999", label: `疑似${x.label_name}` })),
+    ];
+    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id), itemId: it.id, neighbors };
+    if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors };
+    return { startMs, endMs, title: "循环区间", neighbors };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loopRange, items, candidates, labelById]);
 
@@ -667,8 +675,17 @@ export default function AnnotationWorkspace({
 
   // 波形浮窗里调好的起止：改这一条、立刻落库，再拉一遍——调整记录（第几次、从哪改到哪）
   // 是后端存草稿时记的，不拉回来的话「起止调过 N 次」不会更新。循环跟着换到新起止
-  const adjustBoundary = async (id: number, startMs: number, endMs: number) => {
+  const adjustBoundary = async (target: AdjustTarget, startMs: number, endMs: number) => {
     if (taskId == null) return;
+    if (target.kind === "cand") {
+      // 疑似片段：直接改那条候选（后端记调整记录），列表拉一遍
+      await setCandidateSpan(target.id, startMs, endMs);
+      setCandidates(await listCandidates(taskId));
+      setLoop({ startMs, endMs });
+      message.success("起止已保存");
+      return;
+    }
+    const id = target.id;
     const next = items.map((it) => (it.id === id ? touchItem(it, { start_time_ms: startMs, end_time_ms: endMs }) : it));
     setItems(next);
     await saveDraft(taskId, toDraftPayload(next));

@@ -4,6 +4,7 @@ import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Radio, Select, Space
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
+import BoundaryEditsTag from "@/components/BoundaryEditsTag";
 import { REASON_LABEL } from "@/utils/candReason";
 import { currentName, findLabel, flatten } from "@/utils/labelTree";
 
@@ -498,6 +499,7 @@ export default function CandidatePanel({
                     {c.model.split(":")[1] ?? c.model}
                   </Tag>
                 )}
+                <BoundaryEditsTag edits={c.boundary_edits} />
               </Space>
             ),
           },
