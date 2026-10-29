@@ -54,6 +54,7 @@ import {
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
+import LoopWaveform, { type LoopInfo } from "@/components/LoopWaveform";
 
 interface Props {
   task: Task | null;
@@ -586,6 +587,20 @@ export default function AnnotationWorkspace({
   const colorOf = (id: number) =>
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
   const nameOf = (id: number) => labelById.get(id)?.display_name ?? `#${id}`;
+
+  // 正在循环的是哪一段：按起止对回已标注片段 / 疑似片段，给波形浮窗当标题。
+  // 两边都对不上（视频那边手动定的区间）就只写时间
+  const loopInfo = useMemo<LoopInfo | null>(() => {
+    if (!loopRange) return null;
+    const { startMs, endMs } = loopRange;
+    const near = (a: number, b: number) => Math.abs(a - b) <= 2;
+    const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
+    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id) };
+    const c = candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
+    if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}` };
+    return { startMs, endMs, title: "循环区间" };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loopRange, items, candidates, labelById]);
 
   // 分了互斥轨的项目：波形上的色块按轨分成几条横带（行为 / 运动 / 姿态 / 设备），
   // 同一时刻「卧 + 静止 + 舔」三条各占一带，不互相盖住。没分轨的项目照旧整高一条
@@ -1264,6 +1279,10 @@ export default function AnnotationWorkspace({
 
   return (
     <>
+    {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
+    {taskId != null && hasCsv && sampleId != null && (
+      <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)} />
+    )}
     <Modal
       title="找相似的画面 → 候选"
       open={similarOpen}
