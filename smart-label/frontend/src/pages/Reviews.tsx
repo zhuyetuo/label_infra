@@ -8,6 +8,7 @@ import {
   Modal,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -30,13 +31,40 @@ import { currentName } from "@/utils/labelTree";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import DatasetStats from "@/components/DatasetStats";
 import { useAuthStore } from "@/stores/authStore";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useUrlTask } from "@/utils/urlTask";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import type { Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
+import SegmentReview from "@/pages/SegmentReview";
 
+/**
+ * 审核页两个入口：按任务审（整份提交上来的任务，原来的流程）、按片段审（选一个类别
+ * 跨所有项目一条条审）。用哪个记在 URL 的 ?tab= 里，刷新还在
+ */
 export default function Reviews() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "seg" ? "seg" : "task";
+  return (
+    <Tabs
+      activeKey={tab}
+      onChange={(k) => {
+        const p = new URLSearchParams(params);
+        if (k === "seg") p.set("tab", "seg");
+        else p.delete("tab");
+        // 换入口时把打开着的任务参数清掉：两边的 ?task= 不是一回事
+        p.delete("task");
+        setParams(p, { replace: true });
+      }}
+      items={[
+        { key: "task", label: "按任务审核", children: <TaskReviews /> },
+        { key: "seg", label: "片段审核（按类别逐条）", children: <SegmentReview /> },
+      ]}
+    />
+  );
+}
+
+function TaskReviews() {
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
