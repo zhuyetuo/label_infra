@@ -49,6 +49,8 @@ export interface TrainDataset {
   label_seconds?: Record<string, number>;
   /** 按层级汇总：大类 → 细类 → …，每层含它底下所有细类（老数据集没有） */
   label_tree?: LabelTreeNode[];
+  /** 减量前的层级树：滑块的上限（没减量时跟 label_tree 一样） */
+  label_tree_before?: LabelTreeNode[];
   /** 减量：选了哪些类别、各从多少减到多少 */
   reduce?: {
     labels: string[];
@@ -105,6 +107,8 @@ export const exportDataset = (body: {
   reduce_labels?: string[];
   /** 降到「其余最大类」的几倍以内 */
   reduce_factor?: number;
+  /** 手动定的：{大类: 留多少秒}（预览表里拖滑块） */
+  reduce_targets?: Record<string, number>;
   /** 只预览：照常挑数据、算统计，不落盘 */
   dry_run?: boolean;
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });

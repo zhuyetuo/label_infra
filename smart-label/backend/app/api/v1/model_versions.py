@@ -75,6 +75,8 @@ class DatasetExportIn(BaseModel):
     # 降到「其余最大类的 reduce_factor 倍」以内
     reduce_labels: list[str] | None = None
     reduce_factor: float = Field(3.0, gt=0, le=100)
+    # 手动定的：{类别: 留多少秒}（界面上拖滑块）。给了的类别按它，不按倍数
+    reduce_targets: dict[str, float] | None = None
     # 只预览：照常挑数据、算统计，不落盘（导出前先看类别分布）
     dry_run: bool = False
 
@@ -98,6 +100,7 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
             body.include_submitted,
             scope=body.scope, flatten=body.flatten, track_priority=body.track_priority,
             reduce_labels=body.reduce_labels, reduce_factor=body.reduce_factor,
+            reduce_targets=body.reduce_targets,
             dry_run=body.dry_run,
         )
     except TrainingExportError as e:
