@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getDatasetStats, listProjectProgress } from "@/api/dashboard";
+import { fmtSecs } from "@/utils/fmtDuration";
 
 /**
  * 可用数据的类别统计：审核通过的任务里各大类多少段、多长、占多少——看这批数据集类别均不均衡，
@@ -12,8 +13,7 @@ import { getDatasetStats, listProjectProgress } from "@/api/dashboard";
  *   只算人确认过的       scope=reviewed 只取这些；两者差得多说明大量 AI 片段没人看就通过了
  */
 
-const fmtH = (sec: number) =>
-  sec >= 3600 ? `${(sec / 3600).toFixed(1)} 小时` : sec >= 60 ? `${(sec / 60).toFixed(1)} 分钟` : `${sec.toFixed(0)} 秒`;
+const fmtH = fmtSecs;
 
 export default function DatasetStats() {
   const [projectIds, setProjectIds] = useState<number[]>([]);
