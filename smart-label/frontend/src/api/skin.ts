@@ -73,6 +73,8 @@ export type CSource = "ai" | "human" | "stats" | "manual";
 export interface LinkSide { stats: StatsRow; c_inputs: CInputs & { fill_date: string | null; dog_name: string | null; warnings: string[] }; c: { total: number | null; tier: string | null; red_flags: string[] } }
 export interface LinkRow {
   date: string; imu: string;
+  /** 后端按当天的狗场 + IMU 找好的狗名（同一批项圈几个狗场轮着用，不能只按 IMU 查） */
+  dog_name?: string | null;
   tasks: { total: number; approved: number; submitted: number; in_progress: number; pending: number; rejected: number; no_ai: number };
   ai_mode: string[]; ai: LinkSide | null; human: LinkSide | null; human_status: "complete" | "partial" | "none";
 }

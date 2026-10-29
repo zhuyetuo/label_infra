@@ -34,7 +34,9 @@ from app.services import label_tree
 from app.models.sample import Sample
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task, TaskStatus
+from app.services import site_layout
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
+from app.services.dog_name_service import dog_index
 
 _logger = logging.getLogger(__name__)
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
@@ -387,8 +389,31 @@ async def collect_link_stats(
             # 人工完整 = 这天所有任务都已通过；部分 = 有提交/通过但没全通过
             "human_status": "complete" if c["total"] and human_all == c["total"] else ("partial" if human_done else "none"),
         })
+    await attach_dog_names(db, out_rows)
     # 这一趟是刚算的，界面上要显示"上次拉取时间"
     return {"rows": out_rows, "warnings": warnings, "computed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+
+async def attach_dog_names(db: AsyncSession, rows: list[dict]) -> None:
+    """给每行 (date, imu) 补上 dog_name：按当天样本路径认狗场，再按 (狗场, IMU) 找狗。
+
+    前端原来拿一张不分狗场的「IMU → 狗」表自己查，项圈搬到新狗场、新狗建了档之后，
+    老狗场的历史行全显示成新狗的名字。同一天同一个 IMU 号只会在一个狗场。"""
+    if not rows:
+        return
+    days = sorted({r["date"] for r in rows})
+    samples = (await db.execute(
+        select(Sample.session_date, Sample.sample_code, Sample.video_cam1_path, Sample.imu_csv_path)
+        .where(Sample.session_date >= date.fromisoformat(days[0]), Sample.session_date <= date.fromisoformat(days[-1]))
+    )).all()
+    site_by_key: dict[tuple[str, str], str] = {}
+    for sdate, code, cam1, csv in samples:
+        imu, site = imu_of(code), site_layout.site_of(code, cam1, csv)
+        if sdate and imu and site:
+            site_by_key.setdefault((sdate.isoformat(), imu), site)
+    idx = await dog_index(db)
+    for r in rows:
+        r["dog_name"] = idx.name(r["imu"], site_by_key.get((r["date"], r["imu"])))
 
 
 # ── 落库 & 用全部历史天数算基线 ──────────────────────────────────────────
@@ -528,4 +553,5 @@ async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: dat
     msg = [] if out else [f"{date_from} ~ {date_to} 还没算过，点「重新拉取」算一次（之后就一直存着，不用再算）"]
     # 这批数字是什么时候拉的——过了几天再看这张表，得知道它是不是还反映当前的标注
     last = max((r.updated_at for r in rows if r.updated_at), default=None)
+    await attach_dog_names(db, out)
     return {"rows": out, "warnings": msg, "from_cache": True, "computed_at": last.isoformat(sep=" ", timespec="seconds") if last else None}

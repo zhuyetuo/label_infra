@@ -40,7 +40,7 @@ from app.models.sample import Sample
 from app.models.sample_vision_scan import STATE_OK, SampleVisionScan
 from app.services import vision_sam_client as vc
 from app.services import vision_scan_service as vscan
-from app.services.daily_stats_service import _imu_to_dog
+from app.services.dog_name_service import dog_index
 from app.services.dog_presence_service import is_one_dog_site, site_of
 from app.services.skin_tracking_service import _imu_of
 
@@ -140,7 +140,8 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
     （区域见 cam_regions；没划区域的公用机位不参与）。两路按绝对时刻对齐取并集，
     单间有死角时靠 cam7 补，cam7 看不清时靠单间补。
     """
-    imu_map = await _imu_to_dog(db)
+    # 按 (场地, IMU) 找狗：同一批项圈在几个狗场轮着用，同号不同狗
+    idx = await dog_index(db)
     regions = await load_regions(db)
     samples = (await db.execute(
         select(Sample).where(Sample.session_date.is_not(None), Sample.session_date >= date_from,
@@ -204,7 +205,7 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
             "file": os.path.basename(v["path"]),
             "start": v["start"].strftime("%H:%M:%S") if v["start"] else None,
             "imu": v["imu"],
-            "dog_name": imu_map.get(v["imu"]) if v["imu"] else None,
+            "dog_name": idx.name(v["imu"], v["site"]) if v["imu"] else None,
             "duration_seconds": round(v["dur"], 1),
             "scanned": v["scanned"],
             "present_seconds": round(v["present"], 1) if v["present"] is not None else None,
@@ -225,8 +226,8 @@ async def rooms(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
             shared_by_day.setdefault((day, v["site"], cam), []).append(v)
         else:
             b["imus"].add(v["imu"])
-            if imu_map.get(v["imu"]):
-                b["dogs"].add(imu_map[v["imu"]])
+            if idx.name(v["imu"], v["site"]):
+                b["dogs"].add(idx.name(v["imu"], v["site"]))
 
     out = []
     for (day, cam), b in buckets.items():

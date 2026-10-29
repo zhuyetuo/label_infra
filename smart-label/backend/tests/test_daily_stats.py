@@ -72,6 +72,8 @@ class _Sample:
     def __init__(self, d, imu=5):
         self.session_date = d
         self.sample_code = f"20260913_x_imu{imu}"
+        self.video_cam1_path = None
+        self.imu_csv_path = None
         self.dog_id = None      # 实际数据里基本是空的，所以不能靠它分组
 
 
@@ -81,7 +83,7 @@ class _DB:
         self._n = 0
 
     async def execute(self, q):
-        # 第一次是查狗档案（_imu_to_dog），之后才是主查询
+        # 第一次是查狗档案（dog_index），之后才是主查询
         self._n += 1
         rows = [] if self._n == 1 else self._rows
 
@@ -513,7 +515,8 @@ def test_dogs_endpoint_lists_both_devices_of_a_dog(run):
     """狗列表要把一只狗的两个设备都列出来——前端「按设备」那一组靠它。"""
     class DogDB:
         async def execute(self, q):
-            data = [("1", "bibi", "5"), ("2", "dodo", "IMU9，IMU12")]
+            data = [("1", "bibi", "5", None), ("2", "dodo", "IMU9，IMU12", None),
+                    ("11", "奥迪", "IMU9,IMU10", "佛山博朗旺狗场")]
 
             class R:
                 @staticmethod
@@ -525,6 +528,8 @@ def test_dogs_endpoint_lists_both_devices_of_a_dog(run):
     by = {d["dog_name"]: d["imus"] for d in out}
     assert by["bibi"] == ["IMU5"]
     assert by["dodo"] == ["IMU9", "IMU12"]
+    # 同一批项圈几个狗场轮着用：带上场地才分得清是哪只
+    assert by["奥迪（佛山博朗旺狗场）"] == ["IMU9", "IMU10"]
 
 
 def test_dog_options_come_from_the_roster_not_the_data():

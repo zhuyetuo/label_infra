@@ -41,7 +41,8 @@ from app.models.sample import Sample
 from app.models.skin import SkinRecord
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
-from app.services.dog_name_service import imu_keys_of_dog
+from app.services import site_layout
+from app.services.dog_name_service import DogIndex, imu_keys_of_dog
 
 _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
@@ -183,21 +184,28 @@ async def daily_tracking(
     # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、设备号 IMU1）
     # 唯一能对上的地方。一只狗配两个 IMU 轮换充电，两个都要挂上同一套别名，
     # 否则换了设备的那几天照片就对不上了
+    #
+    # 同一批项圈会在几个狗场轮着用：同一个 IMU 号在不同狗场是不同的狗。所以狗名和别名
+    # 都按 (场地, IMU) 记，场地从当天样本的路径里认（下面 site_by_key）。原来只按 IMU
+    # 记，新狗场一建档，老狗场的历史行全显示成新狗的名字，照片也对到新狗的别名上
     dog_rows = (await db.execute(select(Dog))).scalars().all()
-    alias_by_imu: dict[str, set[str]] = defaultdict(set)
+    dog_idx = DogIndex([(d.dog_code, d.name, d.imu, d.site) for d in dog_rows])
+    alias_by_key: dict[tuple[str | None, str], set[str]] = defaultdict(set)
     for d in dog_rows:
         imu_keys = imu_keys_of_dog(d.imu, d.dog_code)
         if not imu_keys:
             continue
         names = {v.strip() for v in [d.name, d.breed, *(d.aliases or "").replace("，", ",").split(",")] if (v or "").strip()}
+        site = site_layout.site_key_of_name(d.site)
         for imu_key in imu_keys:
-            alias_by_imu[imu_key] |= names
+            alias_by_key[(site, imu_key)] |= names
 
     # 这一天这只狗底下有哪几个任务：跟踪表里点「查看标注」要跳过去复看，
     # 顺带带上每个任务里「抓挠」片段有几段，好挑哪一段去看
     task_rows = (
         await db.execute(
-            select(Task.id, Task.status, Sample.sample_code, Sample.session_date, Sample.video_duration_sec)
+            select(Task.id, Task.status, Sample.sample_code, Sample.session_date, Sample.video_duration_sec,
+                   Sample.video_cam1_path, Sample.imu_csv_path)
             .join(Sample, Sample.id == Task.sample_id)
             .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
             .order_by(Sample.sample_code)
@@ -314,10 +322,15 @@ async def daily_tracking(
                 cand_counts[tid]["cand_confirmed"] += 1
 
     tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for tid, status, code, sdate, dur in task_rows:
+    # (日期, IMU) 是哪个狗场的：同一天同一个 IMU 号只会在一个狗场（项圈是同一批，搬过去了）
+    site_by_key: dict[tuple[str, str], str] = {}
+    for tid, status, code, sdate, dur, cam1, csv in task_rows:
         imu = _imu_of(code)
         if imu is None or sdate is None:
             continue
+        site = site_layout.site_of(code, cam1, csv)
+        if site:
+            site_by_key.setdefault((sdate.isoformat(), imu), site)
         tasks_by_key[(sdate.isoformat(), imu)].append(
             {
                 "task_id": tid,
@@ -365,9 +378,13 @@ async def daily_tracking(
     for key in sorted(merged):
         day, imu = key
         m = merged[key]
-        dog = imu_dog_map.get(imu) or imu
+        site = site_by_key.get(key)
+        dog = dog_idx.name(imu, site) or imu_dog_map.get(imu) or imu
         rec = rec_by_key.get((day, dog))
-        photo_n, photo_dog = _match_photos(photo_index, day, dog, alias_by_imu.get(imu))
+        aliases = alias_by_key.get((site, imu)) if site else None
+        if aliases is None:     # 认不出场地：这个 IMU 在各狗场的别名都算上（老行为）
+            aliases = set().union(*[v for (s, k), v in alias_by_key.items() if k == imu]) or None
+        photo_n, photo_dog = _match_photos(photo_index, day, dog, aliases)
         if c_prefer == "ai":
             primary = m["ai"]
             p_source = "ai" if m["ai"] else None

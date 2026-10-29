@@ -31,7 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.dog import Dog
 from app.models.inference_run import SampleInferenceRun
 from app.models.sample import Sample
-from app.services.dog_name_service import imu_keys_of_dog
+from app.services import site_layout
+from app.services.dog_name_service import dog_index, imu_keys_of_dog
 from app.services.skin_tracking_service import _imu_of
 
 _logger = logging.getLogger("smart-label.daily_stats")
@@ -73,20 +74,6 @@ async def versions(db: AsyncSession) -> list[dict]:
     return out
 
 
-async def _imu_to_dog(db: AsyncSession) -> dict[str, str]:
-    """IMU 编号 → 狗名。
-
-    **跟皮肤评估用同一套映射**（imu_keys_of_dog）。各写各的话，同一个样本
-    在两个页面上会被判给不同的狗——而两边看起来都对。
-    """
-    rows = (await db.execute(select(Dog.dog_code, Dog.name, Dog.imu))).all()
-    out: dict[str, str] = {}
-    for code, name, imu in rows:
-        for key in imu_keys_of_dog(imu, code):
-            out[key] = name or code or key
-    return out
-
-
 async def dogs(db: AsyncSession) -> list[dict]:
     """能筛的狗。一只狗可能有两个 IMU（轮换充电），都列出来。
 
@@ -94,14 +81,16 @@ async def dogs(db: AsyncSession) -> list[dict]:
     也跟着变少，下拉会越点越空。
     """
     rows = (await db.execute(
-        select(Dog.dog_code, Dog.name, Dog.imu).order_by(Dog.dog_code)
+        select(Dog.dog_code, Dog.name, Dog.imu, Dog.site).order_by(Dog.dog_code)
     )).all()
     out = []
-    for code, name, imu in rows:
+    for code, name, imu, site in rows:
         keys = imu_keys_of_dog(imu, code)
         if not keys:
             continue
-        out.append({"dog_name": name or code, "imus": keys})
+        # 同一批项圈会在几个狗场轮着用，同一个 IMU 号对应好几只狗：带上场地才分得清
+        label = name or code
+        out.append({"dog_name": f"{label}（{site}）" if site else label, "imus": keys, "site": site})
     return out
 
 
@@ -135,7 +124,8 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
     狗是从 sample_code 里解析出 IMU 编号再映射的，**不是用 Sample.dog_id**
     ——那一列在实际数据里基本是空的，按它分组会把所有狗collapse 成一行。
     """
-    imu_map = await _imu_to_dog(db)
+    # 按 (场地, IMU) 找狗：同一个 IMU 号在不同狗场是不同的狗，场地从样本路径里认
+    idx = await dog_index(db)
     want = set(f"IMU{n}" for n in _imu_nums(imus or []))
     q = (
         select(SampleInferenceRun, Sample)
@@ -163,13 +153,16 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
         imu = _imu_of(sample.sample_code) or "未知设备"
         if want and imu not in want:
             continue          # SQL 那层是粗筛，这里精确核
-        key = (sample.session_date, imu)
+        site = site_layout.site_of(sample.sample_code, sample.video_cam1_path, sample.imu_csv_path)
+        # 场地也进分组：同一天两个狗场同号的设备是两只狗，不能加在一起
+        key = (sample.session_date, imu, site)
         b = buckets.get(key)
         if b is None:
             b = buckets[key] = {
                 "stat_date": sample.session_date.isoformat(),
                 "imu": imu,
-                "dog_name": imu_map.get(imu),
+                "site": site,
+                "dog_name": idx.name(imu, site),
                 "n_samples": 0,
                 "n_windows": 0,
                 "missing_seconds": 0.0,
@@ -201,6 +194,7 @@ async def daily(db: AsyncSession, date_from: date, date_to: date,
         out.append({
             "stat_date": b["stat_date"],
             "imu": b["imu"],
+            "site": b["site"],
             "dog_name": b["dog_name"],
             "n_samples": b["n_samples"],
             "n_windows": b["n_windows"],
