@@ -41,6 +41,7 @@ import json
 import os
 import re
 import shutil
+import zlib
 from collections import Counter
 from datetime import date, datetime, timedelta
 
@@ -111,11 +112,134 @@ def _fmt(t: datetime) -> str:
     return t.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
+def _seg_sec(v: dict) -> float:
+    if v.get("start_ms") is not None and v.get("end_ms") is not None:
+        return max(0, int(v["end_ms"]) - int(v["start_ms"])) / 1000
+    return 0.0
+
+
+def _tally(ls_tasks: list[dict]) -> tuple[Counter, Counter, int, float, list[dict]]:
+    """按导出结果重新数一遍：各叶子类别段数 / 秒数、总段数、总秒数，以及层级树。
+
+    树按整条链挂：一段「舔-前左爪」同时算进「舔」「舔-前爪」「舔-前左爪」。界面上先看
+    大类、点开再看细类——细类太少、要不要训练时并进上一级，看这棵树最清楚。"""
+    counter: Counter[str] = Counter()
+    secs: Counter[str] = Counter()
+    n_seg = 0
+    total = 0.0
+    nodes: dict[tuple[str, ...], dict] = {}
+    for t in ls_tasks:
+        for seg in t["annotations"][0]["result"]:
+            v = seg["value"]
+            chain_ = v.get("timeserieslabels") or []
+            if not chain_:
+                continue
+            sec = _seg_sec(v)
+            counter[chain_[-1]] += 1
+            secs[chain_[-1]] += sec
+            n_seg += 1
+            total += sec
+            for i in range(len(chain_)):
+                key = tuple(chain_[: i + 1])
+                nd = nodes.setdefault(key, {"label": chain_[i], "n": 0, "sec": 0.0, "depth": i + 1})
+                nd["n"] += 1
+                nd["sec"] += sec
+
+    def build(prefix: tuple[str, ...]) -> list[dict]:
+        kids = [k for k in nodes if len(k) == len(prefix) + 1 and k[: len(prefix)] == prefix]
+        out = []
+        for k in sorted(kids, key=lambda k: -nodes[k]["sec"]):
+            nd = dict(nodes[k])
+            nd["sec"] = round(nd["sec"], 1)
+            # 字段就叫 children：导出预览那张表要的正是 antd 的树形展开
+            ch = build(k)
+            if ch:
+                nd["children"] = ch
+            out.append(nd)
+        return out
+
+    return counter, secs, n_seg, total, build(())
+
+
+def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float) -> tuple[list[dict], list[str]]:
+    """把指定的几个大头类别（活动、静止/休息…）按段抽掉一部分，原地改 ls_tasks。
+
+    降到多少是**自适应**的：不超过「其余（没选的）大类里最大那个」的 factor 倍。
+    数据量变了目标跟着变，不用人每次去算该留几小时。
+
+    抽哪些段：按 (任务, 起点) 的哈希排个固定的乱序，依次留到够数为止——
+    **同一批数据每次导出抽到的是同一些段**（可复现），又是摊在所有狗、所有天上的，
+    不会只留了前几天。最后一段超出的部分截掉。被抽掉的段整段不导出，那段时间
+    不参与训练（不会变成负样本：导出格式只取标注过的区间）。"""
+    want = [x for x in dict.fromkeys(reduce_labels) if x]
+    if not want:
+        return [], []
+    warnings: list[str] = []
+    segs: list[tuple[int, dict, list[str]]] = []      # (任务下标, 段, 链)
+    root_sec: Counter[str] = Counter()
+    for ti, t in enumerate(ls_tasks):
+        for seg in t["annotations"][0]["result"]:
+            chain_ = seg["value"].get("timeserieslabels") or []
+            if chain_:
+                segs.append((ti, seg, chain_))
+                root_sec[chain_[0]] += _seg_sec(seg["value"])
+    # 选中的类别落在哪几个大类里：参照物要从**没被减量**的大类里找
+    hit_roots = {c[0] for _ti, _s, c in segs if any(x in c for x in want)}
+    others = [sec for r, sec in root_sec.items() if r not in hit_roots]
+    if not others:
+        return [], ["减量没做：选中的类别把所有大类都包了，找不到参照的类别"]
+    ref = max(others)
+    target = ref * factor
+    drop: set[int] = set()
+    report: list[dict] = []
+    for name in want:
+        mine = [(ti, s, c) for ti, s, c in segs if name in c and id(s) not in drop]
+        before = sum(_seg_sec(s["value"]) for _ti, s, _c in mine)
+        if not mine:
+            warnings.append(f"减量：这批数据里没有「{name}」")
+            continue
+        if before <= target:
+            report.append({"label": name, "before_sec": round(before, 1), "after_sec": round(before, 1),
+                           "before_n": len(mine), "after_n": len(mine), "target_sec": round(target, 1)})
+            continue
+        order = sorted(mine, key=lambda x: zlib.crc32(
+            f"{ls_tasks[x[0]]['id']}:{x[1]['value'].get('start_ms')}:{name}".encode()))
+        kept = 0.0
+        n_kept = 0
+        for _ti, s, _c in order:
+            v = s["value"]
+            sec = _seg_sec(v)
+            if kept >= target:
+                drop.add(id(s))
+                continue
+            if kept + sec > target:
+                rest = target - kept
+                if rest < 5:          # 截出来不到 5 秒的碎段不要
+                    drop.add(id(s))
+                    kept = target
+                    continue
+                end_ms = int(v["start_ms"]) + int(rest * 1000)
+                start_dt = datetime.strptime(v["start"], "%Y-%m-%d %H:%M:%S.%f")
+                v["end"] = _fmt(start_dt + timedelta(milliseconds=end_ms - int(v["start_ms"])))
+                v["end_ms"] = end_ms
+                sec = rest
+            kept += sec
+            n_kept += 1
+        report.append({"label": name, "before_sec": round(before, 1), "after_sec": round(kept, 1),
+                       "before_n": len(mine), "after_n": n_kept, "target_sec": round(target, 1)})
+    if drop:
+        for t in ls_tasks:
+            ann = t["annotations"][0]
+            ann["result"] = [s for s in ann["result"] if id(s) not in drop]
+    return report, warnings
+
+
 async def export_dataset(
     db: AsyncSession, name: str, date_from: date | None = None, date_to: date | None = None,
     project_ids: list[int] | None = None,
     include_submitted: bool = False, scope: str = "approved",
     flatten: bool = True, track_priority: list[str] | None = None,
+    reduce_labels: list[str] | None = None, reduce_factor: float = 3.0,
     dry_run: bool = False,
 ) -> dict:
     """dry_run=True：照常挑数据、算统计，但不落盘——导出前先看这批数据长什么样（类别时长、
@@ -470,6 +594,13 @@ async def export_dataset(
     if not ls_tasks:
         raise TrainingExportError("没有可导出的任务；" + "；".join(warnings[:3]))
 
+    # 减量放在最后：要知道各大类一共多少才定得出目标
+    reduced, w_reduce = _reduce(ls_tasks, reduce_labels or [], reduce_factor)
+    warnings[:0] = w_reduce
+    if reduced:
+        ls_tasks = [t for t in ls_tasks if t["annotations"][0]["result"]]
+    label_counter, label_sec, n_segments, total_sec, label_tree = _tally(ls_tasks)
+
     # 混了采样率就喊一声，放在 warnings 最前面。不拦着导出——混着导是合理需求，
     # 只要下游按每个任务的 sample_rate_hz 处理就行；但绝不能让它悄无声息。
     if len(hz_counter) > 1:
@@ -529,6 +660,10 @@ async def export_dataset(
         "labels": dict(label_counter),
         # 每个类别的总时长（秒）。段数看不出份量，均衡与否得按时长算。
         "label_seconds": {k: round(v, 1) for k, v in label_sec.items()},
+        # 按层级汇总（大类 → 细类 → …），每层的段数 / 秒数含它底下所有细类
+        "label_tree": label_tree,
+        # 减量：选了哪些类别、各从多少减到多少
+        "reduce": {"labels": reduce_labels or [], "factor": reduce_factor, "result": reduced},
         "warnings": warnings[:50],
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "export_json": os.path.join(rel_dir, "merged_tmp.json"),
@@ -619,6 +754,8 @@ def label_stats(names: list[str]) -> dict:
     # 键是 (根, 叶)：叶子名要挂回自己的根，不然排序和占比算不出层次
     per_leaf: dict[str, Counter] = {}
     per_leaf_sec: dict[str, Counter] = {}
+    # 细类的整条链（[舔, 舔-前爪, 舔-前左爪]）：训练时「太少的并进上一级」要知道上一级是谁
+    leaf_chain: dict[tuple[str, str], list[str]] = {}
     missing: list[str] = []
     for name in names:
         if not _NAME_RE.match(name):
@@ -648,6 +785,7 @@ def label_stats(names: list[str]) -> dict:
                     s[labels[0]] += sec
                     lc[(labels[0], labels[-1])] += 1
                     ls[(labels[0], labels[-1])] += sec
+                    leaf_chain.setdefault((labels[0], labels[-1]), list(labels))
         per[name] = c
         per_sec[name] = s
         per_leaf[name] = lc
@@ -676,6 +814,7 @@ def label_stats(names: list[str]) -> dict:
             {
                 "label": leaf if leaf != root else f"{root}（未细分）",
                 "is_root_only": leaf == root,
+                "chain": leaf_chain.get((root, leaf), [root, leaf]),
                 "n_segments": n,
                 "seconds": round(sec, 1),
                 "pct_in_parent": round(sec / base * 100, 1),

@@ -15,7 +15,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,6 +71,10 @@ class DatasetExportIn(BaseModel):
     # 不折叠就各轨原样导，给分轨训练用。没分轨的项目两种一样
     flatten: bool = True
     track_priority: list[str] | None = None
+    # 减量：这几个类别（如 活动、静止/休息）太多，按段随机抽掉一部分，
+    # 降到「其余最大类的 reduce_factor 倍」以内
+    reduce_labels: list[str] | None = None
+    reduce_factor: float = Field(3.0, gt=0, le=100)
     # 只预览：照常挑数据、算统计，不落盘（导出前先看类别分布）
     dry_run: bool = False
 
@@ -93,6 +97,7 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
             (body.project_ids or ([body.project_id] if body.project_id is not None else None)),
             body.include_submitted,
             scope=body.scope, flatten=body.flatten, track_priority=body.track_priority,
+            reduce_labels=body.reduce_labels, reduce_factor=body.reduce_factor,
             dry_run=body.dry_run,
         )
     except TrainingExportError as e:
