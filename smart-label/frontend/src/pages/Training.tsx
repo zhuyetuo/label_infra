@@ -2515,7 +2515,7 @@ function ExportPreview({
             render: (_, r) => (r.ratio < 1 ? `≈${Math.round(r.n * r.ratio)} / ${r.n}` : r.n),
           },
           {
-            title: "保留（拖动调整）", width: 260,
+            title: "保留（拖动或填分钟）", width: 380,
             render: (_, r) => {
               if (!r.isRoot || !tree) {
                 return (
@@ -2525,21 +2525,43 @@ function ExportPreview({
                 );
               }
               const keep = keepOf(r);
+              const reduced = keep < r.sec - 0.5;
+              // **对数刻度**：700 小时的类别要留几十分钟，线性滑块上那只是最左边 0.1% 的一个点，
+              // 根本拖不细。对数下 1 分钟 / 10 分钟 / 1 小时 / 10 小时 间距一样
+              const lo = Math.log(Math.min(60, r.sec));
+              const hi = Math.log(Math.max(r.sec, 1));
+              const toPos = (sec: number) => (hi > lo ? Math.round(((Math.log(Math.max(sec, 1)) - lo) / (hi - lo)) * 1000) : 1000);
+              const fromPos = (v: number) => (v >= 1000 ? r.sec : Math.exp(lo + ((hi - lo) * v) / 1000));
+              // 拖出来的数取个整：到分钟或到 10 分钟，不然是 37 分 13 秒这种
+              const tidy = (sec: number) => (sec >= r.sec - 0.5 ? r.sec : sec >= 3600 ? Math.round(sec / 600) * 600 : Math.max(60, Math.round(sec / 60) * 60));
+              const set = (sec: number) => setTargets({ ...targets, [r.label]: Math.min(r.sec, Math.max(0, sec)) });
               return (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Slider
-                    style={{ flex: 1, margin: "4px 0" }}
+                    style={{ flex: 1, margin: "4px 0", minWidth: 90 }}
                     min={0}
-                    max={Math.max(1, Math.round(r.sec))}
-                    step={Math.max(1, Math.round(r.sec / 200))}
-                    value={Math.round(keep)}
-                    tooltip={{ formatter: (v) => fmtSecs(v ?? 0) }}
-                    onChange={(v: number) => setTargets({ ...targets, [r.label]: v })}
+                    max={1000}
+                    value={toPos(keep)}
+                    tooltip={{ formatter: (v) => fmtSecs(tidy(fromPos(v ?? 0))) }}
+                    onChange={(v: number) => set(tidy(fromPos(v)))}
                   />
-                  <span style={{ fontSize: 12, whiteSpace: "nowrap", width: 110, textAlign: "right" }}>
-                    {keep < r.sec - 0.5 ? <b>{fmtSecs(keep)}</b> : fmtSecs(r.sec)}
-                    {keep < r.sec - 0.5 && <Typography.Text type="secondary"> /{Math.round((keep / r.sec) * 100)}%</Typography.Text>}
-                  </span>
+                  {/* 想要精确值就直接填分钟数 */}
+                  <InputNumber
+                    size="small"
+                    min={0}
+                    max={Math.ceil(r.sec / 60)}
+                    precision={0}
+                    value={Math.round(keep / 60)}
+                    onChange={(v) => v != null && set(v * 60)}
+                    addonAfter="分"
+                    style={{ width: 110 }}
+                  />
+                  {/* 分钟数大了不好读（888 分），旁边换算成小时；百分比放悬停里 */}
+                  <Tooltip title={reduced ? `留原来的 ${Math.max(0.1, Math.round((keep / r.sec) * 1000) / 10)}%` : "全部保留"}>
+                    <Typography.Text type={reduced ? undefined : "secondary"} style={{ fontSize: 12, width: 84, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {reduced ? fmtSecs(keep) : "全留"}
+                    </Typography.Text>
+                  </Tooltip>
                 </div>
               );
             },
