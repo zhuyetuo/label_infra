@@ -41,8 +41,9 @@ import json
 import os
 import re
 import shutil
+import threading
 import zlib
-from collections import Counter
+from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
@@ -110,6 +111,36 @@ def _subtract(start_ms: int, end_ms: int, holes: list[tuple[int, int]]) -> list[
 
 def _fmt(t: datetime) -> str:
     return t.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+# AI 结果 JSON 里的「掉数据」时段，按 (路径, mtime, 大小) 缓存。
+# 那份 JSON 带着逐窗口结果，一份几 MB，导出 / 预览要读上千份——而我们只要里面
+# 的 missing 那几条。不缓存的话每点一次「预览统计」都把上千份完整解析一遍
+_MISSING_CACHE: OrderedDict[tuple, list[tuple]] = OrderedDict()
+_MISSING_CACHE_MAX = 50000
+_missing_lock = threading.Lock()
+
+
+def _missing_raw(relpath: str) -> list[tuple]:
+    """→ [(start_ts, end_ts), ...]（原始字符串，换算成毫秒要 CSV 起点，在调用方做）"""
+    full = os.path.join(settings.nas_root, relpath)
+    try:
+        st = os.stat(full)
+    except OSError:
+        return []
+    key = (full, st.st_mtime, st.st_size)
+    with _missing_lock:
+        hit = _MISSING_CACHE.get(key)
+        if hit is not None:
+            _MISSING_CACHE.move_to_end(key)
+            return hit
+    data = _read_ai_json(relpath)
+    out = [(m.get("start_ts"), m.get("end_ts")) for m in (data or {}).get("missing") or []]
+    with _missing_lock:
+        _MISSING_CACHE[key] = out
+        while len(_MISSING_CACHE) > _MISSING_CACHE_MAX:
+            _MISSING_CACHE.popitem(last=False)
+    return out
 
 
 def _seg_sec(v: dict) -> float:
@@ -366,12 +397,28 @@ async def export_dataset(
     for tid, s_ms, e_ms in cand_rows.all():
         cand_holes.setdefault(tid, []).append((int(s_ms), int(e_ms)))
 
-    def _missing_holes(sample: Sample, csv_start: datetime) -> list[tuple[int, int]]:
+    # 每个任务要去 NAS 读两样东西：IMU CSV 的起点时间、AI 结果里的掉数据时段。
+    # **先并发全读好**，下面的循环只算不等。以前在循环里一个个 await，
+    # 上千个任务就是上千次串行的 NAS 往返，预览要等好几分钟
+    sem = asyncio.Semaphore(16)
+
+    async def _prep(sample: Sample) -> tuple[datetime | PrelabelError, list[tuple]]:
+        async with sem:
+            try:
+                cs = await _csv_start_of(sample)
+            except PrelabelError as e:
+                return e, []
+            raw = await asyncio.to_thread(_missing_raw, ai_label_relpath(sample.imu_csv_path))
+            return cs, raw
+
+    need = [(t.id, s) for t, s in rows if items_by_task.get(t.id)]
+    prepped = dict(zip([tid for tid, _ in need], await asyncio.gather(*(_prep(s) for _, s in need)), strict=True))
+
+    def _missing_holes(raw: list[tuple], csv_start: datetime) -> list[tuple[int, int]]:
         """AI 结果里记的掉数据时间段，换算成相对 CSV 起点的毫秒。"""
-        data = _read_ai_json(ai_label_relpath(sample.imu_csv_path)) if sample.imu_csv_path else None
         out: list[tuple[int, int]] = []
-        for m in (data or {}).get("missing") or []:
-            a, b = parse_ts(m.get("start_ts")), parse_ts(m.get("end_ts"))
+        for s_ts, e_ts in raw:
+            a, b = parse_ts(s_ts), parse_ts(e_ts)
             if a and b and b > a:
                 out.append((
                     int(round((a - csv_start).total_seconds() * 1000)),
@@ -412,14 +459,13 @@ async def export_dataset(
         if not items:
             warnings.append(f"任务 #{task.id} 没有片段，跳过")
             continue
-        try:
-            csv_start = await _csv_start_of(sample)
-        except PrelabelError as e:
-            warnings.append(f"任务 #{task.id}：{e}")
+        csv_start, raw_missing = prepped[task.id]
+        if isinstance(csv_start, PrelabelError):
+            warnings.append(f"任务 #{task.id}：{csv_start}")
             continue
         result = []
         # 「待定」和「采集时掉数据」都要挖掉，合成一组洞一起处理
-        missing = await asyncio.to_thread(_missing_holes, sample, csv_start)
+        missing = _missing_holes(raw_missing, csv_start)
         n_missing_ms += sum(b - a for a, b in missing)
         holes = _merge((holes_by_task.get(task.id) or []) + (cand_holes.get(task.id) or []) + missing)
 
