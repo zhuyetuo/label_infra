@@ -36,13 +36,17 @@ from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
 from app.services import label_tree
 from app.models.sample import Sample
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, parse_ts
 
 _logger = logging.getLogger("smart-label.model_eval")
 
 # 阈值曲线按这个步长扫：0.05 够细了，再细图上也看不出差别
 _THRESHOLDS = [round(x / 20, 2) for x in range(0, 20)]
+
+# 人工审过的任务才拿来当正确答案：还在标的草稿可能只标了一半，
+# 拿它当答案的话没标到的地方模型标对了也算误报
+_REVIEWED = (TaskStatus.SUBMITTED, TaskStatus.APPROVED)
 
 
 @dataclass
@@ -155,6 +159,7 @@ async def _human_by_sample(
             Task.sample_id.in_(sample_ids),
             AnnotationRecord.round_no == Task.round_no,
             AnnotationLabelItem.label_id.in_(label_ids),
+            Task.status.in_(_REVIEWED),
         )
     )
     truths: dict[int, list[Seg]] = defaultdict(list)
@@ -264,14 +269,56 @@ async def evaluate(
     返回每个版本的 P/R/F1、阈值曲线，以及两两之间的回归对照。
     """
     label_names = [label]
-    samples = (await db.execute(select(Sample).where(Sample.id.in_(sample_ids)))).scalars().all()
-    if not samples:
-        return {"versions": [], "warnings": ["没有选中任何样本"]}
+    warnings: list[str] = []
+
+    def _empty(msg: str, n_samples: int = 0) -> dict:
+        # 形状跟正常结果一样：前端不用对"没结果"另写一套判断
+        return {"versions": [], "diffs": [], "n_samples": n_samples, "n_truth": 0,
+                "iou_min": iou_min, "warnings": [*warnings, msg]}
+
+    # 只评人工审过的样本：没审过的没有正确答案，模型在上面标的每一段都会算成误报
+    reviewed = set(
+        (
+            await db.execute(
+                select(Task.sample_id).where(Task.sample_id.in_(sample_ids), Task.status.in_(_REVIEWED))
+            )
+        ).scalars().all()
+    )
+    if len(reviewed) < len(set(sample_ids)):
+        warnings.append(f"{len(set(sample_ids)) - len(reviewed)} 个样本还没人工审过，不计分")
+    if not reviewed:
+        return _empty("这批样本都还没人工审过，没法评测——先审几条出来")
+
+    # 几个版本只在**都跑过**的样本上比。某个版本没跑的样本如果也算进去，
+    # 那里的人工片段全成了它的漏检，召回低的原因是"没跑"而不是"没认出来"
+    covered = reviewed
+    for v in versions:
+        has = set(
+            (
+                await db.execute(
+                    select(SampleInferenceRun.sample_id).where(
+                        SampleInferenceRun.sample_id.in_(reviewed),
+                        SampleInferenceRun.model_tag == v.get("model_tag"),
+                        SampleInferenceRun.mode == v.get("mode"),
+                    )
+                )
+            ).scalars().all()
+        )
+        if len(has) < len(reviewed):
+            warnings.append(
+                f"{v.get('model_tag')} · {v.get('mode')} 在这批里只跑了 {len(has)}/{len(reviewed)} 个样本"
+            )
+        covered = covered & has
+    if not covered:
+        return _empty("选的版本在这批样本上没有共同跑过的——先点「跑这几个版本」", len(reviewed))
+    if len(covered) < len(reviewed):
+        warnings.append(f"只在 {len(covered)} 个所有版本都跑过的样本上比，其余不计分")
+
+    samples = (await db.execute(select(Sample).where(Sample.id.in_(covered)))).scalars().all()
     truths, uncertain_holes = await _human_by_sample(db, [s.id for s in samples], label_names)
     if not truths:
-        return {"versions": [], "warnings": ["这批样本还没有人工标注，没法评测——先审几条出来"]}
+        warnings.append(f"这批样本里没有人工标的「{label}」，只能看误报")
 
-    warnings: list[str] = []
     out_versions: list[dict] = []
     # 每个版本命中了哪些人工片段：(sample_id, 人工片段下标)。两两对照时用它算
     # 「这一版命中、那一版没命中」，也就是回归/改进
@@ -425,7 +472,12 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
     try:
         async with SessionLocal() as db:
             samples = (await db.execute(select(Sample).where(Sample.id.in_(sample_ids)))).scalars().all()
+        no_csv = [s for s in samples if not s.imu_csv_path]
         samples = [s for s in samples if s.imu_csv_path]
+        # 总数按真正要跑的算，不然没有 IMU 的样本会让进度条永远到不了 100%
+        _eval_progress["total"] = len(samples) * len(modes)
+        if no_csv:
+            _eval_progress["detail"].append(f"{len(no_csv)} 个样本没有 IMU 数据，跳过")
         chunk = max(1, settings.algo_infer_batch_size)
         for mode in modes:
             for i in range(0, len(samples), chunk):

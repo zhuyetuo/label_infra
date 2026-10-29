@@ -34,10 +34,57 @@ router = APIRouter(
 _EVAL_SET_ACTION = "model_eval.set"
 
 
+async def _reviewed_in_range(db: AsyncSession, date_from: _dt.date, date_to: _dt.date) -> list[int]:
+    """日期范围里**人工审过**的样本。没审过的样本没有正确答案，拿来评测的话
+    模型在上面标的每一段都会被算成误报——冻结、跑批、出报告三处必须是同一批。"""
+    rows = await db.execute(
+        select(Sample.id)
+        .join(Task, Task.sample_id == Sample.id)
+        .where(
+            Sample.session_date >= date_from,
+            Sample.session_date <= date_to,
+            Task.status.in_([TaskStatus.SUBMITTED, TaskStatus.APPROVED]),
+        )
+        .distinct()
+    )
+    return [r[0] for r in rows.all()]
+
+
+async def _scope_ids(
+    db: AsyncSession,
+    set_id: int | None,
+    sample_ids: list[int] | None,
+    date_from: _dt.date | None,
+    date_to: _dt.date | None,
+) -> list[int]:
+    if set_id:
+        row = await db.get(AuditLog, set_id)
+        if row is None or row.action != _EVAL_SET_ACTION:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "评测集不存在")
+        return (json.loads(row.detail or "{}") or {}).get("sample_ids") or []
+    if sample_ids:
+        return sample_ids
+    if date_from and date_to:
+        return await _reviewed_in_range(db, date_from, date_to)
+    return []
+
+
 @router.get("/runs")
-async def available_runs(db: AsyncSession = Depends(get_db)):
-    """有哪些 (模型, 版本) 跑过、各覆盖多少样本——对比页的下拉。"""
-    return ok(await list_runs(db))
+async def available_runs(
+    set_id: int | None = None,
+    date_from: _dt.date | None = None,
+    date_to: _dt.date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """有哪些 (模型, 版本) 跑过、各覆盖多少样本——对比页的下拉。
+
+    给了范围就只数这批样本：下拉里显示的是「这批里跑了几个」，不是全库，
+    否则选上一个在这批里根本没跑过的版本，报告里全是漏检。"""
+    if set_id or (date_from and date_to):
+        ids = await _scope_ids(db, set_id, None, date_from, date_to)
+        runs = await list_runs(db, ids) if ids else []
+        return ok({"n_scope": len(ids), "runs": runs})
+    return ok({"n_scope": None, "runs": await list_runs(db)})
 
 
 @router.get("/edge-models")
@@ -120,17 +167,7 @@ async def create_set(body: EvalSetIn, db: AsyncSession = Depends(get_db), user: 
     if not ids:
         if not (body.date_from and body.date_to):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "要么直接给 sample_ids，要么给日期范围")
-        rows = await db.execute(
-            select(Sample.id)
-            .join(Task, Task.sample_id == Sample.id)
-            .where(
-                Sample.session_date >= body.date_from,
-                Sample.session_date <= body.date_to,
-                Task.status.in_([TaskStatus.SUBMITTED, TaskStatus.APPROVED]),
-            )
-            .distinct()
-        )
-        ids = [r[0] for r in rows.all()]
+        ids = await _reviewed_in_range(db, body.date_from, body.date_to)
     if not ids:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "这个范围里没有人工审核过的样本，没法当评测集")
     detail = {
@@ -140,17 +177,17 @@ async def create_set(body: EvalSetIn, db: AsyncSession = Depends(get_db), user: 
         "date_from": body.date_from.isoformat() if body.date_from else None,
         "date_to": body.date_to.isoformat() if body.date_to else None,
     }
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action=_EVAL_SET_ACTION,
-            target_type="model_eval",
-            target_id=0,
-            detail=json.dumps(detail, ensure_ascii=False),
-        )
+    row = AuditLog(
+        user_id=user.id,
+        action=_EVAL_SET_ACTION,
+        target_type="model_eval",
+        target_id=0,
+        detail=json.dumps(detail, ensure_ascii=False),
     )
+    db.add(row)
     await db.commit()
-    return ok({"name": body.name, "n_samples": len(ids)})
+    # 带上 id：前端冻完直接选中它，不用再去下拉里找
+    return ok({"id": row.id, "name": body.name, "n_samples": len(ids)})
 
 
 @router.get("/sets")
@@ -200,19 +237,9 @@ class CompareIn(BaseModel):
 
 @router.post("/compare")
 async def compare(body: CompareIn, db: AsyncSession = Depends(get_db)):
-    ids = body.sample_ids or []
-    if body.set_id:
-        row = await db.get(AuditLog, body.set_id)
-        if row is None or row.action != _EVAL_SET_ACTION:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "评测集不存在")
-        ids = (json.loads(row.detail or "{}") or {}).get("sample_ids") or []
-    if not ids and body.date_from and body.date_to:
-        rows = await db.execute(
-            select(Sample.id).where(Sample.session_date >= body.date_from, Sample.session_date <= body.date_to)
-        )
-        ids = [r[0] for r in rows.all()]
+    ids = await _scope_ids(db, body.set_id, body.sample_ids, body.date_from, body.date_to)
     if not ids:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：给 set_id、sample_ids 或日期范围")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集，或者换个有人工审核过样本的日期范围")
     return ok(
         await evaluate(
             db,
@@ -245,19 +272,9 @@ async def run_eval(body: EvalRunIn, db: AsyncSession = Depends(get_db)):
     跟项目页的「批量 AI 预标注」是两回事：那个是给标注员铺草稿（一个任务只能
     有一份），这个纯粹攒对比数据，几个版本并存。
     """
-    ids = body.sample_ids or []
-    if body.set_id:
-        row = await db.get(AuditLog, body.set_id)
-        if row is None or row.action != _EVAL_SET_ACTION:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "评测集不存在")
-        ids = (json.loads(row.detail or "{}") or {}).get("sample_ids") or []
-    if not ids and body.date_from and body.date_to:
-        rows = await db.execute(
-            select(Sample.id).where(Sample.session_date >= body.date_from, Sample.session_date <= body.date_to)
-        )
-        ids = [r[0] for r in rows.all()]
+    ids = await _scope_ids(db, body.set_id, body.sample_ids, body.date_from, body.date_to)
     if not ids:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集，或者换个有人工审核过样本的日期范围")
     started = await start_eval_run(ids, body.modes)
     return ok({"started": started, "n_samples": len(ids), "modes": body.modes})
 

@@ -74,7 +74,9 @@ export interface EvalRunProgress {
   detail: string[];
 }
 
-export const listEvalRuns = () => request.get<never, EvalRunOption[]>("/model-eval/runs");
+/** 给了范围就只数这批样本：n_scope = 这批多少个审过的样本，runs 里的 n_samples = 其中跑了几个 */
+export const listEvalRuns = (params: { set_id?: number; date_from?: string; date_to?: string } = {}) =>
+  request.get<never, { n_scope: number | null; runs: EvalRunOption[] }>("/model-eval/runs", { params });
 export const listEvalSets = () => request.get<never, EvalSet[]>("/model-eval/sets");
 export const createEvalSet = (body: {
   name: string;
@@ -82,7 +84,7 @@ export const createEvalSet = (body: {
   date_to?: string;
   sample_ids?: number[];
   note?: string;
-}) => request.post<never, { name: string; n_samples: number }>("/model-eval/sets", body);
+}) => request.post<never, { id: number; name: string; n_samples: number }>("/model-eval/sets", body);
 
 export const compareModels = (body: {
   set_id?: number;
