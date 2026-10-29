@@ -1,5 +1,5 @@
 import { Button, Checkbox, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
-import { AimOutlined, CaretRightOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
+import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -146,7 +146,7 @@ const spline = uPlot.paths.spline?.();
 
 function MiniPlot({
   snap, chans, smooth, yRange, xRange, width, height, bus, live, follow, winSec, axisColor,
-  rangeRef, editable, onEdge, onScrub, version, resetKey, neighbors,
+  rangeRef, editable, onEdge, onScrub, onMove, version, resetKey, neighbors,
 }: {
   snap: Snap;
   chans: typeof ACC;
@@ -169,6 +169,8 @@ function MiniPlot({
   onEdge?: (which: "s" | "e", ms: number) => void;
   /** 点 / 拖图上别处：把视频跳到那里 */
   onScrub?: (ms: number) => void;
+  /** 按住色块顶上那条拖：整段平移，给新的起止（绝对毫秒） */
+  onMove?: (s: number, e: number) => void;
   /** 外面改了 rangeRef（「起点设到播放线」）时加一，图跟着重画 */
   version?: number;
   /** 加一 = 视图回到初始（取消 Shift+滚轮的缩放 / 平移） */
@@ -183,8 +185,8 @@ function MiniPlot({
   const scrolling = !!follow && dur > winSec * 1.2;
 
   // 交互回调放 ref 里：它们每次渲染都是新函数，放进 effect 依赖会让图每次都重建
-  const cb = useRef({ onEdge, onScrub, editable, neighbors });
-  cb.current = { onEdge, onScrub, editable, neighbors };
+  const cb = useRef({ onEdge, onScrub, onMove, editable, neighbors });
+  cb.current = { onEdge, onScrub, onMove, editable, neighbors };
   // 人用 Shift+滚轮 缩放 / Shift+拖 平移过：跟随模式就别再自己挪窗口
   const zoomedRef = useRef(false);
   const initXRef = useRef<[number, number] | null>(null);
@@ -242,6 +244,7 @@ function MiniPlot({
               u.ctx.save();
               u.ctx.font = `${10 * dpr}px sans-serif`;
               u.ctx.textBaseline = "top";
+              u.ctx.textAlign = "left";
               for (const n of nb) {
                 const a = Math.max(left, u.valToPos((n.s - info.startMs) / 1000, "x", true));
                 const b = Math.min(left + bw, u.valToPos((n.e - info.startMs) / 1000, "x", true));
@@ -270,6 +273,23 @@ function MiniPlot({
                 u.ctx.stroke();
                 u.ctx.fillRect(x - 4 * dpr, top + h / 2 - 9 * dpr, 8 * dpr, 18 * dpr);
               }
+              // 顶上一条把手：按住它拖 = 整段平移（起止一起挪，长度不变）
+              const gx0 = Math.max(left, u.valToPos(rs, "x", true));
+              const gx1 = Math.min(left + bw, u.valToPos(re, "x", true));
+              if (gx1 > gx0) {
+                u.ctx.globalAlpha = 0.55;
+                u.ctx.fillRect(gx0, top, gx1 - gx0, 14 * dpr);
+                u.ctx.globalAlpha = 1;
+                u.ctx.font = `${10 * dpr}px sans-serif`;
+                u.ctx.textBaseline = "top";
+                u.ctx.textAlign = "left";
+                const text = ["⇔ 按住这条拖动整段", "⇔ 拖动整段", "⇔"].find(
+                  (t) => gx1 - gx0 > u.ctx.measureText(t).width + 8 * dpr);
+                if (text) {
+                  u.ctx.fillStyle = "#fff";
+                  u.ctx.fillText(text, gx0 + 4 * dpr, top + 2 * dpr);
+                }
+              }
               u.ctx.restore();
             }
           },
@@ -289,7 +309,7 @@ function MiniPlot({
       const rect = over.getBoundingClientRect();
       return Math.round(info.startMs + u.posToVal(clientX - rect.left, "x") * 1000);
     };
-    const edgeAt = (clientX: number): "s" | "e" | null => {
+    const edgeAt = (clientX: number, clientY?: number): "s" | "e" | "m" | null => {
       if (!cb.current.editable) return null;
       const rect = over.getBoundingClientRect();
       const r = cur();
@@ -297,11 +317,14 @@ function MiniPlot({
       const xe_ = u.valToPos((r.e - info.startMs) / 1000, "x", false);
       const px = clientX - rect.left;
       const ds = Math.abs(px - xs_), de = Math.abs(px - xe_);
-      if (Math.min(ds, de) > 8) return null;
-      return ds <= de ? "s" : "e";
+      if (Math.min(ds, de) <= 8) return ds <= de ? "s" : "e";
+      // 色块顶上 14 像素那条：整段拖
+      if (clientY != null && clientY - rect.top <= 14 && px > xs_ && px < xe_) return "m";
+      return null;
     };
     const onHover = (ev: MouseEvent) => {
-      over.style.cursor = edgeAt(ev.clientX) ? "ew-resize" : cb.current.onScrub ? "pointer" : "default";
+      const w = edgeAt(ev.clientX, ev.clientY);
+      over.style.cursor = w === "m" ? "grab" : w ? "ew-resize" : cb.current.onScrub ? "pointer" : "default";
     };
     // Shift+滚轮：以鼠标位置为中心缩放（不按 Shift 照常滚页面）
     const onWheel = (ev: WheelEvent) => {
@@ -344,12 +367,30 @@ function MiniPlot({
         window.addEventListener("mouseup", up);
         return;
       }
-      const which = edgeAt(ev.clientX);
+      const which = edgeAt(ev.clientX, ev.clientY);
+      if (which === "m") {
+        ev.preventDefault();
+        const a0 = msAt(ev.clientX), r0 = { ...cur() };
+        over.style.cursor = "grabbing";
+        const move = (e2: MouseEvent) => {
+          const d = msAt(e2.clientX) - a0;
+          cb.current.onMove?.(r0.s + d, r0.e + d);
+          u.redraw(false);
+        };
+        const up = () => {
+          over.style.cursor = "grab";
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+        return;
+      }
       if (!which && !cb.current.onScrub) return;
       ev.preventDefault();
       const act = (x: number) => {
         const ms = msAt(x);
-        if (which) cb.current.onEdge?.(which, ms);
+        if (which === "s" || which === "e") cb.current.onEdge?.(which, ms);
         else cb.current.onScrub?.(ms);
         u.redraw(false);
       };
@@ -444,7 +485,7 @@ const fmtMs = (ms: number) => {
 };
 
 export default function LoopWaveform({
-  sampleId, bus, info, onAdjust,
+  sampleId, bus, info, onAdjust, readOnlyHint,
 }: {
   sampleId: number;
   bus: TimeBus;
@@ -453,6 +494,8 @@ export default function LoopWaveform({
   onStop?: () => void;
   /** 保存新的起止（已标注片段 / 疑似片段）。不给 = 只读，不能拖起止 */
   onAdjust?: (target: AdjustTarget, startMs: number, endMs: number) => Promise<void>;
+  /** 只读时为什么不能改起止（给了就在浮窗里写出来） */
+  readOnlyHint?: string;
 }) {
   const { token } = theme.useToken();
   const [cfg, setCfgState] = useState<Cfg>(loadCfg);
@@ -577,6 +620,15 @@ export default function LoopWaveform({
     const r = rangeRef.current;
     const n = which === "s" ? setRange(ms, r.e) : setRange(r.s, ms);
     seekTo(which === "s" ? n.s : n.e);
+  };
+  const onMove = (s0: number, e0: number) => {
+    bus.play("pause");
+    bus.holdLoop(true);
+    // 整段平移：长度不变，挪到头就停在头上
+    const len = e0 - s0;
+    const s1 = Math.min(Math.max(lo, s0), hi - len);
+    const n = setRange(s1, s1 + len);
+    seekTo(n.s);
   };
   const onScrub = (ms: number) => {
     bus.play("pause");
@@ -719,7 +771,7 @@ export default function LoopWaveform({
                 <Typography.Text type="danger" style={{ fontSize: 12 }}>波形读不到：{error}</Typography.Text>
               ) : cur ? (
                 <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={cfg.follow}
-                  rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} version={version}
+                  rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} onMove={onMove} version={version}
                   resetKey={resetKey} neighbors={info.neighbors} />
               ) : (
                 <div style={{ height: cfg.h }} />
@@ -763,13 +815,19 @@ export default function LoopWaveform({
               </div>
               {!edit && (
                 <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  拖底色两边的竖线改起止，视频跟着停在那一帧；点 / 拖图上别处把视频跳过去；
+                  拖底色两边的竖线改起止、按住顶上那条拖动整段，视频跟着停在那一帧；点 / 拖图上别处把视频跳过去；
                   <b>Shift+滚轮</b>缩放、<b>Shift+拖</b>左右平移，看前后的全貌。改好点「保存起止」，会记下这次调整
                 </Typography.Text>
               )}
             </div>
           )}
 
+          {/* 只读：别让人拖半天没反应，直接说为什么改不了、要先做什么 */}
+          {info && !editable && target && readOnlyHint && (
+            <div style={{ marginTop: 4, padding: "4px 6px", borderRadius: 4, background: token.colorFillQuaternary, fontSize: 12 }}>
+              <LockOutlined /> {readOnlyHint}
+            </div>
+          )}
           {pins.map((p) => (
             <div key={p.id} style={{ marginTop: 6, borderTop: `1px dashed ${token.colorBorderSecondary}`, paddingTop: 4 }}>
               <div style={{ display: "flex", alignItems: "center" }}>

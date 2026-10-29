@@ -118,6 +118,8 @@ interface Props {
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
+  /** 只读时有人想拖片段的边 / 整段：给个明确的说法（为什么不能改、要先做什么） */
+  onReadOnlyEdit?: () => void;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -128,6 +130,13 @@ interface AnnotateCtx {
   onResize: ((index: number, startMs: number, endMs: number) => void) | null;
   pending: { startMs: number; endMs: number; color: string } | null;
   redrawAll: () => void;
+  /** 鼠标停在哪一段的哪个位置：s / e = 起止边（拖了改时间），move = 色块顶上那条（拖了整段平移），
+   *  inside = 只是在色块里（提示顶上能拖）。画高亮和提示字用 */
+  hover: { idx: number; kind: "s" | "e" | "move" | "inside" } | null;
+  /** hover 是哪张图设的：6 张图都在 window 上听 mousemove，别的图不能把它清掉 */
+  hoverOwner: unknown;
+  /** 只读时有人去拖边：告诉他为什么不能改、要怎么办 */
+  onReadOnlyEdit: (() => void) | null;
 }
 
 // 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
@@ -144,6 +153,7 @@ export default function ImuChart({
   activeColor,
   onCreateSegment,
   onResizeSegment,
+  onReadOnlyEdit,
 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
@@ -165,10 +175,14 @@ export default function ImuChart({
     onResize: null,
     pending: null,
     redrawAll: () => {},
+    hover: null,
+    hoverOwner: null,
+    onReadOnlyEdit: null,
   });
   annotateRef.current.activeColor = activeColor ?? null;
   annotateRef.current.onCreate = onCreateSegment ?? null;
   annotateRef.current.onResize = onResizeSegment ?? null;
+  annotateRef.current.onReadOnlyEdit = onReadOnlyEdit ?? null;
   annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw(false));
 
   useEffect(() => {
@@ -412,6 +426,72 @@ function segmentBandPlugin(
 ) {
   return {
     hooks: {
+      // 悬停提示画在曲线**上面**（draw，不是 drawClear）：垫在曲线底下的话会被线盖住看不清
+      draw: (u: uPlot) => {
+        const ctx = u.ctx;
+        const left = u.bbox.left;
+        const top = u.bbox.top;
+        const h = u.bbox.height;
+        const startEpoch = getStartEpoch();
+        const scaleMin = u.scales.x.min ?? 0;
+        const scaleMax = u.scales.x.max ?? 1;
+        const pxPerSec = u.bbox.width / Math.max(1e-9, scaleMax - scaleMin);
+        const toX = (ms: number) => left + (startEpoch + ms / 1000 - scaleMin) * pxPerSec;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, top, u.bbox.width, h);
+        ctx.clip();
+        // 鼠标停在某段上：起止边加粗 + 写明「拖动改起点 / 终点」，色块顶上那条把手
+        // 「拖这里移动整段」。以前只有 5 像素的判定范围、没有任何提示，没人知道能拖
+        const hv = annotateRef.current.hover;
+        const hseg = hv ? segmentsRef.current[hv.idx] : null;
+        if (hv && hseg && !annotateRef.current.pending) {
+          const x0 = toX(hseg.start_time_ms), x1 = toX(hseg.end_time_ms);
+          const lanes = hseg.lanes && hseg.lanes > 1 ? hseg.lanes : 1;
+          const sh = h / lanes;
+          const st = top + (hseg.lane ?? 0) * sh;
+          const dpr = window.devicePixelRatio || 1;
+          const ro = !annotateRef.current.onResize;
+          ctx.save();
+          ctx.font = `${11 * dpr}px sans-serif`;
+          ctx.textBaseline = "top";
+          // uPlot 画坐标轴时会把 textAlign 改成 right / center，不重置的话字跟底框对不上
+          ctx.textAlign = "left";
+          if (hv.kind === "s" || hv.kind === "e") {
+            const x = hv.kind === "s" ? x0 : x1;
+            ctx.strokeStyle = ro ? "#999" : hseg.color;
+            ctx.lineWidth = 3 * dpr;
+            ctx.beginPath();
+            ctx.moveTo(x, st);
+            ctx.lineTo(x, st + sh);
+            ctx.stroke();
+            const text = ro ? "只读，不能改" : hv.kind === "s" ? "⇤ 拖动改起点" : "拖动改终点 ⇥";
+            const tw = ctx.measureText(text).width;
+            const tx = hv.kind === "s" ? x + 4 * dpr : x - tw - 4 * dpr;
+            ctx.fillStyle = "rgba(255,255,255,.9)";
+            ctx.fillRect(tx - 2 * dpr, st + sh / 2 - 8 * dpr, tw + 4 * dpr, 16 * dpr);
+            ctx.fillStyle = ro ? "#999" : hseg.color;
+            ctx.fillText(text, tx, st + sh / 2 - 6 * dpr);
+          } else if (!ro) {
+            // 顶上那条把手：在色块里就显出来，按住它拖是整段平移
+            const grip = Math.min(14 * dpr, sh / 3);
+            ctx.globalAlpha = hv.kind === "move" ? 0.85 : 0.45;
+            ctx.fillStyle = hseg.color;
+            ctx.fillRect(x0, st, Math.max(1, x1 - x0), grip);
+            ctx.globalAlpha = 1;
+            // 段窄就用短一点的字，再窄就只留箭头
+            const text = ["⇔ 按住这条拖动整段", "⇔ 拖动整段", "⇔"].find(
+              (t) => x1 - x0 > ctx.measureText(t).width + 8 * dpr);
+            if (text) {
+              ctx.fillStyle = "#fff";
+              ctx.fillText(text, x0 + 4 * dpr, st + 1 * dpr);
+            }
+          }
+          ctx.restore();
+        }
+
+        ctx.restore();
+      },
       // drawClear 在清空画布之后、画曲线之前触发，所以色块会垫在曲线底下
       drawClear: (u: uPlot) => {
         const pending = annotateRef.current.pending;
@@ -667,7 +747,8 @@ function segmentHighlightPlugin(
 }
 
 const PLAYHEAD_GRAB_PX = 8;
-const SEGMENT_EDGE_GRAB_PX = 5; // 色块边缘多少像素内按下算"拖边缘改时间"
+const SEGMENT_EDGE_GRAB_PX = 8; // 色块边缘多少像素内按下算"拖边缘改时间"（原来 5，太难点中）
+const SEGMENT_MOVE_GRIP_PX = 14; // 色块顶上多高一条算"拖动整段"的把手
 const X_AXIS_PX = 30; // 单行时间刻度需要的高度
 const PAN_EPSILON = 1e-6; // 判断"是否已经是整体视图"的浮点容差
 const MIN_SEGMENT_MS = 50; // 拖出来太短的当误点丢弃
@@ -694,6 +775,10 @@ function dragPanPlugin(
   let bandAnchorMs = 0;
   let resizeIdx = -1;
   let resizeFixedMs = 0;
+  // 拖整段：按下时的鼠标位置和那段原来的起止
+  let moveIdx = -1;
+  let moveAnchorMs = 0;
+  let moveOrig: [number, number] = [0, 0];
   let startMin = 0;
   let startMax = 0;
   let startRelX = 0;
@@ -775,6 +860,40 @@ function dragPanPlugin(
 
         const toMs = (relX: number) => (u.posToVal(relX, "x") - getStartEpoch()) * 1000;
 
+        // 鼠标在哪段的哪儿：先看所有段的边（边比色块里优先，相邻两段的边挨着时也能点中），
+        // 再看在不在某段里、是不是在顶上那条把手上。分轨的段各占一条横带
+        const hitTest = (e: MouseEvent): AnnotateCtx["hover"] => {
+          const segs = segmentsRef.current;
+          if (!segs.length) return null;
+          const rect = over.getBoundingClientRect();
+          const relX = e.clientX - rect.left;
+          const relY = e.clientY - rect.top;
+          const H = rect.height;
+          const startEpoch = getStartEpoch();
+          const geo = (seg: ChartSegment) => {
+            const lanes = seg.lanes && seg.lanes > 1 ? seg.lanes : 1;
+            const sh = H / lanes;
+            const st = (seg.lane ?? 0) * sh;
+            return {
+              xs: u.valToPos(startEpoch + seg.start_time_ms / 1000, "x", false),
+              xe: u.valToPos(startEpoch + seg.end_time_ms / 1000, "x", false),
+              st, sh,
+            };
+          };
+          for (let idx = 0; idx < segs.length; idx++) {
+            const g = geo(segs[idx]);
+            if (relY < g.st || relY > g.st + g.sh) continue;
+            if (Math.abs(g.xs - relX) <= SEGMENT_EDGE_GRAB_PX) return { idx, kind: "s" };
+            if (Math.abs(g.xe - relX) <= SEGMENT_EDGE_GRAB_PX) return { idx, kind: "e" };
+          }
+          for (let idx = 0; idx < segs.length; idx++) {
+            const g = geo(segs[idx]);
+            if (relY < g.st || relY > g.st + g.sh || relX < g.xs || relX > g.xe) continue;
+            return { idx, kind: relY - g.st <= Math.min(SEGMENT_MOVE_GRIP_PX, g.sh / 3) ? "move" : "inside" };
+          }
+          return null;
+        };
+
         const onMouseDown = (e: MouseEvent) => {
           if (e.button !== 0) return;
           maxMoveDistance = 0;
@@ -782,7 +901,24 @@ function dragPanPlugin(
           startRelX = e.clientX - overRectLeft;
           lastClientX = e.clientX;
 
-          // 优先级：拖已有色块边缘 > 拖播放头 > 选中标签时划新区间 > 平移
+          // 优先级：拖已有色块边缘 / 顶上把手 > 拖播放头 > 选中标签时划新区间 > 平移
+          const hit = hitTest(e);
+          if (hit && !annotateRef.current.onResize && hit.kind !== "inside") {
+            // 只读：别默默变成平移 / 跳转，说清楚为什么改不了
+            annotateRef.current.onReadOnlyEdit?.();
+          }
+          if (hit && annotateRef.current.onResize && hit.kind === "move") {
+            const seg = segmentsRef.current[hit.idx];
+            bandDragging = true;
+            resizeIdx = -1;
+            moveIdx = hit.idx;
+            moveAnchorMs = toMs(startRelX);
+            moveOrig = [seg.start_time_ms, seg.end_time_ms];
+            annotateRef.current.pending = { startMs: seg.start_time_ms, endMs: seg.end_time_ms, color: seg.color };
+            over.style.cursor = "grabbing";
+            e.preventDefault();
+            return;
+          }
           if (annotateRef.current.onResize) {
             const startEpoch = getStartEpoch();
             for (let idx = 0; idx < segmentsRef.current.length; idx++) {
@@ -870,8 +1006,23 @@ function dragPanPlugin(
               playheadHoverRef.current = nearPlayhead;
               annotateRef.current.redrawAll();
             }
+            const r = over.getBoundingClientRect();
+            const inThis = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+            const hit = nearPlayhead || !inThis ? null : hitTest(e);
+            const prev = annotateRef.current.hover;
+            // 不在这张图上：只有 hover 是这张图设的才清，别把别的图刚设的抹掉
+            if ((inThis || annotateRef.current.hoverOwner === over) &&
+                ((hit?.idx ?? -1) !== (prev?.idx ?? -1) || hit?.kind !== prev?.kind)) {
+              annotateRef.current.hover = hit;
+              annotateRef.current.hoverOwner = hit ? over : null;
+              annotateRef.current.redrawAll();
+            }
+            if (!inThis) return;
             if (nearPlayhead) {
               over.style.cursor = "ew-resize";
+            } else if (hit && hit.kind !== "inside") {
+              const ro = !annotateRef.current.onResize;
+              over.style.cursor = ro ? "not-allowed" : hit.kind === "move" ? "grab" : "ew-resize";
             } else {
               refreshCursor();
             }
@@ -879,7 +1030,11 @@ function dragPanPlugin(
 
           if (bandDragging) {
             const cur = toMs(relX);
-            if (resizeIdx >= 0) {
+            if (moveIdx >= 0) {
+              const seg = segmentsRef.current[moveIdx];
+              const d = Math.max(-moveOrig[0], cur - moveAnchorMs);
+              if (seg) annotateRef.current.pending = { startMs: moveOrig[0] + d, endMs: moveOrig[1] + d, color: seg.color };
+            } else if (resizeIdx >= 0) {
               const seg = segmentsRef.current[resizeIdx];
               if (seg) {
                 annotateRef.current.pending = {
@@ -929,8 +1084,9 @@ function dragPanPlugin(
             refreshCursor();
             const pending = annotateRef.current.pending;
             annotateRef.current.pending = null;
-            const idx = resizeIdx;
+            const idx = moveIdx >= 0 ? moveIdx : resizeIdx;
             resizeIdx = -1;
+            moveIdx = -1;
             // 太短的当成误点，不生成区间
             if (pending && pending.endMs - pending.startMs >= MIN_SEGMENT_MS) {
               if (idx >= 0) {

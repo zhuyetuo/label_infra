@@ -695,6 +695,14 @@ export default function AnnotationWorkspace({
     message.success("起止已保存");
   };
 
+  // 只读时想拖起止：说清楚为什么改不了、要先做什么。以前拖边没反应也没提示，
+  // 实习生以为是功能坏了
+  const readOnlyHint = onClaim
+    ? "现在是「查看」模式，不能改起止：先点右下角「认领并修改」"
+    : task?.status === "SUBMITTED" || task?.status === "APPROVED"
+      ? "这个任务已提交，不能再改起止（要改先退回重标）"
+      : "这个任务不在你名下，只能看不能改";
+
   const updateItems = (ids: number[], patch: Partial<LabelItem>) => {
     const set = new Set(ids);
     setItems((prev) => prev.map((it) => (set.has(it.id) ? touchItem(it, patch) : it)));
@@ -1084,6 +1092,7 @@ export default function AnnotationWorkspace({
               activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
               onCreateSegment={readOnly ? undefined : handleCreateFromChart}
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+              onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
             />
           </div>
           {(
@@ -1312,7 +1321,7 @@ export default function AnnotationWorkspace({
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
       <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
-        onAdjust={readOnly ? undefined : adjustBoundary} />
+        onAdjust={readOnly ? undefined : adjustBoundary} readOnlyHint={readOnly ? readOnlyHint : undefined} />
     )}
     <Modal
       title="找相似的画面 → 候选"
@@ -1948,10 +1957,9 @@ export default function AnnotationWorkspace({
             </Space>
           </div>
         )}
-        {pinnedImu && renderPanel("imu")}
-
+        {/* 「已隐藏」放在面板区最上面（IMU 波形上面）：夹在波形和片段列表中间看着像哪个面板的一部分 */}
         {panelHidden.some((k) => presentPanels.includes(k)) && (
-          <div style={{ marginTop: 6, fontSize: 12, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          <div style={{ marginTop: 6, marginBottom: 2, fontSize: 12, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
             <Typography.Text type="secondary">已隐藏：</Typography.Text>
             {panelHidden.filter((k) => presentPanels.includes(k)).map((k) => (
               <Tooltip key={k} title="点一下恢复显示">
@@ -1962,6 +1970,8 @@ export default function AnnotationWorkspace({
             ))}
           </div>
         )}
+        {pinnedImu && renderPanel("imu")}
+
 
         {/* 占满视频下面剩余的高度，面板在这个框里滚——想看列表最后几条不用把视频滚出屏幕。
             面板全收起来时不再占着剩余高度（写死 flex:1 的话折叠了照样撑着一大片空白）。
