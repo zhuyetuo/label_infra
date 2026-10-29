@@ -2487,6 +2487,8 @@ function ExportPreview({
           <Tooltip title="拖「保留」那一列的滑块，决定每个大类导出多少。导出时按段随机抽到这个量：同一批数据每次抽到的是同一些段，摊在所有狗、所有天上；抽掉的段不导出，不会变成负样本。只能往少了拖——少的类别要补，训练时勾「类别均衡」">
             <span style={{ borderBottom: "1px dashed #bbb", fontSize: 12 }}>数据量调整</span>
           </Tooltip>
+          {/* 说明文字放在框外：放进 addonBefore 的话把输入框挤得只剩几像素，数字根本看不见 */}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>自动：每类不超过中位数的</Typography.Text>
           <InputNumber
             size="small"
             min={0.5}
@@ -2494,9 +2496,8 @@ function ExportPreview({
             step={0.5}
             value={factor}
             onChange={(v) => setFactor(v ?? 3)}
-            addonBefore="自动：不超过中位数的"
             addonAfter="倍"
-            style={{ width: 230 }}
+            style={{ width: 110 }}
           />
           <Button size="small" onClick={autoBalance}>自动摆一遍</Button>
           {changed && <Button size="small" type="link" onClick={() => setTargets({})}>全部恢复</Button>}
