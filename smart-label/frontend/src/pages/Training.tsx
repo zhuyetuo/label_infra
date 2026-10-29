@@ -23,6 +23,7 @@ import {
   checkDataset,
   datasetStats,
   type LabelStats,
+  type LabelTreeNode,
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
@@ -67,6 +68,10 @@ const EXPORT_RANGE_KEY = "export-date-range";
  *  训练是按片段分组切分的（同一段不会一半进训练一半进验证），段数太少的话
  *  训练和验证各只分到一两段，模型只见过这一类的一两个样子 */
 const MIN_SEGMENTS = 5;
+
+/** 归并表的一行：这次数据里的一个类别（最细那一级） */
+type TrainCat = { name: string; n: number; sec: number; root: string; chain: string[] };
+type TrainRow = TrainCat & { key: string; isGroup?: boolean; children?: TrainRow[] };
 
 /** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
 type TrainOpts = {
@@ -119,6 +124,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
 /** 「不参与训练」那一项的值。存进表里是空字符串，但空字符串当不了 Select 的
  *  value（antd 当成"没选"），所以下拉里用这个哨兵 */
 const DROP = "__drop__";
+/** 大类那一行「整组各自成一类」的哨兵值 */
+const KEEP_EACH = "__keep_each__";
 
 /** "32,64,128" / "32/64/128" → [32,64,128]；填得不对就 null（用默认） */
 function parseFilters(s: string): number[] | null {
@@ -228,6 +235,10 @@ export default function Training() {
   // 不折叠 = 各轨原样导，给分轨训练用。没分轨的项目两种一样
   const [flatten, setFlatten] = useState(true);
   const [trackPriority, setTrackPriority] = useState<string[]>(["behavior", "motion", "posture"]);
+  // 减量：活动、静止/休息这种大头太多，选上它们，导出时按段抽掉一部分，
+  // 降到「其余最大类的 N 倍」以内——目标跟着数据量自己变，不用每次去算留几小时
+  const [reduceLabels, setReduceLabels] = useState<string[]>([]);
+  const [reduceFactor, setReduceFactor] = useState(3);
   const [submitting, setSubmitting] = useState(false);
   // 导出完最想知道的是"到底进去了什么、什么被跳过了"。这些数都在 meta.json 里，
   // 之前只是没地方看——尤其是 warnings，哪个任务因为什么被跳过全写在里面
@@ -308,6 +319,8 @@ export default function Training() {
         if (typeof v.includeSubmitted === "boolean") setIncludeSubmitted(v.includeSubmitted);
         if (typeof v.flatten === "boolean") setFlatten(v.flatten);
         if (Array.isArray(v.trackPriority) && v.trackPriority.length) setTrackPriority(v.trackPriority);
+        if (Array.isArray(v.reduceLabels)) setReduceLabels(v.reduceLabels);
+        if (typeof v.reduceFactor === "number" && v.reduceFactor > 0) setReduceFactor(v.reduceFactor);
       }
     } catch {
       // 存的东西坏了不该让弹窗打不开，退回默认名字就是了
@@ -332,11 +345,28 @@ export default function Training() {
     scope,
     flatten,
     track_priority: trackPriority,
+    reduce_labels: reduceLabels,
+    reduce_factor: reduceFactor,
   });
+  // 选项一改旧预览就作废。**减量那两个不清**：减量的候选类别就是从预览里来的，
+  // 一清掉下拉就空了；改完再点一次「预览统计」看减完的样子
   useEffect(() => {
     setPreview(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range?.[0]?.valueOf(), range?.[1]?.valueOf(), JSON.stringify(projectIds), includeSubmitted, scope, flatten, JSON.stringify(trackPriority), exportOpen]);
+  // 减量的候选：预览里出现过的所有类别（大类、细类都行），按时长从多到少
+  const reduceOptions = useMemo(() => {
+    const out: { value: string; label: string; sec: number }[] = [];
+    const walk = (ns: LabelTreeNode[] | undefined) => {
+      for (const n of ns ?? []) {
+        out.push({ value: n.label, label: `${"　".repeat(n.depth - 1)}${n.label}（${fmtSecs(n.sec)}）`, sec: n.sec });
+        walk(n.children);
+      }
+    };
+    walk(preview?.label_tree);
+    for (const l of reduceLabels) if (!out.some((o) => o.value === l)) out.push({ value: l, label: l, sec: 0 });
+    return out;
+  }, [preview, reduceLabels]);
   const doPreview = async () => {
     setPreviewing(true);
     try {
@@ -358,6 +388,8 @@ export default function Training() {
         scope,
         flatten,
         track_priority: trackPriority,
+        reduce_labels: reduceLabels,
+        reduce_factor: reduceFactor,
       });
       message.success(
         `已导出：${meta.n_tasks} 个任务 / ${meta.n_segments} 段 / ${meta.total_hours} 小时` +
@@ -366,7 +398,7 @@ export default function Training() {
       try {
         localStorage.setItem(
           EXPORT_FORM_KEY,
-          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority })
+          JSON.stringify({ name: name.trim(), projectIds, scope, includeSubmitted, flatten, trackPriority, reduceLabels, reduceFactor })
         );
         // 「沿用上次」要指向刚导的这份，不然它还指着更早的那一份
         setLastName(name.trim());
@@ -408,20 +440,72 @@ export default function Training() {
 
   /** 这次数据里出现的类别，按时长从多到少。没有细类的大类就是它自己 */
   const trainCats = useMemo(() => {
-    const out: { name: string; n: number; sec: number }[] = [];
+    const out: TrainCat[] = [];
     for (const r of trainStats?.rows ?? []) {
       const kids = r.sub_labels ?? [];
       if (!kids.length) {
-        out.push({ name: r.label, n: r.n_segments, sec: r.seconds });
+        out.push({ name: r.label, n: r.n_segments, sec: r.seconds, root: r.label, chain: [r.label] });
         continue;
       }
       for (const k of kids) {
         // 「X（未细分）」是只标到大类那部分，映射时按大类名算
-        out.push({ name: k.is_root_only ? r.label : k.label, n: k.n_segments, sec: k.seconds });
+        const name = k.is_root_only ? r.label : k.label;
+        out.push({ name, n: k.n_segments, sec: k.seconds, root: r.label, chain: k.chain ?? [r.label, name] });
       }
     }
     return out.sort((a, b) => b.sec - a.sec);
   }, [trainStats]);
+
+  // 归并表按大类分组：先看大类，点开再看细类。大类那一行的下拉一次设整组
+  const trainTree = useMemo(() => {
+    const groups = new Map<string, TrainCat[]>();
+    for (const c of trainCats) groups.set(c.root, [...(groups.get(c.root) ?? []), c]);
+    const rows: TrainRow[] = [];
+    for (const [root, cats] of groups) {
+      if (cats.length === 1 && cats[0].name === root) {
+        rows.push({ ...cats[0], key: root });
+        continue;
+      }
+      // 组内按链排：同一个上级的挨在一起（舔-前爪、舔-前左爪、舔-前右爪）
+      const kids = [...cats].sort((a, b) => a.chain.join("/").localeCompare(b.chain.join("/")));
+      rows.push({
+        key: `group:${root}`, name: root, root, chain: [root], isGroup: true,
+        n: cats.reduce((x, c) => x + c.n, 0), sec: cats.reduce((x, c) => x + c.sec, 0),
+        children: kids.map((c) => ({ ...c, key: c.name })),
+      });
+    }
+    return rows.sort((a, b) => b.sec - a.sec);
+  }, [trainCats]);
+
+  /** 太少的细类并进上一级：只动「自成一类」的那些（已经并到别处的是人定过的，不动）。
+   *  往上找第一个"加起来够"的上级——舔-前左爪 太少就看 舔-前爪，还不够再看 舔。
+   *  上级本身也是一行的话，跟着它走（它已经并进了别处就一起去） */
+  const mergeSmall = () => {
+    const tooSmall = (n: number, sec: number) => n < MIN_SEGMENTS || sec < 60;
+    // 每个节点（含中间层）底下一共多少：一条链上的每一级都算一份
+    const agg = new Map<string, { n: number; sec: number }>();
+    for (const c of trainCats) {
+      for (const node of c.chain) {
+        const a = agg.get(node) ?? { n: 0, sec: 0 };
+        agg.set(node, { n: a.n + c.n, sec: a.sec + c.sec });
+      }
+    }
+    const next = { ...remapEdits };
+    let changed = 0;
+    for (const c of trainCats) {
+      if (next[c.name] !== c.name || !tooSmall(c.n, c.sec) || c.chain.length < 2) continue;
+      const ups = c.chain.slice(0, -1).reverse();
+      const up = ups.find((u) => {
+        const a = agg.get(u);
+        return a && !tooSmall(a.n, a.sec);
+      }) ?? ups[ups.length - 1];
+      const target = (next[up] ?? "") || up;
+      next[c.name] = target;
+      changed += 1;
+    }
+    setRemapEdits(next);
+    message[changed ? "success" : "info"](changed ? `${changed} 个细类并进了上一级` : "没有太少的细类要并");
+  };
 
   /** 这一类最后算作哪个训练类别。**就是这张表说了算**——算法侧会按它生成
    *  这一次训练专用的重映射表，所以界面上看到什么，训出来就是什么。
@@ -1161,6 +1245,38 @@ export default function Training() {
               </Typography.Text>
             )}
           </Space>
+          {/* 减量：大头类别太多时按段抽掉一部分。不是"智能"挑——按固定的乱序抽，
+              同一批数据每次抽到的一样，摊在所有狗、所有天上 */}
+          <Space wrap size={8}>
+            <Tooltip title="选上太多的类别（活动、静止/休息…），导出时按段随机抽掉一部分，降到「其余最大类」的 N 倍以内。数据量变了目标自己跟着变。同一批数据每次抽到的是同一些段，可复现；抽掉的段不导出，那段时间不参与训练，不会变成负样本">
+              <span style={{ borderBottom: "1px dashed #bbb", whiteSpace: "nowrap" }}>减量</span>
+            </Tooltip>
+            <Select
+              size="small"
+              mode="multiple"
+              allowClear
+              style={{ minWidth: 260 }}
+              value={reduceLabels}
+              onChange={setReduceLabels}
+              placeholder={preview ? "选太多的类别，如 活动、静止/休息" : "先点「预览统计」，再选太多的类别"}
+              options={reduceOptions.map(({ value, label }) => ({ value, label }))}
+              optionLabelProp="value"
+              popupMatchSelectWidth={false}
+            />
+            {reduceLabels.length > 0 && (
+              <InputNumber
+                size="small"
+                min={0.5}
+                max={100}
+                step={0.5}
+                value={reduceFactor}
+                onChange={(v) => setReduceFactor(v ?? 3)}
+                addonBefore="不超过其余最大类的"
+                addonAfter="倍"
+                style={{ width: 230 }}
+              />
+            )}
+          </Space>
           {preview && <ExportPreview meta={preview} />}
         </Space>
       </Modal>
@@ -1743,17 +1859,27 @@ export default function Training() {
             {trainCats.length > 0 && (
               <>
                 <Divider style={{ margin: "4px 0" }} />
-                <Typography.Text>类别归并（可不改）</Typography.Text>
-                <Table
-                  rowKey="name"
+                <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                  <Typography.Text>类别归并（可不改）</Typography.Text>
+                  <Tooltip title={`段数少于 ${MIN_SEGMENTS} 或不到 1 分钟、又是「自成一类」的细类，并进上一级（上一级加起来还不够就再往上）。并完还能逐行改`}>
+                    <Button size="small" onClick={mergeSmall}>太少的细类并进上一级</Button>
+                  </Tooltip>
+                </Space>
+                <Table<TrainRow>
+                  rowKey="key"
                   size="small"
                   pagination={false}
-                  scroll={{ y: 220 }}
-                  dataSource={trainCats}
+                  scroll={{ y: 260 }}
+                  dataSource={trainTree}
                   columns={[
                     {
-                      title: "这次数据里的类别", dataIndex: "name", width: 160,
-                      render: (v: string) => <Tag color={labelColor(v.split("-")[0])}>{v}</Tag>,
+                      title: "这次数据里的类别（点 + 看细类）", dataIndex: "name", width: 200,
+                      render: (v: string, c) =>
+                        c.isGroup ? (
+                          <Typography.Text strong>{v}（{c.children?.length} 个细类）</Typography.Text>
+                        ) : (
+                          <Tag color={labelColor(v.split("-")[0])}>{v}</Tag>
+                        ),
                     },
                     {
                       title: "份量", width: 120,
@@ -1785,7 +1911,29 @@ export default function Training() {
                     },
                     {
                       title: "训练时算作", width: 210,
-                      render: (_, c) => (
+                      render: (_, c) => c.isGroup ? (
+                        <Select
+                          size="small"
+                          showSearch
+                          style={{ width: 195 }}
+                          placeholder="整组一起设…"
+                          value={null}
+                          // 大类这一行不存值：选了就把底下每一行都改成它
+                          onChange={(v: string) => setRemapEdits((m) => {
+                            const next = { ...m };
+                            for (const k of c.children ?? []) {
+                              next[k.name] = v === DROP ? "" : v === KEEP_EACH ? k.name : v;
+                            }
+                            return next;
+                          })}
+                          options={[
+                            { value: c.name, label: `整组并成「${c.name}」一类` },
+                            { value: KEEP_EACH, label: "整组各自成一类" },
+                            ...(remap?.classes ?? []).filter((v) => v !== c.name).map((v) => ({ value: v, label: `整组算作 ${v}` })),
+                            { value: DROP, label: "整组不参与训练" },
+                          ]}
+                        />
+                      ) : (
                         <Select
                           size="small"
                           allowClear
@@ -1820,6 +1968,17 @@ export default function Training() {
                     {
                       title: "", width: 110,
                       render: (_, c) => {
+                        if (c.isGroup) {
+                          // 大类那一行：底下几行要丢、各算作几类，一眼看完不用展开
+                          const kids = c.children ?? [];
+                          const dropped = kids.filter((k) => !finalOf(k.name)).length;
+                          const n = new Set(kids.map((k) => finalOf(k.name)).filter(Boolean)).size;
+                          return (
+                            <Typography.Text type={dropped ? "danger" : "secondary"} style={{ fontSize: 12 }}>
+                              {n ? `→ ${n} 类` : ""}{dropped ? ` ${dropped} 行丢掉` : ""}
+                            </Typography.Text>
+                          );
+                        }
                         const cls = finalOf(c.name);
                         // 留空 = 不参与训练，那些样本会被丢掉。**必须说出来**，
                         // 不然人以为数据都进去了（以前就是只在训练日志里打一句）
@@ -2252,11 +2411,22 @@ const fmtSecs = (sec: number) =>
 /** 导出弹窗里的「预览统计」：这批数据导出来会是什么样——各类别多少段、多长、占比，跳过 / 挖掉了多少 */
 function ExportPreview({ meta }: { meta: TrainDataset }) {
   const secs = meta.label_seconds ?? {};
-  const rows = Object.keys({ ...meta.labels, ...secs })
+  const flat = Object.keys({ ...meta.labels, ...secs })
     .map((k) => ({ label: k, n: meta.labels[k] ?? 0, sec: secs[k] ?? 0 }))
     .sort((a, b) => b.sec - a.sec || b.n - a.n);
-  const total = rows.reduce((n, r) => n + r.sec, 0);
-  const nz = rows.filter((r) => r.sec > 0);
+  // 有层级树就按树显示：先只看大类，点开再看细类（3、4 级那种很碎的放在最里面）。
+  // 老后端没有 label_tree，退回平铺
+  const tree = meta.label_tree;
+  const keyed = (ns: LabelTreeNode[], pre = ""): (LabelTreeNode & { key: string })[] =>
+    ns.map((n) => ({
+      ...n,
+      key: `${pre}/${n.label}`,
+      ...(n.children ? { children: keyed(n.children, `${pre}/${n.label}`) } : {}),
+    }));
+  const rows = tree ? keyed(tree) : flat.map((r) => ({ ...r, key: r.label, depth: 1 }));
+  const total = tree ? tree.reduce((n, r) => n + r.sec, 0) : flat.reduce((n, r) => n + r.sec, 0);
+  // 不均衡倍数按大类算：细类本来就小，拿它比没意义
+  const nz = (tree ?? flat).filter((r) => r.sec > 0);
   const ratio = nz.length > 1 ? nz[0].sec / nz[nz.length - 1].sec : null;
   return (
     <div style={{ borderTop: "1px solid rgba(128,128,128,.3)", paddingTop: 8 }}>
@@ -2277,15 +2447,28 @@ function ExportPreview({ meta }: { meta: TrainDataset }) {
           {meta.n_label_conflicts ? `类别冲突 ${meta.n_label_conflicts} 处（挖掉 ${meta.label_conflict_excluded_sec ?? 0} 秒，要回工作台改）；` : ""}
           {meta.flattened_sec ? `互斥轨折叠让出 ${fmtSecs(meta.flattened_sec)}；` : ""}
         </Typography.Text>
+        {(meta.reduce?.result ?? []).length > 0 && (
+          <>
+            <br />
+            <Typography.Text style={{ fontSize: 12 }}>
+              减量（不超过其余最大类的 {meta.reduce!.factor} 倍）：
+              {meta.reduce!.result.map((r) => (
+                <Tag key={r.label} color={r.after_sec < r.before_sec ? "blue" : undefined} style={{ marginLeft: 4 }}>
+                  {r.label} {fmtSecs(r.before_sec)} → {fmtSecs(r.after_sec)}（{r.before_n} → {r.after_n} 段）
+                </Tag>
+              ))}
+            </Typography.Text>
+          </>
+        )}
       </Typography.Paragraph>
       <Table
         size="small"
-        rowKey="label"
+        rowKey="key"
         pagination={false}
         scroll={{ y: 320 }}
         dataSource={rows}
         columns={[
-          { title: "类别", dataIndex: "label", width: 160 },
+          { title: tree ? "类别（点 + 看细类）" : "类别", dataIndex: "label", width: 220 },
           { title: "段数", dataIndex: "n", width: 80, align: "right" as const },
           { title: "时长", dataIndex: "sec", width: 110, align: "right" as const, render: (s: number) => fmtSecs(s) },
           {

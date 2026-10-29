@@ -47,11 +47,27 @@ export interface TrainDataset {
   labels: Record<string, number>;
   /** 每个类别的总时长（秒）。均不均衡按时长看 */
   label_seconds?: Record<string, number>;
+  /** 按层级汇总：大类 → 细类 → …，每层含它底下所有细类（老数据集没有） */
+  label_tree?: LabelTreeNode[];
+  /** 减量：选了哪些类别、各从多少减到多少 */
+  reduce?: {
+    labels: string[];
+    factor: number;
+    result: { label: string; before_sec: number; after_sec: number; before_n: number; after_n: number; target_sec: number }[];
+  };
   /** 只预览没落盘的那次返回 true */
   dry_run?: boolean;
   warnings: string[];
   exported_at: string;
   export_json: string;
+}
+
+export interface LabelTreeNode {
+  label: string;
+  n: number;
+  sec: number;
+  depth: number;
+  children?: LabelTreeNode[];
 }
 
 export interface ModelVersion {
@@ -85,6 +101,10 @@ export const exportDataset = (body: {
   flatten?: boolean;
   /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */
   track_priority?: string[];
+  /** 减量：这几个类别太多，按段抽掉一部分 */
+  reduce_labels?: string[];
+  /** 降到「其余最大类」的几倍以内 */
+  reduce_factor?: number;
   /** 只预览：照常挑数据、算统计，不落盘 */
   dry_run?: boolean;
 }) => request.post<never, TrainDataset>("/model-versions/datasets", body, { timeout: 600_000 });
@@ -136,6 +156,8 @@ export interface DatasetCheck {
 export type LabelStatChild = {
   label: string;
   is_root_only: boolean;
+  /** 整条链 [舔, 舔-前爪, 舔-前左爪]：「并进上一级」要知道上一级是谁（老后端没有） */
+  chain?: string[];
   n_segments: number;
   seconds: number;
   /** 占**本大类**的百分比，不是占全局：要回答的是"抓挠里头颈耳占多少" */
