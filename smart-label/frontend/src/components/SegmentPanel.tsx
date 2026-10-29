@@ -77,7 +77,7 @@ export function formatMs(ms: number): string {
 const fmtDur = (ms: number) => (ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}min` : `${(ms / 1000).toFixed(2)}s`);
 
 // 审核标「有问题」时的常见原因，点一下就行；不在里面的选「其他原因…」自己写
-const REVIEW_NOTE_PRESETS = ["类别错了", "起止不准", "不是这个动作", "附近还有漏标", "应该拆成几段"];
+export const REVIEW_NOTE_PRESETS = ["类别错了", "起止不准", "混了别的动作", "不是这个动作", "附近还有漏标", "应该拆成几段"];
 
 const isAi = (i: LabelItem) => i.source_type === "ai_generated";
 // 「待定」压过 AI 的确认状态：人已经看过并给了结论（只是结论是"拿不准"），

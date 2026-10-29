@@ -44,6 +44,17 @@ def exclude_own_annotation(stmt, user: User):
     return stmt.where(or_(Task.assigned_to.is_(None), Task.assigned_to != user.id))
 
 
+def _seg_review_task_ids(user_id: int):
+    """这个人在片段审核里领了 / 审过片段的任务（只看当前轮）。"""
+    from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+
+    return (
+        select(AnnotationRecord.task_id)
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .where(or_(AnnotationLabelItem.seg_claimed_by == user_id, AnnotationLabelItem.seg_reviewed_by == user_id))
+    )
+
+
 def apply_task_scope(query: Select, user: User) -> Select:
     """
     - admin/super_admin：不过滤，看全部任务
@@ -66,6 +77,9 @@ def apply_task_scope(query: Select, user: User) -> Select:
                 Task.assigned_to == user.id,
                 Task.reviewer_id == user.id,
                 (Task.reviewer_id.is_(None)) & (Task.status == TaskStatus.SUBMITTED),
+                # 片段审核：领了这个任务里的片段、或者审过这里的片段，就能打开这个任务看
+                # （只读；改起止 / 通过 / 退回走 /segments 那套接口）
+                Task.id.in_(_seg_review_task_ids(user.id)),
             )
         )
     # 未知角色一律拒绝，返回恒假条件

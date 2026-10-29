@@ -1,0 +1,286 @@
+import { useMemo, useState } from "react";
+import {
+  Alert, Button, Checkbox, Dropdown, Empty, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Tooltip, Typography, message,
+} from "antd";
+import { CheckOutlined, DownOutlined, RightOutlined, RollbackOutlined } from "@ant-design/icons";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listLabels } from "@/api/labels";
+import { getTask } from "@/api/tasks";
+import { segClaim, segDecide, segEdit, segQueue, segRelease, type SegItem, type SegStatus } from "@/api/segReview";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import { formatMs, REVIEW_NOTE_PRESETS } from "@/components/SegmentPanel";
+import { useAuthStore } from "@/stores/authStore";
+import type { Task } from "@/types";
+
+/**
+ * 片段审核：审核、退回、修改的最小单位是一条片段，不是整个任务。
+ *
+ * 人手少，不可能所有项目的片段都标完审完再用。要做的是「重点补某几类想识别的数据」：
+ * 挑一个类别，跨所有项目一条条看——起止准不准、类别对不对、有没有混进别的动作。
+ * 通过的才算高质量数据（导出训练集可以选「只要片段审核通过的」）。
+ *
+ *   审核员 / 管理员：选类别 → 领一批（别人看不到这一批，24 小时没审完自动放回）→ 逐条
+ *                   通过 / 退回（写原因）/ 在波形浮窗里直接改好起止再通过
+ *   标注员：看「退回给我的」，逐条改；改了起止就自动交回重审，没改的点「改好了」
+ */
+
+const STATUS_META: Record<SegStatus, { label: string; color: string }> = {
+  pending: { label: "待审", color: "default" },
+  returned: { label: "退回", color: "red" },
+  approved: { label: "通过", color: "green" },
+};
+
+export default function SegmentReview() {
+  const qc = useQueryClient();
+  const role = useAuthStore((s) => s.userInfo?.role);
+  const userId = useAuthStore((s) => s.userInfo?.id);
+  const isReviewer = role === "admin" || role === "super_admin" || role === "reviewer";
+
+  const { data: labels } = useQuery({ queryKey: ["labels", "all"], queryFn: () => listLabels() });
+  // 类别按名字选（跨项目）：同一个「抓挠-头颈耳」每个项目一条，id 不一样
+  const labelOptions = useMemo(() => {
+    const names = [...new Set((labels ?? []).filter((l) => l.is_active !== false).map((l) => l.display_name))];
+    names.sort((a, b) => a.localeCompare(b));
+    // 「抓挠-头颈耳」缩进挂在「抓挠」下面，一眼看出层级
+    return names.map((n) => ({ value: n, label: `${"　".repeat(n.split("-").length - 1)}${n}` }));
+  }, [labels]);
+
+  const [labelName, setLabelName] = useState<string | null>(null);
+  const [status, setStatus] = useState<SegStatus | "all">(isReviewer ? "pending" : "returned");
+  const [mine, setMine] = useState(isReviewer);
+  const [withAi, setWithAi] = useState(false);
+  const [claimN, setClaimN] = useState(30);
+
+  const params = {
+    label_name: labelName,
+    seg_status: status,
+    source: (withAi ? "all" : "touched") as "all" | "touched",
+    mine: isReviewer && mine,
+  };
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ["seg-queue", params],
+    queryFn: () => segQueue(params),
+    // 审核员不选类别就不拉：跨所有类别的列表又长又没法审
+    enabled: !isReviewer || !!labelName || mine,
+  });
+  const rows = data?.items ?? [];
+
+  // ── 打开工作台审一条 ──
+  const [cur, setCur] = useState<SegItem | null>(null);
+  const [curTask, setCurTask] = useState<Task | null>(null);
+  const open = async (it: SegItem) => {
+    const t = await getTask(it.task_id);
+    setCur(it);
+    setCurTask(t);
+  };
+  const close = () => {
+    setCur(null);
+    setCurTask(null);
+    qc.invalidateQueries({ queryKey: ["seg-queue"] });
+  };
+  // 审完一条接着下一条：按当前列表的顺序，跳过刚审的这条
+  const goNext = async () => {
+    const r = await refetch();
+    const list = (r.data?.items ?? []).filter((x) => x.id !== cur?.id);
+    const idx = rows.findIndex((x) => x.id === cur?.id);
+    const next = list.find((x) => rows.findIndex((y) => y.id === x.id) > idx) ?? list[0];
+    if (next) await open(next);
+    else {
+      message.success("这一批审完了");
+      close();
+    }
+  };
+  const decide = async (d: "approved" | "returned" | "pending", note?: string) => {
+    if (!cur) return;
+    await segDecide(cur.id, d, note);
+    message.success(d === "approved" ? "已通过" : d === "returned" ? "已退回" : "已交回重审");
+    await goNext();
+  };
+  const askReturn = (preset?: string) => {
+    let note = preset ?? "";
+    if (preset) return decide("returned", preset);
+    Modal.confirm({
+      title: "退回原因",
+      content: <Input.TextArea autoFocus rows={2} maxLength={300} onChange={(e) => (note = e.target.value)} />,
+      okText: "退回",
+      onOk: () => (note.trim() ? decide("returned", note.trim()) : Promise.reject(message.warning("写一下原因"))),
+    });
+  };
+
+  const actions = cur && (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        片段审核 · {cur.label_name} · 第 {Math.max(1, rows.findIndex((x) => x.id === cur.id) + 1)} / {rows.length} 条
+      </Typography.Text>
+      {cur.review_note && <Tag color="red">退回原因：{cur.review_note}</Tag>}
+      <span style={{ flex: 1 }} />
+      {isReviewer ? (
+        <>
+          <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => decide("approved")}>通过</Button>
+          <Dropdown
+            menu={{
+              items: [...REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__other", label: "其他原因…" }],
+              onClick: ({ key }) => askReturn(key === "__other" ? undefined : key),
+            }}
+          >
+            <Button size="small" danger icon={<RollbackOutlined />}>退回 <DownOutlined /></Button>
+          </Dropdown>
+        </>
+      ) : (
+        <Tooltip title="改了起止会自动交回重审；起止没问题、确认改好了的点这个">
+          <Button size="small" type="primary" onClick={() => decide("pending")}>改好了，交回重审</Button>
+        </Tooltip>
+      )}
+      <Button size="small" icon={<RightOutlined />} onClick={goNext}>下一条</Button>
+    </div>
+  );
+
+  const claim = async () => {
+    if (!labelName) return message.warning("先选要审的类别");
+    const r = await segClaim({ label_name: labelName, n: claimN, source: withAi ? "all" : "touched" });
+    message[r.claimed ? "success" : "info"](r.claimed ? `领了 ${r.claimed} 条` : "这一类没有能领的待审片段了");
+    setMine(true);
+    setStatus("pending");
+    refetch();
+  };
+
+  return (
+    <div>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={isReviewer ? "按类别一条条审：要的是起止准、类别对、没混别的动作的高质量片段" : "退回给你的片段"}
+        description={
+          isReviewer ? (
+            <>
+              选类别 → <b>领一批</b>（领了别人看不到，24 小时没审完自动放回）→ 点「审」打开，片段自动循环播放，
+              波形浮窗里看波形、拖起止改好 → <b>通过</b> / <b>退回</b>（写原因）→ 自动跳下一条。
+              只看人碰过的片段；没人看过的 AI 片段勾「含 AI 未确认」才出来。导出训练集可以选「只要片段审核通过的」。
+            </>
+          ) : (
+            <>审核员退回的片段，点「改」打开：按退回原因在波形浮窗里把起止改好（改了自动交回重审），没改动但确认没问题的点「改好了」。</>
+          )
+        }
+      />
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Select
+          showSearch
+          allowClear
+          style={{ width: 220 }}
+          placeholder="选要审的类别"
+          value={labelName ?? undefined}
+          onChange={(v) => setLabelName(v ?? null)}
+          options={labelOptions}
+          optionFilterProp="value"
+          // 选中后显示原名，不带下拉里那几个缩进空格
+          optionLabelProp="value"
+        />
+        <Radio.Group size="small" value={status} onChange={(e) => setStatus(e.target.value)} optionType="button" buttonStyle="solid">
+          {(["pending", "returned", "approved"] as SegStatus[]).map((s) => (
+            <Radio.Button key={s} value={s}>
+              {STATUS_META[s].label} {data?.counts?.[s] ?? ""}
+            </Radio.Button>
+          ))}
+          <Radio.Button value="all">全部</Radio.Button>
+        </Radio.Group>
+        {isReviewer && (
+          <>
+            <Checkbox checked={mine} onChange={(e) => setMine(e.target.checked)}>只看我领的 {data?.mine ?? ""}</Checkbox>
+            <Checkbox checked={withAi} onChange={(e) => setWithAi(e.target.checked)}>
+              <Tooltip title="默认只审人碰过的（确认过 / 改过 / 人加的）。勾上把没人看过的 AI 片段也拿来审——审核通过就算确认">
+                含 AI 未确认
+              </Tooltip>
+            </Checkbox>
+            <Space.Compact>
+              <InputNumber size="small" min={1} max={500} value={claimN} onChange={(v) => setClaimN(v ?? 30)} style={{ width: 70 }} />
+              <Button size="small" type="primary" onClick={claim} disabled={!labelName}>领这么多条</Button>
+            </Space.Compact>
+            {(data?.mine ?? 0) > 0 && (
+              <Button size="small" onClick={async () => { const r = await segRelease(); message.success(`放回 ${r.released} 条`); refetch(); }}>
+                放回我领的
+              </Button>
+            )}
+          </>
+        )}
+      </Space>
+
+      <Table<SegItem>
+        size="small"
+        rowKey="id"
+        loading={isFetching}
+        dataSource={rows}
+        pagination={{ pageSize: 50, showSizeChanger: false }}
+        locale={{
+          emptyText: (
+            <Empty description={isReviewer && !labelName && !mine ? "先选一个类别" : mine ? "你没有领着的片段，选类别后点「领这么多条」" : "没有"} />
+          ),
+        }}
+        rowClassName={(r) => (r.id === cur?.id ? "ant-table-row-selected" : "")}
+        columns={[
+          { title: "类别", dataIndex: "label_name", width: 140, render: (v: string) => <Tag>{v}</Tag> },
+          {
+            title: "样本", width: 260,
+            render: (_, r) => (
+              <Typography.Text style={{ fontSize: 12 }}>
+                {r.project_name} · {r.sample_code} <Typography.Text type="secondary">#{r.task_id}</Typography.Text>
+              </Typography.Text>
+            ),
+          },
+          { title: "起止", width: 200, render: (_, r) => `${formatMs(r.start_time_ms)} ~ ${formatMs(r.end_time_ms)}` },
+          { title: "时长", width: 70, render: (_, r) => `${((r.end_time_ms - r.start_time_ms) / 1000).toFixed(1)}s` },
+          {
+            title: "来历", width: 150,
+            render: (_, r) => (
+              <Space size={2}>
+                {r.source_type === "ai_generated" ? (
+                  <Tag color={r.is_modified ? "blue" : r.ai_confirmed ? "green" : "orange"}>
+                    {r.is_modified ? "AI 已纠正" : r.ai_confirmed ? "AI 已确认" : "AI 未确认"}
+                  </Tag>
+                ) : r.from_candidate_id ? <Tag color="cyan">疑似确认</Tag> : <Tag>人工</Tag>}
+                {r.n_boundary_edits > 0 && <Tag color="geekblue">调过 {r.n_boundary_edits} 次</Tag>}
+              </Space>
+            ),
+          },
+          {
+            title: "状态", width: 220,
+            render: (_, r) => (
+              <Space size={2} wrap>
+                <Tag color={STATUS_META[r.seg_status].color}>{STATUS_META[r.seg_status].label}</Tag>
+                {r.review_note && <Tag color="red">{r.review_note}</Tag>}
+                {r.seg_reviewed_by_name && r.seg_status !== "pending" && (
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>{r.seg_reviewed_by_name}</Typography.Text>
+                )}
+                {r.claimed_by && r.claimed_by !== userId && <Tag>{r.claimed_by_name} 在审</Tag>}
+              </Space>
+            ),
+          },
+          {
+            title: "操作", width: 80,
+            render: (_, r) => (
+              <Button size="small" type="link" onClick={() => open(r)}>{isReviewer ? "审" : "改"}</Button>
+            ),
+          },
+        ]}
+      />
+
+      {curTask && cur && (
+        <AnnotationWorkspace
+          task={curTask}
+          labels={(labels ?? []).filter((l) => l.project_id === curTask.project_id)}
+          readOnly
+          initialSeekMs={cur.start_time_ms}
+          onClose={close}
+          segReview={{
+            itemId: cur.id,
+            onEdit: async (s, e) => {
+              const r = await segEdit(cur.id, { start_time_ms: s, end_time_ms: e });
+              setCur({ ...cur, start_time_ms: r.start_time_ms, end_time_ms: r.end_time_ms, seg_status: r.seg_status });
+            },
+            actions,
+          }}
+        />
+      )}
+    </div>
+  );
+}

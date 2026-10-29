@@ -294,8 +294,8 @@ async def export_dataset(
     flatten=False 就各轨原样导（同一时刻多条），给分轨训练用。没分轨的项目两种一样。"""
     if not _NAME_RE.match(name):
         raise TrainingExportError("数据集名只能用字母/数字/下划线/横线，1–64 位")
-    if scope not in ("approved", "reviewed"):
-        raise TrainingExportError("scope 只能是 approved 或 reviewed")
+    if scope not in ("approved", "reviewed", "seg_approved"):
+        raise TrainingExportError("scope 只能是 approved / reviewed / seg_approved")
     priority = [t for t in (track_priority or label_tracks.DEFAULT_PRIORITY) if t in label_tracks.TRACK_NAMES and t != "device"]
     for t in label_tracks.DEFAULT_PRIORITY:
         if t not in priority:
@@ -308,7 +308,9 @@ async def export_dataset(
     # 为什么必须它赢：项圈不在狗身上时，IMU 测的是桌子，那段时间里任何"行为"
     # 都不成立——让「活动」赢的话，等于把一段桌子的数据当成狗在活动喂给模型
     rank_of["device"] = -1
-    only_reviewed = scope == "reviewed"
+    # seg_approved：只要「片段审核」里审核通过的片段，任务状态不管（跟 reviewed 一样按片段取）
+    only_seg_approved = scope == "seg_approved"
+    only_reviewed = scope in ("reviewed", "seg_approved")
     q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
     # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
     # 一份），只是导出来会很大，n_tasks 会如实报出来。
@@ -373,16 +375,22 @@ async def export_dataset(
             AnnotationLabelItem.ai_confirmed,
             AnnotationLabelItem.is_modified,
             AnnotationLabelItem.source_type,
+            AnnotationLabelItem.seg_status,
         )
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
         .join(Task, Task.id == AnnotationRecord.task_id)
         .where(AnnotationRecord.task_id.in_(task_ids), AnnotationRecord.round_no == Task.round_no)
     )
     n_skipped_untouched = 0
-    for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source in item_rows.all():
+    n_skipped_unapproved = 0
+    for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source, seg_st in item_rows.all():
         if uncertain:
             # 「待定」永远挖洞，跟怎么取无关：那段时间既不能当正例也不能当负例
             holes_by_task.setdefault(task_id, []).append((int(s_ms), int(e_ms)))
+            continue
+        if only_seg_approved and seg_st != "approved":
+            # 没在片段审核里通过的不要。注意：不挖洞——那段时间不导出，不参与训练
+            n_skipped_unapproved += 1
             continue
         if only_reviewed:
             # 人确认过才算数：点过「通过」、改过、或者本来就是人加的（含从候选
@@ -701,6 +709,8 @@ async def export_dataset(
         "n_device_segments": n_device,
         # 按片段取时跳过了多少条"没人看过的 AI 片段"，导出后能对上账
         "n_untouched_skipped": n_skipped_untouched,
+        # 只要片段审核通过的：没通过（待审 / 退回）而没导出的条数
+        "n_unapproved_skipped": n_skipped_unapproved,
         # 同类别压在一起并掉了几段（「疑似抓挠」补上来的常跟已有 AI 段覆盖同一次动作）
         "n_merged_overlaps": n_merged_overlaps,
         # 不同类别压在一起的处数：这是矛盾标注，得回工作台改

@@ -18,6 +18,7 @@ from app.api.v1 import (
     projects,
     reviews,
     samples,
+    segment_review,
     skin,
     tasks,
     tooth,
@@ -39,6 +40,7 @@ api_router.include_router(samples.scoped_router)
 api_router.include_router(tasks.router)
 api_router.include_router(candidates.router)
 api_router.include_router(reviews.router)
+api_router.include_router(segment_review.router)
 api_router.include_router(media.router)
 api_router.include_router(imu.router)
 api_router.include_router(clips.router)
