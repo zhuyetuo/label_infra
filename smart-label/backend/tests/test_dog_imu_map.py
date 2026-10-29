@@ -148,3 +148,19 @@ def test_样本按日期目录里的场地对上当时那只狗():
     assert dog_label("multicam_x_imu9", g, s) == "东德牧羊犬（IMU9）"
     # 老调用：三元组、不带 site_map，行为不变
     assert dog_label("x_imu15", _merge({}, [("8", "旺财", "IMU15")])) == "旺财（IMU15）"
+
+
+# ── DogIndex：所有按 IMU 找狗的地方共用，带场地查 ─────────────────────────
+
+from app.services.dog_name_service import DogIndex
+
+
+def test_DogIndex_老狗场的历史数据不会被新狗场的同号狗盖掉():
+    """现场：深圳雷诺的 IMU9 是小白，项圈搬到佛山博朗旺后 IMU9 是奥迪。
+    日常统计、皮肤跟踪原来各自拼一张不分场地的表，深圳的历史行全变成了奥迪。"""
+    idx = DogIndex([("5", "小白", "IMU9,IMU10", "深圳雷诺狗场"),
+                    ("11", "奥迪", "IMU9,IMU10", "佛山博朗旺狗场")])
+    assert idx.name("IMU9", "gouchang") == "小白"
+    assert idx.name("IMU9", "bolangwang") == "奥迪"
+    assert idx.name("IMU9") == "奥迪", "认不出场地时，在合作的狗场优先"
+    assert idx.name("IMU3", "gouchang") is None and idx.name(None) is None

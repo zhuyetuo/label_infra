@@ -1724,7 +1724,7 @@ function LinkTab(p: {
             sorter: (a: LinkRow, b: LinkRow) => a.date.localeCompare(b.date) || a.imu.localeCompare(b.imu),
             sortDirections: ["descend", "ascend"] as const,
           },
-          { title: "机位 / 狗", render: (_, r: LinkRow) => `${r.imu} / ${p.opts.imu_dog_default_map[r.imu] ?? "?"}` },
+          { title: "机位 / 狗", render: (_, r: LinkRow) => `${r.imu} / ${r.dog_name ?? p.opts.imu_dog_default_map[r.imu] ?? "?"}` },
           { title: "任务进度", render: (_, r: LinkRow) => (
             <Space size={4}>
               <span>{r.tasks.approved}/{r.tasks.total} 已通过</span>

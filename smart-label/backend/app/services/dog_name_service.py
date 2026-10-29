@@ -129,6 +129,35 @@ def site_imu_map(dog_rows) -> dict[tuple[str, str], str]:
     return out
 
 
+class DogIndex:
+    """设备号 → 狗，**带上场地查**。所有按 IMU 找狗的地方都该用它，不要各自拼一张
+    「IMU → 狗」的表——拼的那张不分场地，项圈搬到新狗场、新狗一建档，老狗场的
+    历史数据就全显示成新狗的名字了（日常统计、皮肤跟踪都这么错过）。
+
+    rows: (dog_code, name, imu, site) 元组，就是 dogs 表查出来的样子。
+    name(imu, site)：认得出场地就按 (场地, IMU) 查；认不出才退回全局那张
+    （同一个 IMU 跨场地撞号时，在合作的场地那只优先）。
+    """
+
+    def __init__(self, rows):
+        rows = list(rows)
+        self.by_site = site_imu_map(rows)
+        self.global_map = merge_imu_map({}, rows)
+
+    def name(self, imu: str | None, site: str | None = None) -> str | None:
+        if not imu:
+            return None
+        if site and (site, imu) in self.by_site:
+            return self.by_site[(site, imu)]
+        return self.global_map.get(imu)
+
+
+async def dog_index(db) -> DogIndex:
+    """当前狗档案的 DogIndex。调用方传自己的 session，不新开。"""
+    rows = (await db.execute(select(Dog.dog_code, Dog.name, Dog.imu, Dog.site))).all()
+    return DogIndex(rows)
+
+
 async def site_imu_dog_map() -> dict[tuple[str, str], str]:
     """按场地分的那张，跟 imu_dog_map 同一次刷新、同一个 TTL。"""
     await imu_dog_map()
