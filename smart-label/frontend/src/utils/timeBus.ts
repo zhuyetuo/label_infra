@@ -80,13 +80,31 @@ export class TimeBus {
     this.stepHandler?.(frames);
   }
 
+  // 波形浮窗里调起止时用：
+  //   held    —— 暂时不循环，视频可以停在 / 拖到片段外面（不然一过终点就被拽回起点）
+  //   preview —— 按还没保存的新起止试播一圈，不通知外面（列表里的「循环中」不跟着变）
+  private loopHeld = false;
+  private loopPreview: { start: number; end: number } | null = null;
+
   getLoop(): { start: number; end: number } | null {
-    return this.loop;
+    if (this.loopPreview) return this.loopPreview;
+    return this.loopHeld ? null : this.loop;
+  }
+
+  holdLoop(on: boolean): void {
+    this.loopHeld = on;
+    if (on) this.loopPreview = null;
+  }
+
+  previewLoop(loop: { start: number; end: number } | null): void {
+    this.loopPreview = loop;
   }
 
   /** 设区间循环并跳到起点开始播；传 null 取消循环（不动播放状态） */
   setLoop(loop: { start: number; end: number } | null): void {
     this.loop = loop;
+    this.loopHeld = false;
+    this.loopPreview = null;
     for (const cb of this.loopListeners) cb(loop);
     if (loop) this.seek(loop.start);
   }

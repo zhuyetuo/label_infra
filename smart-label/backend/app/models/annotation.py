@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     SmallInteger,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -116,6 +117,11 @@ class AnnotationLabelItem(Base):
     review_note: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="审核标的问题")
     review_flag_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     review_flag_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # 起止每被人改一次记一笔：[{"from": [起, 止], "to": [起, 止], "by": 用户 id, "by_name": 名字,
+    # "at": 时间}, ...]，最早的在前。一段可能被调好几次（先粗标、再在波形上抠精确的起止），
+    # 光一个 is_modified 看不出改过几次、从哪改到哪。开新一轮时跟着带过去
+    boundary_edits: Mapped[str | None] = mapped_column(Text, nullable=True, comment="起止调整记录 JSON")
 
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列

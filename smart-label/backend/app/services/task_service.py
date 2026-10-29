@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, update
@@ -206,6 +207,30 @@ async def release_all_in_project(db: AsyncSession, project_id: int, user: User) 
     return result.rowcount
 
 
+_BOUNDARY_EDITS_MAX = 30
+
+
+def _append_boundary_edit(raw: str | None, old: tuple[int, int], new: tuple[int, int], user: User) -> str:
+    """起止改了一次，往这条的调整记录里追加一笔（JSON 文本）。只留最近 30 笔，
+    第一笔另外留着——它的 from 就是最初的起止，删了就不知道原来是多少了。"""
+    try:
+        edits = json.loads(raw) if raw else []
+        if not isinstance(edits, list):
+            edits = []
+    except ValueError:
+        edits = []
+    edits.append({
+        "from": [int(old[0]), int(old[1])],
+        "to": [int(new[0]), int(new[1])],
+        "by": user.id,
+        "by_name": user.display_name or user.username,
+        "at": datetime.now().isoformat(timespec="seconds"),
+    })
+    if len(edits) > _BOUNDARY_EDITS_MAX:
+        edits = edits[:1] + edits[-(_BOUNDARY_EDITS_MAX - 1):]
+    return json.dumps(edits, ensure_ascii=False)
+
+
 async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     """只有当前锁定人能续期，推迟 lock_expires_at。"""
     ttl_hours = settings.annotation_timeout_hours
@@ -343,6 +368,13 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 or origin.start_time_ms != incoming.start_time_ms
                 or origin.end_time_ms != incoming.end_time_ms
             )
+            if (origin.start_time_ms, origin.end_time_ms) != (incoming.start_time_ms, incoming.end_time_ms):
+                origin.boundary_edits = _append_boundary_edit(
+                    origin.boundary_edits,
+                    (origin.start_time_ms, origin.end_time_ms),
+                    (incoming.start_time_ms, incoming.end_time_ms),
+                    user,
+                )
             origin.label_id = incoming.label_id
             origin.start_time_ms = incoming.start_time_ms
             origin.end_time_ms = incoming.end_time_ms

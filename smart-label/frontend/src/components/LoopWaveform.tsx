@@ -1,5 +1,5 @@
 import { Button, Checkbox, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
-import { CloseOutlined, LineChartOutlined, MinusOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
+import { CaretRightOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -49,6 +49,8 @@ export interface LoopInfo {
   /** 「已标注 · 饮水」「疑似 · 舔」 */
   title: string;
   color?: string;
+  /** 已标注片段的 id：有它（且给了 onAdjust）才能在波形上拖起止、保存 */
+  itemId?: number;
 }
 
 interface Snap {
@@ -134,6 +136,7 @@ const spline = uPlot.paths.spline?.();
 
 function MiniPlot({
   snap, chans, smooth, yRange, xRange, width, height, bus, live, follow, winSec, axisColor,
+  rangeRef, editable, onEdge, onScrub, version,
 }: {
   snap: Snap;
   chans: typeof ACC;
@@ -148,6 +151,16 @@ function MiniPlot({
   follow?: boolean;
   winSec: number;
   axisColor: string;
+  /** 现在的起止（绝对毫秒）。拖边的时候改它、只重画不重建；不给就用 snap 里的 */
+  rangeRef?: React.MutableRefObject<{ s: number; e: number }>;
+  /** 能拖起止 */
+  editable?: boolean;
+  /** 拖边：which = 起 / 止，ms = 新位置（绝对毫秒） */
+  onEdge?: (which: "s" | "e", ms: number) => void;
+  /** 点 / 拖图上别处：把视频跳到那里 */
+  onScrub?: (ms: number) => void;
+  /** 外面改了 rangeRef（「起点设到播放线」）时加一，图跟着重画 */
+  version?: number;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
@@ -156,9 +169,14 @@ function MiniPlot({
   // 片段比窗口短就没必要跟着滚，整段都放得下
   const scrolling = !!follow && dur > winSec * 1.2;
 
+  // 交互回调放 ref 里：它们每次渲染都是新函数，放进 effect 依赖会让图每次都重建
+  const cb = useRef({ onEdge, onScrub, editable });
+  cb.current = { onEdge, onScrub, editable };
+
   useEffect(() => {
     if (!el.current) return;
     const { series, info } = snap;
+    const cur = () => (rangeRef?.current ? rangeRef.current : { s: info.startMs, e: info.endMs });
     // 横轴：相对片段起点的秒。钉住的几段起点都对齐在 0，形状才能直接比
     const xs = series.t.map((ms) => (ms - info.startMs) / 1000);
     const band = info.color ?? "#4096ff";
@@ -186,24 +204,91 @@ function MiniPlot({
         drawClear: [
           (u) => {
             const { left, top, width: bw, height: h } = u.bbox;
+            const r = cur();
+            const rs = (r.s - info.startMs) / 1000, re = (r.e - info.startMs) / 1000;
             // 片段起止可能在可见窗口外面（跟随模式），夹到绘图区里，别涂到坐标轴上
-            const x0 = Math.max(left, u.valToPos(0, "x", true));
-            const x1 = Math.min(left + bw, u.valToPos(dur, "x", true));
-            if (x1 <= x0) return;
-            u.ctx.save();
-            u.ctx.fillStyle = band;
-            u.ctx.globalAlpha = 0.14;
-            u.ctx.fillRect(x0, top, x1 - x0, h);
-            u.ctx.restore();
+            const x0 = Math.max(left, u.valToPos(rs, "x", true));
+            const x1 = Math.min(left + bw, u.valToPos(re, "x", true));
+            if (x1 > x0) {
+              u.ctx.save();
+              u.ctx.fillStyle = band;
+              u.ctx.globalAlpha = 0.14;
+              u.ctx.fillRect(x0, top, x1 - x0, h);
+              u.ctx.restore();
+            }
+            // 能改起止：两条边画粗一点、带个把手，看得出能拖
+            if (cb.current.editable) {
+              const dpr = window.devicePixelRatio || 1;
+              u.ctx.save();
+              u.ctx.strokeStyle = band;
+              u.ctx.fillStyle = band;
+              u.ctx.lineWidth = 2 * dpr;
+              for (const v of [rs, re]) {
+                const x = u.valToPos(v, "x", true);
+                if (x < left - 1 || x > left + bw + 1) continue;
+                u.ctx.beginPath();
+                u.ctx.moveTo(x, top);
+                u.ctx.lineTo(x, top + h);
+                u.ctx.stroke();
+                u.ctx.fillRect(x - 4 * dpr, top + h / 2 - 9 * dpr, 8 * dpr, 18 * dpr);
+              }
+              u.ctx.restore();
+            }
           },
         ],
       },
     };
     const data: uPlot.AlignedData = [xs, ...chans.map((c) => (smooth ? movingAvg(series[c.key] ?? []) : series[c.key] ?? []))];
     plotRef.current?.destroy();
-    plotRef.current = new uPlot(opts, data, el.current);
-    if (initX) plotRef.current.setScale("x", { min: initX[0], max: initX[1] });
+    const u = new uPlot(opts, data, el.current);
+    plotRef.current = u;
+    if (initX) u.setScale("x", { min: initX[0], max: initX[1] });
+
+    // 交互：在图上按下——靠近起 / 止那条边（8 像素内）就是拖边，否则是拖播放位置
+    const over = u.over;
+    const msAt = (clientX: number) => {
+      const rect = over.getBoundingClientRect();
+      return Math.round(info.startMs + u.posToVal(clientX - rect.left, "x") * 1000);
+    };
+    const edgeAt = (clientX: number): "s" | "e" | null => {
+      if (!cb.current.editable) return null;
+      const rect = over.getBoundingClientRect();
+      const r = cur();
+      const xs_ = u.valToPos((r.s - info.startMs) / 1000, "x", false);
+      const xe_ = u.valToPos((r.e - info.startMs) / 1000, "x", false);
+      const px = clientX - rect.left;
+      const ds = Math.abs(px - xs_), de = Math.abs(px - xe_);
+      if (Math.min(ds, de) > 8) return null;
+      return ds <= de ? "s" : "e";
+    };
+    const onHover = (ev: MouseEvent) => {
+      over.style.cursor = edgeAt(ev.clientX) ? "ew-resize" : cb.current.onScrub ? "pointer" : "default";
+    };
+    const onDown = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      const which = edgeAt(ev.clientX);
+      if (!which && !cb.current.onScrub) return;
+      ev.preventDefault();
+      const act = (x: number) => {
+        const ms = msAt(x);
+        if (which) cb.current.onEdge?.(which, ms);
+        else cb.current.onScrub?.(ms);
+        u.redraw(false);
+      };
+      act(ev.clientX);
+      const move = (e2: MouseEvent) => act(e2.clientX);
+      const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    };
+    over.addEventListener("mousemove", onHover);
+    over.addEventListener("mousedown", onDown);
     return () => {
+      over.removeEventListener("mousemove", onHover);
+      over.removeEventListener("mousedown", onDown);
       plotRef.current?.destroy();
       plotRef.current = null;
     };
@@ -214,6 +299,10 @@ function MiniPlot({
   useEffect(() => {
     plotRef.current?.setSize({ width, height });
   }, [width, height]);
+
+  useEffect(() => {
+    plotRef.current?.redraw(false);
+  }, [version, editable]);
 
   // 播放头：跟着视频走。平时只挪一个 div，不重画图（视频每帧都在报时间）；
   // 跟随模式下窗口跟着滚，限到每 100ms 最多挪一次
@@ -259,14 +348,24 @@ function MiniPlot({
   );
 }
 
+/** 00:56:24.724 */
+const fmtMs = (ms: number) => {
+  const t = Math.max(0, Math.round(ms));
+  const h = Math.floor(t / 3600000), m = Math.floor((t % 3600000) / 60000), sec = Math.floor((t % 60000) / 1000);
+  const p = (n: number, l = 2) => String(n).padStart(l, "0");
+  return `${p(h)}:${p(m)}:${p(sec)}.${p(t % 1000, 3)}`;
+};
+
 export default function LoopWaveform({
-  sampleId, bus, info, onStop,
+  sampleId, bus, info, onAdjust,
 }: {
   sampleId: number;
   bus: TimeBus;
   /** 当前在循环的那段；null = 没在循环（钉住的还在就照样显示） */
   info: LoopInfo | null;
-  onStop: () => void;
+  onStop?: () => void;
+  /** 保存新的起止（已标注片段）。不给 = 只读，不能拖起止 */
+  onAdjust?: (itemId: number, startMs: number, endMs: number) => Promise<void>;
 }) {
   const { token } = theme.useToken();
   const [cfg, setCfgState] = useState<Cfg>(loadCfg);
@@ -289,11 +388,24 @@ export default function LoopWaveform({
   const [closed, setClosed] = useState(false);
   const [opened, setOpened] = useState(false);
   const idRef = useRef(0);
+  // 调起止：rangeRef 是图上画的那对（拖的时候每一下都改它，不走 React），
+  // edit 是给界面显示用的同一对；null = 没动过
+  const rangeRef = useRef({ s: 0, e: 0 });
+  const [edit, setEdit] = useState<{ s: number; e: number } | null>(null);
+  const [version, setVersion] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const lastSec = useRef(0);
+  const lastSeek = useRef(0);
+  const editable = !!(info?.itemId != null && onAdjust);
+  useEffect(() => bus.onTime((sec) => { lastSec.current = sec; }), [bus]);
 
   const key = info ? `${info.startMs}-${info.endMs}` : null;
   useEffect(() => {
     setClosed(false);
     setOpened(false);
+    setEdit(null);
+    if (info) rangeRef.current = { s: info.startMs, e: info.endMs };
+    setVersion((v) => v + 1);
     if (!info) {
       setCur(null);
       return;
@@ -310,6 +422,8 @@ export default function LoopWaveform({
       .finally(() => !gone && setLoading(false));
     return () => {
       gone = true;
+      // 换了一段 / 关掉：之前为调起止暂停的循环恢复
+      bus.holdLoop(false);
     };
     // info 每次渲染都是新对象，按起止判断要不要重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -344,6 +458,66 @@ export default function LoopWaveform({
   }, [cur, pins, cfg.follow, cfg.winSec]);
 
   const show = (info && (cfg.auto ? !closed : opened)) || (!info && pins.length > 0);
+
+  // ── 调起止 ──
+  // 拖的时候视频跟到那一帧（限 120ms 一次：每次 seek 都要等解码，拖得太勤会卡）。
+  // 暂停、并暂时不循环——不然一拖到终点外面就被拽回起点
+  const seekTo = (ms: number, force = false) => {
+    const now = performance.now();
+    if (!force && now - lastSeek.current < 120) return;
+    lastSeek.current = now;
+    bus.seek(ms / 1000);
+  };
+  const lo = info && cur ? info.startMs - cur.padMs : 0;
+  const hi = info && cur ? info.endMs + cur.padMs : 0;
+  const setRange = (s0: number, e0: number) => {
+    // 只能在拉回来的这截数据里调（前后各多看的那点）；起止至少隔 0.2 秒
+    const s1 = Math.round(Math.min(Math.max(lo, s0), hi - 200) / 10) * 10;
+    const e1 = Math.round(Math.max(Math.min(hi, e0), s1 + 200) / 10) * 10;
+    rangeRef.current = { s: s1, e: e1 };
+    setEdit(info && s1 === info.startMs && e1 === info.endMs ? null : { s: s1, e: e1 });
+    setVersion((v) => v + 1);
+    return { s: s1, e: e1 };
+  };
+  const onEdge = (which: "s" | "e", ms: number) => {
+    bus.play("pause");
+    bus.holdLoop(true);
+    const r = rangeRef.current;
+    const n = which === "s" ? setRange(ms, r.e) : setRange(r.s, ms);
+    seekTo(which === "s" ? n.s : n.e);
+  };
+  const onScrub = (ms: number) => {
+    bus.play("pause");
+    bus.holdLoop(true);
+    seekTo(Math.min(Math.max(lo, ms), hi));
+  };
+  const play = () => {
+    const r = rangeRef.current;
+    if (edit) {
+      // 没保存的新起止：按它试播一圈，列表里的循环不动
+      bus.previewLoop({ start: r.s / 1000, end: r.e / 1000 });
+      seekTo(r.s, true);
+    } else {
+      bus.holdLoop(false);
+      if (lastSec.current * 1000 < r.s || lastSec.current * 1000 >= r.e) seekTo(r.s, true);
+    }
+    bus.play("play");
+  };
+  const revert = () => {
+    if (!info) return;
+    bus.previewLoop(null);
+    setRange(info.startMs, info.endMs);
+  };
+  const save = async () => {
+    if (!info?.itemId || !onAdjust || !edit) return;
+    setSaving(true);
+    try {
+      bus.previewLoop(null);
+      await onAdjust(info.itemId, edit.s, edit.e);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // 没开自动弹：循环时只在角上留一个小按钮
   if (info && !show) {
@@ -414,6 +588,16 @@ export default function LoopWaveform({
           </Typography.Text></> : "钉住的波形"}
         </Typography.Text>
         <Space size={2} onMouseDown={(e) => e.stopPropagation()}>
+          {info && (
+            <>
+              <Tooltip title={edit ? "按改过的起止试播（还没保存）" : "播放（接着循环这一段）"}>
+                <Button size="small" type="text" icon={<CaretRightOutlined />} onClick={play} />
+              </Tooltip>
+              <Tooltip title="暂停。也可以直接在图上点 / 拖，视频跟着跳到那一帧">
+                <Button size="small" type="text" icon={<PauseOutlined />} onClick={() => bus.play("pause")} />
+              </Tooltip>
+            </>
+          )}
           <Tooltip title={cfg.gyro ? "现在看陀螺仪，点一下换回加速度" : "现在看加速度，点一下换成陀螺仪（只有 6 轴数据才有）"}>
             <Tag style={{ cursor: "pointer", margin: 0 }} onClick={() => setCfg({ gyro: !cfg.gyro })}>{cfg.gyro ? "陀螺仪" : "加速度"}</Tag>
           </Tooltip>
@@ -437,7 +621,8 @@ export default function LoopWaveform({
               {error ? (
                 <Typography.Text type="danger" style={{ fontSize: 12 }}>波形读不到：{error}</Typography.Text>
               ) : cur ? (
-                <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={cfg.follow} />
+                <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={cfg.follow}
+                  rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} version={version} />
               ) : (
                 <div style={{ height: cfg.h }} />
               )}
@@ -459,6 +644,35 @@ export default function LoopWaveform({
               <Checkbox checked={cfg.auto} onChange={(e) => setCfg({ auto: e.target.checked })} style={{ fontSize: 11 }}>循环时自动弹出</Checkbox>
             </Tooltip>
           </div>
+          {info && editable && (
+            <div style={{ marginTop: 4, padding: "4px 6px", borderRadius: 4, background: edit ? token.colorWarningBg : token.colorFillQuaternary, fontSize: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <span>起 <b>{fmtMs(edit?.s ?? info.startMs)}</b></span>
+                <span>止 <b>{fmtMs(edit?.e ?? info.endMs)}</b></span>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {(((edit?.e ?? info.endMs) - (edit?.s ?? info.startMs)) / 1000).toFixed(2)}s
+                  {edit && `（原 ${fmtMs(info.startMs)} ~ ${fmtMs(info.endMs)}）`}
+                </Typography.Text>
+                <span style={{ flex: 1 }} />
+                <Tooltip title="先在图上点 / 拖到动作真正开始的那一帧，再点这个">
+                  <Button size="small" onClick={() => { const n = setRange(lastSec.current * 1000, rangeRef.current.e); seekTo(n.s, true); }}>起点 = 播放线</Button>
+                </Tooltip>
+                <Tooltip title="拖到动作真正结束的那一帧，再点这个">
+                  <Button size="small" onClick={() => { const n = setRange(rangeRef.current.s, lastSec.current * 1000); seekTo(n.e, true); }}>终点 = 播放线</Button>
+                </Tooltip>
+                {edit && <Button size="small" onClick={revert}>还原</Button>}
+                <Button size="small" type="primary" disabled={!edit} loading={saving} onClick={save}>保存起止</Button>
+              </div>
+              {!edit && (
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  拖底色两边的竖线改起止，视频跟着停在那一帧；点 / 拖图上别处把视频跳过去。改好点「保存起止」，会记下这次调整
+                </Typography.Text>
+              )}
+            </div>
+          )}
+          {info && !editable && info.itemId == null && info.title.startsWith("疑似") && (
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>疑似片段先确认成片段，再在这里调起止</Typography.Text>
+          )}
           {pins.map((p) => (
             <div key={p.id} style={{ marginTop: 6, borderTop: `1px dashed ${token.colorBorderSecondary}`, paddingTop: 4 }}>
               <div style={{ display: "flex", alignItems: "center" }}>

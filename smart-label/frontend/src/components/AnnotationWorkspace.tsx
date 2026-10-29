@@ -595,7 +595,7 @@ export default function AnnotationWorkspace({
     const { startMs, endMs } = loopRange;
     const near = (a: number, b: number) => Math.abs(a - b) <= 2;
     const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
-    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id) };
+    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id), itemId: it.id };
     const c = candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
     if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}` };
     return { startMs, endMs, title: "循环区间" };
@@ -663,6 +663,19 @@ export default function AnnotationWorkspace({
       next.review_flag_by = null;
     }
     return next;
+  };
+
+  // 波形浮窗里调好的起止：改这一条、立刻落库，再拉一遍——调整记录（第几次、从哪改到哪）
+  // 是后端存草稿时记的，不拉回来的话「起止调过 N 次」不会更新。循环跟着换到新起止
+  const adjustBoundary = async (id: number, startMs: number, endMs: number) => {
+    if (taskId == null) return;
+    const next = items.map((it) => (it.id === id ? touchItem(it, { start_time_ms: startMs, end_time_ms: endMs }) : it));
+    setItems(next);
+    await saveDraft(taskId, toDraftPayload(next));
+    const d = await getDraft(taskId);
+    setItems(d.items);
+    setLoop({ startMs, endMs });
+    message.success("起止已保存");
   };
 
   const updateItems = (ids: number[], patch: Partial<LabelItem>) => {
@@ -1281,7 +1294,8 @@ export default function AnnotationWorkspace({
     <>
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
-      <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)} />
+      <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
+        onAdjust={readOnly ? undefined : adjustBoundary} />
     )}
     <Modal
       title="找相似的画面 → 候选"
