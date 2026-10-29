@@ -11,6 +11,7 @@ import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import { formatMs, REVIEW_NOTE_PRESETS } from "@/components/SegmentPanel";
 import { useAuthStore } from "@/stores/authStore";
 import type { Task } from "@/types";
+import { Navigate } from "react-router-dom";
 
 /**
  * 片段审核：审核、退回、修改的最小单位是一条片段，不是整个任务。
@@ -283,4 +284,11 @@ export default function SegmentReview() {
       )}
     </div>
   );
+}
+
+/** /segment-review：标注员看退回给自己的片段；审核员 / 管理员转到审核页的「片段审核」标签 */
+export function SegmentReviewEntry() {
+  const role = useAuthStore((s) => s.userInfo?.role);
+  if (role === "admin" || role === "super_admin" || role === "reviewer") return <Navigate to="/reviews?tab=seg" replace />;
+  return <SegmentReview />;
 }
