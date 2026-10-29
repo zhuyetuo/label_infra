@@ -53,6 +53,7 @@ import {
 } from "@/utils/panelLayout";
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
+import { candTitle } from "@/utils/candReason";
 
 interface Props {
   task: Task | null;
@@ -138,7 +139,7 @@ function candKindSummary(cands: AiCandidate[]) {
   if (n.size === 0) return null;
   return (
     <span style={{ color: "#888", fontSize: 12 }}>
-      {[...n.entries()].map(([k, v]) => `疑似${k} ${v}`).join(" · ")}
+      {[...n.entries()].map(([k, v]) => `${candTitle(k)} ${v}`).join(" · ")}
     </span>
   );
 }
@@ -498,13 +499,13 @@ export default function AnnotationWorkspace({
             // 被退回来改的：先看审核标了问题的那几条，比按类别筛更具体
             jumpTo(flagged[0], `有问题：${flagged[0].review_note}`, flagged.length + flaggedCands.length);
           } else if (autoJump && !readOnly && flaggedCands.length) {
-            jumpTo(flaggedCands[0], `疑似${flaggedCands[0].label_name} 有问题：${flaggedCands[0].review_note}`, flaggedCands.length);
+            jumpTo(flaggedCands[0], `${candTitle(flaggedCands[0].label_name)} 有问题：${flaggedCands[0].review_note}`, flaggedCands.length);
           } else if (autoJump) {
             // 候选类别优先：按「疑似进食」筛进来，要看的就是疑似片段；先挑还没判过的
             const want = new Set(focusCandLabels ?? []);
             const hits = cs.filter((c) => want.has(c.label_name))
               .sort((a, b) => Number(a.status !== "pending") - Number(b.status !== "pending") || a.start_time_ms - b.start_time_ms);
-            if (hits.length) jumpTo(hits[0], `疑似${hits[0].label_name}`, hits.length);
+            if (hits.length) jumpTo(hits[0], candTitle(hits[0].label_name), hits.length);
             else if (segHits.length) jumpTo(segHits[0], labelById.get(segHits[0].label_id)?.display_name ?? "片段", segHits.length);
           }
           // 从找相似的链接进来（?seek=&cand=similar）：直接把那一段设成循环播放，不用人再去找。

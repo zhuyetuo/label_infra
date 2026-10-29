@@ -159,7 +159,7 @@ def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str 
 
 # AI 预标注自己产出的候选来源。重跑时只换这几种：大模型看视频（vision）和找相似（similar）
 # 是别的入口写的、有的还花了钱，预标注重跑不该顺手把它们没判的那些删掉
-PRELABEL_REASONS = ("low_conf", "spectral", "grooming", "eating", "drinking", "barking")
+PRELABEL_REASONS = ("low_conf", "spectral", "grooming", "eating", "drinking", "barking", "shaking", "toileting")
 
 
 def _same_kind(cand_label: str, other: str) -> bool:

@@ -21,6 +21,8 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   eating: "volcano",
   drinking: "blue",
   barking: "red",
+  shaking: "green",
+  toileting: "gold",
   vision: "magenta",
   similar: "geekblue",
 };
@@ -117,6 +119,8 @@ export const SRC_CN: Record<string, string> = {
   eating: "姿态+节律像进食",
   drinking: "姿态+节律像饮水",
   barking: "冲击串像吠叫",
+  shaking: "振荡像甩头/抖身",
+  toileting: "走停走像如厕",
   vision: "大模型看视频",
 };
 
