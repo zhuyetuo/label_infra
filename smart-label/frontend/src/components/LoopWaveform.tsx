@@ -65,11 +65,12 @@ const fetchSeries = (sampleId: number, startMs: number, endMs: number) =>
   });
 
 function MiniPlot({
-  snap, gyro, yRange, width, height, bus, live,
+  snap, gyro, yRange, xRange, width, height, bus, live,
 }: {
   snap: Snap;
   gyro: boolean;
   yRange: [number, number] | null;
+  xRange: [number, number] | null;
   width: number;
   height: number;
   bus?: TimeBus;
@@ -93,7 +94,7 @@ function MiniPlot({
       legend: { show: false },
       cursor: { show: false },
       scales: {
-        x: { time: false },
+        x: xRange ? { time: false, range: () => xRange } : { time: false },
         y: yRange ? { range: () => yRange } : {},
       },
       axes: [
@@ -125,7 +126,7 @@ function MiniPlot({
       plotRef.current?.destroy();
       plotRef.current = null;
     };
-  }, [snap, gyro, yRange, width, height, chans]);
+  }, [snap, gyro, yRange, xRange, width, height, chans]);
 
   // 播放头：跟着视频走。只挪一个 div，不重画图（视频每帧都在报时间）
   useEffect(() => {
@@ -220,6 +221,15 @@ export default function LoopWaveform({
     return [lo - pad, hi + pad];
   }, [cur, pins, chans]);
 
+  // 横轴也共用：一秒在几张图上一样宽，抖得快慢（频率）才能直接比
+  const xRange = useMemo<[number, number] | null>(() => {
+    const all = [cur, ...pins].filter(Boolean) as Snap[];
+    if (all.length < 2) return null;
+    const pad = Math.max(...all.map((s) => s.padMs)) / 1000;
+    const dur = Math.max(...all.map((s) => (s.info.endMs - s.info.startMs) / 1000));
+    return [-pad, dur + pad];
+  }, [cur, pins]);
+
   if ((!info && pins.length === 0) || hidden) return null;
 
   const W = 440;
@@ -276,7 +286,7 @@ export default function LoopWaveform({
               {error ? (
                 <Typography.Text type="danger" style={{ fontSize: 12 }}>波形读不到：{error}</Typography.Text>
               ) : cur ? (
-                <MiniPlot snap={cur} gyro={gyro} yRange={yRange} width={W} height={150} bus={bus} live />
+                <MiniPlot snap={cur} gyro={gyro} yRange={yRange} xRange={xRange} width={W} height={150} bus={bus} live />
               ) : (
                 <div style={{ height: 150 }} />
               )}
@@ -298,7 +308,7 @@ export default function LoopWaveform({
                 </Tooltip>
                 <Button size="small" type="text" icon={<CloseOutlined />} onClick={() => setPins((x) => x.filter((y) => y.id !== p.id))} />
               </div>
-              <MiniPlot snap={p} gyro={gyro} yRange={yRange} width={W} height={90} />
+              <MiniPlot snap={p} gyro={gyro} yRange={yRange} xRange={xRange} width={W} height={90} />
             </div>
           ))}
         </>
