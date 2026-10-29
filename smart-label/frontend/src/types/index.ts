@@ -130,6 +130,16 @@ export interface LabelItem {
   /** 审核标的「这条有问题」：原因；没有就是空 */
   review_note?: string | null;
   review_flag_by?: number | null;
+  /** 起止调整记录，最早的在前：每次从哪改到哪、谁、什么时候 */
+  boundary_edits?: BoundaryEdit[];
+}
+
+export interface BoundaryEdit {
+  from: [number, number];
+  to: [number, number];
+  by?: number;
+  by_name?: string;
+  at?: string;
 }
 
 export interface Draft {

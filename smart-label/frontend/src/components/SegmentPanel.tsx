@@ -902,6 +902,25 @@ export default function SegmentPanel({
                   </Tag>
                 </Tooltip>
               ) : null;
+              // 起止被人调过几次：鼠标停上去看每一次从哪改到哪、谁改的
+              const edits = i.boundary_edits ?? [];
+              const editsTag = edits.length ? (
+                <Tooltip
+                  title={
+                    <div style={{ fontSize: 12 }}>
+                      <div>起止调过 {edits.length} 次（最早的在上）：</div>
+                      {edits.map((e, k) => (
+                        <div key={k}>
+                          {k + 1}. {formatMs(e.from[0])}~{formatMs(e.from[1])} → {formatMs(e.to[0])}~{formatMs(e.to[1])}
+                          <span style={{ opacity: 0.7 }}>　{e.by_name ?? ""} {e.at?.replace("T", " ").slice(5, 16)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                >
+                  <Tag color="geekblue" style={{ marginLeft: 4 }}>起止调过 {edits.length} 次</Tag>
+                </Tooltip>
+              ) : null;
               const justTag = justEdited.has(i.id) ? (
                 <Tooltip title="刚改过，暂时不受筛选影响，方便你核对">
                   <Tag color="gold" style={{ marginLeft: 4 }}>刚改</Tag>
@@ -915,6 +934,7 @@ export default function SegmentPanel({
                     <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
                       <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
                     </Tooltip>
+                    {editsTag}
                     {justTag}
                     {dupTag}
                   </>
@@ -958,6 +978,7 @@ export default function SegmentPanel({
                       <Tag>人工</Tag>
                     </Tooltip>
                   )}
+                  {editsTag}
                   {justTag}
                   {dupTag}
                 </>

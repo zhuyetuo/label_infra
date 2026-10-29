@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.annotation import LabelItemSource
 from app.models.task import TaskStatus, TaskType
@@ -107,6 +108,21 @@ class LabelItemOut(LabelItemIn):
     # 审核标的「这条有问题」（原因），没有就是 None
     review_note: str | None = None
     review_flag_by: int | None = None
+    # 起止调整记录，最早的在前（见模型上的说明）
+    boundary_edits: list[dict] = []
+
+    @field_validator("boundary_edits", mode="before")
+    @classmethod
+    def _parse_edits(cls, v):
+        # 库里存的是 JSON 文本
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                return []
+        return v if isinstance(v, list) else []
 
     @model_validator(mode="after")
     def _origin_is_self(self):

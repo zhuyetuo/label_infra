@@ -109,6 +109,7 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 review_note=item.review_note,
                 review_flag_by=item.review_flag_by,
                 review_flag_at=item.review_flag_at,
+                boundary_edits=item.boundary_edits,
                 created_by=item.created_by,
             )
         )
