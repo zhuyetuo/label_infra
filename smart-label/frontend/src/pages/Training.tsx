@@ -91,6 +91,26 @@ type TrainOpts = {
 };
 const TRAIN_OPTS_KEY = "train-submit-opts";
 
+/** 归并习惯：某个类别上次训练时算作了什么（舔-大腿内侧 → 舔）。跨数据集记——
+ *  新导的数据集里同名的类别直接按上次的来，不用每份都从头选一遍。"" = 上次选了不参与 */
+const REMAP_HABITS_KEY = "train-remap-habits";
+function loadRemapHabits(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(REMAP_HABITS_KEY) || "null");
+    if (v && typeof v === "object") return v;
+  } catch {
+    // 坏了当没记过
+  }
+  return {};
+}
+function saveRemapHabits(edits: Record<string, string>) {
+  try {
+    localStorage.setItem(REMAP_HABITS_KEY, JSON.stringify({ ...loadRemapHabits(), ...edits }));
+  } catch {
+    // 存不下不影响训练
+  }
+}
+
 function loadTrainOpts(): { byDataset: Record<string, TrainOpts>; last: TrainOpts | null } {
   try {
     const v = JSON.parse(localStorage.getItem(TRAIN_OPTS_KEY) || "null");
@@ -124,6 +144,11 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
 /** 「不参与训练」那一项的值。存进表里是空字符串，但空字符串当不了 Select 的
  *  value（antd 当成"没选"），所以下拉里用这个哨兵 */
 const DROP = "__drop__";
+/** 下拉选项按 value 去重，留第一个（上级排在前面，同名的「并进 X」就不再出现） */
+const dedupeOpts = <T extends { value: string }>(opts: T[]): T[] => {
+  const seen = new Set<string>();
+  return opts.filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
+};
 /** 大类那一行「整组各自成一类」的哨兵值 */
 const KEEP_EACH = "__keep_each__";
 
@@ -518,21 +543,26 @@ export default function Training() {
     [trainCats, remapEdits]
   );
 
-  // 类别查出来之后按默认那张 3 类表预填：绝大多数类别本来就该照默认走
-  // （行走/奔跑 → 活动），人只需要改自己在意的那两三行。**没有默认的就留空**，
-  // 那正是「会被丢掉」，留空才看得见。
+  // 类别查出来之后预填，按这个顺序：
+  //   1. 上次训练时这个类别算作了什么（跨数据集记的习惯：舔-大腿内侧 → 舔）
+  //   2. 默认那张 3 类表（行走/奔跑 → 活动）
+  //   3. 细类跟着它的大类走：大类在表里就跟大类；不在表里就**并进大类自己**
+  //      （舔-大腿内侧 → 舔）。以前这一步是留空 = 丢掉，于是几十行舔的细类要一行行手选
+  // 人只需要改自己在意的那两三行
   useEffect(() => {
     if (!trainFor || !trainCats.length) return;
+    const habits = loadRemapHabits();
+    const table = remap?.table ?? {};
+    const hasKids = new Set(trainCats.filter((c) => c.chain.length > 1).map((c) => c.root));
     setRemapEdits((prev) => {
       const next = { ...prev };
       let touched = false;
       for (const c of trainCats) {
-        if (c.name in next) continue;             // 人改过的不动
-        const table = remap?.table ?? {};
-        // 细类（抓挠-躯干）默认跟着它的大类走：训练本来就取链的第 0 个
-        const root = c.name.includes("-") ? c.name.split("-")[0] : c.name;
-        const d = table[c.name] ?? table[root] ?? "";
-        if (d) { next[c.name] = d; touched = true; }
+        if (c.name in next) continue;             // 这份数据集上次提交时定过的不动
+        let d: string;
+        if (c.name in habits) d = habits[c.name];
+        else d = table[c.name] ?? table[c.root] ?? (hasKids.has(c.root) ? (habits[c.root] || c.root) : "");
+        if (d || c.name in habits) { next[c.name] = d; touched = true; }
       }
       return touched ? next : prev;
     });
@@ -572,7 +602,9 @@ export default function Training() {
     setExtraDs(mine ? (mine.extraDs ?? []).filter((n) => alive.has(n) && n !== d.name) : []);
     setExtraHz(mine?.extraHz ?? {});
     // 归并表：恢复上次的；这次多出来的类别，下面那个 effect 按默认表补上
-    setRemapEdits(mine?.remapEdits ?? {});
+    // 空的不恢复：以前没设过的行也存成了 ""，恢复回来会挡住上面的预填（上级 / 习惯）。
+    // 真选过「不参与」的，习惯表里记着，预填时还是空
+    setRemapEdits(Object.fromEntries(Object.entries(mine?.remapEdits ?? {}).filter(([, v]) => v)));
     setTrainFor(d);
   };
 
@@ -611,6 +643,8 @@ export default function Training() {
         model_type: modelType,
         tag: tag.trim() || null,
       });
+      // 记下这次每个类别算作了什么，下一份数据集里同名的类别直接照这个预填
+      saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
         modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
@@ -1945,8 +1979,11 @@ export default function Training() {
                           // 空字符串当不了 Select 的 value（antd 会当成"没选"，
                           // 于是选项永远选不中、看着像没生效）
                           onChange={(v) => setRemapEdits((m) => ({ ...m, [c.name]: v === DROP || v == null ? "" : v }))}
-                          options={[
-                            // 自成一类排第一：**这就是「识别出是什么抓挠」的做法**，
+                          options={dedupeOpts([
+                            // 上级排最前（近的在前）：细类最常见的去处就是并进上级
+                            // （舔-大腿内侧 → 舔-大腿 → 舔），以前它们夹在一长串兄弟里得翻
+                            ...c.chain.slice(0, -1).reverse().map((u) => ({ value: u, label: `并进上级 ${u}` })),
+                            // 然后是自成一类：**这就是「识别出是什么抓挠」的做法**，
                             // 选了它这一类就是一个独立的训练类别
                             { value: c.name, label: `${c.name}（自成一类）` },
                             // 再是默认那几类（活动/睡觉/抓挠），把不训的行为折进去当负样本
@@ -1961,7 +1998,7 @@ export default function Training() {
                             // 想清空只能去点那个悬停才出现的小 ✕——没人找得到，而
                             // "这一类干脆不要"恰恰是常用操作（份量太少、这次不训它）
                             { value: DROP, label: "不参与训练（丢掉这些样本）" },
-                          ]}
+                          ])}
                         />
                       ),
                     },
