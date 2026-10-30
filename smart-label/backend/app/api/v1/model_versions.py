@@ -282,8 +282,9 @@ async def edge_bundle(version_id: int, kind: str = "src", db: AsyncSession = Dep
         data = await algo_client.edge_bundle(row.algo_job_id, kind)
     except algo_client.AlgoServiceError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    suffix = "_lib" if kind == "lib" else ""
     return Response(content=data, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="edge_train{row.algo_job_id}_v{row.id}{'_lib' if kind == 'lib' else ''}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="edge_train{row.algo_job_id}_v{row.id}{suffix}.zip"'})
 
 
 @router.post("/{version_id}/export-edge")
