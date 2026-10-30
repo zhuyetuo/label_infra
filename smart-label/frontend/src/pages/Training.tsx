@@ -677,6 +677,37 @@ export default function Training() {
       return {};
     }
   };
+  /** 「再训一版」：照这条记录的数据集和配置（模型、轴数、采样率、一起训的数据集、归并表、
+   *  端侧尺寸……）打开训练弹窗，「方向无关」默认勾上。确认后提交，原来那版不动 */
+  const retrainFrom = (v: ModelVersion) => {
+    const sp = specOf(v);
+    const ds = (datasets ?? []).find((d) => d.name === sp.date);
+    if (!ds) {
+      message.warning(`数据集「${String(sp.date ?? "-")}」已经不在了，没法照它再训`);
+      return;
+    }
+    openTrain(ds);
+    const num = (x: unknown) => (typeof x === "number" ? x : null);
+    setModelType(v.model_type || "rf");
+    if (num(sp.source_hz)) setSourceHz(num(sp.source_hz)!);
+    if (num(sp.hz)) setHz(num(sp.hz)!);
+    setAxes(num(sp.axes) ?? 6);
+    setOrientFree(true);
+    setEdgeSize(!!sp.edge_size);
+    setEdgeTrees(num(sp.edge_trees));
+    setEdgeDepth(num(sp.edge_depth));
+    setEdgeFilters(Array.isArray(sp.edge_filters) ? (sp.edge_filters as number[]).join(",") : "");
+    setSkipSyn(!!sp.skip_syn);
+    setBalance(typeof sp.balance === "string" && sp.balance ? sp.balance : "none");
+    const alive = new Set((datasets ?? []).map((x) => x.name));
+    const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null }[] | undefined) ?? [])
+      .filter((e) => alive.has(e.date) && e.date !== ds.name);
+    setExtraDs(extras.map((e) => e.date));
+    setExtraHz(Object.fromEntries(extras.filter((e) => e.source_hz).map((e) => [e.date, e.source_hz as number])));
+    const remap = (sp.label_remap as Record<string, string> | undefined) ?? {};
+    if (Object.keys(remap).length) setRemapEdits(remap);
+    message.info(`已照训练记录 #${v.id} 的配置填好，「方向无关」已勾上，确认后提交`, 5);
+  };
   /** 每类的 P/R/F1。训练脚本产出的 json 里叫 per_class，键是类别名 */
   const perClassOf = (v: ModelVersion) => {
     const pc = metricsOf(v)?.per_class as Record<string, Record<string, number>> | undefined;
@@ -1072,6 +1103,13 @@ export default function Training() {
                                 </Button>
                               </Tooltip>
                             </Dropdown>
+                          )}
+                          {!busy && (
+                            <Tooltip title="照这一版的数据集和配置再训一版新的（方向无关默认勾上），原来这版不动">
+                              <Button size="small" type="link" onClick={() => retrainFrom(v)}>
+                                再训一版
+                              </Button>
+                            </Tooltip>
                           )}
                           {v.status === "done" && v.model_path && (
                             <Popconfirm
