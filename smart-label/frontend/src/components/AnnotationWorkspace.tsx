@@ -115,8 +115,8 @@ export interface SegReviewCtx {
   actions: React.ReactNode;
   /** 外面改了这一条（比如改了类别）就加一：工作台重新拉一遍草稿 */
   reloadKey?: number;
-  /** 这一条在工作台里被拆成了两条（都回到待审）：审核页刷新列表 / 红色数字 */
-  onSplit?: (leftEndMs: number) => void;
+  /** 这一条在工作台里被拆开 / 改了（都回到待审）：审核页同步这一条的起止类别、刷新列表和红色数字 */
+  onChanged?: (main: { start_time_ms: number; end_time_ms: number; label_id: number }) => void;
 }
 
 interface VideoSrc {
@@ -742,6 +742,67 @@ export default function AnnotationWorkspace({
 
   // 正在循环的已标注片段（审核员在浮窗里直接「通过 / 有问题」用）
   const loopItem = loopInfo?.itemId != null ? items.find((x) => x.id === loopInfo.itemId) : undefined;
+
+  // 退回给我的那条拆出来的「一组」：每一段都能接着拆、调起止、改类别（不止原来那一条）
+  const [splitGroup, setSplitGroup] = useState<number[]>([]);
+  useEffect(() => {
+    setSplitGroup(segReview ? [segReview.itemId] : []);
+  }, [segReview?.itemId]);
+  const inGroup = (id: number | null | undefined) => !!segReview && id != null && splitGroup.includes(id);
+  const groupItems = items.filter((x) => inGroup(x.id)).sort((a, b) => a.start_time_ms - b.start_time_ms);
+  // 原来那一条变了：告诉审核页（它那边存着这一条的起止类别，改类别时要用）
+  const syncMain = (list: LabelItem[]) => {
+    const m = segReview ? list.find((x) => x.id === segReview.itemId) : undefined;
+    if (m) segReview?.onChanged?.({ start_time_ms: m.start_time_ms, end_time_ms: m.end_time_ms, label_id: m.label_id });
+  };
+  const relabelPiece = async (it: LabelItem, labelId: number) => {
+    if (taskId == null || labelId === it.label_id) return;
+    await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
+    const d = await getDraft(taskId);
+    setItems(d.items);
+    syncMain(d.items);
+    message.success(`已改成「${nameOf(labelId)}」`);
+  };
+  const splitPanel = segReview && (
+    <div style={{ width: "100%", borderTop: "1px dashed #ddd", paddingTop: 4, marginTop: 2 }}>
+      <Space size={6} wrap style={{ marginBottom: 4 }}>
+        <Tooltip title="把播放线压着的那一段拆成两段（类别不变，都交回重审）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别">
+          <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
+        </Tooltip>
+        {groupItems.length > 1 && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>拆成了 {groupItems.length} 段，逐段改类别：</Typography.Text>
+        )}
+      </Space>
+      {groupItems.length > 1 && groupItems.map((it, k) => {
+        const cur = loopInfo?.itemId === it.id;
+        return (
+          <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "1px 0",
+            background: cur ? "rgba(114,46,209,.08)" : undefined }}>
+            <span style={{ width: 16, color: "#888" }}>{k + 1}</span>
+            <Button size="small" type="link" style={{ padding: 0 }}
+              onClick={() => setLoop({ startMs: it.start_time_ms, endMs: it.end_time_ms })}>
+              {cur ? "▶ 在循环" : "▶ 循环"}
+            </Button>
+            <span style={{ fontFamily: "monospace" }}>
+              {formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}
+            </span>
+            <span style={{ color: "#888" }}>{((it.end_time_ms - it.start_time_ms) / 1000).toFixed(1)}s</span>
+            <Select
+              size="small"
+              showSearch
+              style={{ width: 130, marginLeft: "auto" }}
+              value={it.label_id}
+              optionFilterProp="label"
+              popupMatchSelectWidth={false}
+              onChange={(v: number) => relabelPiece(it, v)}
+              options={labels.filter((l) => l.is_active !== false || l.id === it.label_id)
+                .map((l) => ({ value: l.id, label: l.display_name }))}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
   const waveReviewBar = (it: LabelItem) => (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>这一条：</Typography.Text>
@@ -817,6 +878,15 @@ export default function AnnotationWorkspace({
       message.success("起止已保存");
       return;
     }
+    if (segReview && target.kind === "item" && inGroup(target.id) && taskId != null) {
+      // 拆出来的其它几段：直接走片段接口
+      await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
+      const d = await getDraft(taskId);
+      setItems(d.items);
+      setLoop({ startMs, endMs });
+      message.success("起止已保存");
+      return;
+    }
     await adjustBoundary(target, startMs, endMs);
   };
 
@@ -855,21 +925,24 @@ export default function AnnotationWorkspace({
     }
     if (readOnly) {
       // 任务已提交 / 不在名下：退回给我的那一条（或审核员看的任意一条）走片段接口拆，直接落库
-      const allowed = segReview ? it.id === segReview.itemId : canFlag;
+      const allowed = segReview ? inGroup(it.id) : canFlag;
       if (!allowed || taskId == null) {
         message.info({
-          content: segReview ? "这里只能拆退回给你的那一条（浮窗里循环的那段）" : readOnlyHint,
+          content: segReview ? "这里只能拆退回给你的那一条（和从它拆出来的几段）" : readOnlyHint,
           key: "split",
         });
         return;
       }
       void (async () => {
         try {
-          await segSplit(it.id, at);
-          setItems((await getDraft(taskId)).items);
-          if (segReview && it.id === segReview.itemId) {
-            setLoop({ startMs: it.start_time_ms, endMs: at });
-            segReview.onSplit?.(at);
+          const r = await segSplit(it.id, at);
+          const list = (await getDraft(taskId)).items;
+          setItems(list);
+          if (segReview) {
+            setSplitGroup((g) => (g.includes(r.right.id) ? g : [...g, r.right.id]));
+            // 浮窗接着循环刚才那一段的左半段，方便接着往下切
+            if (loopInfo?.itemId === it.id) setLoop({ startMs: it.start_time_ms, endMs: at });
+            syncMain(list);
           }
           message.success({ content: `已拆成两段（${(it.start_time_ms / 1000).toFixed(1)}–${(at / 1000).toFixed(1)} s ｜ ${(at / 1000).toFixed(1)}–${(it.end_time_ms / 1000).toFixed(1)} s），已保存，两段都交回重审`, key: "split", duration: 5 });
         } catch {
@@ -912,7 +985,7 @@ export default function AnnotationWorkspace({
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => it.start_time_ms < at && at < it.end_time_ms)
       // 从「退回给我的片段」打开的：只拆那一条
-      .filter(({ it }) => !segReview || it.id === segReview.itemId);
+      .filter(({ it }) => !segReview || inGroup(it.id));
     if (!hits.length) {
       message.info({ content: "播放线没压在任何片段上：先把视频停到要切的位置", key: "split" });
       return;
@@ -1545,7 +1618,7 @@ export default function AnnotationWorkspace({
         // 疑似片段只有管理员能改（跟后端一致）
         canAdjust={
           readOnly && segReview
-            ? (t) => t.kind === "item" && t.id === segReview.itemId
+            ? (t) => t.kind === "item" && inGroup(t.id)
             : readOnly && canFlag
               ? (t) => t.kind === "item" || role === "admin" || role === "super_admin"
               : undefined
@@ -1553,14 +1626,12 @@ export default function AnnotationWorkspace({
         readOnlyHint={readOnly && !canFlag ? readOnlyHint : undefined}
         forceOpen={!!segReview}
         extra={
-          segReview && loopInfo?.itemId === segReview.itemId
+          segReview && inGroup(loopInfo?.itemId)
             ? (
-              <Space size={6} wrap>
-                <Tooltip title="在视频播放线处把这一条拆成两段（类别不变，两段都交回重审）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S">
-                  <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
-                </Tooltip>
+              <div style={{ width: "100%" }}>
                 {segReview.actions}
-              </Space>
+                {splitPanel}
+              </div>
             )
             : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
         } />

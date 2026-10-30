@@ -316,11 +316,11 @@ export default function SegmentReview() {
             },
             actions,
             reloadKey,
-            onSplit: (at) => {
-              // 拆成两条、都回到待审：红色数字少一条，列表刷新（新的右半段也会出现在待审里）
+            onChanged: (m) => {
+              // 拆开 / 改了：都回到待审。红色数字少一条，列表刷新（拆出来的新段也会出现在待审里）
               qc.invalidateQueries({ queryKey: ["seg-returned-summary"] });
               qc.invalidateQueries({ queryKey: ["seg-queue"] });
-              setCur({ ...cur, end_time_ms: at, seg_status: "pending" });
+              setCur({ ...cur, ...m, seg_status: "pending" });
             },
           }}
         />
