@@ -32,6 +32,10 @@ class DatasetSpecIn(BaseModel):
     # **端侧只有加速度计时要用 3**——否则模型学的是板上根本没有的信号，
     # 服务端指标再好也代表不了端上的表现
     axes: int = 6
+    # 输入通道：tilt=重力对齐+姿态角（老模型）；inv=方向无关（竖直/水平分量、模长、偏角、jerk），
+    # 用户怎么戴都一样。rot_aug：训练集每窗另加几份随机 3D 旋转
+    channel_mode: str = "tilt"
+    rot_aug: int = 0
     # 端侧尺寸：用 imu_train 的 configs/ml_edge.yaml（限深限棵数），模型才塞得进
     # 板子给模型留的约 128KB flash。默认那份是 200 棵不限深的森林，几十 MB
     edge_size: bool = False

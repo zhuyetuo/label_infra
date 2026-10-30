@@ -80,6 +80,7 @@ type TrainOpts = {
   sourceHz?: number;
   hz?: number;
   axes?: number;
+  orientFree?: boolean;
   edgeSize?: boolean;
   edgeTrees?: number | null;
   edgeDepth?: number | null;
@@ -134,8 +135,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
     if (names.length > 30) {
       for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
     }
-    const { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance } = opts;
-    cur.last = { modelType, sourceHz, hz, axes, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance };
+    const { modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance };
     localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
   } catch {
     // 存不了就算了，不影响这次提交
@@ -242,6 +243,8 @@ export default function Training() {
   const [sourceHz, setSourceHz] = useState<number>(50);
   // 用几轴。6=加速度+陀螺仪（默认），3=只用加速度——**端侧只有加速度计时用 3**
   const [axes, setAxes] = useState<number>(6);
+  // 方向无关：输入只用跟佩戴方向无关的量 + 训练集随机旋转增强。用户怎么戴都不限制，默认开
+  const [orientFree, setOrientFree] = useState(true);
   // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
   const [edgeSize, setEdgeSize] = useState(false);
   // 端侧尺寸里具体的规格。空 = 默认（rf 20 棵 × 深 10；cnn filters 32/64/128）。
@@ -585,6 +588,7 @@ export default function Training() {
       if (base.sourceHz) setSourceHz(base.sourceHz);
       if (base.hz) setHz(base.hz);
       if (base.axes) setAxes(base.axes);
+      if (typeof base.orientFree === "boolean") setOrientFree(base.orientFree);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
       setBalance(base.balance || "none");
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
@@ -627,6 +631,8 @@ export default function Training() {
           source_hz: sourceHz,
           hz,
           axes,
+          channel_mode: orientFree ? "inv" : "tilt",
+          rot_aug: orientFree ? 2 : 0,
           edge_size: edgeSize,
           edge_trees: edgeSize && modelType !== "cnn" ? edgeTrees : null,
           edge_depth: edgeSize && modelType !== "cnn" ? edgeDepth : null,
@@ -641,7 +647,7 @@ export default function Training() {
       // 记下这次每个类别算作了什么，下一份数据集里同名的类别直接照这个预填
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
+        modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -1756,6 +1762,13 @@ export default function Training() {
               />
             </Space>
             <Space>
+              <Checkbox checked={orientFree} onChange={(e) => setOrientFree(e.target.checked)}>
+                <Tooltip title="用户怎么戴都不限制，所以模型不该看佩戴方向。勾上后：输入换成跟方向无关的量（竖直/水平分量、模长、偏离重力的角度、jerk），正着戴、倒着戴、转个角度输入都一样；训练集每个窗口再加 2 份随机旋转（含窗口内的小幅滑动）。不勾就是老的输入（重力对齐 + 姿态角），佩戴方向一变判决会跟着变">
+                  <span style={{ borderBottom: "1px dashed #666" }}>方向无关（怎么戴都识别，推荐）</span>
+                </Tooltip>
+              </Checkbox>
+            </Space>
+            <Space>
               <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
                 <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB，板子上装不下。勾上之后：rf = 20 棵 × 深 10（约 100 KB），跟板上现在跑的 edge_rf_d10 同规格；cnn = filters 32/64/128（int8 约 35 KB）；xgb = 50 轮 × 深 6。要更小的，在后面填具体规格，或者训完看「体积曲线」挑">
                   <span style={{ borderBottom: "1px dashed #666" }}>端侧尺寸（要烧进项圈就勾）</span>
@@ -2097,6 +2110,7 @@ export default function Training() {
           setModelType(curveFor.model_type);
           setEdgeSize(true);
           if (typeof sp.axes === "number") setAxes(sp.axes);
+          setOrientFree(sp.channel_mode === "inv");
           setEdgeTrees(spec.edge_trees ?? null);
           setEdgeDepth(spec.edge_depth ?? null);
           setEdgeFilters(spec.edge_filters ? spec.edge_filters.join(",") : "");
@@ -2226,6 +2240,7 @@ export default function Training() {
                     </span>
                     <span>
                       {Number(sp.axes) === 3 ? "3 轴（只用加速度）" : "6 轴（加速度+陀螺仪）"} ·
+                      {sp.channel_mode === "inv" ? " 方向无关 ·" : ""}
                       原始 {String(sp.source_hz ?? "-")}Hz → 训练 {String(sp.hz ?? "-")}Hz · {detail.model_type}
                       {sp.skip_syn ? " · 跳过合成数据" : ""}
                     </span>
