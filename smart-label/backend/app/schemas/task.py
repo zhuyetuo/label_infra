@@ -110,6 +110,9 @@ class LabelItemOut(LabelItemIn):
     review_flag_by: int | None = None
     # 起止调整记录，最早的在前（见模型上的说明）
     boundary_edits: list[dict] = []
+    # 片段审核：None = 待审 / approved = 通过 / returned = 退回（原因在 review_note）
+    seg_status: str | None = None
+    seg_reviewed_by: int | None = None
 
     @field_validator("boundary_edits", mode="before")
     @classmethod

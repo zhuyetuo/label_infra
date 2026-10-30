@@ -77,7 +77,7 @@ export interface Task {
   /** 当前轮草稿里已有多少段，0 = 认领了还没动手 */
   draft_item_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
-  label_counts?: Record<number, { n: number; ai_pending: number }>;
+  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number }>;
   /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
   cand_count?: number;
   cand_pending?: number;
@@ -132,6 +132,9 @@ export interface LabelItem {
   review_flag_by?: number | null;
   /** 起止调整记录，最早的在前：每次从哪改到哪、谁、什么时候 */
   boundary_edits?: BoundaryEdit[];
+  /** 片段审核：空 = 还没审 / approved = 通过 / returned = 退回（原因在 review_note） */
+  seg_status?: "approved" | "returned" | null;
+  seg_reviewed_by?: number | null;
 }
 
 export interface BoundaryEdit {

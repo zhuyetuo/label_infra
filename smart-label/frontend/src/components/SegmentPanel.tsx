@@ -21,6 +21,8 @@ type SourceFilter =
   | "ai_relabeled"
   | "from_cand"
   | "flagged"
+  | "seg_approved"
+  | "seg_unreviewed"
   | "human"
   | "uncertain"
   | "uncertain_no_view"
@@ -29,7 +31,9 @@ type SourceFilter =
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
-  { value: "flagged", label: "被标有问题" },
+  { value: "flagged", label: "审核：退回（有问题）" },
+  { value: "seg_approved", label: "审核：已通过" },
+  { value: "seg_unreviewed", label: "审核：还没审" },
   { value: "ai", label: "AI 全部" },
   { value: "ai_pending", label: "AI 待确认" },
   { value: "ai_confirmed", label: "AI 已确认" },
@@ -151,6 +155,8 @@ interface Props {
   onReviewNote?: (item: LabelItem, note: string | null) => void;
   /** 只有清掉的权限（标注员改好了）：不显示「有问题」，只显示「已改好」 */
   reviewNoteClearOnly?: boolean;
+  /** 片段级「通过」（审核员 / 管理员）。ok = false 是撤销通过。给了才显示按钮 */
+  onSegApprove?: (item: LabelItem, ok: boolean) => void;
   /** 打开时先只看被标有问题的（标注员拿到被退回的任务） */
   initialFlaggedOnly?: boolean;
   /**
@@ -183,6 +189,7 @@ export default function SegmentPanel({
   onCreate,
   initialFilterLabels,
   onReviewNote,
+  onSegApprove,
   reviewNoteClearOnly,
   initialFlaggedOnly,
   controlsPortalTarget,
@@ -302,12 +309,15 @@ export default function SegmentPanel({
         if (filterSource === "ai_relabeled" && !(st === "modified" && i.ai_label_id != null && i.ai_label_id !== i.label_id)) return false;
         if (filterSource === "from_cand" && !i.cand_label_name) return false;
         if (filterSource === "flagged" && !i.review_note) return false;
+        if (filterSource === "seg_approved" && i.seg_status !== "approved") return false;
+        if (filterSource === "seg_unreviewed" && (i.seg_status === "approved" || i.review_note)) return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
         if (filterSource === "uncertain_needs_split" && i.uncertain_reason !== "needs_split") return false;
         // 「待定」是单独一类，别混进别的来源的筛选结果里
         if (!filterSource.startsWith("uncertain") && filterSource !== "all" && filterSource !== "flagged" && i.uncertain) return false;
+        if (filterSource.startsWith("seg_") && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
@@ -896,6 +906,11 @@ export default function SegmentPanel({
                   <Tag color="volcano" style={{ marginLeft: 4 }}>疑似重复</Tag>
                 </Tooltip>
               ) : null;
+              const okTag = i.seg_status === "approved" ? (
+                <Tooltip title="片段审核通过：起止、类别都确认过。导出训练集选「只要片段审核通过的」就只要这些">
+                  <Tag color="success">✓ 已通过</Tag>
+                </Tooltip>
+              ) : null;
               const flagTag = i.review_note ? (
                 <Tooltip title={`审核标的问题：${i.review_note}。改了这条（类别或起止）就自动算处理过；没改也确认没问题的，点右边「已改好」`}>
                   <Tag color="red" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle" }}>
@@ -914,6 +929,7 @@ export default function SegmentPanel({
                 const k = kindOf(i.uncertain_reason);
                 return (
                   <>
+                    {okTag}
                     {flagTag}
                     <Tooltip title={`${k?.hint ?? "拿不准"}；留着当记录，但不参与模型训练`}>
                       <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
@@ -926,6 +942,7 @@ export default function SegmentPanel({
               }
               return (
                 <>
+                  {okTag}
                   {flagTag}
                   {st === "pending" ? (
                     <Tooltip title="AI 标的，你还没表态。点右边「通过」认可它，或者直接改标签/拖起止——改了就算你的结论，不用再点通过">
@@ -980,6 +997,21 @@ export default function SegmentPanel({
                     跳转
                   </Button>
                   {loopButton(i.start_time_ms, i.end_time_ms)}
+                  {/* 片段级「通过」：一条条认可，有问题的点右边「有问题」一条条退回。
+                      已经标了有问题的先「清除问题」再通过 */}
+                  {onSegApprove && i.id > 0 && !i.review_note && (i.seg_status === "approved" ? (
+                    <Tooltip title="撤销通过，回到还没审">
+                      <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onSegApprove(i, false)}>
+                        撤销通过
+                      </Button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="这条起止、类别都没问题：片段审核通过（导出训练集可以只要通过的）">
+                      <Button size="small" type="link" style={{ color: "#52c41a" }} onClick={() => onSegApprove(i, true)}>
+                        通过
+                      </Button>
+                    </Tooltip>
+                  ))}
                   {/* 审核：看到哪条不对就标哪条，退回时标注员只需要改这几条。
                       还没存进库的新片段（id 为负）标不了——先存草稿 */}
                   {onReviewNote && i.id > 0 && (i.review_note ? (
