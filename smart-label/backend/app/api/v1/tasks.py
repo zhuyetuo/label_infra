@@ -324,8 +324,11 @@ async def list_tasks(
                 func.count(AnnotationLabelItem.id),
                 func.sum(ai_pending),
                 # 片段审核：通过了几段、退回了还没处理的几段（项目页按类别看「哪些 OK、哪些在等标注员改」）
-                func.sum(case((AnnotationLabelItem.seg_status == "approved", 1), else_=0)),
-                func.sum(case((AnnotationLabelItem.seg_status == "returned", 1), else_=0)),
+                # 「有问题」标记也算退回：片段审核上线前标的只有 review_note（迁移已补，这里再兜一层）
+                func.sum(case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1),
+                              else_=0)),
+                func.sum(case(((AnnotationLabelItem.seg_status == "returned") | AnnotationLabelItem.review_note.is_not(None), 1),
+                              else_=0)),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
