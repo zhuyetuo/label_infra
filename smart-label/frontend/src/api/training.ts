@@ -235,6 +235,10 @@ export const submitTrain = (body: {
     label_remap?: Record<string, string>;
     /** 用几轴：6=加速度+陀螺仪，3=只用加速度（端侧没有陀螺仪时用） */
     axes?: number;
+    /** 输入通道：tilt=重力对齐+姿态角（老）；inv=方向无关，佩戴方向不影响识别 */
+    channel_mode?: "tilt" | "inv";
+    /** 训练集旋转增强：每窗另加几份随机 3D 旋转 */
+    rot_aug?: number;
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
     /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */
