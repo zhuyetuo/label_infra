@@ -347,8 +347,11 @@ export const rerunTrainReview = (id: number) => request.post<never, { ok: boolea
 
 /** 下载端侧包（zip）：要带登录 token，所以不能直接 window.open 那个地址（会 401），
  *  先用 axios 拿成 Blob 再存盘。打包在算法机上现编，要十几秒 */
-export async function downloadEdgeBundle(id: number, filename = `edge_v${id}.zip`) {
+export type EdgeBundleKind = "src" | "lib";
+/** kind：src 源码包；lib 编译库（保密：只有 .a + 头文件 + PC 验证工具，给外部嵌入式） */
+export async function downloadEdgeBundle(id: number, filename = `edge_v${id}.zip`, kind: EdgeBundleKind = "src") {
   const blob = await request.get<never, Blob>(`/model-versions/${id}/edge-bundle`, {
+    params: { kind },
     responseType: "blob",
     timeout: 300000,
   });

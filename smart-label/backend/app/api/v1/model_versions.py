@@ -268,19 +268,22 @@ async def rerun_train_review(version_id: int, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/{version_id}/edge-bundle")
-async def edge_bundle(version_id: int, db: AsyncSession = Depends(get_db)):
-    """下载这一版的端侧源码包（zip）：core/ 运行时 + 模型导出的 C + README（占用、调用顺序、编译选项）。"""
+async def edge_bundle(version_id: int, kind: str = "src", db: AsyncSession = Depends(get_db)):
+    """下载这一版的端侧包（zip）。kind=src 源码包：core/ 运行时 + 模型导出的 C + README；
+    kind=lib 编译库（保密）：只有 .a + 头文件 + PC 验证工具，给外部嵌入式。"""
     from fastapi.responses import Response
 
     row = await db.get(ModelVersion, version_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
     try:
-        data = await algo_client.edge_bundle(row.algo_job_id)
+        if kind not in ("src", "lib"):
+            raise HTTPException(status_code=400, detail="kind 只能是 src 或 lib")
+        data = await algo_client.edge_bundle(row.algo_job_id, kind)
     except algo_client.AlgoServiceError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     return Response(content=data, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="edge_train{row.algo_job_id}_v{row.id}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="edge_train{row.algo_job_id}_v{row.id}{'_lib' if kind == 'lib' else ''}.zip"'})
 
 
 @router.post("/{version_id}/export-edge")
