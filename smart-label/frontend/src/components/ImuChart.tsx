@@ -122,6 +122,8 @@ interface Props {
   onReadOnlyEdit?: () => void;
   /** 按住 Alt 点片段：从点的位置拆成两段（index 跟 segments 对应） */
   onSplitSegment?: (index: number, atMs: number) => void;
+  /** 在片段上点右键：弹菜单（改类别 / 拆开 / 删除）。clientX/Y 是菜单出现的位置 */
+  onSegmentMenu?: (index: number, atMs: number, clientX: number, clientY: number) => void;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -140,6 +142,7 @@ interface AnnotateCtx {
   /** 只读时有人去拖边：告诉他为什么不能改、要怎么办 */
   onReadOnlyEdit: (() => void) | null;
   onSplit: ((index: number, atMs: number) => void) | null;
+  onMenu: ((index: number, atMs: number, clientX: number, clientY: number) => void) | null;
   /** 按着 Alt 停在某段里：在鼠标位置画一条「从这里拆开」的虚线（样本内毫秒） */
   splitMs: number | null;
 }
@@ -160,6 +163,7 @@ export default function ImuChart({
   onResizeSegment,
   onReadOnlyEdit,
   onSplitSegment,
+  onSegmentMenu,
 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
@@ -185,6 +189,7 @@ export default function ImuChart({
     hoverOwner: null,
     onReadOnlyEdit: null,
     onSplit: null,
+    onMenu: null,
     splitMs: null,
   });
   annotateRef.current.activeColor = activeColor ?? null;
@@ -192,6 +197,7 @@ export default function ImuChart({
   annotateRef.current.onResize = onResizeSegment ?? null;
   annotateRef.current.onReadOnlyEdit = onReadOnlyEdit ?? null;
   annotateRef.current.onSplit = onSplitSegment ?? null;
+  annotateRef.current.onMenu = onSegmentMenu ?? null;
   annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw(false));
 
   useEffect(() => {
@@ -516,8 +522,8 @@ function segmentBandPlugin(
               ctx.fillRect(sx + 4 * dpr, st + sh / 2 - 8 * dpr, tw + 6 * dpr, 16 * dpr);
               ctx.fillStyle = "#000";
               ctx.fillText(t, sx + 7 * dpr, st + sh / 2 - 6 * dpr);
-            } else if (annotateRef.current.onSplit && x1 - x0 > 120 * dpr) {
-              const t = "Alt+点击 拆开";
+            } else if (annotateRef.current.onSplit && x1 - x0 > 190 * dpr) {
+              const t = "右键改类别 · Alt+点击 拆开";
               ctx.fillStyle = "rgba(255,255,255,.85)";
               ctx.fillText(t, x0 + 4 * dpr, st + sh - 15 * dpr);
             }
@@ -1168,6 +1174,16 @@ function dragPanPlugin(
         };
 
         over.addEventListener("mousedown", onMouseDown);
+        // 右键片段：改类别 / 拆开 / 删除的菜单（不在片段上就照浏览器默认）
+        over.addEventListener("contextmenu", (e: MouseEvent) => {
+          const menu = annotateRef.current.onMenu;
+          if (!menu) return;
+          const hit = hitTest(e);
+          if (!hit) return;
+          e.preventDefault();
+          const rel = e.clientX - over.getBoundingClientRect().left;
+          menu(hit.idx, toMs(rel), e.clientX, e.clientY);
+        });
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
       },

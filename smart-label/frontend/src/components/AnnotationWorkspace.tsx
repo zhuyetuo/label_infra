@@ -3,6 +3,7 @@ import InferModeHelp from "@/components/InferModeHelp";
 import {
   Alert,
   Button,
+  ConfigProvider,
   Dropdown,
   Empty,
   Modal,
@@ -744,10 +745,30 @@ export default function AnnotationWorkspace({
   const loopItem = loopInfo?.itemId != null ? items.find((x) => x.id === loopInfo.itemId) : undefined;
 
   // 退回给我的那条拆出来的「一组」：每一段都能接着拆、调起止、改类别（不止原来那一条）
+  // 存在 localStorage 里：刷新页面回来，拆出来的那几段还认得是「这一组」
+  const groupKey = segReview ? `seg-split-group:${segReview.itemId}` : null;
   const [splitGroup, setSplitGroup] = useState<number[]>([]);
   useEffect(() => {
-    setSplitGroup(segReview ? [segReview.itemId] : []);
+    if (!segReview || !groupKey) {
+      setSplitGroup([]);
+      return;
+    }
+    let saved: number[] = [];
+    try {
+      saved = JSON.parse(localStorage.getItem(groupKey) || "[]");
+    } catch {
+      saved = [];
+    }
+    setSplitGroup([...new Set([segReview.itemId, ...(Array.isArray(saved) ? saved : [])])]);
   }, [segReview?.itemId]);
+  useEffect(() => {
+    if (!groupKey || splitGroup.length < 2) return;
+    try {
+      localStorage.setItem(groupKey, JSON.stringify(splitGroup));
+    } catch {
+      /* 存不了就算了，只是刷新后要从列表里找 */
+    }
+  }, [groupKey, splitGroup]);
   const inGroup = (id: number | null | undefined) => !!segReview && id != null && splitGroup.includes(id);
   const groupItems = items.filter((x) => inGroup(x.id)).sort((a, b) => a.start_time_ms - b.start_time_ms);
   // 原来那一条变了：告诉审核页（它那边存着这一条的起止类别，改类别时要用）
@@ -763,6 +784,83 @@ export default function AnnotationWorkspace({
     syncMain(d.items);
     message.success(`已改成「${nameOf(labelId)}」`);
   };
+  // ── 大波形上右键片段：改类别 / 拆开 / 删除 ──
+  const [segMenu, setSegMenu] = useState<{ idx: number; at: number; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!segMenu) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSegMenu(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [segMenu]);
+  const menuItem = segMenu ? items[segMenu.idx] : undefined;
+  const relabelFromMenu = async (it: LabelItem, v: number) => {
+    setSegMenu(null);
+    if (v === it.label_id) return;
+    if (!readOnly) {
+      updateItems([it.id], { label_id: v });
+      message.success({ content: `已改成「${nameOf(v)}」（存草稿后生效）`, key: "relabel" });
+    } else if (segReview) {
+      if (!inGroup(it.id)) {
+        message.info({ content: "这里只能改退回给你的那一条（和从它拆出来的几段）", key: "relabel" });
+        return;
+      }
+      await relabelPiece(it, v);
+    } else if (canFlag) {
+      await relabelItem(it, v);
+    } else {
+      message.info({ content: readOnlyHint, key: "relabel" });
+    }
+  };
+  const segMenuEl = segMenu && menuItem && (
+    <>
+      <div style={{ position: "fixed", inset: 0, zIndex: 1190 }}
+        onMouseDown={() => setSegMenu(null)} onContextMenu={(e) => { e.preventDefault(); setSegMenu(null); }} />
+      <div
+        style={{
+          position: "fixed",
+          left: Math.min(segMenu.x, window.innerWidth - 240),
+          top: Math.min(segMenu.y, window.innerHeight - 380),
+          zIndex: 1200, width: 230, background: "#fff", borderRadius: 8, padding: 8,
+          boxShadow: "0 6px 16px rgba(0,0,0,.18)", border: "1px solid #eee", fontSize: 12,
+        }}
+      >
+        <div style={{ marginBottom: 6, color: "#666" }}>
+          <Tag color={colorOf(menuItem.label_id)} style={{ marginRight: 4 }}>{nameOf(menuItem.label_id)}</Tag>
+          {formatMs(menuItem.start_time_ms)} → {formatMs(menuItem.end_time_ms)}
+        </div>
+        <ConfigProvider theme={{ token: { zIndexPopupBase: 1250 } }}>
+          <Select
+            size="small"
+            showSearch
+            autoFocus
+            defaultOpen
+            placeholder="改成…（可输入搜索）"
+            style={{ width: "100%" }}
+            optionFilterProp="label"
+            value={menuItem.label_id}
+            listHeight={260}
+            onChange={(v: number) => relabelFromMenu(menuItem, v)}
+            options={labels.filter((l) => l.is_active !== false || l.id === menuItem.label_id)
+              .map((l) => ({ value: l.id, label: l.display_name }))}
+          />
+        </ConfigProvider>
+        <Space size={4} style={{ marginTop: 6 }} wrap>
+          <Button size="small" onClick={() => { const m = segMenu; setSegMenu(null); splitItem(m.idx, m.at); }}>
+            ✂ 从这里拆开
+          </Button>
+          <Button size="small" onClick={() => { setSegMenu(null); setLoop({ startMs: menuItem.start_time_ms, endMs: menuItem.end_time_ms }); }}>
+            ▶ 循环
+          </Button>
+          {!readOnly && (
+            <Button size="small" danger onClick={() => { setSegMenu(null); setItems((prev) => prev.filter((x) => x.id !== menuItem.id)); }}>
+              删除
+            </Button>
+          )}
+        </Space>
+      </div>
+    </>
+  );
+
   const splitPanel = segReview && (
     <div style={{ width: "100%", borderTop: "1px dashed #ddd", paddingTop: 4, marginTop: 2 }}>
       <Space size={6} wrap style={{ marginBottom: 4 }}>
@@ -1377,6 +1475,7 @@ export default function AnnotationWorkspace({
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
               onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
+              onSegmentMenu={(idx, at, x, y) => setSegMenu({ idx, at, x, y })}
             />
           </div>
           {(
@@ -1610,6 +1709,7 @@ export default function AnnotationWorkspace({
 
   return (
     <>
+    {segMenuEl}
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
       <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
