@@ -175,3 +175,21 @@ def test_退回数_按项目(db, run):
     assert d == {"total": 2, "by_project": {w.p.id: 2}}
     run(api.edit(w.items[0].id, api.EditIn(start_time_ms=100, end_time_ms=3000), db, w.ann))   # 改好一条
     assert run(api.returned_summary(db=db, user=w.ann))["data"]["total"] == 1
+
+
+def test_退回说要拆_标注员拆成两段_都回到待审(db, run):
+    w = _world(db, run)
+    it = w.items[0]                     # 0 ~ 3000
+    run(api.decide(it.id, api.DecideIn(decision="returned", note="应该拆成几段"), db, w.rev))
+    with pytest.raises(HTTPException):
+        run(api.split(it.id, api.SplitIn(at_ms=100), db, w.ann))      # 太靠边
+    r = run(api.split(it.id, api.SplitIn(at_ms=1200), db, w.ann))
+    rows = run(db.execute(select(AnnotationLabelItem).where(
+        AnnotationLabelItem.annotation_record_id == it.annotation_record_id,
+        AnnotationLabelItem.label_id == it.label_id).order_by(AnnotationLabelItem.start_time_ms))).scalars().all()
+    spans = [(x.start_time_ms, x.end_time_ms) for x in rows if x.start_time_ms < 3000]
+    assert spans == [(0, 1200), (1200, 3000)]
+    left = next(x for x in rows if x.id == it.id)
+    assert left.seg_status is None and left.review_note is None and '"to": [0, 1200]' in left.boundary_edits
+    assert r["data"]["right"]["start_time_ms"] == 1200
+    assert _q(run, db, w.ann, seg_status="returned")["items"] == []   # 退回清掉了
