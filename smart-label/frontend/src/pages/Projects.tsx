@@ -4,6 +4,7 @@ import InferModeHelp from "@/components/InferModeHelp";
 import { currentName, descendantIds } from "@/utils/labelTree";
 import {
   Alert,
+  Badge,
   Button,
   Checkbox,
   Collapse,
@@ -26,7 +27,8 @@ import {
   message,
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useReturnedSegments } from "@/hooks/useReturnedSegments";
 import { unapprove } from "@/api/reviews";
 import {
   assignProject,
@@ -152,6 +154,9 @@ const answerNote = (sp: { clips_sent: number; ans_label?: number; ans_unclear?: 
 };
 
 export default function Projects() {
+  const navigate = useNavigate();
+  // 标注员：每个项目里退回给我、还没改好的片段条数（项目名旁边的红色数字）
+  const returnedSegs = useReturnedSegments();
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
   const role = useAuthStore((s) => s.userInfo?.role);
@@ -1646,6 +1651,18 @@ export default function Projects() {
                   <strong style={p.description ? { cursor: "help" } : undefined}>{p.name}</strong>
                 </Tooltip>
                 {!p.is_active && <Tag>已停用</Tag>}
+                {(returnedSegs.byProject[p.id] ?? 0) > 0 && (
+                  <Tooltip title="审核退回给你、还没改好的片段。点一下去「退回的片段」逐条改">
+                    <Badge
+                      count={`退回 ${returnedSegs.byProject[p.id]}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate("/segment-review");
+                      }}
+                    />
+                  </Tooltip>
+                )}
               </Space>
             ),
           },

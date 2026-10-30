@@ -165,3 +165,13 @@ def test_按名字跨项目(db, run):
     assert len(d["items"]) == 3
     assert run(api.claim(api.ClaimIn(label_name="抓挠-头颈耳", n=10), db, w.rev))["data"]["claimed"] == 3
     assert _q(run, db, w.rev, label_name="没有这个")["items"] == []
+
+
+def test_退回数_按项目(db, run):
+    w = _world(db, run)
+    run(api.decide(w.items[0].id, api.DecideIn(decision="returned", note="起止不准"), db, w.rev))
+    run(api.decide(w.items[1].id, api.DecideIn(decision="returned", note="类别错了"), db, w.rev))
+    d = run(api.returned_summary(db=db, user=w.ann))["data"]
+    assert d == {"total": 2, "by_project": {w.p.id: 2}}
+    run(api.edit(w.items[0].id, api.EditIn(start_time_ms=100, end_time_ms=3000), db, w.ann))   # 改好一条
+    assert run(api.returned_summary(db=db, user=w.ann))["data"]["total"] == 1

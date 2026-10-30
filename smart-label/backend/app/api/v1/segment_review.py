@@ -124,6 +124,21 @@ def _filters(q, *, label_ids, source: str, project_id: int | None):
     return q
 
 
+@router.get("/returned-summary")
+async def returned_summary(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """退回给我、还没改好的片段有多少，按项目分。
+
+    给标注员的红色数字用（左侧菜单「退回的片段」、项目列表每一行）：审核员退回了
+    几十条，不用再私聊一个个通知。标注员只算自己名下任务里的；管理员 / 审核员按可见范围算。"""
+    rows = (await db.execute(
+        _base(user).where(_status_cond("returned"))
+        .with_only_columns(Task.project_id, func.count())
+        .group_by(Task.project_id)
+    )).all()
+    by_project = {int(pid): int(n) for pid, n in rows}
+    return ok({"total": sum(by_project.values()), "by_project": by_project})
+
+
 @router.get("/queue")
 async def queue(
     label_id: int | None = None,

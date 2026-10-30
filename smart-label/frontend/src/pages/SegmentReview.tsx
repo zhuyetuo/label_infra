@@ -78,6 +78,8 @@ export default function SegmentReview() {
     setCur(null);
     setCurTask(null);
     qc.invalidateQueries({ queryKey: ["seg-queue"] });
+    // 菜单 / 项目列表上的红色数字跟着变
+    qc.invalidateQueries({ queryKey: ["seg-returned-summary"] });
   };
   // 审完一条接着下一条：按当前列表的顺序，跳过刚审的这条
   const goNext = async () => {
@@ -94,6 +96,7 @@ export default function SegmentReview() {
   const decide = async (d: "approved" | "returned" | "pending", note?: string) => {
     if (!cur) return;
     await segDecide(cur.id, d, note);
+    qc.invalidateQueries({ queryKey: ["seg-returned-summary"] });
     message.success(d === "approved" ? "已通过" : d === "returned" ? "已退回" : "已交回重审");
     await goNext();
   };
@@ -276,6 +279,8 @@ export default function SegmentReview() {
             itemId: cur.id,
             onEdit: async (s, e) => {
               const r = await segEdit(cur.id, { start_time_ms: s, end_time_ms: e });
+              // 标注员改了起止就交回重审：红色数字少一条
+              qc.invalidateQueries({ queryKey: ["seg-returned-summary"] });
               setCur({ ...cur, start_time_ms: r.start_time_ms, end_time_ms: r.end_time_ms, seg_status: r.seg_status });
             },
             actions,

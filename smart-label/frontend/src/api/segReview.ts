@@ -62,3 +62,7 @@ export const segDecide = (id: number, decision: "approved" | "returned" | "pendi
 export const segEdit = (id: number, body: { start_time_ms: number; end_time_ms: number; label_id?: number | null }) =>
   request.put<never, { id: number; start_time_ms: number; end_time_ms: number; label_id: number; seg_status: SegStatus }>(
     `/segments/${id}`, body);
+
+/** 退回给我、还没改好的片段条数（总数 + 按项目）。标注员的红色数字用 */
+export const segReturnedSummary = () =>
+  request.get<never, { total: number; by_project: Record<number, number> }>("/segments/returned-summary");
