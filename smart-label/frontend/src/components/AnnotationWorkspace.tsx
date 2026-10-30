@@ -113,6 +113,8 @@ export interface SegReviewCtx {
   onEdit: (startMs: number, endMs: number) => Promise<void>;
   /** 浮窗底下那一栏：通过 / 退回 / 下一条 这些按钮，由片段审核页给 */
   actions: React.ReactNode;
+  /** 外面改了这一条（比如改了类别）就加一：工作台重新拉一遍草稿 */
+  reloadKey?: number;
 }
 
 interface VideoSrc {
@@ -744,6 +746,21 @@ export default function AnnotationWorkspace({
       {it.seg_status === "approved" && <Tag color="success">✓ 已通过</Tag>}
       {it.review_note && <Tag color="red">退回：{it.review_note}</Tag>}
       <span style={{ flex: 1 }} />
+      {readOnly && (
+        <Tooltip title="类别不对就在这里改（只读任务里也能改，不用认领）">
+          <Select
+            size="small"
+            showSearch
+            style={{ width: 140 }}
+            value={it.label_id}
+            optionFilterProp="label"
+            popupMatchSelectWidth={false}
+            onChange={(v: number) => relabelItem(it, v)}
+            options={labels.filter((l) => l.is_active !== false || l.id === it.label_id)
+              .map((l) => ({ value: l.id, label: l.display_name }))}
+          />
+        </Tooltip>
+      )}
       {!it.review_note && it.seg_status !== "approved" && (
         <Button size="small" type="primary" onClick={() => handleSegApprove(it, true)}>通过</Button>
       )}
@@ -761,6 +778,22 @@ export default function AnnotationWorkspace({
       )}
     </div>
   );
+
+  // 片段审核那边改了类别：重新拉草稿，片段列表 / 波形色块跟着变
+  useEffect(() => {
+    if (!segReview?.reloadKey || taskId == null) return;
+    getDraft(taskId).then((d) => setItems(d.items)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segReview?.reloadKey]);
+
+  // 审核员 / 管理员在只读任务里改类别（走片段接口，不用认领）
+  const relabelItem = async (it: LabelItem, labelId: number) => {
+    if (taskId == null || labelId === it.label_id) return;
+    await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
+    const d = await getDraft(taskId);
+    setItems(d.items);
+    message.success(`已改成「${nameOf(labelId)}」`);
+  };
 
   // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
   const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number) => {
