@@ -840,6 +840,63 @@ export default function AnnotationWorkspace({
     );
   };
 
+  // 拆片段：一段从 atMs 处切成两段，类别不变（右半段要换类别就选中它按标签键 / 在列表里改）。
+  // 左半段就是原来那条（AI 的会记成「已纠正」），右半段是新加的人工片段。两边至少留 0.3 秒
+  const SPLIT_MIN_MS = 300;
+  const splitItem = (index: number, atMs: number) => {
+    const it = items[index];
+    if (!it) return;
+    const at = Math.round(atMs);
+    if (at - it.start_time_ms < SPLIT_MIN_MS || it.end_time_ms - at < SPLIT_MIN_MS) {
+      message.info({ content: "离起点或终点太近（< 0.3 秒），往中间点一点再拆", key: "split" });
+      return;
+    }
+    const right: LabelItem = {
+      ...it,
+      id: -Date.now(),
+      start_time_ms: at,
+      origin_item_id: null,
+      source_type: "human_added",
+      is_modified: false,
+      ai_confidence: null,
+      ai_confirmed: false,
+      from_candidate_id: null,
+      created_by: null,
+    };
+    setItems((prev) => {
+      const i = prev.findIndex((x) => x.id === it.id);
+      if (i < 0) return prev;
+      const next = [...prev];
+      next[i] = touchItem(prev[i], { end_time_ms: at });
+      next.splice(i + 1, 0, right);
+      return next;
+    });
+    const fmt = (ms: number) => (ms / 1000).toFixed(1);
+    message.success({
+      content: `已拆开「${nameOf(it.label_id)}」：${fmt(it.start_time_ms)}–${fmt(at)} s ｜ ${fmt(at)}–${fmt(it.end_time_ms)} s（存草稿后生效，右半段要换类别在右侧列表改）`,
+      key: "split",
+      duration: 4,
+    });
+  };
+  // Alt+S：从视频播放线的位置拆开它压着的那段（几段叠着时优先当前选中标签那一类，再取最短的）
+  const splitAtPlayhead = () => {
+    const at = curSecRef.current * 1000;
+    const hits = items
+      .map((it, i) => ({ it, i }))
+      .filter(({ it }) => it.start_time_ms < at && at < it.end_time_ms);
+    if (!hits.length) {
+      message.info({ content: "播放线没压在任何片段上：先把视频停到要切的位置", key: "split" });
+      return;
+    }
+    hits.sort((a, b) =>
+      Number(b.it.label_id === labelId) - Number(a.it.label_id === labelId) ||
+      (a.it.end_time_ms - a.it.start_time_ms) - (b.it.end_time_ms - b.it.start_time_ms));
+    splitItem(hits[0].i, at);
+  };
+
+  const splitAtPlayheadRef = useRef(splitAtPlayhead);
+  splitAtPlayheadRef.current = splitAtPlayhead;
+
   // 草稿的 payload 形状，存草稿的几个地方都用它——以前是各写一份，
   // 加字段时漏掉一处就会静默丢数据
   const toDraftPayload = (list: typeof items) => list.map((i) => ({
@@ -1047,6 +1104,12 @@ export default function AnnotationWorkspace({
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      // Alt+S：在播放线处拆开片段。按 code 认：Mac 上 Alt+S 的 e.key 是「ß」
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyS") {
+        e.preventDefault();
+        splitAtPlayheadRef.current();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         // 取消选中 -> 回到拖动平移模式
@@ -1208,6 +1271,7 @@ export default function AnnotationWorkspace({
               onCreateSegment={readOnly ? undefined : handleCreateFromChart}
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
+              onSplitSegment={readOnly ? undefined : splitItem}
             />
           </div>
           {(
@@ -1307,6 +1371,13 @@ export default function AnnotationWorkspace({
         dupIds={dupIds}
         onUpdate={updateItems}
         onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+        onSplit={(id) => {
+          const idx = items.findIndex((x) => x.id === id);
+          const it = items[idx];
+          if (!it) return;
+          const at = curSecRef.current * 1000;
+          splitItem(idx, at > it.start_time_ms && at < it.end_time_ms ? at : (it.start_time_ms + it.end_time_ms) / 2);
+        }}
         onReturnToCandidate={async (i) => {
           if (i.from_candidate_id == null || taskId == null) return;
           // 先把候选放回「待确认」，再把这条片段从草稿里去掉并落库——

@@ -120,6 +120,8 @@ interface Props {
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
   /** 只读时有人想拖片段的边 / 整段：给个明确的说法（为什么不能改、要先做什么） */
   onReadOnlyEdit?: () => void;
+  /** 按住 Alt 点片段：从点的位置拆成两段（index 跟 segments 对应） */
+  onSplitSegment?: (index: number, atMs: number) => void;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -137,6 +139,9 @@ interface AnnotateCtx {
   hoverOwner: unknown;
   /** 只读时有人去拖边：告诉他为什么不能改、要怎么办 */
   onReadOnlyEdit: (() => void) | null;
+  onSplit: ((index: number, atMs: number) => void) | null;
+  /** 按着 Alt 停在某段里：在鼠标位置画一条「从这里拆开」的虚线（样本内毫秒） */
+  splitMs: number | null;
 }
 
 // 每个通道独立一行、各自Y轴、共享X轴（跟公司原来用的 Label Studio TimeSeries
@@ -154,6 +159,7 @@ export default function ImuChart({
   onCreateSegment,
   onResizeSegment,
   onReadOnlyEdit,
+  onSplitSegment,
 }: Props) {
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
@@ -178,11 +184,14 @@ export default function ImuChart({
     hover: null,
     hoverOwner: null,
     onReadOnlyEdit: null,
+    onSplit: null,
+    splitMs: null,
   });
   annotateRef.current.activeColor = activeColor ?? null;
   annotateRef.current.onCreate = onCreateSegment ?? null;
   annotateRef.current.onResize = onResizeSegment ?? null;
   annotateRef.current.onReadOnlyEdit = onReadOnlyEdit ?? null;
+  annotateRef.current.onSplit = onSplitSegment ?? null;
   annotateRef.current.redrawAll = () => plotRefs.current.forEach((p) => p?.redraw(false));
 
   useEffect(() => {
@@ -485,6 +494,29 @@ function segmentBandPlugin(
             if (text) {
               ctx.fillStyle = "#fff";
               ctx.fillText(text, x0 + 4 * dpr, st + 1 * dpr);
+            }
+            const sm = annotateRef.current.splitMs;
+            if (annotateRef.current.onSplit && sm != null && sm > hseg.start_time_ms && sm < hseg.end_time_ms) {
+              // 按着 Alt：在鼠标处画剪刀线，点下去就从这里拆开
+              const sx = toX(sm);
+              ctx.strokeStyle = "#000";
+              ctx.lineWidth = 2 * dpr;
+              ctx.setLineDash([4 * dpr, 3 * dpr]);
+              ctx.beginPath();
+              ctx.moveTo(sx, st);
+              ctx.lineTo(sx, st + sh);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              const t = "✂ 点击从这里拆开";
+              const tw = ctx.measureText(t).width;
+              ctx.fillStyle = "rgba(255,255,255,.92)";
+              ctx.fillRect(sx + 4 * dpr, st + sh / 2 - 8 * dpr, tw + 6 * dpr, 16 * dpr);
+              ctx.fillStyle = "#000";
+              ctx.fillText(t, sx + 7 * dpr, st + sh / 2 - 6 * dpr);
+            } else if (annotateRef.current.onSplit && x1 - x0 > 120 * dpr) {
+              const t = "Alt+点击 拆开";
+              ctx.fillStyle = "rgba(255,255,255,.85)";
+              ctx.fillText(t, x0 + 4 * dpr, st + sh - 15 * dpr);
             }
           }
           ctx.restore();
@@ -901,8 +933,16 @@ function dragPanPlugin(
           startRelX = e.clientX - overRectLeft;
           lastClientX = e.clientX;
 
-          // 优先级：拖已有色块边缘 / 顶上把手 > 拖播放头 > 选中标签时划新区间 > 平移
+          // 优先级：Alt+点击拆分 > 拖已有色块边缘 / 顶上把手 > 拖播放头 > 选中标签时划新区间 > 平移
           const hit = hitTest(e);
+          if (e.altKey && hit) {
+            const split = annotateRef.current.onSplit;
+            if (split) split(hit.idx, toMs(startRelX));
+            else annotateRef.current.onReadOnlyEdit?.();
+            annotateRef.current.splitMs = null;
+            e.preventDefault();
+            return;
+          }
           if (hit && !annotateRef.current.onResize && hit.kind !== "inside") {
             // 只读：别默默变成平移 / 跳转，说清楚为什么改不了
             annotateRef.current.onReadOnlyEdit?.();
@@ -1017,8 +1057,16 @@ function dragPanPlugin(
               annotateRef.current.hoverOwner = hit ? over : null;
               annotateRef.current.redrawAll();
             }
+            // 按着 Alt 停在段里：记下鼠标时间，画剪刀线
+            const sm = e.altKey && inThis && hit && annotateRef.current.onSplit ? toMs(relX) : null;
+            if (sm !== annotateRef.current.splitMs && (inThis || annotateRef.current.hoverOwner === over)) {
+              annotateRef.current.splitMs = sm;
+              annotateRef.current.redrawAll();
+            }
             if (!inThis) return;
-            if (nearPlayhead) {
+            if (sm != null) {
+              over.style.cursor = "crosshair";
+            } else if (nearPlayhead) {
               over.style.cursor = "ew-resize";
             } else if (hit && hit.kind !== "inside") {
               const ro = !annotateRef.current.onResize;
