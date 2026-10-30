@@ -188,11 +188,11 @@ export default function Projects() {
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean };
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -1212,6 +1212,13 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
+                {f.labels.length > 0 && (
+                  <Tooltip title="选了类别时，任务列表的「片段」一栏默认只显示这几类，并拆开写通过 / 退回 / 还没审。勾上就跟原来一样显示所有类别">
+                    <Checkbox checked={f.showAllLabels} onChange={(e) => setFilter(p.id, { showAllLabels: e.target.checked })}>
+                      片段栏显示全部类别
+                    </Checkbox>
+                  </Tooltip>
+                )}
                 {segReturnedTasks > 0 && (
                   <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
                     <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
@@ -1446,9 +1453,44 @@ export default function Projects() {
                     sortDirections: ["descend", "ascend", "descend"],
                     render: (_, task: Task) => {
                       const lc = task.label_counts ?? {};
-                      const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
-                      const candN = task.cand_count ?? 0;
+                      // 选了类别（比如饮水）：默认只显示这几类，并拆开写通过 / 退回 / 还没审各几段——
+                      // 要回答的是「每个样本里饮水有几段、审到哪了」，别的类别都是干扰
+                      const focus = f.labels.length > 0 && !f.showAllLabels;
+                      const inFocus = (l: LabelDefinition) => {
+                        for (let cur: LabelDefinition | undefined = l; cur; cur = projLabels.find((x) => x.id === cur!.parent_id)) {
+                          if (f.labels.includes(cur.id)) return true;
+                          if (cur.parent_id == null) break;
+                        }
+                        return false;
+                      };
+                      const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0 && (!focus || inFocus(l)));
+                      const candN = focus ? 0 : task.cand_count ?? 0;
                       if (!entries.length && !candN) return <Typography.Text type="secondary">-</Typography.Text>;
+                      if (focus) {
+                        return (
+                          <Space size={2} wrap>
+                            {entries.map((l) => {
+                              const c = lc[l.id];
+                              const ok = c.approved ?? 0, ret = c.returned ?? 0;
+                              const todo = Math.max(0, c.n - ok - ret);
+                              return (
+                                <Tooltip
+                                  key={l.id}
+                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回待改 ${ret}、还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
+                                >
+                                  <Space size={0}>
+                                    <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}>{l.display_name} {c.n}</Tag>
+                                    {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}>✓通过 {ok}</Tag>}
+                                    {ret > 0 && <Tag color="error" style={{ marginRight: 2 }}>退回 {ret}</Tag>}
+                                    {todo > 0 && <Tag style={{ marginRight: 2 }}>未审 {todo}</Tag>}
+                                    {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}>AI待确认 {c.ai_pending}</Tag>}
+                                  </Space>
+                                </Tooltip>
+                              );
+                            })}
+                          </Space>
+                        );
+                      }
                       return (
                         <Space size={2} wrap>
                           {entries.map((l) => {
