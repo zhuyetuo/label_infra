@@ -56,7 +56,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segEdit } from "@/api/segReview";
+import { segDecide, segEdit, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -115,6 +115,8 @@ export interface SegReviewCtx {
   actions: React.ReactNode;
   /** 外面改了这一条（比如改了类别）就加一：工作台重新拉一遍草稿 */
   reloadKey?: number;
+  /** 这一条在工作台里被拆成了两条（都回到待审）：审核页刷新列表 / 红色数字 */
+  onSplit?: (leftEndMs: number) => void;
 }
 
 interface VideoSrc {
@@ -851,6 +853,31 @@ export default function AnnotationWorkspace({
       message.info({ content: "离起点或终点太近（< 0.3 秒），往中间点一点再拆", key: "split" });
       return;
     }
+    if (readOnly) {
+      // 任务已提交 / 不在名下：退回给我的那一条（或审核员看的任意一条）走片段接口拆，直接落库
+      const allowed = segReview ? it.id === segReview.itemId : canFlag;
+      if (!allowed || taskId == null) {
+        message.info({
+          content: segReview ? "这里只能拆退回给你的那一条（浮窗里循环的那段）" : readOnlyHint,
+          key: "split",
+        });
+        return;
+      }
+      void (async () => {
+        try {
+          await segSplit(it.id, at);
+          setItems((await getDraft(taskId)).items);
+          if (segReview && it.id === segReview.itemId) {
+            setLoop({ startMs: it.start_time_ms, endMs: at });
+            segReview.onSplit?.(at);
+          }
+          message.success({ content: `已拆成两段（${(it.start_time_ms / 1000).toFixed(1)}–${(at / 1000).toFixed(1)} s ｜ ${(at / 1000).toFixed(1)}–${(it.end_time_ms / 1000).toFixed(1)} s），已保存，两段都交回重审`, key: "split", duration: 5 });
+        } catch {
+          /* request 拦截器已经弹了错误 */
+        }
+      })();
+      return;
+    }
     const right: LabelItem = {
       ...it,
       id: -Date.now(),
@@ -883,7 +910,9 @@ export default function AnnotationWorkspace({
     const at = curSecRef.current * 1000;
     const hits = items
       .map((it, i) => ({ it, i }))
-      .filter(({ it }) => it.start_time_ms < at && at < it.end_time_ms);
+      .filter(({ it }) => it.start_time_ms < at && at < it.end_time_ms)
+      // 从「退回给我的片段」打开的：只拆那一条
+      .filter(({ it }) => !segReview || it.id === segReview.itemId);
     if (!hits.length) {
       message.info({ content: "播放线没压在任何片段上：先把视频停到要切的位置", key: "split" });
       return;
@@ -1100,7 +1129,9 @@ export default function AnnotationWorkspace({
 
   // 数字/字母键快速切标签，跟参考工具一样，标注时手不用离开键盘
   useEffect(() => {
-    if (taskId == null || readOnly) return;
+    // 只读时只留 Alt+S（退回给我的那条 / 审核员能拆），标签快捷键不要
+    const canSplit = !readOnly || !!segReview || canFlag;
+    if (taskId == null || !canSplit) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
@@ -1110,6 +1141,7 @@ export default function AnnotationWorkspace({
         splitAtPlayheadRef.current();
         return;
       }
+      if (readOnly) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         // 取消选中 -> 回到拖动平移模式
@@ -1129,7 +1161,7 @@ export default function AnnotationWorkspace({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [taskId, readOnly, labelRows]);
+  }, [taskId, readOnly, labelRows, !!segReview, canFlag]);
 
   // ── 下面四个面板 ─────────────────────────────────────────────────────
   // 每个面板一个 Collapse，按 panelOrder 的顺序摆，panelHidden 里的不摆。
@@ -1271,7 +1303,7 @@ export default function AnnotationWorkspace({
               onCreateSegment={readOnly ? undefined : handleCreateFromChart}
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
-              onSplitSegment={readOnly ? undefined : splitItem}
+              onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
             />
           </div>
           {(
@@ -1522,7 +1554,14 @@ export default function AnnotationWorkspace({
         forceOpen={!!segReview}
         extra={
           segReview && loopInfo?.itemId === segReview.itemId
-            ? segReview.actions
+            ? (
+              <Space size={6} wrap>
+                <Tooltip title="在视频播放线处把这一条拆成两段（类别不变，两段都交回重审）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S">
+                  <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
+                </Tooltip>
+                {segReview.actions}
+              </Space>
+            )
             : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
         } />
     )}

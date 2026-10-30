@@ -63,6 +63,12 @@ export const segEdit = (id: number, body: { start_time_ms: number; end_time_ms: 
   request.put<never, { id: number; start_time_ms: number; end_time_ms: number; label_id: number; seg_status: SegStatus }>(
     `/segments/${id}`, body);
 
+/** 从 at_ms 拆成两条（类别不变，两条都回到待审）。退回原因是「应该拆成几段」时用 */
+export const segSplit = (id: number, atMs: number) =>
+  request.post<never, { left: { id: number; start_time_ms: number; end_time_ms: number };
+    right: { id: number; start_time_ms: number; end_time_ms: number }; label_id: number }>(
+    `/segments/${id}/split`, { at_ms: Math.round(atMs) });
+
 /** 退回给我、还没改好的片段条数（总数 + 按项目）。标注员的红色数字用 */
 export const segReturnedSummary = () =>
   request.get<never, { total: number; by_project: Record<number, number> }>("/segments/returned-summary");

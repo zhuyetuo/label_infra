@@ -495,6 +495,9 @@ function segmentBandPlugin(
               ctx.fillStyle = "#fff";
               ctx.fillText(text, x0 + 4 * dpr, st + 1 * dpr);
             }
+          }
+          // Alt+点击拆开：可编辑时，或只读但允许拆（退回给我的那条、审核员）都提示
+          if (hv.kind === "inside" || hv.kind === "move") {
             const sm = annotateRef.current.splitMs;
             if (annotateRef.current.onSplit && sm != null && sm > hseg.start_time_ms && sm < hseg.end_time_ms) {
               // 按着 Alt：在鼠标处画剪刀线，点下去就从这里拆开

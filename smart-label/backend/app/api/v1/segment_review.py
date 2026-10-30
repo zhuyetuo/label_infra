@@ -380,3 +380,62 @@ async def edit(item_id: int, body: EditIn, db: AsyncSession = Depends(get_db),
     await db.commit()
     return ok({"id": it.id, "start_time_ms": it.start_time_ms, "end_time_ms": it.end_time_ms,
                "label_id": it.label_id, "seg_status": it.seg_status or "pending"})
+
+
+class SplitIn(BaseModel):
+    at_ms: int = Field(..., ge=0)
+
+
+SPLIT_MIN_MS = 300
+
+
+@router.post("/{item_id}/split")
+async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
+                user: User = Depends(get_current_user)):
+    """把一条片段从 at_ms 拆成两条（审核员要求「应该拆成几段」时用）。类别不变，
+    左半段是原来那条（起止调整记一笔），右半段新建。两条都回到待审：
+    标注员拆完就算处理了退回意见；审核员拆完再对两条各自下结论。"""
+    from app.services.task_service import _append_boundary_edit
+
+    it, task = await _load(db, item_id, user)
+    reviewer = _is_reviewer(user)
+    if not reviewer and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这条不在你名下")
+    if reviewer:
+        _check_not_taken(it, user)
+    if (task.status == TaskStatus.IN_PROGRESS and task.locked_by and task.locked_by != user.id
+            and task.lock_expires_at and task.lock_expires_at.replace(tzinfo=None) > datetime.now(UTC).replace(tzinfo=None)):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "有人正在工作台里标这个任务，这里改了会被他下次保存冲掉。先让他保存退出，或者到工作台里改")
+    at = body.at_ms
+    if at - it.start_time_ms < SPLIT_MIN_MS or it.end_time_ms - at < SPLIT_MIN_MS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "拆分点离起点或终点太近（两边至少 0.3 秒）")
+    now = _now()
+    old_end = it.end_time_ms
+    it.boundary_edits = _append_boundary_edit(it.boundary_edits, (it.start_time_ms, old_end), (it.start_time_ms, at), user)
+    it.end_time_ms = at
+    if it.source_type == LabelItemSource.ai_generated:
+        it.is_modified = True
+        it.ai_confirmed = False
+    it.seg_status = None
+    it.review_note = it.review_flag_by = it.review_flag_at = None
+    it.seg_claimed_by = it.seg_claim_expires_at = None
+    it.touched_at, it.touched_by = now, user.id
+    right = AnnotationLabelItem(
+        annotation_record_id=it.annotation_record_id,
+        label_id=it.label_id,
+        start_time_ms=at,
+        end_time_ms=old_end,
+        source_type=LabelItemSource.human_added,
+        is_modified=False,
+        ai_confirmed=False,
+        uncertain=False,
+        created_by=user.id,
+        touched_at=now,
+        touched_by=user.id,
+    )
+    db.add(right)
+    await db.commit()
+    return ok({"left": {"id": it.id, "start_time_ms": it.start_time_ms, "end_time_ms": it.end_time_ms},
+               "right": {"id": right.id, "start_time_ms": right.start_time_ms, "end_time_ms": right.end_time_ms},
+               "label_id": it.label_id})
