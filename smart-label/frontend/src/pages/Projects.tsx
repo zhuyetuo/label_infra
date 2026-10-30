@@ -1289,7 +1289,7 @@ export default function Projects() {
                         {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
                         {/* 片段审核进度：通过几条、退回了还在等标注员改的几条 */}
                         {okN ? <span> · ✓{okN}</span> : null}
-                        {retN ? <span style={{ fontWeight: 600 }}> · 退{retN}</span> : null}
+                        {retN ? <span style={{ fontWeight: 600 }}> · 退回待改{retN}</span> : null}
                         <span style={{ opacity: 0.6 }}> · {tasksN} 任务</span>
                       </Tag>
                     </Tooltip>
@@ -1476,13 +1476,14 @@ export default function Projects() {
                               return (
                                 <Tooltip
                                   key={l.id}
-                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回待改 ${ret}、还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
+                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
                                   <Space size={0}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}>{l.display_name} {c.n}</Tag>
                                     {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}>✓通过 {ok}</Tag>}
-                                    {ret > 0 && <Tag color="error" style={{ marginRight: 2 }}>退回 {ret}</Tag>}
-                                    {todo > 0 && <Tag style={{ marginRight: 2 }}>未审 {todo}</Tag>}
+                                    {/* 退回 = 你标了有问题、在等标注员改；未审 = 你还没看过 */}
+                                    {ret > 0 && <Tag color="error" style={{ marginRight: 2 }}>退回·待标注员改 {ret}</Tag>}
+                                    {todo > 0 && <Tag style={{ marginRight: 2 }}>还没审 {todo}</Tag>}
                                     {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}>AI待确认 {c.ai_pending}</Tag>}
                                   </Space>
                                 </Tooltip>
@@ -1549,10 +1550,14 @@ export default function Projects() {
                       const editable = task.status === "IN_PROGRESS" && task.locked_by === userId;
                       return (
                         <Space>
-                          {task.status === "PENDING_ASSIGN" && (
-                            <Button size="small" onClick={() => handleClaimTask(task.id)}>
-                              认领
-                            </Button>
+                          {/* 认领 = 领到自己名下来标（不是审核）。已经指派给别人的领不到，不显示，
+                              不然点了只会报错、还让人以为认领是"我来看看" */}
+                          {task.status === "PENDING_ASSIGN" && (task.assigned_to == null || task.assigned_to === userId) && (
+                            <Tooltip title="认领 = 把这个任务领到你名下，你自己来标。只是看看 / 审核不用认领，点「查看标注」">
+                              <Button size="small" onClick={() => handleClaimTask(task.id)}>
+                                认领
+                              </Button>
+                            </Tooltip>
                           )}
                           <Button
                             size="small"
