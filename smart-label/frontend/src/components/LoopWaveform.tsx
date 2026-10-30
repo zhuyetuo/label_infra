@@ -1,4 +1,4 @@
-import { Button, Checkbox, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
+import { Button, Checkbox, ConfigProvider, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
 import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
@@ -720,6 +720,9 @@ export default function LoopWaveform({
   const plotProps = { chans, smooth: cfg.smooth, yRange, xRange, width: cfg.w, winSec: cfg.winSec, axisColor: token.colorTextSecondary };
 
   return (
+    // 浮窗本身是 zIndex 1100，antd 的下拉 / 提示默认 1050——浮窗里的类别下拉会被浮窗自己挡住。
+    // 把浮窗里弹出层的基准抬到浮窗之上
+    <ConfigProvider theme={{ token: { zIndexPopupBase: 1150 } }}>
     <div
       style={{
         position: "fixed", left: cfg.left, top: cfg.top, zIndex: 1100, width: cfg.w + 20,
@@ -863,5 +866,6 @@ export default function LoopWaveform({
         }}
       />
     </div>
+    </ConfigProvider>
   );
 }

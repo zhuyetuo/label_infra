@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, Dropdown, Empty, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Tooltip, Typography, message,
 } from "antd";
@@ -31,6 +31,24 @@ const STATUS_META: Record<SegStatus, { label: string; color: string }> = {
   approved: { label: "通过", color: "green" },
 };
 
+// 刷新页面回来还是原样：筛选条件、正在改的是哪一条，存在 localStorage（按用户分开）
+const loadJson = <T,>(k: string): T | null => {
+  try {
+    return JSON.parse(localStorage.getItem(k) || "null") as T | null;
+  } catch {
+    return null;
+  }
+};
+const saveJson = (k: string, v: unknown) => {
+  try {
+    if (v == null) localStorage.removeItem(k);
+    else localStorage.setItem(k, JSON.stringify(v));
+  } catch {
+    /* 存不了就算了 */
+  }
+};
+type SavedFilters = { labelName: string | null; status: SegStatus | "all"; mine: boolean; withAi: boolean };
+
 export default function SegmentReview() {
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.userInfo?.role);
@@ -47,10 +65,14 @@ export default function SegmentReview() {
   }, [labels]);
 
   const labelColorOf = (id: number) => (labels ?? []).find((l) => l.id === id)?.color ?? null;
-  const [labelName, setLabelName] = useState<string | null>(null);
-  const [status, setStatus] = useState<SegStatus | "all">(isReviewer ? "pending" : "returned");
-  const [mine, setMine] = useState(isReviewer);
-  const [withAi, setWithAi] = useState(false);
+  const filtersKey = `seg-review-filters:${userId ?? ""}`;
+  const openKey = `seg-review-open:${userId ?? ""}`;
+  const saved = loadJson<SavedFilters>(filtersKey);
+  const [labelName, setLabelName] = useState<string | null>(saved?.labelName ?? null);
+  const [status, setStatus] = useState<SegStatus | "all">(saved?.status ?? (isReviewer ? "pending" : "returned"));
+  const [mine, setMine] = useState(saved?.mine ?? isReviewer);
+  const [withAi, setWithAi] = useState(saved?.withAi ?? false);
+  useEffect(() => saveJson(filtersKey, { labelName, status, mine, withAi }), [filtersKey, labelName, status, mine, withAi]);
   const [claimN, setClaimN] = useState(30);
 
   const params = {
@@ -75,7 +97,21 @@ export default function SegmentReview() {
     setCur(it);
     setCurTask(t);
   };
+  // 正在改的那一条跟着存；刷新回来自动打开（打不开——任务删了 / 没权限——就算了）
+  useEffect(() => {
+    if (cur) saveJson(openKey, cur);
+  }, [openKey, cur]);
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    // 等登录信息到了再恢复（key 按用户分开）
+    if (restored || userId == null) return;
+    setRestored(true);
+    const it = loadJson<SegItem>(openKey);
+    if (it?.id && it.task_id) open(it).catch(() => saveJson(openKey, null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
   const close = () => {
+    saveJson(openKey, null);
     setCur(null);
     setCurTask(null);
     qc.invalidateQueries({ queryKey: ["seg-queue"] });
