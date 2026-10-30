@@ -140,6 +140,8 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
+  /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
+  onSplit?: (id: number) => void;
   /** 夜视增强：把这一段黑得看不见的画面捞出来看清楚（夜里那几路才用得上）。
    *  给的是整段起止，不是中点——抓挠是动作，单帧判不出来，得能循环播放 */
   onLowlight?: (startMs: number, endMs: number) => void;
@@ -183,6 +185,7 @@ export default function SegmentPanel({
   loopRange,
   onUpdate,
   onDelete,
+  onSplit,
   onLowlight,
   onReturnToCandidate,
   dupIds,
@@ -1099,6 +1102,13 @@ export default function SegmentPanel({
                         退回候选
                       </Button>
                     </Popconfirm>
+                  )}
+                  {!readOnly && onSplit && (
+                    <Tooltip title="拆成两段：视频播放线压在这段上就从播放线处拆，否则从中间对半拆。也可以在波形上按住 Alt 点要拆的位置，或者停好视频按 Alt+S">
+                      <Button size="small" type="link" onClick={() => onSplit(i.id)}>
+                        ✂ 拆开
+                      </Button>
+                    </Tooltip>
                   )}
                   {/* 直接删是个坑：片段没了，生它的那条候选还留在「已确认」里。
                       「找相似 / 一句话找画面」再碰到同一段时间，会以为早写过了而跳过，
