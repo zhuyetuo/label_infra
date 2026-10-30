@@ -1,10 +1,11 @@
 import { useEffect } from "react";
-import { Layout, Menu, Space, Tag, Typography } from "antd";
+import { Badge, Layout, Menu, Space, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { getMe } from "@/api/auth";
 import { hasFeature, useAuthStore } from "@/stores/authStore";
 import { RoleTag } from "@/utils/taskStatus";
+import { useReturnedSegments } from "@/hooks/useReturnedSegments";
 
 const { Header, Content, Sider } = Layout;
 
@@ -46,6 +47,8 @@ export default function AppLayout() {
     if (me) setUserInfo(me);
   }, [me, setUserInfo]);
 
+  const returned = useReturnedSegments();
+
   if (!accessToken) return <Navigate to="/login" replace />;
 
   const items = ALL_ITEMS.filter(
@@ -79,7 +82,19 @@ export default function AppLayout() {
             style={{ height: "100%" }}
             selectedKeys={[location.pathname]}
             onClick={(e) => navigate(e.key)}
-            items={items.map((i) => ({ key: i.key, label: i.label }))}
+            items={items.map((i) => ({
+              key: i.key,
+              // 退回给我的片段：红色数字，有多少条没改好
+              label:
+                i.key === "/segment-review" && returned.total > 0 ? (
+                  <Space size={6}>
+                    {i.label}
+                    <Badge count={returned.total} overflowCount={999} size="small" />
+                  </Space>
+                ) : (
+                  i.label
+                ),
+            }))}
           />
         </Sider>
         <Content style={{ padding: 24, overflow: "auto" }}>
