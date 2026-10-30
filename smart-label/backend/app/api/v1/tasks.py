@@ -203,6 +203,10 @@ async def set_review_note(
     item.review_note = note
     item.review_flag_by = user.id if note else None
     item.review_flag_at = datetime.now(UTC).replace(tzinfo=None) if note else None
+    # 「有问题」就是片段级的退回：跟「片段审核」那边是同一个状态。清掉（改好了 / 撤销）回到待审
+    item.seg_status = "returned" if note else None
+    if note:
+        item.seg_reviewed_by, item.seg_reviewed_at = user.id, datetime.now()
     await db.commit()
     await db.refresh(item)
     return ok(LabelItemOut.model_validate(item).model_dump())
@@ -319,6 +323,9 @@ async def list_tasks(
                 AnnotationLabelItem.label_id,
                 func.count(AnnotationLabelItem.id),
                 func.sum(ai_pending),
+                # 片段审核：通过了几段、退回了还没处理的几段（项目页按类别看「哪些 OK、哪些在等标注员改」）
+                func.sum(case((AnnotationLabelItem.seg_status == "approved", 1), else_=0)),
+                func.sum(case((AnnotationLabelItem.seg_status == "returned", 1), else_=0)),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -326,8 +333,11 @@ async def list_tasks(
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
-        for task_id, label_id, n, n_pending in rows.all():
-            label_counts.setdefault(task_id, {})[label_id] = {"n": int(n), "ai_pending": int(n_pending or 0)}
+        for task_id, label_id, n, n_pending, n_ok, n_ret in rows.all():
+            label_counts.setdefault(task_id, {})[label_id] = {
+                "n": int(n), "ai_pending": int(n_pending or 0),
+                "approved": int(n_ok or 0), "returned": int(n_ret or 0),
+            }
 
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
     # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，

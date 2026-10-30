@@ -3,6 +3,7 @@ import InferModeHelp from "@/components/InferModeHelp";
 import {
   Alert,
   Button,
+  Dropdown,
   Empty,
   Modal,
   Popconfirm,
@@ -16,13 +17,13 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
-import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import LowlightModal from "@/components/LowlightModal";
 import { NIGHT_VISION } from "@/config/features";
-import SegmentPanel, { formatMs } from "@/components/SegmentPanel";
+import SegmentPanel, { formatMs, REVIEW_NOTE_PRESETS } from "@/components/SegmentPanel";
 import CandidatePanel, { candFocus } from "@/components/CandidatePanel";
 import SimilarFramePreview from "@/components/SimilarFramePreview";
 import SimilarHitsGrid from "@/components/SimilarHitsGrid";
@@ -55,6 +56,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
+import { segDecide, segEdit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -393,8 +395,18 @@ export default function AnnotationWorkspace({
   const handleReviewNote = async (it: LabelItem, note: string | null) => {
     if (taskId == null) return;
     const saved = await setReviewNote(taskId, it.id, note);
-    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, review_note: saved.review_note, review_flag_by: saved.review_flag_by } : x)));
-    message.success(note ? `已标为有问题：${note}` : "已清除问题标记");
+    setItems((prev) => prev.map((x) => (x.id === it.id
+      ? { ...x, review_note: saved.review_note, review_flag_by: saved.review_flag_by, seg_status: saved.seg_status ?? null }
+      : x)));
+    message.success(note ? `已退回这一条：${note}` : "已清除问题标记");
+  };
+  // 片段级「通过」：一条条认可（跟「有问题」一条条退回配对），不用整个任务通过
+  const handleSegApprove = async (it: LabelItem, okFlag: boolean) => {
+    const r = await segDecide(it.id, okFlag ? "approved" : "pending");
+    setItems((prev) => prev.map((x) => (x.id === it.id
+      ? { ...x, seg_status: r.seg_status === "pending" ? null : r.seg_status, ...(okFlag ? { review_note: null, review_flag_by: null } : {}) }
+      : x)));
+    message.success(okFlag ? "这一条通过了" : "已撤销通过");
   };
   const handleCandReviewNote = async (c: AiCandidate, note: string | null) => {
     const saved = await setCandidateReviewNote(c.id, note);
@@ -724,8 +736,44 @@ export default function AnnotationWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segReview?.itemId, items.length > 0]);
 
+  // 正在循环的已标注片段（审核员在浮窗里直接「通过 / 有问题」用）
+  const loopItem = loopInfo?.itemId != null ? items.find((x) => x.id === loopInfo.itemId) : undefined;
+  const waveReviewBar = (it: LabelItem) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>这一条：</Typography.Text>
+      {it.seg_status === "approved" && <Tag color="success">✓ 已通过</Tag>}
+      {it.review_note && <Tag color="red">退回：{it.review_note}</Tag>}
+      <span style={{ flex: 1 }} />
+      {!it.review_note && it.seg_status !== "approved" && (
+        <Button size="small" type="primary" onClick={() => handleSegApprove(it, true)}>通过</Button>
+      )}
+      {it.review_note ? (
+        <Button size="small" onClick={() => handleReviewNote(it, null)}>清除问题</Button>
+      ) : (
+        <Dropdown
+          menu={{
+            items: REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })),
+            onClick: ({ key }) => handleReviewNote(it, key),
+          }}
+        >
+          <Button size="small" danger>有问题，退回 <DownOutlined /></Button>
+        </Dropdown>
+      )}
+    </div>
+  );
+
   // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
   const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number) => {
+    // 审核员 / 管理员看只读的任务（已提交的、别人的）：直接改这一条，走片段接口，
+    // 不用为了调个起止去认领整个任务
+    if (readOnly && canFlag && !segReview && target.kind === "item" && taskId != null) {
+      await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
+      const d = await getDraft(taskId);
+      setItems(d.items);
+      setLoop({ startMs, endMs });
+      message.success("起止已保存");
+      return;
+    }
     if (segReview && target.kind === "item" && target.id === segReview.itemId && taskId != null) {
       await segReview.onEdit(startMs, endMs);
       const d = await getDraft(taskId);
@@ -1242,6 +1290,7 @@ export default function AnnotationWorkspace({
         onLowlight={NIGHT_VISION ? (a, b) => setLowlightAt([a, b]) : undefined}
         initialFilterLabels={initialSegmentFilter}
         onReviewNote={canFlag || !readOnly ? handleReviewNote : undefined}
+        onSegApprove={canFlag ? handleSegApprove : undefined}
         reviewNoteClearOnly={!canFlag}
         initialFlaggedOnly={flagFocus}
       />
@@ -1355,12 +1404,23 @@ export default function AnnotationWorkspace({
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
       <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
-        onAdjust={readOnly && !segReview ? undefined : adjustFromWave}
-        // 片段审核时只有正在审的那一条能改，别的照旧只读
-        canAdjust={readOnly && segReview ? (t) => t.kind === "item" && t.id === segReview.itemId : undefined}
-        readOnlyHint={readOnly ? readOnlyHint : undefined}
+        onAdjust={readOnly && !segReview && !canFlag ? undefined : adjustFromWave}
+        // 片段审核时只有正在审的那一条能改；审核员 / 管理员看只读任务时片段都能改，
+        // 疑似片段只有管理员能改（跟后端一致）
+        canAdjust={
+          readOnly && segReview
+            ? (t) => t.kind === "item" && t.id === segReview.itemId
+            : readOnly && canFlag
+              ? (t) => t.kind === "item" || role === "admin" || role === "super_admin"
+              : undefined
+        }
+        readOnlyHint={readOnly && !canFlag ? readOnlyHint : undefined}
         forceOpen={!!segReview}
-        extra={segReview && loopInfo?.itemId === segReview.itemId ? segReview.actions : undefined} />
+        extra={
+          segReview && loopInfo?.itemId === segReview.itemId
+            ? segReview.actions
+            : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
+        } />
     )}
     <Modal
       title="找相似的画面 → 候选"

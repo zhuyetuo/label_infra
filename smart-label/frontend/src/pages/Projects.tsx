@@ -188,11 +188,11 @@ export default function Projects() {
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean };
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
   const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
   const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false };
+    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false };
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -1088,11 +1088,18 @@ export default function Projects() {
             const matchImu = (t: Task) => f.imu === "ALL" || imuOf(String(sampleCode(t.sample_id))) === f.imu;
             const noCsvTasks = all.filter(noCsv);
             const unassignedN = all.filter((t) => t.assigned_to == null).length;
+            // 片段审核退回了、标注员还没改的（选了类别就只算那几类）
+            const segReturnedOf = (t: Task) =>
+              Object.entries(t.label_counts ?? {})
+                .filter(([lid]) => !f.labels.length || f.labels.includes(Number(lid)))
+                .reduce((s2, [, c]) => s2 + (c.returned ?? 0), 0);
+            const segReturnedTasks = all.filter((t) => segReturnedOf(t) > 0).length;
             const rows = all.filter(
               (t) =>
                 matchImu(t) &&
                 (!f.noCsv || noCsv(t)) &&
                 (!f.unassigned || t.assigned_to == null) &&
+                (!f.segReturned || segReturnedOf(t) > 0) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
@@ -1101,13 +1108,14 @@ export default function Projects() {
             const projLabels = labelsOf(p.id);
             const labelTotals = projLabels
               .map((l) => {
-                let n = 0, pending = 0, tasksN = 0;
+                let n = 0, pending = 0, tasksN = 0, okN = 0, retN = 0;
                 for (const t of all) {
                   const c = t.label_counts?.[l.id];
                   if (!c?.n) continue;
                   n += c.n; pending += c.ai_pending; tasksN += 1;
+                  okN += c.approved ?? 0; retN += c.returned ?? 0;
                 }
-                return { label: l, n, pending, tasksN };
+                return { label: l, n, pending, tasksN, okN, retN };
               })
               .filter((x) => x.n > 0);
             const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
@@ -1204,6 +1212,13 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
+                {segReturnedTasks > 0 && (
+                  <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
+                    <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
+                      <span style={{ color: "#ff4d4f" }}>有退回待改 {segReturnedTasks}</span>
+                    </Checkbox>
+                  </Tooltip>
+                )}
                 {unassignedN > 0 && (
                   <Tooltip title="没指派给任何人的任务。多半是认领后超过 48 小时没打开、被自动收回的——行里「指派给」那一列写着原来是谁的">
                     <Checkbox checked={f.unassigned} onChange={(e) => setFilter(p.id, { unassigned: e.target.checked })}>
@@ -1240,7 +1255,7 @@ export default function Projects() {
                     </Button>
                   </Tooltip>
                 )}
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned) && (
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
@@ -1252,8 +1267,8 @@ export default function Projects() {
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
                   </Typography.Text>
-                  {labelTotals.map(({ label, n, pending, tasksN }) => (
-                    <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}；点击只看含「${label.display_name}」的任务`}>
+                  {labelTotals.map(({ label, n, pending, tasksN, okN, retN }) => (
+                    <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}${okN || retN ? `；片段审核：通过 ${okN}、退回待改 ${retN}、还没审 ${n - okN - retN}` : ""}；点击只看含「${label.display_name}」的任务`}>
                       <Tag
                         color={label.color ?? undefined}
                         style={{ cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined }}
@@ -1265,6 +1280,9 @@ export default function Projects() {
                       >
                         {label.display_name} {n}
                         {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
+                        {/* 片段审核进度：通过几条、退回了还在等标注员改的几条 */}
+                        {okN ? <span> · ✓{okN}</span> : null}
+                        {retN ? <span style={{ fontWeight: 600 }}> · 退{retN}</span> : null}
                         <span style={{ opacity: 0.6 }}> · {tasksN} 任务</span>
                       </Tag>
                     </Tooltip>
