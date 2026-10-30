@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Slider, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Dropdown, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Slider, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -28,7 +28,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, downloadEdgeBundle, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, downloadEdgeBundle, type EdgeBundleKind, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
   type DatasetStats,
@@ -694,9 +694,10 @@ export default function Training() {
   };
   const [exportingEdge, setExportingEdge] = useState<number | null>(null);
   const [downloadingEdge, setDownloadingEdge] = useState<number | null>(null);
-  const edgeZipName = (v: ModelVersion) => `edge_${v.model_type || "rf"}_train${v.algo_job_id}_v${v.id}.zip`;
+  const edgeZipName = (v: ModelVersion, kind: EdgeBundleKind = "src") =>
+    `edge_${v.model_type || "rf"}_train${v.algo_job_id}_v${v.id}${kind === "lib" ? "_lib" : ""}.zip`;
   /** 一键下载端侧包：还没导过端侧就先导（算端侧 F1、挂端侧服务），再打包下载 */
-  const oneClickEdgeBundle = async (v: ModelVersion) => {
+  const oneClickEdgeBundle = async (v: ModelVersion, kind: EdgeBundleKind) => {
     setDownloadingEdge(v.id);
     try {
       if (!edgeOf(v)) {
@@ -705,7 +706,7 @@ export default function Training() {
         qc.invalidateQueries({ queryKey: ["model-versions"] });
         qc.invalidateQueries({ queryKey: ["edge-models"] });
       }
-      await downloadEdgeBundle(v.id, edgeZipName(v));
+      await downloadEdgeBundle(v.id, edgeZipName(v, kind), kind);
     } finally {
       setDownloadingEdge(null);
     }
@@ -1048,17 +1049,23 @@ export default function Training() {
                             </Tooltip>
                           )}
                           {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
-                            <Tooltip title="给嵌入式的端侧包（zip）：板上 C 源码 + 这版模型 + 8 通道输入映射 + PC 命令行测试程序 + README。Linux 上解压后 make test 就能跑。还没导出到端侧的会先自动导出">
-                              <Button
-                                size="small"
-                                type="link"
-                                loading={downloadingEdge === v.id}
-                                disabled={(downloadingEdge != null && downloadingEdge !== v.id) || exportingEdge === v.id}
-                                onClick={() => oneClickEdgeBundle(v)}
-                              >
-                                下载端侧包
-                              </Button>
-                            </Tooltip>
+                            <Dropdown
+                              trigger={["click"]}
+                              disabled={(downloadingEdge != null && downloadingEdge !== v.id) || exportingEdge === v.id}
+                              menu={{
+                                items: [
+                                  { key: "src", label: "源码包（内部）", title: "板上 C 源码 + 这版模型 + PC 命令行测试程序 + README，Linux 上 make test 就能跑" },
+                                  { key: "lib", label: "编译库（保密，给外部）", title: "只有编译好的 .a + 头文件 + PC 验证工具，不含源码" },
+                                ],
+                                onClick: ({ key }) => oneClickEdgeBundle(v, key as EdgeBundleKind),
+                              }}
+                            >
+                              <Tooltip title="还没导出到端侧的会先自动导出">
+                                <Button size="small" type="link" loading={downloadingEdge === v.id}>
+                                  下载端侧包 ▾
+                                </Button>
+                              </Tooltip>
+                            </Dropdown>
                           )}
                           {v.status === "done" && v.model_path && (
                             <Popconfirm
@@ -2243,7 +2250,7 @@ export default function Training() {
               <Descriptions.Item label="端侧资源占用">
                 <EdgeFootprint
                   fp={edgeOf(detail)!.footprint!}
-                  onDownload={() => downloadEdgeBundle(detail.id, edgeZipName(detail))}
+                  onDownload={(kind) => downloadEdgeBundle(detail.id, edgeZipName(detail, kind), kind)}
                 />
               </Descriptions.Item>
             )}
