@@ -46,6 +46,7 @@ export default function SegmentReview() {
     return names.map((n) => ({ value: n, label: `${"　".repeat(n.split("-").length - 1)}${n}` }));
   }, [labels]);
 
+  const labelColorOf = (id: number) => (labels ?? []).find((l) => l.id === id)?.color ?? null;
   const [labelName, setLabelName] = useState<string | null>(null);
   const [status, setStatus] = useState<SegStatus | "all">(isReviewer ? "pending" : "returned");
   const [mine, setMine] = useState(isReviewer);
@@ -222,7 +223,11 @@ export default function SegmentReview() {
         }}
         rowClassName={(r) => (r.id === cur?.id ? "ant-table-row-selected" : "")}
         columns={[
-          { title: "类别", dataIndex: "label_name", width: 140, render: (v: string) => <Tag>{v}</Tag> },
+          {
+            title: "类别", dataIndex: "label_name", width: 140,
+            // 跟工作台、项目页同一个颜色：一眼认出是哪类
+            render: (v: string, r) => <Tag color={labelColorOf(r.label_id) ?? undefined}>{v}</Tag>,
+          },
           {
             title: "样本", width: 260,
             render: (_, r) => (
