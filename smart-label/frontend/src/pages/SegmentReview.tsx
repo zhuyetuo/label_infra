@@ -112,6 +112,19 @@ export default function SegmentReview() {
     });
   };
 
+  // 改类别：退回原因常常就是「类别错了」，光能拖起止改不了。改完让工作台重新拉一遍草稿
+  const [reloadKey, setReloadKey] = useState(0);
+  const projLabels = curTask ? (labels ?? []).filter((l) => l.project_id === curTask.project_id) : [];
+  const relabel = async (labelId: number) => {
+    if (!cur || labelId === cur.label_id) return;
+    const r = await segEdit(cur.id, { start_time_ms: cur.start_time_ms, end_time_ms: cur.end_time_ms, label_id: labelId });
+    const name = projLabels.find((l) => l.id === labelId)?.display_name ?? `#${labelId}`;
+    setCur({ ...cur, label_id: labelId, label_name: name, seg_status: r.seg_status });
+    setReloadKey((k) => k + 1);
+    qc.invalidateQueries({ queryKey: ["seg-returned-summary"] });
+    message.success(isReviewer ? `已改成「${name}」` : `已改成「${name}」，交回重审了`);
+  };
+
   const actions = cur && (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -119,6 +132,19 @@ export default function SegmentReview() {
       </Typography.Text>
       {cur.review_note && <Tag color="red">退回原因：{cur.review_note}</Tag>}
       <span style={{ flex: 1 }} />
+      <Tooltip title="类别不对就在这里改。标注员改了自动交回重审">
+        <Select
+          size="small"
+          showSearch
+          style={{ width: 150 }}
+          value={cur.label_id}
+          optionFilterProp="label"
+          popupMatchSelectWidth={false}
+          onChange={relabel}
+          options={projLabels.filter((l) => l.is_active !== false || l.id === cur.label_id)
+            .map((l) => ({ value: l.id, label: l.display_name }))}
+        />
+      </Tooltip>
       {isReviewer ? (
         <>
           <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => decide("approved")}>通过</Button>
@@ -289,6 +315,7 @@ export default function SegmentReview() {
               setCur({ ...cur, start_time_ms: r.start_time_ms, end_time_ms: r.end_time_ms, seg_status: r.seg_status });
             },
             actions,
+            reloadKey,
           }}
         />
       )}
