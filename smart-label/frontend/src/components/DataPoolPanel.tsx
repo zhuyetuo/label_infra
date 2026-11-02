@@ -1,23 +1,41 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Checkbox, Col, DatePicker, Input, InputNumber, Modal, Popconfirm, Radio, Row, Select, Space, Statistic,
+  Alert, Button, Checkbox, Col, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic,
   Table, Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import { listDogs } from "@/api/dogs";
-import { poolAdd, poolRemove, poolSummary, type PoolBucket } from "@/api/dataPool";
+import {
+  poolItems, poolRemove, poolSummary, type PoolBucket, type PoolFilter, type PoolItem, type PoolSort,
+} from "@/api/dataPool";
 import { exportDataset, type TrainDataset } from "@/api/training";
 import { useAuthStore } from "@/stores/authStore";
+import { fmtSecs } from "@/utils/fmtDuration";
+
+const fmtMs = (ms: number) => {
+  const t = Math.floor(ms / 1000);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  return `${h ? `${h}:` : ""}${String(m).padStart(h ? 2 : 1, "0")}:${String(s).padStart(2, "0")}`;
+};
 
 /**
- * 数据池：人认可的高质量片段库（跟「导出数据集」不是一回事）。
- * 片段审核里点了通过的自动在池里；另外可以整批手动加入 / 移出。
- * 每次训练从池里按 项目 / 狗 / 日期 / 采样率 / 类别 挑一部分，每类可设上限，
- * 导出后直接打开训练弹窗——类别合并在弹窗的归并表里做。
+ * 数据池：你认可的片段库（跟「导出数据集」不是一回事）。
+ * 进池：项目页「加入数据池」（看过觉得行，整个任务 / 整个项目的已提交任务）；片段审核通过的也自动在池。
+ * 这里一条条列出池里的片段，顶上是统计；训练时按 类别 / 项目 / 狗 / 日期 / 采样率 / 片段时长 挑一批，
+ * 「用这批训练」导出后直接打开训练弹窗——类别合并在弹窗的归并表里做。
  */
-export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset) => void }) {
+export default function DataPoolPanel({
+  onTrain,
+  onOpen,
+}: {
+  onTrain: (ds: TrainDataset) => void;
+  /** 在工作台打开这个任务，跳到这一刻 */
+  onOpen: (taskId: number, seekMs: number) => void;
+}) {
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.userInfo?.role);
   const curator = role === "admin" || role === "super_admin" || role === "reviewer";
@@ -28,61 +46,82 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
   const [hzs, setHzs] = useState<number[]>([]);
   // 只要不短于这么多秒的片段：长片段往往更干净，先拿它们训
   const [minSec, setMinSec] = useState<number | null>(null);
+  const [pickLabels, setPickLabels] = useState<string[]>([]);
 
-  const filters = useMemo(
+  const filters: PoolFilter = useMemo(
     () => ({
       project_ids: projectIds.length ? projectIds : undefined,
       dog_ids: dogIds.length ? dogIds : undefined,
       date_from: range?.[0]?.format("YYYY-MM-DD") ?? null,
       date_to: range?.[1]?.format("YYYY-MM-DD") ?? null,
+      sample_hz: hzs.length ? hzs : undefined,
+      min_sec: minSec || null,
+      label_names: pickLabels.length ? pickLabels : undefined,
     }),
-    [projectIds, dogIds, range],
+    [projectIds, dogIds, range, hzs, minSec, pickLabels],
   );
-  const anyFilter = !!(filters.project_ids || filters.dog_ids || filters.date_from || filters.date_to);
+  // 类别下拉的选项不能跟着类别筛选变（选了一个别的就没了）：统计另拉一份不带类别的
+  const noLabel = useMemo(() => ({ ...filters, label_names: undefined }), [filters]);
+  const anyFilter = !!(
+    filters.project_ids || filters.dog_ids || filters.date_from || filters.date_to || filters.label_names
+  );
 
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
-  const { data: sum, isFetching } = useQuery({
-    queryKey: ["data-pool", filters, hzs, minSec],
-    queryFn: () => poolSummary({ ...filters, sample_hz: hzs.length ? hzs : undefined, min_sec: minSec }),
+  const { data: sum, isFetching: loadingSum } = useQuery({
+    queryKey: ["data-pool", "summary", filters],
+    queryFn: () => poolSummary(filters),
   });
-  const refresh = () => qc.invalidateQueries({ queryKey: ["data-pool"] });
+  const { data: sumAll } = useQuery({
+    queryKey: ["data-pool", "summary", noLabel],
+    queryFn: () => poolSummary(noLabel),
+  });
 
-  // 整批加入
-  const [addSrc, setAddSrc] = useState<"reviewed" | "approved_tasks">("reviewed");
+  const [sort, setSort] = useState<PoolSort>("long");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  useEffect(() => setPage(1), [filters, sort]);
+  const { data: list, isFetching: loadingList } = useQuery({
+    queryKey: ["data-pool", "items", filters, sort, page, pageSize],
+    queryFn: () => poolItems(filters, sort, page, pageSize),
+    placeholderData: (prev) => prev,
+  });
+  const [picked, setPicked] = useState<number[]>([]);
+  const refresh = () => {
+    setPicked([]);
+    qc.invalidateQueries({ queryKey: ["data-pool"] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
+  };
   const [busy, setBusy] = useState(false);
-  const doAdd = async () => {
+  const remove = async (body: Parameters<typeof poolRemove>[0]) => {
     setBusy(true);
     try {
-      const r = await poolAdd({ ...filters, source: addSrc });
-      message.success(`加入 ${r.added} 段`);
+      const r = await poolRemove(body);
+      message.success(`移出 ${r.removed} 段`);
       refresh();
     } finally {
       setBusy(false);
     }
   };
 
-  // 挑类别：移出 / 训练共用
-  const [pickLabels, setPickLabels] = useState<string[]>([]);
   const labelOpts = useMemo(() => {
     const seen = new Set<string>();
     const out: { value: string; label: string }[] = [];
-    for (const b of [...(sum?.by_root ?? []), ...(sum?.by_label ?? [])]) {
+    for (const b of [...(sumAll?.by_root ?? []), ...(sumAll?.by_label ?? [])]) {
       if (seen.has(b.name)) continue;
       seen.add(b.name);
       out.push({ value: b.name, label: `${b.name}（${b.n} 段 / ${b.hours} h）` });
     }
     return out;
-  }, [sum]);
+  }, [sumAll]);
 
   // 「用这批训练」
   const [trainOpen, setTrainOpen] = useState(false);
   const [dsName, setDsName] = useState("");
   const [capH, setCapH] = useState<number | null>(null);
   const [preview, setPreview] = useState<TrainDataset | null>(null);
-
   const exportBody = (dry: boolean) => {
-    const roots = (sum?.by_root ?? []).filter((b) => !pickLabels.length || pickLabels.includes(b.name));
+    const roots = sum?.by_root ?? [];
     const reduce_targets =
       capH != null && capH > 0
         ? Object.fromEntries(roots.filter((b) => b.hours > capH).map((b) => [b.name, Math.round(capH * 3600)]))
@@ -90,9 +129,12 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
     return {
       name: dsName.trim(),
       scope: "pool" as const,
-      ...filters,
-      sample_hz: hzs.length ? hzs : undefined,
-      label_names: pickLabels.length ? pickLabels : undefined,
+      project_ids: filters.project_ids,
+      dog_ids: filters.dog_ids,
+      date_from: filters.date_from,
+      date_to: filters.date_to,
+      sample_hz: filters.sample_hz,
+      label_names: filters.label_names,
       min_seg_sec: minSec || undefined,
       reduce_targets: reduce_targets && Object.keys(reduce_targets).length ? reduce_targets : undefined,
       dry_run: dry,
@@ -129,11 +171,11 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
       title={() => <strong>{title}</strong>}
       dataSource={rows ?? []}
       pagination={false}
-      scroll={{ y: 260 }}
+      scroll={{ y: 220 }}
       columns={[
         { title: "名称", dataIndex: "name" },
-        { title: "段数", dataIndex: "n", width: 80, sorter: (a: PoolBucket, b: PoolBucket) => a.n - b.n },
-        { title: "小时", dataIndex: "hours", width: 80, sorter: (a: PoolBucket, b: PoolBucket) => a.hours - b.hours },
+        { title: "段数", dataIndex: "n", width: 70 },
+        { title: "小时", dataIndex: "hours", width: 70 },
       ]}
     />
   );
@@ -144,15 +186,26 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="数据池 = 你认可的高质量片段库"
-        description="片段审核里「通过」的自动在池里；也可以按当前筛选整批加入 / 移出。片段被改过后，手动加入的会自动出池等重新审。训练时从池里按下面的条件挑一部分，「用这批训练」导出后直接打开训练弹窗（类别合并在弹窗的归并表里做）。"
+        message="数据池 = 你认可、可以拿去训练的片段"
+        description="进池：在项目页看过觉得行，点任务的「加入数据池」（或项目行的「加入数据池」= 已提交的任务整份）。片段之后被改过会自动出池。训练时在这里按条件挑一批，「用这批训练」导出并打开训练弹窗（类别合并在弹窗的归并表里做）。"
       />
+
+      {/* 筛选：同时作用于统计、列表、训练 */}
       <Space wrap style={{ marginBottom: 12 }}>
         <Select
           mode="multiple"
           allowClear
-          placeholder="项目（默认全部进行中的）"
-          style={{ minWidth: 240 }}
+          placeholder="类别（含细类）"
+          style={{ minWidth: 260 }}
+          value={pickLabels}
+          onChange={setPickLabels}
+          options={labelOpts}
+        />
+        <Select
+          mode="multiple"
+          allowClear
+          placeholder="项目"
+          style={{ minWidth: 200 }}
           value={projectIds}
           onChange={setProjectIds}
           optionFilterProp="label"
@@ -162,7 +215,7 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
           mode="multiple"
           allowClear
           placeholder="狗"
-          style={{ minWidth: 200 }}
+          style={{ minWidth: 160 }}
           value={dogIds}
           onChange={setDogIds}
           optionFilterProp="label"
@@ -176,108 +229,184 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
             { label: "最近 90 天", value: [dayjs().subtract(90, "day"), dayjs()] },
           ]}
         />
-        <span>
-          原始采样率：
-          <Checkbox.Group
-            value={hzs}
-            onChange={(v) => setHzs(v as number[])}
-            options={[
-              { value: 50, label: "50Hz" },
-              { value: 16, label: "16Hz" },
-            ]}
-          />
-        </span>
-        <Tooltip title="只要不短于这么多秒的片段（统计和「用这批训练」都按它）。长片段往往更干净">
+        <Checkbox.Group
+          value={hzs}
+          onChange={(v) => setHzs(v as number[])}
+          options={[
+            { value: 50, label: "50Hz" },
+            { value: 16, label: "16Hz" },
+          ]}
+        />
+        <Tooltip title="只要不短于这么多秒的片段。长片段往往更干净">
           <InputNumber min={0} step={5} value={minSec} onChange={(v) => setMinSec(v ?? null)} placeholder="片段" addonAfter="秒以上" style={{ width: 140 }} />
         </Tooltip>
       </Space>
 
-      <Row gutter={16} style={{ marginBottom: 12 }}>
-        <Col><Statistic title="池里片段" value={sum?.n ?? 0} loading={isFetching} /></Col>
-        <Col><Statistic title="时长(小时)" value={sum?.hours ?? 0} loading={isFetching} /></Col>
-        <Col><Statistic title="审核通过进来的" value={sum?.n_approved ?? 0} loading={isFetching} /></Col>
-        <Col><Statistic title="手动加入的" value={sum?.n_manual ?? 0} loading={isFetching} /></Col>
+      {/* 统计 */}
+      <Row gutter={24} align="middle" style={{ marginBottom: 8 }}>
+        <Col><Statistic title="片段" value={sum?.n ?? 0} loading={loadingSum} /></Col>
+        <Col><Statistic title="时长" value={fmtSecs((sum?.hours ?? 0) * 3600)} loading={loadingSum} /></Col>
+        <Col flex="auto">
+          <Space size={4} wrap>
+            {(sum?.by_root ?? []).map((b) => (
+              <Tag key={b.name} style={{ cursor: "pointer" }} onClick={() => setPickLabels([b.name])}>
+                {b.name} {b.n} 段 · {fmtSecs(b.hours * 3600)}
+              </Tag>
+            ))}
+          </Space>
+        </Col>
+        <Col>
+          <Button type="primary" disabled={!sum?.n} onClick={() => setTrainOpen(true)}>
+            用这批训练
+          </Button>
+        </Col>
       </Row>
+      <Collapse
+        size="small"
+        style={{ marginBottom: 12 }}
+        items={[
+          {
+            key: "more",
+            label: "更多统计（细类 / 项目 / 狗 / 采样率）",
+            children: (
+              <Row gutter={12}>
+                <Col span={6}>{bucketTable("细类", sum?.by_label)}</Col>
+                <Col span={6}>{bucketTable("项目", sum?.by_project)}</Col>
+                <Col span={6}>{bucketTable("狗", sum?.by_dog)}</Col>
+                <Col span={6}>{bucketTable("采样率", sum?.by_hz)}</Col>
+              </Row>
+            ),
+          },
+        ]}
+      />
 
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Select
-          mode="multiple"
-          allowClear
-          placeholder="类别（训练 / 移出用；不选 = 全部）"
-          style={{ minWidth: 360 }}
-          value={pickLabels}
-          onChange={setPickLabels}
-          options={labelOpts}
+      {/* 一条条的片段 */}
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Select<PoolSort>
+          value={sort}
+          onChange={setSort}
+          style={{ width: 140 }}
+          options={[
+            { value: "long", label: "最长的先" },
+            { value: "short", label: "最短的先" },
+            { value: "new", label: "日期最近的先" },
+            { value: "time", label: "按任务、时间" },
+          ]}
         />
-        <Button type="primary" disabled={!sum?.n} onClick={() => setTrainOpen(true)}>
-          用这批训练
-        </Button>
         {curator && (
           <>
-            <Radio.Group size="small" value={addSrc} onChange={(e) => setAddSrc(e.target.value)}>
-              <Tooltip title="人确认过 / 改过 / 人工画的片段（没人看过的 AI 片段不算）">
-                <Radio.Button value="reviewed">人确认过的片段</Radio.Button>
-              </Tooltip>
-              <Tooltip title="整份审核通过的任务里的全部片段">
-                <Radio.Button value="approved_tasks">审核通过的任务</Radio.Button>
-              </Tooltip>
-            </Radio.Group>
-            <Tooltip title={anyFilter ? "" : "先选项目 / 狗 / 日期，避免一下把全部加进来"}>
-              <Popconfirm title="按当前筛选整批加入数据池？" onConfirm={doAdd} disabled={!anyFilter}>
-                <Button loading={busy} disabled={!anyFilter}>整批加入</Button>
-              </Popconfirm>
-            </Tooltip>
+            <Popconfirm title={`选中的 ${picked.length} 段移出数据池？`} disabled={!picked.length} onConfirm={() => remove({ item_ids: picked })}>
+              <Button danger disabled={!picked.length} loading={busy}>移出选中{picked.length ? ` ${picked.length}` : ""}</Button>
+            </Popconfirm>
             <Popconfirm
-              title={`按当前筛选${pickLabels.length ? `、只移出 ${pickLabels.join("/")}` : "整批"}移出数据池？`}
-              description="移出后再在片段审核里通过一次会重新进池"
-              disabled={!anyFilter && !pickLabels.length}
-              onConfirm={async () => {
-                setBusy(true);
-                try {
-                  const r = await poolRemove({ ...filters, label_names: pickLabels.length ? pickLabels : undefined });
-                  message.success(`移出 ${r.removed} 段`);
-                  refresh();
-                } finally {
-                  setBusy(false);
-                }
-              }}
+              title={`按当前筛选把 ${sum?.n ?? 0} 段全部移出数据池？`}
+              disabled={!anyFilter}
+              onConfirm={() => remove(filters)}
             >
-              <Button danger loading={busy} disabled={!anyFilter && !pickLabels.length}>整批移出</Button>
+              <Tooltip title={anyFilter ? "" : "先选类别 / 项目 / 狗 / 日期"}>
+                <Button danger type="dashed" disabled={!anyFilter} loading={busy}>按筛选全部移出</Button>
+              </Tooltip>
             </Popconfirm>
           </>
         )}
       </Space>
-
-      <Row gutter={16}>
-        <Col span={12}>{bucketTable("按大类", sum?.by_root)}</Col>
-        <Col span={12}>{bucketTable("按细类", sum?.by_label)}</Col>
-        <Col span={8} style={{ marginTop: 12 }}>{bucketTable("按项目", sum?.by_project)}</Col>
-        <Col span={8} style={{ marginTop: 12 }}>{bucketTable("按狗", sum?.by_dog)}</Col>
-        <Col span={8} style={{ marginTop: 12 }}>{bucketTable("按采样率", sum?.by_hz)}</Col>
-      </Row>
+      <Table<PoolItem>
+        size="small"
+        rowKey="id"
+        loading={loadingList}
+        dataSource={list?.items ?? []}
+        rowSelection={curator ? { selectedRowKeys: picked, onChange: (k) => setPicked(k as number[]) } : undefined}
+        pagination={{
+          current: page,
+          pageSize,
+          total: list?.total ?? 0,
+          showSizeChanger: true,
+          pageSizeOptions: [50, 100, 200],
+          showTotal: (t) => `共 ${t} 段`,
+          onChange: (p, s) => {
+            setPage(p);
+            setPageSize(s);
+          },
+        }}
+        columns={[
+          { title: "类别", dataIndex: "label_name", width: 150, render: (v: string) => <Tag>{v}</Tag> },
+          {
+            title: "时长",
+            width: 90,
+            render: (_, r) => <strong>{fmtSecs((r.end_time_ms - r.start_time_ms) / 1000)}</strong>,
+          },
+          {
+            title: "位置",
+            width: 140,
+            render: (_, r) => (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {fmtMs(r.start_time_ms)} ~ {fmtMs(r.end_time_ms)}
+              </Typography.Text>
+            ),
+          },
+          {
+            title: "样本",
+            render: (_, r) => (
+              <Typography.Text style={{ fontSize: 12 }}>
+                {r.sample_code} <Typography.Text type="secondary">#{r.task_id}</Typography.Text>
+              </Typography.Text>
+            ),
+          },
+          { title: "项目", dataIndex: "project_name", width: 160, ellipsis: true },
+          { title: "狗", dataIndex: "dog_name", width: 100, render: (v: string | null) => v ?? "-" },
+          { title: "日期", dataIndex: "session_date", width: 100, render: (v: string | null) => v ?? "-" },
+          { title: "采样率", dataIndex: "hz", width: 70, render: (v: number) => `${v}Hz` },
+          {
+            title: "来源",
+            dataIndex: "via",
+            width: 80,
+            render: (v: string) => (v === "manual" ? <Tag color="blue">手动</Tag> : <Tag color="green">审核</Tag>),
+          },
+          {
+            title: "操作",
+            width: 120,
+            render: (_, r) => (
+              <Space size={0}>
+                <Button size="small" type="link" onClick={() => onOpen(r.task_id, r.start_time_ms)}>
+                  看
+                </Button>
+                {curator && (
+                  <Popconfirm title="这一段移出数据池？" onConfirm={() => remove({ item_ids: [r.id] })}>
+                    <Button size="small" type="link" danger>
+                      移出
+                    </Button>
+                  </Popconfirm>
+                )}
+              </Space>
+            ),
+          },
+        ]}
+      />
 
       <Modal
         title="用这批训练"
         open={trainOpen}
-        onCancel={() => { setTrainOpen(false); setPreview(null); }}
+        onCancel={() => {
+          setTrainOpen(false);
+          setPreview(null);
+        }}
         footer={[
-          <Button key="p" loading={busy} onClick={doPreview}>预览</Button>,
-          <Button key="ok" type="primary" loading={busy} onClick={doExport}>导出并打开训练</Button>,
+          <Button key="p" loading={busy} onClick={doPreview}>
+            预览
+          </Button>,
+          <Button key="ok" type="primary" loading={busy} onClick={doExport}>
+            导出并打开训练
+          </Button>,
         ]}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Text type="secondary">
-            范围：{projectIds.length ? `${projectIds.length} 个项目` : "全部进行中的项目"}
-            {dogIds.length ? `、${dogIds.length} 只狗` : ""}
-            {filters.date_from ? `、${filters.date_from}~${filters.date_to}` : ""}
-            {hzs.length ? `、${hzs.join("/")}Hz` : ""}
-            {minSec ? `、片段 ≥ ${minSec} 秒` : ""}
-            ；类别：{pickLabels.length ? pickLabels.join("、") : "全部"}
+            当前筛选：{sum?.n ?? 0} 段 / {fmtSecs((sum?.hours ?? 0) * 3600)}；类别：{pickLabels.length ? pickLabels.join("、") : "全部"}
+            {minSec ? `；片段 ≥ ${minSec} 秒` : ""}
           </Typography.Text>
           <Input placeholder="数据集名字，如 pool_1102" value={dsName} onChange={(e) => setDsName(e.target.value)} />
           <span>
-            每个大类最多{" "}
-            <InputNumber min={0} step={0.5} value={capH} onChange={(v) => setCapH(v)} placeholder="不限" /> 小时
+            每个大类最多 <InputNumber min={0} step={0.5} value={capH} onChange={(v) => setCapH(v)} placeholder="不限" /> 小时
             <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
               超出的按段随机抽到这个量
             </Typography.Text>
@@ -289,7 +418,9 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
               description={
                 <Space size={4} wrap>
                   {Object.entries(preview.labels ?? {}).map(([k, v]) => (
-                    <Tag key={k}>{k} {String(v)}</Tag>
+                    <Tag key={k}>
+                      {k} {String(v)}
+                    </Tag>
                   ))}
                 </Space>
               }

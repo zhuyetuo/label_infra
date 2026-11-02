@@ -77,7 +77,7 @@ export interface Task {
   /** 当前轮草稿里已有多少段，0 = 认领了还没动手 */
   draft_item_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
-  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number }>;
+  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number }>;
   /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
   cand_count?: number;
   cand_pending?: number;

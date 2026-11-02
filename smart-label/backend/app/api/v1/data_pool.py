@@ -27,40 +27,65 @@ def _require_curator(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能改数据池")
 
 
+def _floats(v: str | None) -> list[float] | None:
+    return [float(x) for x in v.split(",") if x.strip()] if v else None
+
+
+def _qfilter(project_ids: str | None = None, dog_ids: str | None = None, task_ids: str | None = None,
+             date_from: date | None = None, date_to: date | None = None, sample_hz: str | None = None,
+             min_sec: float | None = None, label_names: str | None = None) -> data_pool.PoolFilter:
+    """GET 的筛选参数：多个值逗号分隔"""
+    return data_pool.PoolFilter(
+        project_ids=_ids(project_ids), dog_ids=_ids(dog_ids), task_ids=_ids(task_ids),
+        date_from=date_from, date_to=date_to, sample_hz=_floats(sample_hz), min_sec=min_sec,
+        label_names=[x for x in label_names.split(",") if x.strip()] if label_names else None)
+
+
 @router.get("/summary")
-async def get_summary(project_ids: str | None = None, dog_ids: str | None = None,
-                      date_from: date | None = None, date_to: date | None = None, sample_hz: str | None = None,
-                      min_sec: float | None = None,
+async def get_summary(f: data_pool.PoolFilter = Depends(_qfilter),
                       db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    hz = [float(x) for x in sample_hz.split(",") if x.strip()] if sample_hz else None
-    return ok(await data_pool.summary(db, _ids(project_ids), _ids(dog_ids), date_from, date_to, hz, min_sec))
+    return ok(await data_pool.summary(db, f))
+
+
+@router.get("/items")
+async def get_items(f: data_pool.PoolFilter = Depends(_qfilter), sort: str = "long", page: int = 1, page_size: int = 50,
+                    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """池里一条一条的片段（分页）"""
+    return ok(await data_pool.list_items(db, f, sort, page, page_size))
 
 
 class PoolFilterIn(BaseModel):
     project_ids: list[int] | None = None
     dog_ids: list[int] | None = None
+    task_ids: list[int] | None = None
     date_from: date | None = None
     date_to: date | None = None
+    sample_hz: list[float] | None = None
+    min_sec: float | None = None
+    label_names: list[str] | None = None
+
+    def to_filter(self) -> data_pool.PoolFilter:
+        return data_pool.PoolFilter(**self.model_dump(include=set(data_pool.PoolFilter.__dataclass_fields__)))
 
 
 class PoolAddIn(PoolFilterIn):
-    # reviewed = 人确认过 / 改过 / 人工加的；approved_tasks = 审核通过的任务整份
+    # reviewed = 人确认过 / 改过 / 人工加的；approved_tasks = 审核通过的任务整份；
+    # submitted = 已提交 / 通过的任务整份；all = 全部（一般配 task_ids）
     source: str = "reviewed"
 
 
 class PoolRemoveIn(PoolFilterIn):
     item_ids: list[int] | None = None
-    label_ids: list[int] | None = None
-    label_names: list[str] | None = None
 
 
 @router.post("/add")
 async def post_add(body: PoolAddIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     _require_curator(user)
-    if not body.project_ids and body.date_from is None and body.date_to is None and not body.dog_ids:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "整批加入要先选项目 / 狗 / 日期，别一下子把全部加进去")
+    f = body.to_filter()
+    if not f.any():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "整批加入要先选任务 / 项目 / 狗 / 日期，别一下子把全部加进去")
     try:
-        n = await data_pool.add(db, body.source, body.project_ids, body.dog_ids, body.date_from, body.date_to)
+        n = await data_pool.add(db, body.source, f)
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
     return ok({"added": n})
@@ -69,9 +94,8 @@ async def post_add(body: PoolAddIn, db: AsyncSession = Depends(get_db), user: Us
 @router.post("/remove")
 async def post_remove(body: PoolRemoveIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     _require_curator(user)
-    if not (body.item_ids or body.project_ids or body.dog_ids or body.label_ids or body.label_names
-            or body.date_from is not None or body.date_to is not None):
+    f = body.to_filter()
+    if not (body.item_ids or f.any()):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "移出要指定片段或条件")
-    n = await data_pool.remove(db, body.item_ids, body.project_ids, body.dog_ids, body.date_from, body.date_to,
-                               body.label_ids, body.label_names)
+    n = await data_pool.remove(db, f, body.item_ids)
     return ok({"removed": n})
