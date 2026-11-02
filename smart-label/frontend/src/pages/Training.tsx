@@ -911,10 +911,18 @@ export default function Training() {
                           <Tag color={Number(sp.axes) === 3 ? "purple" : undefined}>
                             {Number(sp.axes) === 3 ? "3 轴" : "6 轴"}
                           </Tag>
+                          {/* 训练采样率：端侧要跟项圈 IMU 实际采样率一致（QMI8658 原生 31.25），
+                              不同采样率的模型不能混用。老记录没存就是默认 16 */}
+                          <Tag color={Number(sp.hz) === 31.25 ? "gold" : undefined}>{String(sp.hz ?? 16)}Hz</Tag>
                           <Tag>{v.model_type}</Tag>
                           {/* 端侧尺寸的跟不限深的大模型不能直接比分数：一个要塞进 128KB，
                               一个没限制。混在一起看，端侧那版永远像是"更差的那个" */}
                           {Boolean(sp.edge_size) && <Tag color="cyan">端侧尺寸</Tag>}
+                          {sp.channel_mode === "inv" && (
+                            <Tooltip title="方向无关输入 + 旋转增强：佩戴方向不影响识别">
+                              <Tag color="green">方向无关</Tag>
+                            </Tooltip>
+                          )}
                         </Space>
                       );
                     },
