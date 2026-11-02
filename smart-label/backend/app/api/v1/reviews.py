@@ -60,7 +60,7 @@ async def review_queue(db: AsyncSession = Depends(get_db), user: User = Depends(
 
 
 async def _per_task_kinds(db: AsyncSession, task_ids: list[int]):
-    """{task_id: {label_id: {n, ai_pending}}}、{task_id: {候选类别名: {n, pending}}}，当前轮。"""
+    """{task_id: {label_id: {n, ai_pending, max_ms, ms}}}、{task_id: {候选类别名: {n, pending}}}，当前轮。"""
     from sqlalchemy import case, func
 
     from app.models.ai_candidate import AiCandidate, CandidateStatus
@@ -72,15 +72,18 @@ async def _per_task_kinds(db: AsyncSession, task_ids: list[int]):
         return lc, cl
     pending = ((AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
                & AnnotationLabelItem.ai_confirmed.is_(False) & AnnotationLabelItem.is_modified.is_(False))
+    dur = AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms
     rows = await db.execute(
         select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, func.count(AnnotationLabelItem.id),
-               func.sum(case((pending, 1), else_=0)))
+               func.sum(case((pending, 1), else_=0)), func.max(dur), func.sum(dur))
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
         .join(Task, Task.id == AnnotationRecord.task_id)
         .where(AnnotationRecord.task_id.in_(task_ids), AnnotationRecord.round_no == Task.round_no)
         .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id))
-    for tid, lid, n, p in rows.all():
-        lc.setdefault(tid, {})[lid] = {"n": int(n), "ai_pending": int(p or 0)}
+    for tid, lid, n, p, mx, tot in rows.all():
+        # max_ms / ms：最长一段、合计时长——审核页按「最长一段」挑长片段（长的往往更干净）
+        lc.setdefault(tid, {})[lid] = {"n": int(n), "ai_pending": int(p or 0),
+                                       "max_ms": int(mx or 0), "ms": int(tot or 0)}
     rows = await db.execute(
         select(AiCandidate.task_id, AiCandidate.label_name, func.count(AiCandidate.id),
                func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)))

@@ -67,9 +67,13 @@ def _hz_of(s: Sample) -> int:
 
 async def summary(db: AsyncSession, project_ids: list[int] | None = None, dog_ids: list[int] | None = None,
                   date_from: date | None = None, date_to: date | None = None,
-                  sample_hz: list[float] | None = None) -> dict:
+                  sample_hz: list[float] | None = None, min_sec: float | None = None) -> dict:
     """池里有什么：总量、按类别 / 项目 / 狗 / 采样率的段数和时长，以及有多少是审核通过、多少是手动加入"""
-    rows = (await db.execute(_base(project_ids, dog_ids, date_from, date_to).where(in_pool_cond()))).all()
+    q = _base(project_ids, dog_ids, date_from, date_to).where(in_pool_cond())
+    if min_sec:
+        # 只看不短于这么多秒的片段：长片段往往更干净，先拿它们训
+        q = q.where(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms >= int(min_sec * 1000))
+    rows = (await db.execute(q)).all()
     want_hz = {round(float(h)) for h in (sample_hz or [])}
     labels = {l.id: l for l in (await db.execute(select(LabelDefinition))).scalars().all()}
     projects = {p.id: p.name for p in (await db.execute(select(Project))).scalars().all()}

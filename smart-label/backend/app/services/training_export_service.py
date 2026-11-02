@@ -286,6 +286,7 @@ async def export_dataset(
     dog_ids: list[int] | None = None,
     sample_hz: list[float] | None = None,
     only_labels: list[str] | None = None,
+    min_seg_sec: float | None = None,
 ) -> dict:
     """dry_run=True：照常挑数据、算统计，但不落盘——导出前先看这批数据长什么样（类别时长、
     跳过了多少没人看的 AI 片段、冲突…），返回的 meta 跟真导出完全一样。
@@ -402,6 +403,7 @@ async def export_dataset(
     # 参数名不能叫 label_names：函数里下面还有个 label_names = {id: 名字}，会把它盖掉
     want_names = set(only_labels or [])
     n_skipped_not_pool = 0
+    n_skipped_short = 0
     for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source, seg_st, pool_st in item_rows.all():
         if uncertain:
             # 「待定」永远挖洞，跟怎么取无关：那段时间既不能当正例也不能当负例
@@ -410,6 +412,10 @@ async def export_dataset(
         if only_pool and not _in_pool(seg_st, pool_st):
             # 不在数据池里的不要（不挖洞：那段时间不导出，不参与训练）
             n_skipped_not_pool += 1
+            continue
+        if min_seg_sec and (int(e_ms) - int(s_ms)) < min_seg_sec * 1000:
+            # 太短的这次不要（长片段更干净）；不挖洞，那段时间不导出
+            n_skipped_short += 1
             continue
         if want_names and not want_names.intersection(label_names_of(label_id)):
             # 只挑这几个类别（含它们的细类）；别的类别这次不用，同样不挖洞
@@ -729,6 +735,7 @@ async def export_dataset(
         "scope": scope,
         **({"pool_filters": {"dog_ids": dog_ids or [], "sample_hz": sample_hz or [], "label_names": only_labels or [],
                              "n_skipped_not_pool": n_skipped_not_pool}} if only_pool else {}),
+        **({"min_seg_sec": min_seg_sec, "n_skipped_short": n_skipped_short} if min_seg_sec else {}),
         # 互斥轨的折叠：按哪个优先级把"同时发生的几件事"折成一个标签、折掉了多少秒；
         # 各轨各导了几段（"-" 是没分轨的）；设备轨单独导了几段
         "flatten": flatten,

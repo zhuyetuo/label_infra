@@ -105,6 +105,8 @@ export const exportDataset = (body: {
   dog_ids?: number[];
   sample_hz?: number[];
   label_names?: string[];
+  /** 只导不短于这么多秒的片段（长片段往往更干净） */
+  min_seg_sec?: number;
   /** 分了互斥轨的项目：按优先级折叠成一个时刻一个标签（默认 true）；false = 各轨原样导，给分轨训练用 */
   flatten?: boolean;
   /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */

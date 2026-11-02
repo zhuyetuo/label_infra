@@ -47,9 +47,16 @@ export const segQueue = (params: {
   project_id?: number | null;
   mine?: boolean;
   limit?: number;
+  /** 只看不短于这么多秒的 */
+  min_sec?: number | null;
+  /** long = 最长的排前面（长片段往往更干净） */
+  order?: "time" | "long";
 }) => request.get<never, SegQueue>("/segments/queue", { params });
 
-export const segClaim = (body: { label_name: string; n: number; source?: "touched" | "all"; project_id?: number | null }) =>
+export const segClaim = (body: {
+  label_name: string; n: number; source?: "touched" | "all"; project_id?: number | null;
+  min_sec?: number | null; order?: "time" | "long";
+}) =>
   request.post<never, { claimed: number }>("/segments/claim", body);
 
 export const segRelease = (ids?: number[]) =>

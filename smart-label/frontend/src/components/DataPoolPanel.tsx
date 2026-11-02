@@ -26,6 +26,8 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
   const [dogIds, setDogIds] = useState<number[]>([]);
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [hzs, setHzs] = useState<number[]>([]);
+  // 只要不短于这么多秒的片段：长片段往往更干净，先拿它们训
+  const [minSec, setMinSec] = useState<number | null>(null);
 
   const filters = useMemo(
     () => ({
@@ -41,8 +43,8 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
   const { data: sum, isFetching } = useQuery({
-    queryKey: ["data-pool", filters, hzs],
-    queryFn: () => poolSummary({ ...filters, sample_hz: hzs.length ? hzs : undefined }),
+    queryKey: ["data-pool", filters, hzs, minSec],
+    queryFn: () => poolSummary({ ...filters, sample_hz: hzs.length ? hzs : undefined, min_sec: minSec }),
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ["data-pool"] });
 
@@ -91,6 +93,7 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
       ...filters,
       sample_hz: hzs.length ? hzs : undefined,
       label_names: pickLabels.length ? pickLabels : undefined,
+      min_seg_sec: minSec || undefined,
       reduce_targets: reduce_targets && Object.keys(reduce_targets).length ? reduce_targets : undefined,
       dry_run: dry,
     };
@@ -184,6 +187,9 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
             ]}
           />
         </span>
+        <Tooltip title="只要不短于这么多秒的片段（统计和「用这批训练」都按它）。长片段往往更干净">
+          <InputNumber min={0} step={5} value={minSec} onChange={(v) => setMinSec(v ?? null)} placeholder="片段" addonAfter="秒以上" style={{ width: 140 }} />
+        </Tooltip>
       </Space>
 
       <Row gutter={16} style={{ marginBottom: 12 }}>
@@ -265,6 +271,7 @@ export default function DataPoolPanel({ onTrain }: { onTrain: (ds: TrainDataset)
             {dogIds.length ? `、${dogIds.length} 只狗` : ""}
             {filters.date_from ? `、${filters.date_from}~${filters.date_to}` : ""}
             {hzs.length ? `、${hzs.join("/")}Hz` : ""}
+            {minSec ? `、片段 ≥ ${minSec} 秒` : ""}
             ；类别：{pickLabels.length ? pickLabels.join("、") : "全部"}
           </Typography.Text>
           <Input placeholder="数据集名字，如 pool_1102" value={dsName} onChange={(e) => setDsName(e.target.value)} />

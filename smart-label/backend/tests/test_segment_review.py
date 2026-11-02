@@ -193,3 +193,16 @@ def test_退回说要拆_标注员拆成两段_都回到待审(db, run):
     assert left.seg_status is None and left.review_note is None and '"to": [0, 1200]' in left.boundary_edits
     assert r["data"]["right"]["start_time_ms"] == 1200
     assert _q(run, db, w.ann, seg_status="returned")["items"] == []   # 退回清掉了
+
+
+def test_长片段优先(db, run):
+    w = _world(db, run)
+    w.items[1].end_time_ms = w.items[1].start_time_ms + 8000   # 8 秒，其余 3 秒
+    run(db.commit())
+    d = _q(run, db, w.rev, label_id=w.parent.id, order="long")
+    assert d["items"][0]["id"] == w.items[1].id
+    d = _q(run, db, w.rev, label_id=w.parent.id, min_sec=5)
+    assert [i["id"] for i in d["items"]] == [w.items[1].id] and d["counts"]["pending"] == 1
+    r = run(api.claim(api.ClaimIn(label_id=w.parent.id, n=1, order="long"), db, w.rev))
+    assert r["data"]["claimed"] == 1
+    assert [i["id"] for i in _q(run, db, w.rev, label_id=w.parent.id, mine=True)["items"]] == [w.items[1].id]
