@@ -3,6 +3,7 @@ import {
   Button,
   Collapse,
   Input,
+  InputNumber,
   Popconfirm,
   Select,
   Modal,
@@ -36,6 +37,9 @@ import { useUrlTask } from "@/utils/urlTask";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import type { Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
+import { fmtSecs } from "@/utils/fmtDuration";
+
+const fmtSec = (ms: number) => fmtSecs(ms / 1000);
 import SegmentReview from "@/pages/SegmentReview";
 
 /**
@@ -82,6 +86,7 @@ function TaskReviews() {
   const [kind, setKind] = useState<string | null>(null);
   const kindType = kind?.split(":")[0] ?? null;
   const kindName = kind ? kind.slice(kind.indexOf(":") + 1) : null;
+  const [minSec, setMinSec] = useState<number | null>(null);
   // 标签 id → 大类名：沿父链走到顶，再按「-」取前一截（没挂父类的「抓挠-头颈耳」也归抓挠），跟后端统计同一口径
   const catOf = useMemo(() => {
     const byId = new Map((labels ?? []).map((l) => [l.id, l]));
@@ -98,9 +103,16 @@ function TaskReviews() {
     return out;
   }, [labels]);
   const kindHits = (t: Task) => {
-    if (!kindName) return { seg: 0, cand: 0, candPending: 0 };
+    if (!kindName) return { seg: 0, cand: 0, candPending: 0, maxMs: 0, ms: 0 };
     let seg = 0;
-    for (const [id, c] of Object.entries(t.label_counts ?? {})) if (catOf.get(Number(id)) === kindName) seg += c.n;
+    let maxMs = 0;
+    let ms = 0;
+    for (const [id, c] of Object.entries(t.label_counts ?? {}))
+      if (catOf.get(Number(id)) === kindName) {
+        seg += c.n;
+        maxMs = Math.max(maxMs, c.max_ms ?? 0);
+        ms += c.ms ?? 0;
+      }
     let cand = 0;
     let candPending = 0;
     for (const [n, c] of Object.entries(t.cand_labels ?? {}))
@@ -108,12 +120,13 @@ function TaskReviews() {
         cand += c.n;
         candPending += c.pending;
       }
-    return { seg, cand, candPending };
+    return { seg, cand, candPending, maxMs, ms };
   };
   const kindMatch = (t: Task) => {
     if (!kind) return true;
     const h = kindHits(t);
-    return kindType === "seg" ? h.seg > 0 : h.cand > 0;
+    if (kindType === "seg") return h.seg > 0 && (!minSec || h.maxMs >= minSec * 1000);
+    return h.cand > 0;
   };
   const kindOptions = useMemo(() => {
     const seg = new Map<string, number>();
@@ -262,10 +275,22 @@ function TaskReviews() {
           ? [
               {
                 title: kindType === "seg" ? kindName : candTitle(kindName ?? ""),
-                width: 110,
+                width: kindType === "seg" ? 190 : 110,
+                // 片段：按「最长一段」排，长片段往往更干净，先审先进数据池
+                ...(kindType === "seg"
+                  ? {
+                      sorter: (a: Task, b: Task) => kindHits(a).maxMs - kindHits(b).maxMs,
+                      defaultSortOrder: "descend" as const,
+                    }
+                  : {}),
                 render: (_: unknown, t: Task) => {
                   const h = kindHits(t);
-                  return kindType === "seg" ? `${h.seg} 段` : `${h.candPending} / ${h.cand} 待判`;
+                  if (kindType !== "seg") return `${h.candPending} / ${h.cand} 待判`;
+                  return (
+                    <Tooltip title={`合计 ${fmtSec(h.ms)}`}>
+                      {h.seg} 段{h.maxMs ? <Typography.Text type="secondary"> · 最长 {fmtSec(h.maxMs)}</Typography.Text> : null}
+                    </Tooltip>
+                  );
                 },
               },
             ]
@@ -495,6 +520,19 @@ function TaskReviews() {
           onChange={(v) => setKind(v ?? null)}
           options={kindOptions}
         />
+        {kindType === "seg" && (
+          <Tooltip title="只留最长一段不短于这么多秒的任务；表里按最长一段从长到短排">
+            <InputNumber
+              min={0}
+              step={5}
+              value={minSec}
+              onChange={(v) => setMinSec(v ?? null)}
+              placeholder="最长一段"
+              addonAfter="秒以上"
+              style={{ width: 150 }}
+            />
+          </Tooltip>
+        )}
         {kind && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             打开任务时片段列表 / 疑似片段面板会先只显示这一类

@@ -92,3 +92,8 @@ def test_从池里挑一批导出(db, run, tmp_path, monkeypatch):
         run(svc.export_dataset(db, "pool_16", project_ids=[w.p.id], scope="pool", dry_run=True, sample_hz=[16]))
     out = run(svc.export_dataset(db, "pool_50", project_ids=[w.p.id], scope="pool", dry_run=True, sample_hz=[50]))
     assert out["n_segments"] == 4
+    # 只要长片段：3 秒的抓挠都不要，10 秒的活动留下
+    out = run(svc.export_dataset(db, "pool_long", project_ids=[w.p.id], scope="pool", dry_run=True, min_seg_sec=5))
+    assert out["n_segments"] == 1 and out["n_skipped_short"] == 3
+    s = run(data_pool.summary(db, min_sec=5))
+    assert s["n"] == 1 and s["by_root"][0]["name"] == "活动"

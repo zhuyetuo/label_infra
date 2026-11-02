@@ -25,7 +25,7 @@ export interface PoolFilter {
   date_to?: string | null;
 }
 
-export const poolSummary = (f: PoolFilter & { sample_hz?: number[] }) =>
+export const poolSummary = (f: PoolFilter & { sample_hz?: number[]; min_sec?: number | null }) =>
   request.get<never, PoolSummary>("/data-pool/summary", {
     params: {
       project_ids: f.project_ids?.join(",") || undefined,
@@ -33,6 +33,7 @@ export const poolSummary = (f: PoolFilter & { sample_hz?: number[] }) =>
       date_from: f.date_from || undefined,
       date_to: f.date_to || undefined,
       sample_hz: f.sample_hz?.join(",") || undefined,
+      min_sec: f.min_sec || undefined,
     },
   });
 

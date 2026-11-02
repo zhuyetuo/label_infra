@@ -47,7 +47,10 @@ const saveJson = (k: string, v: unknown) => {
     /* 存不了就算了 */
   }
 };
-type SavedFilters = { labelName: string | null; status: SegStatus | "all"; mine: boolean; withAi: boolean };
+type SavedFilters = {
+  labelName: string | null; status: SegStatus | "all"; mine: boolean; withAi: boolean;
+  order?: "time" | "long"; minSec?: number | null;
+};
 
 export default function SegmentReview() {
   const qc = useQueryClient();
@@ -72,7 +75,13 @@ export default function SegmentReview() {
   const [status, setStatus] = useState<SegStatus | "all">(saved?.status ?? (isReviewer ? "pending" : "returned"));
   const [mine, setMine] = useState(saved?.mine ?? isReviewer);
   const [withAi, setWithAi] = useState(saved?.withAi ?? false);
-  useEffect(() => saveJson(filtersKey, { labelName, status, mine, withAi }), [filtersKey, labelName, status, mine, withAi]);
+  // 长片段优先：长的往往更干净，先审先进数据池
+  const [order, setOrder] = useState<"time" | "long">(saved?.order ?? "time");
+  const [minSec, setMinSec] = useState<number | null>(saved?.minSec ?? null);
+  useEffect(
+    () => saveJson(filtersKey, { labelName, status, mine, withAi, order, minSec }),
+    [filtersKey, labelName, status, mine, withAi, order, minSec],
+  );
   const [claimN, setClaimN] = useState(30);
 
   const params = {
@@ -80,6 +89,8 @@ export default function SegmentReview() {
     seg_status: status,
     source: (withAi ? "all" : "touched") as "all" | "touched",
     mine: isReviewer && mine,
+    order,
+    min_sec: minSec || null,
   };
   const { data, isFetching, refetch } = useQuery({
     queryKey: ["seg-queue", params],
@@ -204,7 +215,7 @@ export default function SegmentReview() {
 
   const claim = async () => {
     if (!labelName) return message.warning("先选要审的类别");
-    const r = await segClaim({ label_name: labelName, n: claimN, source: withAi ? "all" : "touched" });
+    const r = await segClaim({ label_name: labelName, n: claimN, source: withAi ? "all" : "touched", order, min_sec: minSec || null });
     message[r.claimed ? "success" : "info"](r.claimed ? `领了 ${r.claimed} 条` : "这一类没有能领的待审片段了");
     setMine(true);
     setStatus("pending");
@@ -251,6 +262,24 @@ export default function SegmentReview() {
           ))}
           <Radio.Button value="all">全部</Radio.Button>
         </Radio.Group>
+        <Radio.Group size="small" value={order} onChange={(e) => setOrder(e.target.value)} optionType="button">
+          <Radio.Button value="time">按时间</Radio.Button>
+          <Tooltip title="最长的排前面，「领这么多条」也从最长的领起">
+            <Radio.Button value="long">长片段优先</Radio.Button>
+          </Tooltip>
+        </Radio.Group>
+        <Tooltip title="只看不短于这么多秒的片段（领的时候也一样）">
+          <InputNumber
+            size="small"
+            min={0}
+            step={5}
+            value={minSec}
+            onChange={(v) => setMinSec(v ?? null)}
+            placeholder="最短"
+            addonAfter="秒以上"
+            style={{ width: 130 }}
+          />
+        </Tooltip>
         {isReviewer && (
           <>
             <Checkbox checked={mine} onChange={(e) => setMine(e.target.checked)}>只看我领的 {data?.mine ?? ""}</Checkbox>
@@ -299,7 +328,7 @@ export default function SegmentReview() {
             ),
           },
           { title: "起止", width: 200, render: (_, r) => `${formatMs(r.start_time_ms)} ~ ${formatMs(r.end_time_ms)}` },
-          { title: "时长", width: 70, render: (_, r) => `${((r.end_time_ms - r.start_time_ms) / 1000).toFixed(1)}s` },
+          { title: "时长", width: 70, sorter: (a, b) => (a.end_time_ms - a.start_time_ms) - (b.end_time_ms - b.start_time_ms), render: (_, r) => `${((r.end_time_ms - r.start_time_ms) / 1000).toFixed(1)}s` },
           {
             title: "来历", width: 150,
             render: (_, r) => (

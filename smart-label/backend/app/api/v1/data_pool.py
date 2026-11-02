@@ -30,9 +30,10 @@ def _require_curator(user: User) -> None:
 @router.get("/summary")
 async def get_summary(project_ids: str | None = None, dog_ids: str | None = None,
                       date_from: date | None = None, date_to: date | None = None, sample_hz: str | None = None,
+                      min_sec: float | None = None,
                       db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     hz = [float(x) for x in sample_hz.split(",") if x.strip()] if sample_hz else None
-    return ok(await data_pool.summary(db, _ids(project_ids), _ids(dog_ids), date_from, date_to, hz))
+    return ok(await data_pool.summary(db, _ids(project_ids), _ids(dog_ids), date_from, date_to, hz, min_sec))
 
 
 class PoolFilterIn(BaseModel):

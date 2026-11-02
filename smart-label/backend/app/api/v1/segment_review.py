@@ -114,7 +114,19 @@ async def _label_ids(db: AsyncSession, label_id: int | None, label_name: str | N
     return await label_tree.expand_ids(db, {label_id})
 
 
-def _filters(q, *, label_ids, source: str, project_id: int | None):
+_DUR = AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms
+
+
+def _order(order: str):
+    """long = 最长的先（长片段往往更干净，先审先进数据池）；默认按任务、时间顺序"""
+    if order == "long":
+        return (_DUR.desc(), AnnotationLabelItem.id)
+    return (Task.id, AnnotationLabelItem.start_time_ms)
+
+
+def _filters(q, *, label_ids, source: str, project_id: int | None, min_sec: float | None = None):
+    if min_sec:
+        q = q.where(_DUR >= int(min_sec * 1000))
     if label_ids is not None:
         q = q.where(AnnotationLabelItem.label_id.in_(label_ids))
     if source != "all":
@@ -148,6 +160,8 @@ async def queue(
     project_id: int | None = None,
     mine: bool = False,
     limit: int = 300,
+    min_sec: float | None = None,
+    order: str = "time",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -155,7 +169,7 @@ async def queue(
     if seg_status not in (*STATUSES, "all"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "seg_status 只能是 pending / returned / approved / all")
     label_ids = await _label_ids(db, label_id, label_name)
-    base = _filters(_base(user), label_ids=label_ids, source=source, project_id=project_id)
+    base = _filters(_base(user), label_ids=label_ids, source=source, project_id=project_id, min_sec=min_sec)
 
     q = base
     if seg_status != "all":
@@ -165,7 +179,7 @@ async def queue(
     elif _is_reviewer(user) and seg_status == "pending":
         # 待审的只列没被别人领走的，免得两个人审同一条
         q = q.where(_free_for(user.id))
-    rows = (await db.execute(q.order_by(Task.id, AnnotationLabelItem.start_time_ms).limit(max(1, min(limit, 2000))))).all()
+    rows = (await db.execute(q.order_by(*_order(order)).limit(max(1, min(limit, 2000))))).all()
 
     # 各状态多少条（同样的类别 / 来源 / 项目筛选），给页面顶上那排数字
     counts: dict[str, int] = {}
@@ -233,6 +247,9 @@ class ClaimIn(BaseModel):
     source: str = "touched"
     project_id: int | None = None
     hours: int = Field(CLAIM_HOURS, ge=1, le=168)
+    # 只领不短于这么多秒的；order=long 从最长的领起
+    min_sec: float | None = Field(None, ge=0)
+    order: str = "time"
 
 
 @router.post("/claim")
@@ -243,12 +260,12 @@ async def claim(body: ClaimIn, db: AsyncSession = Depends(get_db), user: User = 
     if body.label_id is None and not body.label_name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "先选要审的类别")
     label_ids = await _label_ids(db, body.label_id, body.label_name)
-    q = _filters(_base(user), label_ids=label_ids, source=body.source, project_id=body.project_id)
+    q = _filters(_base(user), label_ids=label_ids, source=body.source, project_id=body.project_id, min_sec=body.min_sec)
     # 只领还没人领（或领了过期）的；自己已经领着的不重复算
     q = q.where(_status_cond("pending"),
                 or_(AnnotationLabelItem.seg_claimed_by.is_(None), AnnotationLabelItem.seg_claim_expires_at < _now()))
     ids = [r[0] for r in (await db.execute(
-        q.with_only_columns(AnnotationLabelItem.id).order_by(Task.id, AnnotationLabelItem.start_time_ms).limit(body.n)
+        q.with_only_columns(AnnotationLabelItem.id).order_by(*_order(body.order)).limit(body.n)
     )).all()]
     if ids:
         await db.execute(
