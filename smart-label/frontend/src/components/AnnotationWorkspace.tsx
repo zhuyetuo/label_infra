@@ -392,6 +392,34 @@ export default function AnnotationWorkspace({
   // 多放一截反而看不出边界在哪；觉得起止不对就去改起止
   const setLoop = (r: { startMs: number; endMs: number } | null) =>
     bus.setLoop(r ? { start: Math.max(0, r.startMs) / 1000, end: r.endMs / 1000 } : null);
+  // 停止循环后浮窗还留着（勾了「停止循环后保留浮窗」）：拆段、调起止时不想一直循环，
+  // 循环一停浮窗就没了又得重新点。记住最后一段，浮窗接着显示它；点浮窗的 X 才真正关
+  const KEEP_KEY = "loop-popup-keep";
+  const [keepPopup, setKeepPopupState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(KEEP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setKeepPopup = (v: boolean) => {
+    setKeepPopupState(v);
+    try {
+      localStorage.setItem(KEEP_KEY, v ? "1" : "0");
+    } catch {
+      /* 存不了就只管这一次 */
+    }
+  };
+  const [stickyRange, setStickyRange] = useState<{ startMs: number; endMs: number } | null>(null);
+  useEffect(() => {
+    if (loopRange) setStickyRange(loopRange);
+  }, [loopRange]);
+  const viewRange = loopRange ?? (keepPopup ? stickyRange : null);
+  // 浮窗里显示的那段，不在循环时也能改（拆完 / 调完起止后跟着换到新的那段）
+  const showRange = (r: { startMs: number; endMs: number }) => {
+    if (loopRange) setLoop(r);
+    else setStickyRange(r);
+  };
   // 点 X 关掉就当作「不看这一段了」，顺手停掉循环；同一个任务再进来是同一个 bus，
   // 不清的话循环会跟着带回来
   // 审核时按片段标「有问题」：管理员 / 审核员能标能清；标注员只能在自己正在改的任务里清掉
@@ -620,8 +648,8 @@ export default function AnnotationWorkspace({
   // 正在循环的是哪一段：按起止对回已标注片段 / 疑似片段，给波形浮窗当标题。
   // 两边都对不上（视频那边手动定的区间）就只写时间
   const loopInfo = useMemo<LoopInfo | null>(() => {
-    if (!loopRange) return null;
-    const { startMs, endMs } = loopRange;
+    if (!viewRange) return null;
+    const { startMs, endMs } = viewRange;
     const near = (a: number, b: number) => Math.abs(a - b) <= 2;
     const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
     const c = it ? undefined : candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
@@ -637,7 +665,7 @@ export default function AnnotationWorkspace({
     if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors };
     return { startMs, endMs, title: "循环区间", neighbors };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loopRange, items, candidates, labelById]);
+  }, [viewRange, items, candidates, labelById]);
 
   // 分了互斥轨的项目：波形上的色块按轨分成几条横带（行为 / 运动 / 姿态 / 设备），
   // 同一时刻「卧 + 静止 + 舔」三条各占一带，不互相盖住。没分轨的项目照旧整高一条
@@ -710,7 +738,7 @@ export default function AnnotationWorkspace({
       // 疑似片段：直接改那条候选（后端记调整记录），列表拉一遍
       await setCandidateSpan(target.id, startMs, endMs);
       setCandidates(await listCandidates(taskId));
-      setLoop({ startMs, endMs });
+      showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
     }
@@ -720,7 +748,7 @@ export default function AnnotationWorkspace({
     await saveDraft(taskId, toDraftPayload(next));
     const d = await getDraft(taskId);
     setItems(d.items);
-    setLoop({ startMs, endMs });
+    showRange({ startMs, endMs });
     message.success("起止已保存");
   };
 
@@ -861,26 +889,52 @@ export default function AnnotationWorkspace({
     </>
   );
 
-  const splitPanel = segReview && (
+  // 浮窗里「这一段拆成的几段」：片段审核按拆分组（权限只到这一组）；平时按时间范围——
+  // 浮窗第一次打开的那条片段的起止，范围里的片段都列出来（拆出来的、本来就压在里面的）。
+  // 按范围不按 id：存草稿后新片段的 id 会变，按 id 记会丢
+  const [rootRange, setRootRange] = useState<{ s: number; e: number } | null>(null);
+  useEffect(() => {
+    if (!viewRange) {
+      setRootRange(null);
+      return;
+    }
+    const it = loopInfo?.itemId != null ? items.find((x) => x.id === loopInfo.itemId) : undefined;
+    if (!it) return;
+    setRootRange((r) => (r && it.start_time_ms >= r.s - 2 && it.end_time_ms <= r.e + 2
+      ? r : { s: it.start_time_ms, e: it.end_time_ms }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewRange?.startMs, viewRange?.endMs, loopInfo?.itemId]);
+  const panelItems = segReview
+    ? groupItems
+    : rootRange
+      ? items.filter((x) => x.start_time_ms >= rootRange.s - 2 && x.end_time_ms <= rootRange.e + 2)
+        .sort((a, b) => a.start_time_ms - b.start_time_ms)
+      : [];
+  const panelIds = new Set(panelItems.map((x) => x.id));
+  const splitPanel = (
     <div style={{ width: "100%", borderTop: "1px dashed #ddd", paddingTop: 4, marginTop: 2 }}>
       <Space size={6} wrap style={{ marginBottom: 4 }}>
-        <Tooltip title="把播放线压着的那一段拆成两段（类别不变，都交回重审）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别">
+        <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，存草稿后生效"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
           <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
         </Tooltip>
-        {groupItems.length > 1 && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>拆成了 {groupItems.length} 段，逐段改类别：</Typography.Text>
+        {panelItems.length > 1 && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {segReview ? `拆成了 ${panelItems.length} 段` : `这段时间里 ${panelItems.length} 段`}，逐段改类别 / 调起止：
+          </Typography.Text>
         )}
       </Space>
-      {groupItems.length > 1 && groupItems.map((it, k) => {
+      {panelItems.length > 1 && panelItems.map((it, k) => {
         const cur = loopInfo?.itemId === it.id;
         return (
           <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "1px 0",
             background: cur ? "rgba(114,46,209,.08)" : undefined }}>
             <span style={{ width: 16, color: "#888" }}>{k + 1}</span>
-            <Button size="small" type="link" style={{ padding: 0 }}
-              onClick={() => setLoop({ startMs: it.start_time_ms, endMs: it.end_time_ms })}>
-              {cur ? "▶ 在循环" : "▶ 循环"}
-            </Button>
+            <Tooltip title="浮窗切到这一段：拖两边的竖线调起止，点「保存起止」">
+              <Button size="small" type="link" style={{ padding: 0 }}
+                onClick={() => showRange({ startMs: it.start_time_ms, endMs: it.end_time_ms })}>
+                {cur ? "▶ 当前" : "▶ 切到"}
+              </Button>
+            </Tooltip>
             <span style={{ fontFamily: "monospace" }}>
               {formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}
             </span>
@@ -892,10 +946,16 @@ export default function AnnotationWorkspace({
               value={it.label_id}
               optionFilterProp="label"
               popupMatchSelectWidth={false}
-              onChange={(v: number) => relabelPiece(it, v)}
+              onChange={(v: number) => relabelFromMenu(it, v)}
               options={labels.filter((l) => l.is_active !== false || l.id === it.label_id)
                 .map((l) => ({ value: l.id, label: l.display_name }))}
             />
+            {!readOnly && (
+              <Button size="small" type="link" danger style={{ padding: 0 }}
+                onClick={() => setItems((prev) => prev.filter((x) => x.id !== it.id))}>
+                删
+              </Button>
+            )}
           </div>
         );
       })}
@@ -964,7 +1024,7 @@ export default function AnnotationWorkspace({
       await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
       const d = await getDraft(taskId);
       setItems(d.items);
-      setLoop({ startMs, endMs });
+      showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
     }
@@ -972,7 +1032,7 @@ export default function AnnotationWorkspace({
       await segReview.onEdit(startMs, endMs);
       const d = await getDraft(taskId);
       setItems(d.items);
-      setLoop({ startMs, endMs });
+      showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
     }
@@ -981,7 +1041,7 @@ export default function AnnotationWorkspace({
       await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
       const d = await getDraft(taskId);
       setItems(d.items);
-      setLoop({ startMs, endMs });
+      showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
     }
@@ -1039,7 +1099,7 @@ export default function AnnotationWorkspace({
           if (segReview) {
             setSplitGroup((g) => (g.includes(r.right.id) ? g : [...g, r.right.id]));
             // 浮窗接着循环刚才那一段的左半段，方便接着往下切
-            if (loopInfo?.itemId === it.id) setLoop({ startMs: it.start_time_ms, endMs: at });
+            if (loopInfo?.itemId === it.id) showRange({ startMs: it.start_time_ms, endMs: at });
             syncMain(list);
           }
           message.success({ content: `已拆成两段（${(it.start_time_ms / 1000).toFixed(1)}–${(at / 1000).toFixed(1)} s ｜ ${(at / 1000).toFixed(1)}–${(it.end_time_ms / 1000).toFixed(1)} s），已保存，两段都交回重审`, key: "split", duration: 5 });
@@ -1069,6 +1129,8 @@ export default function AnnotationWorkspace({
       next.splice(i + 1, 0, right);
       return next;
     });
+    // 浮窗正看着这一段：跟到左半段，接着往下拆 / 调起止，循环区间跟片段对得上
+    if (loopInfo?.itemId === it.id) showRange({ startMs: it.start_time_ms, endMs: at });
     const fmt = (ms: number) => (ms / 1000).toFixed(1);
     message.success({
       content: `已拆开「${nameOf(it.label_id)}」：${fmt(it.start_time_ms)}–${fmt(at)} s ｜ ${fmt(at)}–${fmt(it.end_time_ms)} s（存草稿后生效，右半段要换类别在右侧列表改）`,
@@ -1082,8 +1144,8 @@ export default function AnnotationWorkspace({
     const hits = items
       .map((it, i) => ({ it, i }))
       .filter(({ it }) => it.start_time_ms < at && at < it.end_time_ms)
-      // 从「退回给我的片段」打开的：只拆那一条
-      .filter(({ it }) => !segReview || inGroup(it.id));
+      // 从「退回给我的片段」打开的：只拆那一条（和它拆出来的几段）；浮窗开着时优先拆浮窗里这一组
+      .filter(({ it }) => (segReview ? inGroup(it.id) : !panelIds.size || panelIds.has(it.id)));
     if (!hits.length) {
       message.info({ content: "播放线没压在任何片段上：先把视频停到要切的位置", key: "split" });
       return;
@@ -1712,7 +1774,9 @@ export default function AnnotationWorkspace({
     {segMenuEl}
     {/* 循环播放时弹出这一段的波形：已标注、疑似片段都一样 */}
     {taskId != null && hasCsv && sampleId != null && (
-      <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo} onStop={() => setLoop(null)}
+      <LoopWaveform sampleId={sampleId} bus={bus} info={loopInfo}
+        onStop={() => { setLoop(null); setStickyRange(null); }}
+        keepOpen={keepPopup} onKeepOpenChange={setKeepPopup}
         onAdjust={readOnly && !segReview && !canFlag ? undefined : adjustFromWave}
         // 片段审核时只有正在审的那一条能改；审核员 / 管理员看只读任务时片段都能改，
         // 疑似片段只有管理员能改（跟后端一致）
@@ -1733,7 +1797,14 @@ export default function AnnotationWorkspace({
                 {splitPanel}
               </div>
             )
-            : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
+            : loopItem && (!readOnly || canFlag)
+              ? (
+                <div style={{ width: "100%" }}>
+                  {canFlag && waveReviewBar(loopItem)}
+                  {splitPanel}
+                </div>
+              )
+              : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
         } />
     )}
     <Modal

@@ -485,7 +485,7 @@ const fmtMs = (ms: number) => {
 };
 
 export default function LoopWaveform({
-  sampleId, bus, info, onAdjust, readOnlyHint, canAdjust, forceOpen, extra,
+  sampleId, bus, info, onAdjust, readOnlyHint, canAdjust, forceOpen, extra, keepOpen, onKeepOpenChange,
 }: {
   sampleId: number;
   bus: TimeBus;
@@ -502,6 +502,9 @@ export default function LoopWaveform({
   forceOpen?: boolean;
   /** 浮窗最底下再放一栏（片段审核的通过 / 退回 / 下一条） */
   extra?: React.ReactNode;
+  /** 停止循环后浮窗还留着（由外面记住最后一段接着传 info）。给了 onKeepOpenChange 才显示这个选项 */
+  keepOpen?: boolean;
+  onKeepOpenChange?: (v: boolean) => void;
 }) {
   const { token } = theme.useToken();
   const [cfg, setCfgState] = useState<Cfg>(loadCfg);
@@ -802,6 +805,13 @@ export default function LoopWaveform({
             <Tooltip title="关掉后循环时不自动弹出，只在这个位置留一个「波形」小按钮，点了才打开">
               <Checkbox checked={cfg.auto} onChange={(e) => setCfg({ auto: e.target.checked })} style={{ fontSize: 11 }}>循环时自动弹出</Checkbox>
             </Tooltip>
+            {onKeepOpenChange && (
+              <Tooltip title="停止循环播放后浮窗不消失，还停在这一段：拆段、调起止时可以先停掉循环，自己拖视频看，浮窗照样能改。点右上角 X 才关">
+                <Checkbox checked={!!keepOpen} onChange={(e) => onKeepOpenChange(e.target.checked)} style={{ fontSize: 11 }}>
+                  停止循环后保留
+                </Checkbox>
+              </Tooltip>
+            )}
           </div>
           {info && editable && (
             <div style={{ marginTop: 4, padding: "4px 6px", borderRadius: 4, background: edit ? token.colorWarningBg : token.colorFillQuaternary, fontSize: 12 }}>
