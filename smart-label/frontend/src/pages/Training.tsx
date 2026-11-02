@@ -259,7 +259,9 @@ export default function Training() {
   const [balance, setBalance] = useState<string>("none");
   const [reviewFor, setReviewFor] = useState<ModelVersion | null>(null);
   const [tag, setTag] = useState("");
-  const [scope, setScope] = useState<"approved" | "reviewed" | "seg_approved">("approved");
+  // 默认就是最高质量那一档：片段审核里一条条点了「通过」的。训练集的质量决定模型的上限，
+  // 宁可少，不要没人把过关的
+  const [scope, setScope] = useState<"approved" | "reviewed" | "seg_approved">("seg_approved");
   // 互斥轨的折叠：默认按 行为 > 运动 > 姿态 折成一个时刻一个标签（RF 单标签）；
   // 不折叠 = 各轨原样导，给分轨训练用。没分轨的项目两种一样
   const [flatten, setFlatten] = useState(true);
@@ -815,6 +817,11 @@ export default function Training() {
                               <Tag color="blue" style={{ marginLeft: 4 }}>按片段</Tag>
                             </Tooltip>
                           )}
+                          {d.scope === "seg_approved" && (
+                            <Tooltip title="只包含片段审核里逐条通过的片段">
+                              <Tag color="gold" style={{ marginLeft: 4 }}>★ 高质量·审核通过</Tag>
+                            </Tooltip>
+                          )}
                         </span>
                       ),
                     },
@@ -903,10 +910,24 @@ export default function Training() {
                     render: (_, v: ModelVersion) => {
                       const sp = specOf(v);
                       const extra = (sp.extra_datasets as unknown[] | undefined)?.length ?? 0;
+                      // 用到的数据集是不是都是「片段审核通过」导出的：都是 = 高质量；混了别的要看得出来
+                      const names = [sp.date as string, ...((sp.extra_datasets as { date: string }[] | undefined) ?? []).map((e) => e.date)];
+                      const scopes = names.map((n) => (datasets ?? []).find((d) => d.name === n)?.scope);
+                      const nHq = scopes.filter((x) => x === "seg_approved").length;
                       return (
                         <Space size={4} wrap>
                           <span>{(sp.date as string) ?? "-"}</span>
                           {extra > 0 && <Tag>+{extra} 份</Tag>}
+                          {nHq === names.length && (
+                            <Tooltip title="用到的数据集全部是「片段审核通过」导出的高质量数据">
+                              <Tag color="gold">★ 高质量</Tag>
+                            </Tooltip>
+                          )}
+                          {nHq > 0 && nHq < names.length && (
+                            <Tooltip title={`${names.length} 份数据集里 ${nHq} 份是审核通过的高质量数据，其余是按任务 / 按片段导出的`}>
+                              <Tag color="orange">部分高质量 {nHq}/{names.length}</Tag>
+                            </Tooltip>
+                          )}
                           {/* 轴数：3 轴和 6 轴的模型不能拿来直接比，一眼得看出来 */}
                           <Tag color={Number(sp.axes) === 3 ? "purple" : undefined}>
                             {Number(sp.axes) === 3 ? "3 轴" : "6 轴"}
@@ -1286,6 +1307,13 @@ export default function Training() {
               等整份审完再用，数据集永远攒不起来——所以给一个按片段取的口子 */}
           <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)} style={{ width: "100%" }}>
             <Space direction="vertical" size={4}>
+              <Radio value="seg_approved">
+                <Tooltip title="只要在「片段审核」里一条条审过、点了「通过」的片段——起止准、类别对、没混别的动作。量少但质量最高；待审和退回的都不导出（那段时间不参与训练，不会变成负样本）。通过之后又被人改过起止 / 类别的，会自动回到待审，不会混进来">
+                  <span style={{ borderBottom: "1px dashed #bbb" }}>
+                    <b>高质量：只要片段审核通过的</b>（推荐，你逐条把过关的）
+                  </span>
+                </Tooltip>
+              </Radio>
               <Radio value="approved">
                 <Tooltip title="整份取：这个任务里的片段全要，包括没人看过的纯 AI 片段。任务审核通过意味着「这一份整体认可」，所以不再逐条看确认状态。只审了一部分就提交的任务别用这一档——那几十条没确认的 AI 片段会跟着进训练集，等于拿模型自己的输出喂它自己">
                   <span style={{ borderBottom: "1px dashed #bbb" }}>
@@ -1297,13 +1325,6 @@ export default function Training() {
                 <Tooltip title="不看任务状态，只挑出人确认过 / 改过 / 人工加的片段（包括从「疑似片段」确认上来的）。没人看过的纯 AI 片段不导出——它只是模型自己的输出，拿去训练就是自我强化。那段时间也不会被当成负样本：导出格式只提取被标注的区间，没标注的时间根本不进数据集">
                   <span style={{ borderBottom: "1px dashed #bbb" }}>
                     按片段取：人确认过的（审了一半也能用）
-                  </span>
-                </Tooltip>
-              </Radio>
-              <Radio value="seg_approved">
-                <Tooltip title="只要在「片段审核」里一条条审过、点了「通过」的片段——起止准、类别对、没混别的动作。量少但质量最高；待审和退回的都不导出（那段时间不参与训练，不会变成负样本）">
-                  <span style={{ borderBottom: "1px dashed #bbb" }}>
-                    只要片段审核通过的（质量最高）
                   </span>
                 </Tooltip>
               </Radio>
