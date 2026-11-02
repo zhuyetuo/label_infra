@@ -283,6 +283,9 @@ async def export_dataset(
     reduce_labels: list[str] | None = None, reduce_factor: float = 3.0,
     reduce_targets: dict[str, float] | None = None,
     dry_run: bool = False,
+    dog_ids: list[int] | None = None,
+    sample_hz: list[float] | None = None,
+    only_labels: list[str] | None = None,
 ) -> dict:
     """dry_run=True：照常挑数据、算统计，但不落盘——导出前先看这批数据长什么样（类别时长、
     跳过了多少没人看的 AI 片段、冲突…），返回的 meta 跟真导出完全一样。
@@ -294,8 +297,8 @@ async def export_dataset(
     flatten=False 就各轨原样导（同一时刻多条），给分轨训练用。没分轨的项目两种一样。"""
     if not _NAME_RE.match(name):
         raise TrainingExportError("数据集名只能用字母/数字/下划线/横线，1–64 位")
-    if scope not in ("approved", "reviewed", "seg_approved"):
-        raise TrainingExportError("scope 只能是 approved / reviewed / seg_approved")
+    if scope not in ("approved", "reviewed", "seg_approved", "pool"):
+        raise TrainingExportError("scope 只能是 approved / reviewed / seg_approved / pool")
     priority = [t for t in (track_priority or label_tracks.DEFAULT_PRIORITY) if t in label_tracks.TRACK_NAMES and t != "device"]
     for t in label_tracks.DEFAULT_PRIORITY:
         if t not in priority:
@@ -310,7 +313,9 @@ async def export_dataset(
     rank_of["device"] = -1
     # seg_approved：只要「片段审核」里审核通过的片段，任务状态不管（跟 reviewed 一样按片段取）
     only_seg_approved = scope == "seg_approved"
-    only_reviewed = scope in ("reviewed", "seg_approved")
+    # pool：数据池里的（审核通过的 + 手动加入的，减去手动移出的），见 data_pool.in_pool
+    only_pool = scope == "pool"
+    only_reviewed = scope in ("reviewed", "seg_approved", "pool")
     q = select(Task, Sample).join(Sample, Sample.id == Task.sample_id).order_by(Task.id)
     # 日期和项目各自可选。都不给就是"全部"——那是合理需求（把手上所有标注导成
     # 一份），只是导出来会很大，n_tasks 会如实报出来。
@@ -326,6 +331,8 @@ async def export_dataset(
         # 整份取：任务本身得审过
         statuses = [TaskStatus.APPROVED] + ([TaskStatus.SUBMITTED] if include_submitted else [])
         q = q.where(Task.status.in_(statuses))
+    if dog_ids:
+        q = q.where(Sample.dog_id.in_(dog_ids))
     if project_ids:
         q = q.where(Task.project_id.in_(project_ids))
     else:
@@ -333,6 +340,10 @@ async def export_dataset(
         # 核对完停用它——不跳过的话同一段标注（原项目 + 拆出来的）会算两遍
         q = q.where(Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True))))
     rows = (await db.execute(q)).all()
+    if sample_hz:
+        # 按样本的原始采样率挑（训 31.25 Hz 只能用 50 Hz 采的；老的 16 Hz 数据升不上去）
+        want_hz = {round(float(h)) for h in sample_hz}
+        rows = [(t, smp) for t, smp in rows if round(float(smp.sample_hz or smp.imu_sample_rate_hz or 0)) in want_hz]
     if not rows:
         raise TrainingExportError(
             "这个范围里没有任务" if only_reviewed else "这个范围里没有审核通过的任务"
@@ -359,6 +370,9 @@ async def export_dataset(
             cur = parent_of.get(cur)
         return out[::-1]
 
+    def label_names_of(label_id: int) -> set[str]:
+        return {label_names[i] for i in chain(label_id)}
+
     def related(a: int, b: int) -> bool:
         """一个是另一个的祖先（父子重叠不算矛盾：细的那段本来就在粗的里面）。"""
         return a in chain(b) or b in chain(a)
@@ -376,6 +390,7 @@ async def export_dataset(
             AnnotationLabelItem.is_modified,
             AnnotationLabelItem.source_type,
             AnnotationLabelItem.seg_status,
+            AnnotationLabelItem.pool_state,
         )
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
         .join(Task, Task.id == AnnotationRecord.task_id)
@@ -383,16 +398,28 @@ async def export_dataset(
     )
     n_skipped_untouched = 0
     n_skipped_unapproved = 0
-    for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source, seg_st in item_rows.all():
+    from app.services.data_pool import in_pool as _in_pool
+    # 参数名不能叫 label_names：函数里下面还有个 label_names = {id: 名字}，会把它盖掉
+    want_names = set(only_labels or [])
+    n_skipped_not_pool = 0
+    for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source, seg_st, pool_st in item_rows.all():
         if uncertain:
             # 「待定」永远挖洞，跟怎么取无关：那段时间既不能当正例也不能当负例
             holes_by_task.setdefault(task_id, []).append((int(s_ms), int(e_ms)))
+            continue
+        if only_pool and not _in_pool(seg_st, pool_st):
+            # 不在数据池里的不要（不挖洞：那段时间不导出，不参与训练）
+            n_skipped_not_pool += 1
+            continue
+        if want_names and not want_names.intersection(label_names_of(label_id)):
+            # 只挑这几个类别（含它们的细类）；别的类别这次不用，同样不挖洞
             continue
         if only_seg_approved and seg_st != "approved":
             # 没在片段审核里通过的不要。注意：不挖洞——那段时间不导出，不参与训练
             n_skipped_unapproved += 1
             continue
-        if only_reviewed:
+        if only_reviewed and not only_pool:
+            # 数据池里的不再看这个：进池就是人认可过的（审核通过 / 手动加入）
             # 人确认过才算数：点过「通过」、改过、或者本来就是人加的（含从候选
             # 确认上来的）。**打开看过但没点的不算**，那正是 n_skipped_untouched。
             # 没人看过的纯 AI 片段跳过——它只是模型自己的输出，拿去训练就是自我强化
@@ -700,6 +727,8 @@ async def export_dataset(
         },
         "include_submitted": include_submitted,
         "scope": scope,
+        **({"pool_filters": {"dog_ids": dog_ids or [], "sample_hz": sample_hz or [], "label_names": only_labels or [],
+                             "n_skipped_not_pool": n_skipped_not_pool}} if only_pool else {}),
         # 互斥轨的折叠：按哪个优先级把"同时发生的几件事"折成一个标签、折掉了多少秒；
         # 各轨各导了几段（"-" 是没分轨的）；设备轨单独导了几段
         "flatten": flatten,

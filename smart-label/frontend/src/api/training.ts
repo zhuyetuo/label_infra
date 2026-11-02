@@ -9,7 +9,7 @@ export interface TrainDataset {
   include_submitted: boolean;
   /** approved = 整份审完的任务；reviewed = 只取人确认过的片段
    *  （点过「通过」/ 改过 / 人自己画的。只是打开看过没点的不算） */
-  scope?: "approved" | "reviewed" | "seg_approved";
+  scope?: "approved" | "reviewed" | "seg_approved" | "pool";
   /** reviewed 模式下跳过了多少条"没人看过的 AI 片段" */
   n_untouched_skipped?: number;
   /** 被判「待定」而挖掉的段数 */
@@ -100,7 +100,11 @@ export const exportDataset = (body: {
   date_to?: string | null;
   project_ids?: number[];
   include_submitted?: boolean;
-  scope?: "approved" | "reviewed" | "seg_approved";
+  scope?: "approved" | "reviewed" | "seg_approved" | "pool";
+  /** 从数据池挑（scope=pool）：只要这几只狗 / 这几种原始采样率 / 这几个类别（含细类） */
+  dog_ids?: number[];
+  sample_hz?: number[];
+  label_names?: string[];
   /** 分了互斥轨的项目：按优先级折叠成一个时刻一个标签（默认 true）；false = 各轨原样导，给分轨训练用 */
   flatten?: boolean;
   /** 折叠优先级，前面的赢；默认 行为 > 运动 > 姿态 */

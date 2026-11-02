@@ -18,6 +18,7 @@ import EdgeFootprint from "@/components/EdgeFootprint";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import { fmtSecs } from "@/utils/fmtDuration";
 import ModelCompare from "@/components/ModelCompare";
+import DataPoolPanel from "@/components/DataPoolPanel";
 import type { LabelDefinition, Task } from "@/types";
 import {
   type DatasetCheck,
@@ -768,6 +769,11 @@ export default function Training() {
             children: <ModelCompare />,
           },
           {
+            key: "pool",
+            label: "数据池",
+            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} />,
+          },
+          {
             key: "ds",
             label: "训练数据集",
             children: (
@@ -815,6 +821,11 @@ export default function Training() {
                           {d.scope === "reviewed" && (
                             <Tooltip title="按片段取的：只包含人确认过/改过/人工加的片段，没人看过的 AI 片段没有导出">
                               <Tag color="blue" style={{ marginLeft: 4 }}>按片段</Tag>
+                            </Tooltip>
+                          )}
+                          {d.scope === "pool" && (
+                            <Tooltip title="从数据池挑出来的：审核通过 + 手动认可的片段">
+                              <Tag color="gold" style={{ marginLeft: 4 }}>★ 数据池</Tag>
                             </Tooltip>
                           )}
                           {d.scope === "seg_approved" && (
@@ -913,7 +924,7 @@ export default function Training() {
                       // 用到的数据集是不是都是「片段审核通过」导出的：都是 = 高质量；混了别的要看得出来
                       const names = [sp.date as string, ...((sp.extra_datasets as { date: string }[] | undefined) ?? []).map((e) => e.date)];
                       const scopes = names.map((n) => (datasets ?? []).find((d) => d.name === n)?.scope);
-                      const nHq = scopes.filter((x) => x === "seg_approved").length;
+                      const nHq = scopes.filter((x) => x === "seg_approved" || x === "pool").length;
                       return (
                         <Space size={4} wrap>
                           <span>{(sp.date as string) ?? "-"}</span>

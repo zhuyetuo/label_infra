@@ -386,6 +386,9 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 origin.created_by = user.id
                 # 改过的片段要重新审：通过的、退回的都回到待审
                 origin.seg_status = None
+                # 手动加进数据池的也一样：改过的要重新认可，不能带着「在池里」
+                if origin.pool_state == "in":
+                    origin.pool_state = None
                 # 审核标过「有问题」的，改了就算处理过了
                 origin.review_note = None
                 origin.review_flag_by = None
