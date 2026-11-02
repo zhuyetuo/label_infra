@@ -913,7 +913,7 @@ export default function Training() {
                           </Tag>
                           {/* 训练采样率：端侧要跟项圈 IMU 实际采样率一致（QMI8658 原生 31.25），
                               不同采样率的模型不能混用。老记录没存就是默认 16 */}
-                          <Tag color={Number(sp.hz) === 31.25 ? "gold" : undefined}>{String(sp.hz ?? 16)}Hz</Tag>
+                          <Tag color={Number(sp.hz) === 31.25 || Number(sp.hz) === 15.625 ? "gold" : undefined}>{String(sp.hz ?? 16)}Hz</Tag>
                           <Tag>{v.model_type}</Tag>
                           {/* 端侧尺寸的跟不限深的大模型不能直接比分数：一个要塞进 128KB，
                               一个没限制。混在一起看，端侧那版永远像是"更差的那个" */}
@@ -1795,6 +1795,7 @@ export default function Training() {
                 options={[
                   { value: 16, label: "16Hz" },
                   { value: 25, label: "25Hz" },
+                  { value: 15.625, label: "15.625Hz（31.25 二分频）" },
                   { value: 31.25, label: "31.25Hz（QMI8658 原生）" },
                   { value: 50, label: "50Hz" },
                 ]}
