@@ -51,8 +51,9 @@ class DatasetSpecIn(BaseModel):
     # 用标注平台导出的数据集训练时带上：NAS 相对路径的 Label Studio 格式 JSON。
     # AI 服务会把它整理成 data/raw_custom/<date>/merged_tmp.json 再跑 train_custom.sh
     export_json: str | None = None
-    source_hz: int | None = None
-    hz: int | None = None
+    source_hz: float | None = None
+    # 可以是小数：31.25 / 15.625 是 QMI8658 的原生档位（它没有 16 / 25 / 50）
+    hz: float | None = None
     clean: bool = False
 
 

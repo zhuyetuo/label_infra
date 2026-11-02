@@ -1776,12 +1776,20 @@ export default function Training() {
                 onChange={setSourceHz}
                 options={[16, 25, 50, 100].map((v) => ({ value: v, label: `${v}Hz` }))}
               />
-              <Typography.Text>训练采样率</Typography.Text>
+              <Tooltip title="端侧要跟项圈 IMU 的实际采样率一致。QMI8658 没有 16/25/50 档，原生是 31.25 Hz：选 31.25 就不用在固件里软件抽样（没有频率误差、功耗最低）。31.25 下窗口自动用 64 点 = 2.048 秒、步长 32 点 = 1.024 秒">
+                <Typography.Text style={{ borderBottom: "1px dashed #666" }}>训练采样率</Typography.Text>
+              </Tooltip>
               <Select
-                style={{ width: 100 }}
+                style={{ width: 150 }}
                 value={hz}
                 onChange={setHz}
-                options={[16, 25, 50].map((v) => ({ value: v, label: `${v}Hz` }))}
+                popupMatchSelectWidth={false}
+                options={[
+                  { value: 16, label: "16Hz" },
+                  { value: 25, label: "25Hz" },
+                  { value: 31.25, label: "31.25Hz（QMI8658 原生）" },
+                  { value: 50, label: "50Hz" },
+                ]}
               />
             </Space>
             <Space>
