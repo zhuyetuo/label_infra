@@ -133,6 +133,12 @@ class AnnotationLabelItem(Base):
     seg_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     seg_claimed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
     seg_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 数据池（「模型训练 → 数据池」）：人认可的高质量片段库，每次训练从里面挑一部分。
+    #   空 = 自动：审核通过（seg_status=approved）就在池里
+    #   in = 手动加入（认可的历史数据整批加进来）/ out = 手动移出
+    #   人改了起止 / 类别，手动加入的也失效（跟审核通过一样，改过的要重新认可）
+    pool_state: Mapped[str | None] = mapped_column(String(4), nullable=True, index=True,
+                                                   comment="数据池：空=自动（审核通过即在池）/ in=手动加入 / out=手动移出")
 
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列

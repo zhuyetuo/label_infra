@@ -79,6 +79,10 @@ class DatasetExportIn(BaseModel):
     reduce_targets: dict[str, float] | None = None
     # 只预览：照常挑数据、算统计，不落盘（导出前先看类别分布）
     dry_run: bool = False
+    # 从数据池挑（scope=pool）时常用的几个筛选：只要这几只狗 / 这几种原始采样率 / 这几个类别（含细类）
+    dog_ids: list[int] | None = None
+    sample_hz: list[float] | None = None
+    label_names: list[str] | None = None
 
 
 @router.get("/datasets")
@@ -102,6 +106,7 @@ async def create_dataset(body: DatasetExportIn, db: AsyncSession = Depends(get_d
             reduce_labels=body.reduce_labels, reduce_factor=body.reduce_factor,
             reduce_targets=body.reduce_targets,
             dry_run=body.dry_run,
+            dog_ids=body.dog_ids, sample_hz=body.sample_hz, only_labels=body.label_names,
         )
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

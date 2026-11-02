@@ -316,6 +316,9 @@ async def decide(item_id: int, body: DecideIn, db: AsyncSession = Depends(get_db
                 it.ai_confirmed = True
         it.seg_status = body.decision
         it.seg_reviewed_by, it.seg_reviewed_at = user.id, now
+        # 重新通过 = 重新认可：之前手动移出数据池的作废，跟着「通过」回到池里
+        if body.decision == "approved" and it.pool_state == "out":
+            it.pool_state = None
         it.seg_claimed_by = it.seg_claim_expires_at = None
     elif body.decision == "pending":
         # 标注员：退回给我的这条改好了（或者看过确认没问题），交回去重审
@@ -373,6 +376,8 @@ async def edit(item_id: int, body: EditIn, db: AsyncSession = Depends(get_db),
             it.is_modified = True
             it.ai_confirmed = False
         it.touched_at, it.touched_by = _now(), user.id
+        if it.pool_state == "in":
+            it.pool_state = None          # 手动加进数据池的，改过就要重新认可
         if not reviewer:
             # 标注员改了就算处理过退回意见，交回待审
             it.seg_status = None
@@ -418,6 +423,8 @@ async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
         it.is_modified = True
         it.ai_confirmed = False
     it.seg_status = None
+    if it.pool_state == "in":
+        it.pool_state = None
     it.review_note = it.review_flag_by = it.review_flag_at = None
     it.seg_claimed_by = it.seg_claim_expires_at = None
     it.touched_at, it.touched_by = now, user.id
