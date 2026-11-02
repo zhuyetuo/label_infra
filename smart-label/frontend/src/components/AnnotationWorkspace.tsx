@@ -43,7 +43,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
-import { TRACKS, TRACK_NAME, chainOf, currentName, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
+import { TRACKS, TRACK_NAME, chainOf, conflicts as labelsConflict, currentName, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -1159,6 +1159,73 @@ export default function AnnotationWorkspace({
   const splitAtPlayheadRef = useRef(splitAtPlayhead);
   splitAtPlayheadRef.current = splitAtPlayhead;
 
+  // ── 疑似片段确认后跟已有片段重叠 ──
+  // 同一轨不同类别压在一起是矛盾标注：提交会被拦，导出时重叠那一截两边都挖掉（白白少了数据）。
+  // 确认时就提示，并给一键「裁掉旧片段被盖住的部分」：新确认的是人刚看过的，以它为准
+  const OVERLAP_MIN_KEEP_MS = 300;
+  const trimUnder = (list: LabelItem[], fresh: LabelItem, victims: Set<number>): LabelItem[] => {
+    const out: LabelItem[] = [];
+    let k = 0;
+    for (const it of list) {
+      if (!victims.has(it.id)) {
+        out.push(it);
+        continue;
+      }
+      const s0 = it.start_time_ms, e0 = it.end_time_ms, s1 = fresh.start_time_ms, e1 = fresh.end_time_ms;
+      // 旧片段在新片段左边露出来的部分、右边露出来的部分，太短（< 0.3 s）的就不要了
+      const left = s0 < s1 ? [s0, Math.min(e0, s1)] : null;
+      const right = e0 > e1 ? [Math.max(s0, e1), e0] : null;
+      const parts = [left, right].filter((x): x is number[] => !!x && x[1] - x[0] >= OVERLAP_MIN_KEEP_MS);
+      parts.forEach((pp, idx) => {
+        if (idx === 0) out.push(touchItem(it, { start_time_ms: pp[0], end_time_ms: pp[1] }));
+        else out.push({ ...touchItem(it, {}), id: -Date.now() - ++k, start_time_ms: pp[0], end_time_ms: pp[1],
+          origin_item_id: null, source_type: "human_added", ai_confidence: null, ai_confirmed: false,
+          from_candidate_id: null, created_by: null, is_modified: false });
+      });
+    }
+    return out;
+  };
+  const checkOverlapAfterConfirm = (list: LabelItem[], candId: number) => {
+    const fresh = list.find((x) => x.from_candidate_id === candId);
+    if (!fresh || taskId == null) return;
+    const hit = list.filter((x) => x.id !== fresh.id
+      && x.start_time_ms < fresh.end_time_ms && fresh.start_time_ms < x.end_time_ms
+      && labelsConflict(labelById, x.label_id, fresh.label_id));
+    if (!hit.length) return;
+    const fmt = (it: LabelItem) => `「${nameOf(it.label_id)}」${formatMs(it.start_time_ms)} → ${formatMs(it.end_time_ms)}`;
+    Modal.confirm({
+      title: `新确认的「${nameOf(fresh.label_id)}」跟 ${hit.length} 段已有片段时间重叠`,
+      width: 520,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 6 }}>
+            同一轨上不同类别压在一起是矛盾标注：<b>提交会被拦</b>，导出训练集时重叠那一截两边都会被挖掉。
+          </div>
+          <div style={{ color: "#888", marginBottom: 4 }}>新片段：{fmt(fresh)}</div>
+          {hit.map((h) => (
+            <div key={h.id}>
+              · {fmt(h)}
+              {h.start_time_ms >= fresh.start_time_ms && h.end_time_ms <= fresh.end_time_ms
+                ? <Tag color="red" style={{ marginLeft: 6 }}>整段被盖住，会删掉</Tag>
+                : h.start_time_ms < fresh.start_time_ms && h.end_time_ms > fresh.end_time_ms
+                  ? <Tag color="orange" style={{ marginLeft: 6 }}>会拆成前后两段</Tag>
+                  : <Tag style={{ marginLeft: 6 }}>只裁掉重叠部分</Tag>}
+            </div>
+          ))}
+          <div style={{ marginTop: 6, color: "#888" }}>以新确认的为准：旧片段被盖住的部分裁掉，露在外面的保留（短于 0.3 秒的不留）。</div>
+        </div>
+      ),
+      okText: "裁掉旧片段被盖住的部分",
+      cancelText: "先不管，我自己改",
+      onOk: async () => {
+        const next = trimUnder(list, fresh, new Set(hit.map((h) => h.id)));
+        await saveDraft(taskId, toDraftPayload(next));
+        setItems((await getDraft(taskId)).items);
+        message.success("已裁好，重叠没有了");
+      },
+    });
+  };
+
   // 草稿的 payload 形状，存草稿的几个地方都用它——以前是各写一份，
   // 加字段时漏掉一处就会静默丢数据
   const toDraftPayload = (list: typeof items) => list.map((i) => ({
@@ -1721,11 +1788,12 @@ export default function AnnotationWorkspace({
         onBeforeDecide={async () => {
           if (!readOnly && taskId != null) await persist();
         }}
-        onDecided={async () => {
+        onDecided={async (c, decision) => {
           if (taskId == null) return;
           const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
           setItems(draft.items);
           setCandidates(cs);
+          if (decision === "confirmed" && !readOnly) checkOverlapAfterConfirm(draft.items, c.id);
         }}
         onUndo={async (c) => {
           if (taskId == null) return;
