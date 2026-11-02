@@ -306,6 +306,7 @@ async def list_tasks(
     # 显示"抓挠 5 / 睡觉 3"，想专门审抓挠的一眼就能挑出哪些任务去看，不用逐个点开
     label_counts: dict[int, dict[int, dict[str, int]]] = {}
     if task_ids:
+        from app.services.data_pool import in_pool_cond
         ai_pending = case(
             (
                 (AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
@@ -329,6 +330,8 @@ async def list_tasks(
                               else_=0)),
                 func.sum(case(((AnnotationLabelItem.seg_status == "returned") | AnnotationLabelItem.review_note.is_not(None), 1),
                               else_=0)),
+                # 已在数据池里的（项目页「加入数据池」按钮看这个）。待定的不进池，不算
+                func.sum(case((in_pool_cond() & AnnotationLabelItem.uncertain.is_(False), 1), else_=0)),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -336,10 +339,10 @@ async def list_tasks(
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
-        for task_id, label_id, n, n_pending, n_ok, n_ret in rows.all():
+        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool in rows.all():
             label_counts.setdefault(task_id, {})[label_id] = {
                 "n": int(n), "ai_pending": int(n_pending or 0),
-                "approved": int(n_ok or 0), "returned": int(n_ret or 0),
+                "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
             }
 
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts

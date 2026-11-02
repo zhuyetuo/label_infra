@@ -99,6 +99,7 @@ const ASSIGN_USER_KEY = "smart-label:assign-user";
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
 import { listLlmProviders } from "@/api/llmProviders";
+import { poolAdd, poolRemove } from "@/api/dataPool";
 import {
   cancelVisionIndex,
   getVisionIndexStatus,
@@ -1594,6 +1595,46 @@ export default function Projects() {
                                 </Button>
                               </Popconfirm>
                             )}
+                          {(isAdmin || role === "reviewer") && (() => {
+                            // 数据池：看过觉得行就整份加入；已经在池里的显示几段、可以移出
+                            const lc = Object.values(task.label_counts ?? {});
+                            const n = lc.reduce((a, c) => a + c.n, 0);
+                            const inPool = lc.reduce((a, c) => a + (c.pool ?? 0), 0);
+                            if (!n) return null;
+                            return (
+                              <>
+                                {inPool < n && (
+                                  <Popconfirm
+                                    title="这个任务整份加入数据池？"
+                                    description={`当前 ${n} 段（待定的不进）。之后片段再被改，会自动出池`}
+                                    onConfirm={async () => {
+                                      const r = await poolAdd({ task_ids: [task.id], source: "all" });
+                                      message.success(`加入 ${r.added} 段`);
+                                      refresh();
+                                    }}
+                                  >
+                                    <Button size="small" type="link">
+                                      {inPool ? `加入数据池（已 ${inPool}/${n}）` : "加入数据池"}
+                                    </Button>
+                                  </Popconfirm>
+                                )}
+                                {inPool > 0 && (
+                                  <Popconfirm
+                                    title="这个任务的片段移出数据池？"
+                                    onConfirm={async () => {
+                                      const r = await poolRemove({ task_ids: [task.id] });
+                                      message.success(`移出 ${r.removed} 段`);
+                                      refresh();
+                                    }}
+                                  >
+                                    <Button size="small" type="link">
+                                      <Tag color="gold" style={{ marginRight: 0 }}>★ 池 {inPool}</Tag>
+                                    </Button>
+                                  </Popconfirm>
+                                )}
+                              </>
+                            );
+                          })()}
                           {isAdmin && task.status === "APPROVED" && (
                             <Popconfirm
                               title="退回待审核"
@@ -1920,6 +1961,17 @@ export default function Projects() {
                   <Button size="small" type="link" onClick={() => setCreateForProject(p)}>
                     新建任务
                   </Button>
+                  <Popconfirm
+                    title="已提交的任务整份加入数据池？"
+                    description="这个项目里标注员已提交 / 已通过的任务，全部片段进池（待定的不进；已在池里的不重复）"
+                    onConfirm={async () => {
+                      const r = await poolAdd({ project_ids: [p.id], source: "submitted" });
+                      message.success(`加入 ${r.added} 段`);
+                      refresh();
+                    }}
+                  >
+                    <Button size="small" type="link">加入数据池</Button>
+                  </Popconfirm>
                   <Button size="small" type="link" onClick={() => openBulkImport(p)}>
                     批量导入
                   </Button>

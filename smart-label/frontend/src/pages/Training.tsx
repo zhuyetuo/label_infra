@@ -771,7 +771,7 @@ export default function Training() {
           {
             key: "pool",
             label: "数据池",
-            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} />,
+            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms) => openTask(id, ms)} />,
           },
           {
             key: "ds",

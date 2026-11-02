@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import and_, func, or_, select
@@ -39,25 +40,56 @@ def in_pool_cond():
     return or_(ps == "in", and_(ss == "approved", ps != "out"))
 
 
-def _base(project_ids: list[int] | None, dog_ids: list[int] | None,
-          date_from: date | None, date_to: date | None):
-    """当前这一轮的片段 + 任务 + 样本。不选项目时只看启用的项目（拆分后的原项目停用了，不重复算）"""
+@dataclass
+class PoolFilter:
+    """池子的筛选条件（统计 / 列表 / 加入 / 移出共用）"""
+    project_ids: list[int] | None = None
+    dog_ids: list[int] | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    task_ids: list[int] | None = None
+    sample_hz: list[float] | None = None
+    # 只要不短于这么多秒的片段
+    min_sec: float | None = None
+    # 类别名（含细类，各项目同名的都算）
+    label_names: list[str] | None = None
+
+    def any(self) -> bool:
+        return bool(self.project_ids or self.dog_ids or self.task_ids or self.label_names
+                    or self.date_from is not None or self.date_to is not None)
+
+
+_DUR = AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms
+_HZ = func.round(func.coalesce(Sample.sample_hz, Sample.imu_sample_rate_hz, 0))
+
+
+async def _query(db: AsyncSession, f: PoolFilter):
+    """当前这一轮的片段 + 任务 + 样本。不选项目也不选任务时只看启用的项目（拆分后的原项目停用了，不重复算）"""
     it = AnnotationLabelItem
     q = (select(it, Task, Sample)
          .join(AnnotationRecord, AnnotationRecord.id == it.annotation_record_id)
          .join(Task, and_(Task.id == AnnotationRecord.task_id, AnnotationRecord.round_no == Task.round_no))
          .join(Sample, Sample.id == Task.sample_id)
          .where(it.uncertain.is_(False)))
-    if project_ids:
-        q = q.where(Task.project_id.in_(project_ids))
-    else:
+    if f.task_ids:
+        q = q.where(Task.id.in_(f.task_ids))
+    if f.project_ids:
+        q = q.where(Task.project_id.in_(f.project_ids))
+    elif not f.task_ids:
         q = q.where(Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True))))
-    if dog_ids:
-        q = q.where(Sample.dog_id.in_(dog_ids))
-    if date_from is not None:
-        q = q.where(Sample.session_date >= date_from)
-    if date_to is not None:
-        q = q.where(Sample.session_date <= date_to)
+    if f.dog_ids:
+        q = q.where(Sample.dog_id.in_(f.dog_ids))
+    if f.date_from is not None:
+        q = q.where(Sample.session_date >= f.date_from)
+    if f.date_to is not None:
+        q = q.where(Sample.session_date <= f.date_to)
+    if f.sample_hz:
+        q = q.where(_HZ.in_([round(float(h)) for h in f.sample_hz]))
+    if f.min_sec:
+        q = q.where(_DUR >= int(f.min_sec * 1000))
+    if f.label_names:
+        ids = await _label_ids_under(db, f.label_names)
+        q = q.where(it.label_id.in_(ids or {-1}))
     return q
 
 
@@ -65,16 +97,9 @@ def _hz_of(s: Sample) -> int:
     return int(round(float(s.sample_hz or s.imu_sample_rate_hz or 0)))
 
 
-async def summary(db: AsyncSession, project_ids: list[int] | None = None, dog_ids: list[int] | None = None,
-                  date_from: date | None = None, date_to: date | None = None,
-                  sample_hz: list[float] | None = None, min_sec: float | None = None) -> dict:
+async def summary(db: AsyncSession, f: PoolFilter) -> dict:
     """池里有什么：总量、按类别 / 项目 / 狗 / 采样率的段数和时长，以及有多少是审核通过、多少是手动加入"""
-    q = _base(project_ids, dog_ids, date_from, date_to).where(in_pool_cond())
-    if min_sec:
-        # 只看不短于这么多秒的片段：长片段往往更干净，先拿它们训
-        q = q.where(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms >= int(min_sec * 1000))
-    rows = (await db.execute(q)).all()
-    want_hz = {round(float(h)) for h in (sample_hz or [])}
+    rows = (await db.execute((await _query(db, f)).where(in_pool_cond()))).all()
     labels = {l.id: l for l in (await db.execute(select(LabelDefinition))).scalars().all()}
     projects = {p.id: p.name for p in (await db.execute(select(Project))).scalars().all()}
     dogs = {d.id: (d.name or d.dog_code) for d in (await db.execute(select(Dog))).scalars().all()}
@@ -91,8 +116,6 @@ async def summary(db: AsyncSession, project_ids: list[int] | None = None, dog_id
     sec_total = 0.0
     for it, task, smp in rows:
         hz = _hz_of(smp)
-        if want_hz and hz not in want_hz:
-            continue
         sec = max(0, it.end_time_ms - it.start_time_ms) / 1000
         n += 1
         sec_total += sec
@@ -112,19 +135,25 @@ async def summary(db: AsyncSession, project_ids: list[int] | None = None, dog_id
             **{f"by_{k}": fmt(v) for k, v in by.items()}}
 
 
-async def add(db: AsyncSession, source: str, project_ids: list[int] | None = None, dog_ids: list[int] | None = None,
-              date_from: date | None = None, date_to: date | None = None) -> int:
+ADD_SOURCES = ("reviewed", "approved_tasks", "submitted", "all")
+
+
+async def add(db: AsyncSession, source: str, f: PoolFilter) -> int:
     """整批手动加入。source：
       reviewed       人确认过 / 改过 / 人工加的片段（没人看过的纯 AI 片段不加）
-      approved_tasks 审核通过的任务里的全部片段（任务整份认可过）
+      approved_tasks 审核通过的任务里的全部片段
+      submitted      已提交 / 审核通过的任务里的全部片段（标注员交了、你看过觉得行）
+      all            全部片段（一般配 task_ids：这个任务我看过，整份认）
     返回新进池的条数。"""
-    if source not in ("reviewed", "approved_tasks"):
-        raise ValueError("source 只能是 reviewed / approved_tasks")
+    if source not in ADD_SOURCES:
+        raise ValueError(f"source 只能是 {' / '.join(ADD_SOURCES)}")
     it = AnnotationLabelItem
-    q = _base(project_ids, dog_ids, date_from, date_to).where(~in_pool_cond())
+    q = (await _query(db, f)).where(~in_pool_cond())
     if source == "approved_tasks":
         q = q.where(Task.status == TaskStatus.APPROVED)
-    else:
+    elif source == "submitted":
+        q = q.where(Task.status.in_([TaskStatus.SUBMITTED, TaskStatus.APPROVED]))
+    elif source == "reviewed":
         q = q.where(or_(it.ai_confirmed.is_(True), it.is_modified.is_(True), it.source_type == LabelItemSource.human_added))
     # 逐条改 ORM 对象，不用批量 UPDATE：批量的不更新会话里已经载入的对象，紧接着的统计会读到旧值
     items = [row[0] for row in (await db.execute(q)).all()]
@@ -150,25 +179,49 @@ async def _label_ids_under(db: AsyncSession, names: list[str]) -> set[int]:
     return out
 
 
-async def remove(db: AsyncSession, item_ids: list[int] | None = None, project_ids: list[int] | None = None,
-                 dog_ids: list[int] | None = None, date_from: date | None = None, date_to: date | None = None,
-                 label_ids: list[int] | None = None, label_names: list[str] | None = None) -> int:
-    """手动移出（标成 out）。给了 item_ids 就只动这几条，否则按条件整批。
-    label_names：按类别名移（含它底下的细类，各项目同名的都算）。返回移出的条数"""
-    it = AnnotationLabelItem
-    if label_names:
-        ids = await _label_ids_under(db, label_names)
-        label_ids = sorted(set(label_ids or []) | ids) if label_ids else sorted(ids)
-        if not label_ids:
-            return 0
-    q = _base(project_ids, dog_ids, date_from, date_to).where(in_pool_cond())
+async def remove(db: AsyncSession, f: PoolFilter, item_ids: list[int] | None = None) -> int:
+    """手动移出（标成 out）。给了 item_ids 就只动这几条（再叠加条件），否则按条件整批。返回移出的条数"""
+    q = (await _query(db, f)).where(in_pool_cond())
     if item_ids:
-        q = q.where(it.id.in_(item_ids))
-    if label_ids:
-        q = q.where(it.label_id.in_(label_ids))
+        q = q.where(AnnotationLabelItem.id.in_(item_ids))
     items = [row[0] for row in (await db.execute(q)).all()]
     for x in items:
         x.pool_state = "out"
     if items:
         await db.commit()
     return len(items)
+
+
+async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: int = 1, page_size: int = 50) -> dict:
+    """池里一条一条的片段。sort：long = 最长的先 / short / new = 最近日期先 / time = 按任务、时间"""
+    it = AnnotationLabelItem
+    q = (await _query(db, f)).where(in_pool_cond())
+    total = (await db.execute(select(func.count()).select_from(q.with_only_columns(it.id).subquery()))).scalar_one()
+    order = {
+        "long": (_DUR.desc(), it.id),
+        "short": (_DUR.asc(), it.id),
+        "new": (Sample.session_date.desc(), Task.id.desc(), it.start_time_ms),
+    }.get(sort, (Task.id, it.start_time_ms))
+    page_size = max(1, min(page_size, 500))
+    rows = (await db.execute(q.order_by(*order).offset((max(1, page) - 1) * page_size).limit(page_size))).all()
+    labels = {l.id: l.display_name for l in (await db.execute(select(LabelDefinition))).scalars().all()}
+    projects = {p.id: p.name for p in (await db.execute(select(Project))).scalars().all()}
+    dog_ids = {smp.dog_id for _, _, smp in rows if smp.dog_id}
+    dogs = ({d.id: (d.name or d.dog_code) for d in (await db.execute(select(Dog).where(Dog.id.in_(dog_ids)))).scalars()}
+            if dog_ids else {})
+    return {"total": int(total), "items": [{
+        "id": x.id,
+        "task_id": t.id,
+        "project_id": t.project_id,
+        "project_name": projects.get(t.project_id, f"#{t.project_id}"),
+        "sample_code": smp.sample_code,
+        "session_date": smp.session_date.isoformat() if smp.session_date else None,
+        "dog_name": dogs.get(smp.dog_id) if smp.dog_id else None,
+        "hz": _hz_of(smp),
+        "label_id": x.label_id,
+        "label_name": labels.get(x.label_id, f"#{x.label_id}"),
+        "start_time_ms": x.start_time_ms,
+        "end_time_ms": x.end_time_ms,
+        # manual = 手动加入的；approved = 片段审核通过进来的
+        "via": "manual" if x.pool_state == "in" else "approved",
+    } for x, t, smp in rows]}
