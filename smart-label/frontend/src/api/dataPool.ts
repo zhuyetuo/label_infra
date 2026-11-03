@@ -17,6 +17,8 @@ export interface PoolSummary {
   by_project: PoolBucket[];
   by_dog: PoolBucket[];
   by_hz: PoolBucket[];
+  /** 类别层级：每个节点含它底下全部细类的段数 / 时长；parent = 上一级的名字（根是 null） */
+  tree?: (PoolBucket & { parent: string | null })[];
 }
 export interface PoolFilter {
   project_ids?: number[];

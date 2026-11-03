@@ -111,6 +111,19 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
             cur = labels[cur.parent_id]
         return cur.display_name if cur else f"#{lid}"
 
+    def chain_names(lid: int) -> list[str]:
+        """根 → 叶的名字链：[抓挠, 抓挠-头颈耳, 抓挠-眼周/颊]"""
+        out: list[str] = []
+        cur, seen = labels.get(lid), set()
+        while cur is not None and cur.id not in seen:
+            seen.add(cur.id)
+            out.append(cur.display_name)
+            cur = labels.get(cur.parent_id) if cur.parent_id else None
+        return out[::-1] or [f"#{lid}"]
+
+    # 层级树：每一层都算上它底下所有细类（抓挠 41 段 = 自己标的 + 头颈耳 32 + 躯干 9）。
+    # 按名字合（各项目各一套标签、id 不同，名字相同就是一类）
+    tree: dict[str, list] = {}   # 名字 → [段数, 秒, 上级名字]
     by = {k: defaultdict(lambda: [0, 0.0]) for k in ("label", "root", "project", "dog", "hz")}
     n = n_manual = 0
     sec_total = 0.0
@@ -121,6 +134,12 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
         sec_total += sec
         n_manual += it.pool_state == "in"
         lab = labels.get(it.label_id)
+        parent = None
+        for nm in chain_names(it.label_id):
+            node = tree.setdefault(nm, [0, 0.0, parent])
+            node[0] += 1
+            node[1] += sec
+            parent = nm
         for k, key in (("label", lab.display_name if lab else f"#{it.label_id}"), ("root", root_name(it.label_id)),
                        ("project", projects.get(task.project_id, f"#{task.project_id}")),
                        ("dog", dogs.get(smp.dog_id, "未关联") if smp.dog_id else "未关联"), ("hz", f"{hz}Hz")):
@@ -132,7 +151,9 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
                       key=lambda x: -x["n"])
 
     return {"n": n, "hours": round(sec_total / 3600, 3), "n_manual": n_manual, "n_approved": n - n_manual,
-            **{f"by_{k}": fmt(v) for k, v in by.items()}}
+            **{f"by_{k}": fmt(v) for k, v in by.items()},
+            "tree": sorted(({"name": k, "parent": v[2], "n": v[0], "hours": round(v[1] / 3600, 3)} for k, v in tree.items()),
+                           key=lambda x: -x["n"])}
 
 
 ADD_SOURCES = ("reviewed", "approved_tasks", "submitted", "all")

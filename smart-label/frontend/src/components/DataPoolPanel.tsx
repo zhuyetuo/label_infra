@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, Col, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic,
-  Table, Tag, Tooltip, Typography, message,
+  Table, Tag, Tooltip, TreeSelect, Typography, message,
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -104,15 +104,26 @@ export default function DataPoolPanel({
     }
   };
 
-  const labelOpts = useMemo(() => {
-    const seen = new Set<string>();
-    const out: { value: string; label: string }[] = [];
-    for (const b of [...(sumAll?.by_root ?? []), ...(sumAll?.by_label ?? [])]) {
-      if (seen.has(b.name)) continue;
-      seen.add(b.name);
-      out.push({ value: b.name, label: `${b.name}（${b.n} 段 / ${b.hours} h）` });
+  // 类别下拉按层级摆：抓挠 → 抓挠-头颈耳 / 抓挠-躯干 → …，每层的数含它底下全部细类。
+  // 子节点显示短名（「头颈耳」），选中后框里是全名。老后端没有 tree 时退回平铺
+  type TNode = { value: string; title: string; full: string; children?: TNode[] };
+  const labelTree = useMemo<TNode[]>(() => {
+    const t = sumAll?.tree;
+    const fmt = (b: PoolBucket) => `（${b.n} 段 · ${fmtSecs(b.hours * 3600)}）`;
+    if (!t) {
+      return [...(sumAll?.by_root ?? []), ...(sumAll?.by_label ?? [])]
+        .filter((b, i, a) => a.findIndex((x) => x.name === b.name) === i)
+        .map((b) => ({ value: b.name, title: `${b.name}${fmt(b)}`, full: b.name }));
     }
-    return out;
+    const kids = new Map<string | null, typeof t>();
+    for (const b of t) kids.set(b.parent, [...(kids.get(b.parent) ?? []), b]);
+    const build = (p: string | null): TNode[] =>
+      (kids.get(p) ?? []).map((b) => {
+        const short = p && b.name.startsWith(p + "-") ? b.name.slice(p.length + 1) : b.name;
+        const ch = build(b.name);
+        return { value: b.name, title: `${short}${fmt(b)}`, full: b.name, ...(ch.length ? { children: ch } : {}) };
+      });
+    return build(null);
   }, [sumAll]);
 
   // 「用这批训练」
@@ -192,14 +203,20 @@ export default function DataPoolPanel({
 
       {/* 筛选：同时作用于统计、列表、训练 */}
       <Space wrap style={{ marginBottom: 12 }}>
-        <Select
-          mode="multiple"
+        <TreeSelect
+          multiple
           allowClear
-          placeholder="类别（含细类）"
-          style={{ minWidth: 260 }}
+          showSearch
+          treeLine
+          placeholder="类别（选上级含全部细类）"
+          style={{ minWidth: 280 }}
+          popupMatchSelectWidth={false}
           value={pickLabels}
-          onChange={setPickLabels}
-          options={labelOpts}
+          onChange={(v) => setPickLabels(v as string[])}
+          treeData={labelTree}
+          treeNodeFilterProp="full"
+          treeNodeLabelProp="full"
+          treeDefaultExpandedKeys={labelTree.map((n) => n.value)}
         />
         <Select
           mode="multiple"
