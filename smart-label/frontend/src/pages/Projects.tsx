@@ -248,6 +248,8 @@ export default function Projects() {
   const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
   const [workspaceFocusCands, setWorkspaceFocusCands] = useState<string[]>([]);
   const [workspaceJump, setWorkspaceJump] = useState(false);
+  // 项目片段汇总里展开了哪些大类（看细类）
+  const [sumOpen, setSumOpen] = useState<Set<number>>(new Set());
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
@@ -1235,19 +1237,50 @@ export default function Projects() {
             );
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
-            const labelTotals = projLabels
-              .map((l) => {
-                let n = 0, pending = 0, tasksN = 0, okN = 0, retN = 0;
-                for (const t of all) {
-                  const c = t.label_counts?.[l.id];
+            // 片段汇总按层级：每个类别的数都含它底下全部细类（抓挠 = 抓挠 + 头颈耳 + 肩胸 + 躯干…）。
+            // 默认只摆大类，点 ▸ 展开细类。上级：parent_id；老标签没挂上级、名字是「抓挠-头颈耳」的按前缀认
+            const byName = new Map(projLabels.map((l) => [l.display_name, l]));
+            const parentOf = (l: LabelDefinition): number | null => {
+              if (l.parent_id != null) return l.parent_id;
+              const i = l.display_name.lastIndexOf("-");
+              const pl = i > 0 ? byName.get(l.display_name.slice(0, i)) : undefined;
+              return pl && pl.id !== l.id ? pl.id : null;
+            };
+            const kidsOf = new Map<number | null, LabelDefinition[]>();
+            for (const l of projLabels) {
+              const pid = parentOf(l);
+              kidsOf.set(pid, [...(kidsOf.get(pid) ?? []), l]);
+            }
+            const subtree = (id: number): number[] => [id, ...(kidsOf.get(id) ?? []).flatMap((k) => subtree(k.id))];
+            const totalOf = (l: LabelDefinition) => {
+              const ids = subtree(l.id);
+              let n = 0, pending = 0, tasksN = 0, okN = 0, retN = 0;
+              for (const t of all) {
+                let hit = false;
+                for (const id of ids) {
+                  const c = t.label_counts?.[id];
                   if (!c?.n) continue;
-                  n += c.n; pending += c.ai_pending; tasksN += 1;
+                  hit = true;
+                  n += c.n; pending += c.ai_pending;
                   okN += c.approved ?? 0; retN += c.returned ?? 0;
                 }
-                return { label: l, n, pending, tasksN, okN, retN };
-              })
-              .filter((x) => x.n > 0);
-            const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
+                if (hit) tasksN += 1;
+              }
+              return { label: l, n, pending, tasksN, okN, retN };
+            };
+            type LTotal = ReturnType<typeof totalOf> & { depth: number; hasKids: boolean };
+            const labelTotals: LTotal[] = [];
+            const walk = (pid: number | null, depth: number) => {
+              for (const l of kidsOf.get(pid) ?? []) {
+                const t = totalOf(l);
+                if (!t.n) continue;
+                const hasKids = (kidsOf.get(l.id) ?? []).some((k) => totalOf(k).n > 0);
+                labelTotals.push({ ...t, depth, hasKids });
+                if (hasKids && sumOpen.has(l.id)) walk(l.id, depth + 1);
+              }
+            };
+            walk(null, 0);
+            const totalPending = labelTotals.filter((x) => x.depth === 0).reduce((s, x) => s + x.pending, 0);
             // 「疑似片段」候选跟上面那些类别并排显示。它不是一个 label，是另一张表，
             // 但对"这个项目还剩多少活"来说是同一个问题，分开放两处反而要人自己去合
             const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
@@ -1427,18 +1460,38 @@ export default function Projects() {
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
                   </Typography.Text>
-                  {labelTotals.map(({ label, n, pending, tasksN, okN, retN }) => (
-                    <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}${okN || retN ? `；片段审核：通过 ${okN}、退回待改 ${retN}、还没审 ${n - okN - retN}` : ""}；点击只看含「${label.display_name}」的任务`}>
+                  {labelTotals.map(({ label, n, pending, tasksN, okN, retN, depth, hasKids }) => (
+                    <Tooltip key={label.id} title={`${n} 段${hasKids ? "（含细类）" : ""}，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}${okN || retN ? `；片段审核：通过 ${okN}、退回待改 ${retN}、还没审 ${n - okN - retN}` : ""}；点击只看含「${label.display_name}」的任务${hasKids ? "，点 ▸ 展开细类" : ""}`}>
                       <Tag
                         color={label.color ?? undefined}
-                        style={{ cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined }}
+                        style={{
+                          cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined,
+                          // 细类：缩小一号、虚线边，跟在它的大类后面
+                          ...(depth > 0 ? { fontSize: 11, borderStyle: "dashed", opacity: 0.9 } : {}),
+                        }}
                         onClick={() =>
                           setFilter(p.id, {
                             labels: f.labels.includes(label.id) ? f.labels.filter((x) => x !== label.id) : [...f.labels, label.id],
                           })
                         }
                       >
-                        {label.display_name} {n}
+                        {hasKids && (
+                          <span
+                            style={{ marginRight: 4, display: "inline-block", width: 10 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSumOpen((s) => {
+                                const nx = new Set(s);
+                                if (nx.has(label.id)) nx.delete(label.id);
+                                else nx.add(label.id);
+                                return nx;
+                              });
+                            }}
+                          >
+                            {sumOpen.has(label.id) ? "▾" : "▸"}
+                          </span>
+                        )}
+                        {depth > 0 ? "└ " : ""}{label.display_name} {n}
                         {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
                         {/* 片段审核进度：通过几条、退回了还在等标注员改的几条 */}
                         {okN ? <span> · ✓{okN}</span> : null}
