@@ -117,8 +117,8 @@ function loadCfg(): Cfg {
 
 /** 前后各留多少：短段多留一点，不然看不出起止前后是什么样 */
 const padOf = (durMs: number) => Math.min(3000, Math.max(800, durMs * 0.3));
-/** 前后各拉多少数据：至少 10 秒、最多 1 分钟，缩小看全貌时够用 */
-const ctxOf = (durMs: number) => Math.min(60000, Math.max(10000, durMs));
+/** 前后各拉多少数据：至少 30 秒、最多 1 分钟。起止拖到这截数据的头上松手，会再往外多拉一截 */
+const ctxOf = (durMs: number) => Math.min(60000, Math.max(30000, durMs));
 
 const fetchSeries = (sampleId: number, startMs: number, endMs: number) =>
   request.get<never, Series>(`/imu/${sampleId}/series`, {
@@ -146,7 +146,7 @@ const spline = uPlot.paths.spline?.();
 
 function MiniPlot({
   snap, chans, smooth, yRange, xRange, width, height, bus, live, follow, winSec, axisColor,
-  rangeRef, editable, onEdge, onScrub, onMove, version, resetKey, neighbors,
+  rangeRef, editable, onEdge, onScrub, onMove, onDragEnd, version, resetKey, neighbors,
 }: {
   snap: Snap;
   chans: typeof ACC;
@@ -171,6 +171,8 @@ function MiniPlot({
   onScrub?: (ms: number) => void;
   /** 按住色块顶上那条拖：整段平移，给新的起止（绝对毫秒） */
   onMove?: (s: number, e: number) => void;
+  /** 拖边 / 拖整段松手 */
+  onDragEnd?: () => void;
   /** 外面改了 rangeRef（「起点设到播放线」）时加一，图跟着重画 */
   version?: number;
   /** 加一 = 视图回到初始（取消 Shift+滚轮的缩放 / 平移） */
@@ -185,8 +187,8 @@ function MiniPlot({
   const scrolling = !!follow && dur > winSec * 1.2;
 
   // 交互回调放 ref 里：它们每次渲染都是新函数，放进 effect 依赖会让图每次都重建
-  const cb = useRef({ onEdge, onScrub, onMove, editable, neighbors });
-  cb.current = { onEdge, onScrub, onMove, editable, neighbors };
+  const cb = useRef({ onEdge, onScrub, onMove, onDragEnd, editable, neighbors });
+  cb.current = { onEdge, onScrub, onMove, onDragEnd, editable, neighbors };
   // 人用 Shift+滚轮 缩放 / Shift+拖 平移过：跟随模式就别再自己挪窗口
   const zoomedRef = useRef(false);
   const initXRef = useRef<[number, number] | null>(null);
@@ -200,7 +202,12 @@ function MiniPlot({
     const band = info.color ?? "#4096ff";
     const pad = snap.padMs / 1000;
     // 数据比初始视图宽（前后多拉了上下文），初始视图要明确给，不能让 uPlot 按数据自动铺满
-    const initX: [number, number] = scrolling ? [-pad, -pad + winSec] : xRange ?? [-pad, dur + pad];
+    // 起止已经被拖到原来视图外面（往外多拉了数据、图重建）：初始视图要把现在的起止也包进来
+    const r0 = cur();
+    const rs0 = (r0.s - info.startMs) / 1000, re0 = (r0.e - info.startMs) / 1000;
+    const initX: [number, number] = scrolling
+      ? [-pad, -pad + winSec]
+      : xRange ?? [Math.min(-pad, rs0 - pad), Math.max(dur + pad, re0 + pad)];
     initXRef.current = initX;
     zoomedRef.current = false;
     const opts: uPlot.Options = {
@@ -344,6 +351,24 @@ function MiniPlot({
       zoomedRef.current = true;
       u.setScale("x", { min: nmin, max: nmin + span });
     };
+    // 拖起止时保证 [a, b]（相对秒）在视图里，留 8% 余量；不够就把视图往那边扩（不缩另一边）。
+    // 最多扩到样本开头；右边不设限（超出已拉数据的部分先空着，松手后会补拉）
+    const reveal = (a: number, b: number) => {
+      const mn = u.scales.x.min ?? 0, mx = u.scales.x.max ?? 1;
+      const margin = (mx - mn) * 0.08;
+      let nmn = mn, nmx = mx;
+      if (a < mn + margin) nmn = Math.max(-info.startMs / 1000, a - margin * 1.5);
+      if (b > mx - margin) nmx = b + margin * 1.5;
+      if (nmn !== mn || nmx !== mx) {
+        zoomedRef.current = true;
+        u.setScale("x", { min: nmn, max: nmx });
+      }
+    };
+    // 鼠标在图的左右 12 像素以内或者已经出去了
+    const atBorder = (clientX: number) => {
+      const rect = over.getBoundingClientRect();
+      return clientX < rect.left + 12 || clientX > rect.right - 12;
+    };
     const onDown = (ev: MouseEvent) => {
       if (ev.button !== 0) return;
       // Shift+拖：左右平移
@@ -372,15 +397,25 @@ function MiniPlot({
         ev.preventDefault();
         const a0 = msAt(ev.clientX), r0 = { ...cur() };
         over.style.cursor = "grabbing";
-        const move = (e2: MouseEvent) => {
-          const d = msAt(e2.clientX) - a0;
+        let lastX = ev.clientX;
+        const apply = (x: number) => {
+          const d = msAt(x) - a0;
           cb.current.onMove?.(r0.s + d, r0.e + d);
+          const r = cur();
+          reveal((r.s - info.startMs) / 1000, (r.e - info.startMs) / 1000);
           u.redraw(false);
         };
+        const move = (e2: MouseEvent) => {
+          lastX = e2.clientX;
+          apply(lastX);
+        };
+        const timer = window.setInterval(() => atBorder(lastX) && apply(lastX), 120);
         const up = () => {
           over.style.cursor = "grab";
+          window.clearInterval(timer);
           window.removeEventListener("mousemove", move);
           window.removeEventListener("mouseup", up);
+          cb.current.onDragEnd?.();
         };
         window.addEventListener("mousemove", move);
         window.addEventListener("mouseup", up);
@@ -390,15 +425,28 @@ function MiniPlot({
       ev.preventDefault();
       const act = (x: number) => {
         const ms = msAt(x);
-        if (which === "s" || which === "e") cb.current.onEdge?.(which, ms);
-        else cb.current.onScrub?.(ms);
+        if (which === "s" || which === "e") {
+          cb.current.onEdge?.(which, ms);
+          // 拖到视图边上：视图往外扩，边界跟着走（不然长片段到窗口头就拖不动了）
+          const r = cur();
+          const v = ((which === "s" ? r.s : r.e) - info.startMs) / 1000;
+          reveal(v, v);
+        } else cb.current.onScrub?.(ms);
         u.redraw(false);
       };
-      act(ev.clientX);
-      const move = (e2: MouseEvent) => act(e2.clientX);
+      let lastX = ev.clientX;
+      act(lastX);
+      const move = (e2: MouseEvent) => {
+        lastX = e2.clientX;
+        act(lastX);
+      };
+      // 鼠标按着停在图的左右边上（或者拖出图外）：每 120ms 往外扩一点，一直按着就一直延伸
+      const timer = which ? window.setInterval(() => atBorder(lastX) && act(lastX), 120) : 0;
       const up = () => {
+        window.clearInterval(timer);
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
+        if (which) cb.current.onDragEnd?.();
       };
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up);
@@ -639,6 +687,21 @@ export default function LoopWaveform({
     const n = setRange(s1, s1 + len);
     seekTo(n.s);
   };
+  // 起止拖到已拉数据的头上（前后 3 秒内）松手：再往外多拉 1 分钟，接着就能继续拖。
+  // 长的抓挠一两分钟，开始拉的那截不一定够
+  const extendData = () => {
+    if (!info || !cur) return;
+    const r = rangeRef.current;
+    const needLo = lo > 0 && r.s < lo + 3000;
+    const needHi = r.e > hi - 3000;
+    if (!needLo && !needHi) return;
+    const ctxMs = Math.min(cur.ctxMs + 60000, 600000);
+    if (ctxMs === cur.ctxMs) return;
+    const snapInfo = info;
+    fetchSeries(sampleId, snapInfo.startMs - ctxMs, snapInfo.endMs + ctxMs)
+      .then((series) => setCur((c) => (c && c.info === snapInfo ? { ...c, ctxMs, series } : c)))
+      .catch(() => {});
+  };
   const onScrub = (ms: number) => {
     bus.play("pause");
     bus.holdLoop(true);
@@ -783,7 +846,7 @@ export default function LoopWaveform({
                 <Typography.Text type="danger" style={{ fontSize: 12 }}>波形读不到：{error}</Typography.Text>
               ) : cur ? (
                 <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={cfg.follow}
-                  rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} onMove={onMove} version={version}
+                  rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} onMove={onMove} onDragEnd={extendData} version={version}
                   resetKey={resetKey} neighbors={info.neighbors} />
               ) : (
                 <div style={{ height: cfg.h }} />
