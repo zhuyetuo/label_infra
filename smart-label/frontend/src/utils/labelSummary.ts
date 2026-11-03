@@ -17,7 +17,22 @@ export interface LabelTotal {
  * 任务数按含任一细类算）。只摆大类，open 里的展开到下一层。
  * 上级按 parent_id；老标签没挂上级、名字是「抓挠-头颈耳」的按前缀认。
  */
-export function buildLabelTotals(labels: LabelDefinition[], tasks: Task[], open: Set<number>): LabelTotal[] {
+export function buildLabelTotals(labels: LabelDefinition[], tasks: Task[], open: Set<number>, flat = false): LabelTotal[] {
+  if (flat) {
+    // 「全部标签」：老样子，每个标签一条、只算它自己（不含细类），按项目里标签的顺序
+    const out: LabelTotal[] = [];
+    for (const l of labels) {
+      let n = 0, pending = 0, tasksN = 0, okN = 0, retN = 0;
+      for (const t of tasks) {
+        const c = t.label_counts?.[l.id];
+        if (!c?.n) continue;
+        n += c.n; pending += c.ai_pending; tasksN += 1;
+        okN += c.approved ?? 0; retN += c.returned ?? 0;
+      }
+      if (n) out.push({ label: l, n, pending, tasksN, okN, retN, depth: 0, hasKids: false });
+    }
+    return out;
+  }
   const byName = new Map(labels.map((l) => [l.display_name, l]));
   const parentOf = (l: LabelDefinition): number | null => {
     if (l.parent_id != null) return l.parent_id;
@@ -82,3 +97,20 @@ export function focusDur(t: Task, ids: Set<number>) {
 
 export const fmtSecShort = (sec: number) =>
   sec >= 60 ? `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒` : `${sec.toFixed(1)}s`;
+
+const FLAT_KEY = "label-summary-flat";
+/** 片段汇总的显示方式（按大类 / 全部标签），记在本机，项目页和任务页共用 */
+export function loadSummaryFlat(): boolean {
+  try {
+    return localStorage.getItem(FLAT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export function saveSummaryFlat(v: boolean) {
+  try {
+    localStorage.setItem(FLAT_KEY, v ? "1" : "0");
+  } catch {
+    /* 存不了就只管这一次 */
+  }
+}
