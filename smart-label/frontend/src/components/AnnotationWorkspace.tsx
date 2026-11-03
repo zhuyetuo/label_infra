@@ -32,7 +32,7 @@ import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, setCandidateReviewNote, setCandidateSpan, type AiCandidate, type SimilarHit } from "@/api/candidates";
-import { getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
+import { DRAFT_STALE_EVENT, getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
@@ -999,6 +999,24 @@ export default function AnnotationWorkspace({
       )}
     </div>
   );
+
+  // 存草稿时服务器说：有片段刚被别人（管理员）直接改过 / 拆过，保留了他的版本。
+  // 这边手里那几条是旧的，重新拉一遍，不然下次看到的还是旧起止
+  useEffect(() => {
+    const onStale = (e: Event) => {
+      const d = (e as CustomEvent<{ taskId: number; n: number }>).detail;
+      if (taskId == null || d.taskId !== taskId) return;
+      getDraft(taskId)
+        .then((dr) => {
+          setItems(dr.items);
+          message.info(`有 ${d.n} 段刚被管理员改过或通过，已按他的版本更新`);
+        })
+        .catch(() => {});
+    };
+    window.addEventListener(DRAFT_STALE_EVENT, onStale);
+    return () => window.removeEventListener(DRAFT_STALE_EVENT, onStale);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
 
   // 片段审核那边改了类别：重新拉草稿，片段列表 / 波形色块跟着变
   useEffect(() => {

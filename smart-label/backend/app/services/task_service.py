@@ -265,10 +265,15 @@ async def _get_or_create_record(db: AsyncSession, task: Task) -> AnnotationRecor
     return record
 
 
-async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[LabelItemIn]) -> AnnotationRecord:
+async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[LabelItemIn],
+                     loaded_at: datetime | None = None) -> AnnotationRecord:
     """
     保存草稿：UPSERT annotation_records(task_id, round_no)，逐条 replace-in-place
     label items。草稿阶段允许时间重叠（画到一半的中间态），提交时才强制校验。
+
+    loaded_at：前端上次从服务器拉草稿的时间。这之后**别人**（管理员在片段弹窗里直接改 /
+    拆 / 通过）动过的片段，前端手里那份是旧的——不拿旧的覆盖、也不因为前端没有就删掉，
+    保留别人的版本。保留了几条记在 record.kept_others 上，前端据此重新拉一遍。
     """
     task = await db.get(Task, task_id)
     if task is None:
@@ -282,6 +287,12 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
         select(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id == record.id)
     )
     existing_by_id = {item.id: item for item in existing_result.scalars().all()}
+    # 前端拉草稿之后别人改过 / 新建的：这次保存不碰它们
+    protected = {
+        i.id for i in existing_by_id.values()
+        if loaded_at is not None and i.touched_by is not None and i.touched_by != user.id
+        and i.touched_at is not None and i.touched_at > loaded_at
+    }
 
     keep_ids: set[int] = set()
     # 一次保存里出现两条**完全一样**的（同标签、同起、同止）：没有人是故意标两遍的，
@@ -361,6 +372,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
         if winner_by_span.get(_span(incoming)) is not incoming:
             continue        # 同标签同起止的另一条已经留下了
         origin = existing_by_id.get(incoming.origin_item_id) if incoming.origin_item_id else None
+        if origin is not None and origin.id in protected:
+            continue        # 别人刚改过，前端这份是旧的：保留别人的（下面也不删）
         if origin is not None:
             keep_ids.add(origin.id)
             changed = (
@@ -433,11 +446,12 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             keep_ids.add(new_item.id)
 
     for item_id, item in existing_by_id.items():
-        if item_id not in keep_ids:
+        if item_id not in keep_ids and item_id not in protected:
             await db.delete(item)
 
     await db.commit()
     await db.refresh(record)
+    record.kept_others = len(protected)      # 非持久字段：给接口回给前端
     return record
 
 

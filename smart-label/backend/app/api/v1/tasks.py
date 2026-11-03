@@ -534,7 +534,8 @@ async def get_draft(task_id: int, db: AsyncSession = Depends(get_db), user: User
             name, reason = cands[i.from_candidate_id]
             d["cand_label_name"], d["cand_reason"] = name, getattr(reason, "value", reason)
         out.append(d)
-    return ok(DraftOut(round_no=task.round_no, items=out).model_dump())
+    return ok(DraftOut(round_no=task.round_no, items=out,
+                       server_time=datetime.now().isoformat(timespec="microseconds")).model_dump())
 
 
 @router.put("/{task_id}/draft")
@@ -545,10 +546,12 @@ async def put_draft(
     user: User = Depends(get_current_user),
 ):
     try:
-        await save_draft(db, task_id, user, body.items)
+        loaded_at = body.loaded_at.replace(tzinfo=None) if body.loaded_at else None
+        record = await save_draft(db, task_id, user, body.items, loaded_at)
     except TaskConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return ok(msg="草稿已保存")
+    # kept_others > 0：有片段刚被别人（管理员）改过，保留了他的版本，前端要重新拉一遍
+    return ok({"kept_others": getattr(record, "kept_others", 0)}, msg="草稿已保存")
 
 
 @router.post("/{task_id}/submit")

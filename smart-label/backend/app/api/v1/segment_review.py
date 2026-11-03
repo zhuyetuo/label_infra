@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -29,7 +29,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelIt
 from app.models.label import LabelDefinition
 from app.models.project import Project
 from app.models.sample import Sample
-from app.models.task import Task, TaskStatus
+from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import label_tree
@@ -370,11 +370,8 @@ async def edit(item_id: int, body: EditIn, db: AsyncSession = Depends(get_db),
         raise HTTPException(status.HTTP_403_FORBIDDEN, "这条不在你名下")
     if reviewer:
         _check_not_taken(it, user)
-    # 有人正开着这个任务在标：他下次存草稿会把本地那份旧起止写回来，把这里的改动冲掉
-    if (task.status == TaskStatus.IN_PROGRESS and task.locked_by and task.locked_by != user.id
-            and task.lock_expires_at and task.lock_expires_at.replace(tzinfo=None) > datetime.now(UTC).replace(tzinfo=None)):
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "有人正在工作台里标这个任务，这里改了会被他下次保存冲掉。先让他保存退出，或者到工作台里改")
+    # 有人正开着这个任务在标也照样改：他下次存草稿时，前端拉草稿之后别人改过的片段
+    # 不会被他手里的旧版本覆盖（save_draft 的 loaded_at），他那边会重新拉到这里改的
     if body.label_id is not None:
         exists = (await db.execute(select(LabelDefinition.id).where(
             LabelDefinition.id == body.label_id, LabelDefinition.project_id == task.project_id))).scalar_one_or_none()
@@ -399,6 +396,12 @@ async def edit(item_id: int, body: EditIn, db: AsyncSession = Depends(get_db),
             # 标注员改了就算处理过退回意见，交回待审
             it.seg_status = None
             it.review_note = it.review_flag_by = it.review_flag_at = None
+        else:
+            # 审核员 / 管理员亲手改的就是认可的版本：直接算通过（进数据池），不用再点一次「通过」
+            it.seg_status = "approved"
+            it.seg_reviewed_by, it.seg_reviewed_at = user.id, _now()
+            it.review_note = it.review_flag_by = it.review_flag_at = None
+            it.seg_claimed_by = it.seg_claim_expires_at = None
     await db.commit()
     return ok({"id": it.id, "start_time_ms": it.start_time_ms, "end_time_ms": it.end_time_ms,
                "label_id": it.label_id, "seg_status": it.seg_status or "pending"})
@@ -425,10 +428,6 @@ async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
         raise HTTPException(status.HTTP_403_FORBIDDEN, "这条不在你名下")
     if reviewer:
         _check_not_taken(it, user)
-    if (task.status == TaskStatus.IN_PROGRESS and task.locked_by and task.locked_by != user.id
-            and task.lock_expires_at and task.lock_expires_at.replace(tzinfo=None) > datetime.now(UTC).replace(tzinfo=None)):
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "有人正在工作台里标这个任务，这里改了会被他下次保存冲掉。先让他保存退出，或者到工作台里改")
     at = body.at_ms
     if at - it.start_time_ms < SPLIT_MIN_MS or it.end_time_ms - at < SPLIT_MIN_MS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "拆分点离起点或终点太近（两边至少 0.3 秒）")

@@ -146,11 +146,14 @@ class LabelItemOut(LabelItemIn):
 
 class DraftSaveRequest(BaseModel):
     items: list[LabelItemIn]
+    # 前端上次拉草稿时服务器给的 server_time：这之后别人改过的片段不被这次保存覆盖
+    loaded_at: datetime | None = None
 
 
 class DraftOut(BaseModel):
     round_no: int
     items: list[LabelItemOut]
+    server_time: str | None = None
 
 
 class TaskCreate(BaseModel):
