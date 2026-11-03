@@ -80,6 +80,8 @@ interface Props {
   /** 从列表里点某个类别标签进来的：不恢复上次的位置，直接跳到这一类的第一段循环，
    *  对应面板（片段列表 / 疑似片段）隐藏了就显示、收起了就展开 */
   jumpToFocus?: boolean;
+  /** 打开就循环这一段（片段 id）：数据池里点「看」、链接里的 ?seg= 都走它。波形浮窗跟着弹出，能直接改 */
+  initialSegId?: number | null;
   labels: LabelDefinition[];
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
@@ -176,6 +178,7 @@ export default function AnnotationWorkspace({
   focusLabelIds,
   focusCandLabels,
   jumpToFocus,
+  initialSegId,
   labels,
   readOnly,
   onClose,
@@ -618,7 +621,7 @@ export default function AnnotationWorkspace({
       // 直接停到第一段对得上的，循环播放。不然进来还是从 0 秒开始，几十段里要自己去找
       // 刷新回来：回到上次的位置和循环（不是从别处指定了时刻点进来的才这么做）
       // 链接里带了片段（?task=…&seg=片段id，别人发过来让改这一段的）：直接循环那一段，优先于上次的位置
-      const urlSegId = Number(new URLSearchParams(window.location.search).get("seg"));
+      const urlSegId = initialSegId ?? Number(new URLSearchParams(window.location.search).get("seg"));
       const urlSeg = urlSegId && !segReview ? draft.items.find((x) => x.id === urlSegId) : undefined;
       if (urlSeg) {
         bus.seek(urlSeg.start_time_ms / 1000);
