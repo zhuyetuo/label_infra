@@ -16,7 +16,7 @@ from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
 from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map, site_imu_dog_map
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
 from app.models.label import LabelDefinition
@@ -138,6 +138,32 @@ async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
     await db.commit()
     task = await db.get(Task, task_id)
     assert task is not None
+    return task
+
+
+async def edit_again(db: AsyncSession, task_id: int, user: User) -> Task:
+    """
+    提交之后自己再改：已提交 / 已通过 / 已驳回 → 回到「标注中」，锁给自己，**轮次不变**、
+    片段原样（不像「退回重标」那样开新一轮）。改完照常再提交。
+
+    人少的时候（一个标注员 + 一个管理员）管理员看到问题不用一条条退回，
+    叫标注员自己打开再检查一遍就行。标注员只能改自己名下的；管理员哪条都能。
+    """
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise TaskConflictError("任务不存在")
+    is_admin = user.role in (UserRole.admin, UserRole.super_admin)
+    if not is_admin and task.assigned_to != user.id:
+        raise TaskConflictError("这个任务不在你名下")
+    if task.status not in (TaskStatus.SUBMITTED, TaskStatus.APPROVED, TaskStatus.REJECTED):
+        raise TaskConflictError("只有已提交 / 已通过 / 已驳回的任务能继续编辑")
+    task.status = TaskStatus.IN_PROGRESS
+    if task.assigned_to is None:
+        task.assigned_to = user.id
+    task.locked_by = user.id
+    task.lock_expires_at = datetime.now(UTC) + timedelta(hours=settings.annotation_timeout_hours)
+    await db.commit()
+    await db.refresh(task)
     return task
 
 

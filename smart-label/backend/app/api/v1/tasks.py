@@ -46,6 +46,7 @@ from app.services.task_service import (
     heartbeat,
     release_all_in_project,
     release_task,
+    edit_again,
     purge_task_children,
     sample_brief,
     save_draft,
@@ -474,6 +475,16 @@ async def release_all(body: ProjectScopeRequest, db: AsyncSession = Depends(get_
 async def claim(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         task = await claim_task(db, task_id, user)
+    except TaskConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return ok(TaskOut.model_validate(task).model_dump())
+
+
+@router.post("/{task_id}/edit-again")
+async def edit_again_api(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """提交之后自己再改：回到标注中、锁给自己，轮次和片段不变（见 edit_again）"""
+    try:
+        task = await edit_again(db, task_id, user)
     except TaskConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ok(TaskOut.model_validate(task).model_dump())

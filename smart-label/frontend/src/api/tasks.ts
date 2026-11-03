@@ -31,6 +31,9 @@ export const reopenTask = (id: number, comment?: string) =>
 
 export const claimTask = (id: number) => request.post<never, Task>(`/tasks/${id}/claim`);
 
+/** 提交之后自己再改：已提交 / 已通过 / 已驳回 → 回到标注中、锁给自己，轮次和片段不变 */
+export const editAgain = (id: number) => request.post<never, Task>(`/tasks/${id}/edit-again`);
+
 /** 标注中途主动放弃任务：退回公共池，草稿保留，换人接手能接着标 */
 export const releaseTask = (id: number) => request.post<never, Task>(`/tasks/${id}/release`);
 

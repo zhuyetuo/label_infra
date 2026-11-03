@@ -101,6 +101,8 @@ interface Props {
   onClaim?: () => void | Promise<void>;
   /** 已通过的任务想再改：退回重标（轮次+1，上一轮内容原样带过去） */
   onReopen?: () => void | Promise<void>;
+  /** 已提交 / 已通过的任务自己再改（轮次不变，回到标注中）。给了才显示「继续编辑」 */
+  onEditAgain?: () => void | Promise<void>;
   /** 只认某一类（皮肤复看那边是「抓挠」）标得对，不动别的类别和任务状态 */
   onConfirmScratch?: () => void | Promise<void>;
   /** 上面那个按钮写什么 */
@@ -184,6 +186,7 @@ export default function AnnotationWorkspace({
   initialSimilar,
   initialSimilarLabel,
   onReopen,
+  onEditAgain,
   onConfirmScratch,
   confirmScratchText,
   segReview,
@@ -844,7 +847,9 @@ export default function AnnotationWorkspace({
   const readOnlyHint = onClaim
     ? "现在是「查看」模式，不能改起止：先点右下角「认领并修改」"
     : task?.status === "SUBMITTED" || task?.status === "APPROVED"
-      ? "这个任务已提交，不能再改起止（要改先退回重标）"
+      ? onEditAgain
+        ? "这个任务已提交：点右下角「继续编辑」就能接着改，改完再提交"
+        : "这个任务已提交，不能再改起止（要改先退回重标）"
       : "这个任务不在你名下，只能看不能改";
 
   // 片段审核：草稿拉回来之后循环那一条（不靠 initialSeekMs 去找——同一时刻往往还压着
@@ -2342,8 +2347,14 @@ export default function AnnotationWorkspace({
         readOnly ? (
           // 注意：这里必须给 null 而不是 undefined。footer 传 undefined 时
           // antd 会当成"没设置"，渲染它默认的 取消/确定 两个按钮。
-          onApprove || onReject || onClaim || onReopen ? (
+          onApprove || onReject || onClaim || onReopen || onEditAgain ? (
             <Space>
+              {/* 提交之后自己再检查一遍：不开新一轮，片段原样，改完再提交 */}
+              {onEditAgain && (
+                <Tooltip title="回到「标注中」接着改（轮次不变、片段原样），改完再提交">
+                  <Button type="primary" onClick={onEditAgain}>继续编辑</Button>
+                </Tooltip>
+              )}
               {/* 只读标志挪到这里跟按钮放一起：它说的就是"要动手先点右边那个"，
                   以前在标题栏右上角，跟底部这排是同一件事说了两遍 */}
               {onClaim && (

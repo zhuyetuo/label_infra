@@ -56,6 +56,7 @@ import {
   createTask,
   deleteTask,
   deleteTasksBatch,
+  editAgain,
   listTasks,
   releaseAllTasks,
   releaseTask,
@@ -949,6 +950,17 @@ export default function Projects() {
     refresh();
   };
 
+
+  // 提交之后自己再改（轮次不变，回到标注中）：自己名下的，或者管理员
+  const canEditAgain = (t: Task | null) =>
+    !!t && ["SUBMITTED", "APPROVED", "REJECTED"].includes(t.status) && (t.assigned_to === userId || isAdmin);
+  const handleEditAgain = async (t: Task, open: (t: Task) => void) => {
+    const nt = await editAgain(t.id);
+    message.success("可以接着改了，改完记得再提交");
+    open({ ...t, ...nt });
+    refresh();
+  };
+
   const handleReleaseTask = async (id: number) => {
     await releaseTask(id);
     message.success("已放弃，任务退回公共池，草稿已保留");
@@ -1603,6 +1615,14 @@ export default function Projects() {
                           >
                             {editable ? "编辑标注" : "查看标注"}
                           </Button>
+                          {canEditAgain(task) && (
+                            <Tooltip title="提交之后再改：回到「标注中」，轮次和片段不变，改完再提交">
+                              <Button size="small" type="link"
+                                onClick={() => handleEditAgain(task, (t) => openWorkspace(t, false, p.id))}>
+                                继续编辑
+                              </Button>
+                            </Tooltip>
+                          )}
                           {editable && (
                             <Popconfirm
                               title="放弃任务"
@@ -3089,6 +3109,9 @@ export default function Projects() {
         focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
+        onEditAgain={workspaceReadOnly && canEditAgain(workspaceTask)
+          ? () => handleEditAgain(workspaceTask!, (t) => { setWorkspaceReadOnly(false); setWorkspaceTask(t); })
+          : undefined}
         // 关掉也刷一遍：中途改过类别、删过段，不刷的话列表上的数还是进去之前那份
         onClose={() => { setWorkspaceTask(null); refresh(); }}
         onSaved={refresh}
