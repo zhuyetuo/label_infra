@@ -140,6 +140,8 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
+  /** 只读时也能删（管理员 / 审核员直接删到服务器，不用认领）。删前都要确认 */
+  canDeleteReadOnly?: boolean;
   /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
   onSplit?: (id: number) => void;
   /** 夜视增强：把这一段黑得看不见的画面捞出来看清楚（夜里那几路才用得上）。
@@ -188,6 +190,7 @@ export default function SegmentPanel({
   loopRange,
   onUpdate,
   onDelete,
+  canDeleteReadOnly,
   onSplit,
   onLowlight,
   onReturnToCandidate,
@@ -1086,6 +1089,17 @@ export default function SegmentPanel({
                       「找相似 / 一句话找画面」再碰到同一段时间，会以为早写过了而跳过，
                       于是这一段**再也写不回来**。所以从候选来的行，删之前先说清楚，
                       并把人推到上面那个「退回候选」——那个会把候选也一起还原。 */}
+                  {readOnly && canDeleteReadOnly && (
+                    <Popconfirm
+                      title="删掉这一段？"
+                      description={i.from_candidate_id != null ? "直接从库里删（不用认领）。它是从疑似片段确认来的，那条候选会一起标成「排除」" : "直接从库里删（不用认领），标注员那边会同步"}
+                      okText="删除"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => onDelete(i.id)}
+                    >
+                      <Button size="small" danger type="link">删除</Button>
+                    </Popconfirm>
+                  )}
                   {!readOnly &&
                     (i.from_candidate_id != null ? (
                       <Popconfirm

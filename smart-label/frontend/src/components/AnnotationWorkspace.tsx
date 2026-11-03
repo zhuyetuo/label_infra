@@ -18,7 +18,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
-import { ArrowDownOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -59,7 +59,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segEdit, segSplit } from "@/api/segReview";
+import { segDecide, segDelete, segEdit, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -1052,6 +1052,12 @@ export default function AnnotationWorkspace({
                 删
               </Button>
             )}
+            {readOnly && canFlag && !segReview && (
+              <Popconfirm title="删掉这一段？" description="直接从库里删（不用认领）" okText="删除"
+                okButtonProps={{ danger: true }} onConfirm={() => deleteItemRemote(it)}>
+                <Button size="small" type="link" danger style={{ padding: 0 }}>删</Button>
+              </Popconfirm>
+            )}
           </div>
         );
       })}
@@ -1079,6 +1085,21 @@ export default function AnnotationWorkspace({
       )}
       {!it.review_note && it.seg_status !== "approved" && (
         <Button size="small" type="primary" onClick={() => handleSegApprove(it, true)}>通过</Button>
+      )}
+      {readOnly && !segReview && (
+        <Popconfirm
+          title="删掉这一段？"
+          description={it.from_candidate_id != null
+            ? "重复的 / 不要的直接删（不用认领）。它是从疑似片段确认来的，那条候选会一起标成「排除」"
+            : "重复的 / 不要的直接删（不用认领），标注员那边会同步"}
+          okText="删除"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => deleteItemRemote(it)}
+        >
+          <Tooltip title="删掉这一段（比如跟旁边那条完全重复）">
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Tooltip>
+        </Popconfirm>
       )}
       {it.review_note ? (
         <Button size="small" onClick={() => handleReviewNote(it, null)}>清除问题</Button>
@@ -1121,6 +1142,20 @@ export default function AnnotationWorkspace({
   }, [segReview?.reloadKey]);
 
   // 审核员 / 管理员在只读任务里改类别（走片段接口，不用认领）
+  // 只读（管理员 / 审核员旁观）时删一段：直接走片段接口删到库里，不用认领。
+  // 正在循环它的话停掉循环，地址栏的 seg 也清掉
+  const deleteItemRemote = async (it: LabelItem) => {
+    if (taskId == null) return;
+    await segDelete(it.id);
+    if (loopInfo?.itemId === it.id) {
+      setLoop(null);
+      setStickyRange(null);
+      setUrlSeg(null);
+    }
+    const d = await getDraft(taskId);
+    setItems(d.items);
+    message.success("已删除这一段");
+  };
   const relabelItem = async (it: LabelItem, labelId: number) => {
     if (taskId == null || labelId === it.label_id) return;
     await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
@@ -1826,7 +1861,14 @@ export default function AnnotationWorkspace({
         loopRange={loopRange}
         dupIds={dupIds}
         onUpdate={updateItems}
-        onDelete={(id) => setItems((prev) => prev.filter((x) => x.id !== id))}
+        onDelete={(id) => {
+          if (!readOnly) setItems((prev) => prev.filter((x) => x.id !== id));
+          else {
+            const it = items.find((x) => x.id === id);
+            if (it) void deleteItemRemote(it);
+          }
+        }}
+        canDeleteReadOnly={canFlag && !segReview}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];
