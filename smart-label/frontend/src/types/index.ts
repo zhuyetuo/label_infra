@@ -148,6 +148,8 @@ export interface BoundaryEdit {
 export interface Draft {
   round_no: number;
   items: LabelItem[];
+  /** 服务器拉草稿时的时间（存草稿时带回去，防止旧版本覆盖别人刚改的） */
+  server_time?: string | null;
 }
 
 export interface AppUser {

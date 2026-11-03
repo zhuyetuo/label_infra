@@ -44,9 +44,20 @@ export const releaseAllTasks = (projectId: number) =>
 
 export const heartbeat = (id: number) => request.patch<never, null>(`/tasks/${id}/heartbeat`);
 
-export const getDraft = (id: number) => request.get<never, Draft>(`/tasks/${id}/draft`);
+// 每个任务上次拉草稿时服务器的时间。存草稿时带上：这之后别人（管理员在片段弹窗里直接改）
+// 动过的片段，服务器不拿这边的旧版本覆盖，并回一个 kept_others，这边据此重新拉
+const loadedAt = new Map<number, string>();
 
-export const saveDraft = (
+/** 存草稿时发现别人刚改过片段：工作台听这个事件重新拉一遍 */
+export const DRAFT_STALE_EVENT = "draft-stale";
+
+export const getDraft = async (id: number) => {
+  const d = await request.get<never, Draft>(`/tasks/${id}/draft`);
+  if (d.server_time) loadedAt.set(id, d.server_time);
+  return d;
+};
+
+export const saveDraft = async (
   id: number,
   items: {
     label_id: number;
@@ -59,7 +70,14 @@ export const saveDraft = (
     uncertain?: boolean;
     uncertain_reason?: string | null;
   }[]
-) => request.put<never, null>(`/tasks/${id}/draft`, { items });
+) => {
+  const r = await request.put<never, { kept_others?: number } | null>(`/tasks/${id}/draft`, {
+    items,
+    loaded_at: loadedAt.get(id) ?? null,
+  });
+  if (r?.kept_others) window.dispatchEvent(new CustomEvent(DRAFT_STALE_EVENT, { detail: { taskId: id, n: r.kept_others } }));
+  return r;
+};
 
 export const submitTask = (id: number) => request.post<never, Task>(`/tasks/${id}/submit`);
 

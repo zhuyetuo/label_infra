@@ -206,3 +206,38 @@ def test_长片段优先(db, run):
     r = run(api.claim(api.ClaimIn(label_id=w.parent.id, n=1, order="long"), db, w.rev))
     assert r["data"]["claimed"] == 1
     assert [i["id"] for i in _q(run, db, w.rev, label_id=w.parent.id, mine=True)["items"]] == [w.items[1].id]
+
+
+def test_标注员开着任务时管理员直接改_不被他的旧草稿冲掉(db, run):
+    from datetime import datetime, timedelta
+
+    w = _world(db, run)
+    w.t.status = TaskStatus.IN_PROGRESS
+    w.t.locked_by = w.ann.id
+    w.t.lock_expires_at = datetime.now() + timedelta(hours=1)
+    run(db.commit())
+    all_items = run(db.execute(select(AnnotationLabelItem))).scalars().all()
+    # 标注员这时拉了草稿：手里是旧版本
+    stale = [SimpleNamespace(label_id=x.label_id, start_time_ms=x.start_time_ms, end_time_ms=x.end_time_ms,
+                             origin_item_id=x.id, source_type=None, ai_confidence=None, ai_confirmed=None,
+                             uncertain=None, uncertain_reason=None) for x in all_items]
+    loaded_at = datetime.now() - timedelta(seconds=1)
+    a, b = w.items[0], w.items[1]
+    # 管理员在片段弹窗里直接改起止（不再 409），改完就算通过
+    r = run(api.edit(a.id, api.EditIn(start_time_ms=500, end_time_ms=2500), db, w.admin))
+    assert r["data"]["seg_status"] == "approved"
+    # 管理员把 b 拆成两段：右半段是新建的，标注员手里没有
+    run(api.split(b.id, api.SplitIn(at_ms=b.start_time_ms + 1500), db, w.admin))
+    n_before = len(run(db.execute(select(AnnotationLabelItem))).scalars().all())
+
+    # 标注员拿旧版本存草稿：a 的旧起止不写回，b 的右半段也不删
+    rec = run(task_service.save_draft(db, w.t.id, w.ann, stale, loaded_at))
+    assert rec.kept_others == 3
+    got = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == a.id))).scalar_one()
+    assert (got.start_time_ms, got.end_time_ms, got.seg_status) == (500, 2500, "approved")
+    assert len(run(db.execute(select(AnnotationLabelItem))).scalars().all()) == n_before
+
+    # 不带 loaded_at（老前端）：照旧整份覆盖
+    rec = run(task_service.save_draft(db, w.t.id, w.ann, stale))
+    got = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == a.id))).scalar_one()
+    assert got.start_time_ms == 0
