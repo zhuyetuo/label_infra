@@ -35,7 +35,10 @@ export function useUrlTask<T extends { id: number }>(
     const next = openTaskId == null ? null : String(openTaskId);
     if (current === next) return;
     const p = new URLSearchParams(params);
-    if (next == null) p.delete("task");
+    if (next == null) {
+      p.delete("task");
+      p.delete("seg");   // 工作台里写进去的「正在看哪一段」，关掉工作台一起清
+    }
     else p.set("task", next);
     setParams(p, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps

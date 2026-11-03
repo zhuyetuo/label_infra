@@ -18,7 +18,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table
 } from "antd";
-import { ArrowDownOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -512,7 +512,27 @@ export default function AnnotationWorkspace({
   };
   const handleClose = () => {
     bus.setLoop(null);
+    setUrlSeg(null);
     onClose();
+  };
+  /** 把正在看的片段写进地址栏（?seg=片段id），复制链接发给别人就能直接打开到这一段。
+   *  只在地址栏里已经有 ?task= 的页面上写（项目页 / 任务页），别的地方打开的工作台不动地址栏。
+   *  用 replaceState，不往历史里塞记录 */
+  const setUrlSeg = (id: number | null) => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.get("task")) return;
+    if (id == null) url.searchParams.delete("seg");
+    else url.searchParams.set("seg", String(id));
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url.href);
+  };
+  const copySegLink = (id: number) => {
+    const url = new URL(window.location.href);
+    if (taskId != null) url.searchParams.set("task", String(taskId));
+    url.searchParams.set("seg", String(id));
+    const text = url.href;
+    const ok = () => message.success("链接已复制，发给对方打开就是这一段");
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(ok, () => window.prompt("复制这个链接：", text));
+    else window.prompt("复制这个链接：", text);
   };
 
   useEffect(() => {
@@ -590,14 +610,23 @@ export default function AnnotationWorkspace({
       // 从筛过类别的列表点进来（项目页筛了「进食」/候选类别「进食」），又没指定具体时刻：
       // 直接停到第一段对得上的，循环播放。不然进来还是从 0 秒开始，几十段里要自己去找
       // 刷新回来：回到上次的位置和循环（不是从别处指定了时刻点进来的才这么做）
-      const restore = initialSeekMs == null && !segReview && savedPos != null;
+      // 链接里带了片段（?task=…&seg=片段id，别人发过来让改这一段的）：直接循环那一段，优先于上次的位置
+      const urlSegId = Number(new URLSearchParams(window.location.search).get("seg"));
+      const urlSeg = urlSegId && !segReview ? draft.items.find((x) => x.id === urlSegId) : undefined;
+      if (urlSeg) {
+        bus.seek(urlSeg.start_time_ms / 1000);
+        setLoop({ startMs: urlSeg.start_time_ms, endMs: urlSeg.end_time_ms });
+      } else if (urlSegId) {
+        message.warning("链接里的那一段已经不在了（可能被删了或重新拆过）");
+      }
+      const restore = !urlSeg && initialSeekMs == null && !segReview && savedPos != null;
       if (restore) {
         bus.seek(savedPos.sec);
         if (savedPos.loop) setLoop(savedPos.loop);
         else if (savedPos.view) setStickyRange(savedPos.view);
       }
       posReady.current = true;
-      const autoJump = initialSeekMs == null && !restore;
+      const autoJump = initialSeekMs == null && !restore && !urlSeg;
       const jumpTo = (r: { start_time_ms: number; end_time_ms: number }, what: string, n: number) => {
         bus.seek(r.start_time_ms / 1000);
         setLoop({ startMs: r.start_time_ms, endMs: r.end_time_ms });
@@ -829,6 +858,12 @@ export default function AnnotationWorkspace({
 
   // 正在循环的已标注片段（审核员在浮窗里直接「通过 / 有问题」用）
   const loopItem = loopInfo?.itemId != null ? items.find((x) => x.id === loopInfo.itemId) : undefined;
+  // 循环到哪一段，地址栏的 ?seg= 就跟到哪一段（刷新 / 复制地址栏发给别人都是这一段）
+  useEffect(() => {
+    if (segReview || loopInfo?.itemId == null) return;
+    setUrlSeg(loopInfo.itemId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loopInfo?.itemId]);
 
   // 退回给我的那条拆出来的「一组」：每一段都能接着拆、调起止、改类别（不止原来那一条）
   // 存在 localStorage 里：刷新页面回来，拆出来的那几段还认得是「这一组」
@@ -1016,6 +1051,9 @@ export default function AnnotationWorkspace({
   const waveReviewBar = (it: LabelItem) => (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>这一条：</Typography.Text>
+      <Tooltip title="复制这一段的链接：发给标注员，打开就直接循环这一段">
+        <Button size="small" type="text" icon={<LinkOutlined />} onClick={() => copySegLink(it.id)} />
+      </Tooltip>
       {it.seg_status === "approved" && <Tag color="success">✓ 已通过</Tag>}
       {it.review_note && <Tag color="red">退回：{it.review_note}</Tag>}
       <span style={{ flex: 1 }} />
