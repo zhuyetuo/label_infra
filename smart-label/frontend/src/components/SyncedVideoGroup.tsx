@@ -391,9 +391,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // ── 窗口化：画面从页面里拿出来，变成能拖、能改大小、能锁住位置的浮窗 ──
   // 只是同一组 DOM 换成 position:fixed，<video> 不重建，播放进度、循环都不断。
   // 位置 / 大小 / 开没开都记在 localStorage，下次打开任务还是那样
-  type FloatCfg = { on: boolean; left: number; top: number; w: number; h: number; locked: boolean };
+  // gap：画面浮出去之后，页面顶上留多高的空位（下面的波形 / 片段列表整体往下挪），
+  // 浮窗和波形小窗可以放在这块空位上，不挡工作栏
+  type FloatCfg = { on: boolean; left: number; top: number; w: number; h: number; locked: boolean; gap: number };
   const [flt, setFltState] = useState<FloatCfg>(() => {
-    const d: FloatCfg = { on: false, left: Math.max(0, window.innerWidth - 700), top: 80, w: 640, h: 400, locked: false };
+    const d: FloatCfg = { on: false, left: Math.max(0, window.innerWidth - 700), top: 80, w: 640, h: 400, locked: false, gap: 0 };
     try {
       const v = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
       if (!v || typeof v !== "object") return d;
@@ -447,6 +449,24 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         }
       }
       last = { ...c0, left, top, w, h };
+      setFltState(last);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      saveFlt(last);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  // 拖顶上空位的下沿：调这块空位多高。拖的过程只改状态，松手才落盘
+  const gapDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const sy = e.clientY, c0 = flt;
+    let last = c0;
+    const move = (ev: MouseEvent) => {
+      last = { ...c0, gap: Math.round(Math.min(Math.max(0, c0.gap + ev.clientY - sy), window.innerHeight - 160)) };
       setFltState(last);
     };
     const up = () => {
@@ -1086,6 +1106,29 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   );
 
   return (
+    <>
+    {/* 画面浮出去之后，原来的位置留一块可调高度的空位：往下拖下沿，工作栏整体下移，
+        上面腾出地方放画面浮窗和波形小窗，不互相遮。双击下沿收起。
+        这个占位放在 Fragment 的第一格，浮不浮都在（不浮时是 null），后面那块视频的位置不变、不重建 */}
+    {floating ? (
+      <div style={{ flex: "0 0 auto", height: (flt.gap ?? 0) + 10, position: "relative" }}>
+        {(flt.gap ?? 0) > 30 && (
+          <div style={{ position: "absolute", inset: "0 0 10px 0", border: "1px dashed #3a3a3a", borderRadius: 6,
+            display: "flex", alignItems: "center", justifyContent: "center", color: "#555", fontSize: 12, pointerEvents: "none" }}>
+            留给浮窗的空位（拖下沿调高度，双击收起）
+          </div>
+        )}
+        <div
+          onMouseDown={gapDrag}
+          onDoubleClick={() => setFlt({ gap: 0 })}
+          title="往下拖：工作栏下移，上面腾出空位放画面 / 波形浮窗；双击收起"
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 10, cursor: "row-resize",
+            display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
+          <div style={{ width: 60, height: 4, borderRadius: 2, background: "#888" }} />
+        </div>
+      </div>
+    ) : null}
     <div
       className={fill && !floating ? "ws-videos" : undefined}
       style={
@@ -1266,5 +1309,6 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         </div>
       )}
     </div>
+    </>
   );
 }
