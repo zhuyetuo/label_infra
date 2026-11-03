@@ -146,17 +146,26 @@ function movingAvg(v: number[], k = 3): number[] {
 
 const spline = uPlot.paths.spline?.();
 
-/** 纵轴自适应：只看当前横轴范围里的点，按 0.5% ~ 99.5% 分位定上下限，留 12% 余量 */
-function fitVisible(u: uPlot): [number, number] {
+/** 纵轴自适应：只看当前横轴范围里的点，按 0.5% ~ 99.5% 分位定上下限，留 12% 余量。
+ *  seg（相对秒）= 片段本身：这一截**完整**放进来，不按分位裁——片段两边平稳的数据一多，
+ *  分位就会落在平稳那一档，把片段里真正要看的动作（抓挠的大幅抖动）切掉 */
+function fitVisible(u: uPlot, seg?: [number, number]): [number, number] {
   const xs = u.data[0] as number[];
   const mn = u.scales.x.min ?? -Infinity, mx = u.scales.x.max ?? Infinity;
   const vals: number[] = [];
+  let segLo = Infinity, segHi = -Infinity;
   for (let s = 1; s < u.data.length; s++) {
     const ys = u.data[s] as (number | null)[];
     for (let i = 0; i < xs.length; i++) {
       if (xs[i] < mn || xs[i] > mx) continue;
       const v = ys[i];
-      if (v != null && Number.isFinite(v)) vals.push(v);
+      if (v != null && Number.isFinite(v)) {
+        vals.push(v);
+        if (seg && xs[i] >= seg[0] && xs[i] <= seg[1]) {
+          if (v < segLo) segLo = v;
+          if (v > segHi) segHi = v;
+        }
+      }
     }
   }
   if (!vals.length) return [-1, 1];
@@ -164,6 +173,10 @@ function fitVisible(u: uPlot): [number, number] {
   const q = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
   let lo = vals.length > 200 ? q(0.005) : vals[0];
   let hi = vals.length > 200 ? q(0.995) : vals[vals.length - 1];
+  if (Number.isFinite(segLo)) {
+    lo = Math.min(lo, segLo);
+    hi = Math.max(hi, segHi);
+  }
   if (hi - lo < 0.05) {
     const m = (hi + lo) / 2;
     lo = m - 0.05;
@@ -254,7 +267,13 @@ function MiniPlot({
         // 纵轴：钉住了几段要并排比时用共用的范围；平时按**当前看得见的那一截**自适应——
         // 原来按拉回来的整截数据（前后各 30 秒）取最大最小，别处一个大冲击就把这一段压成一条线。
         // 取 0.5% ~ 99.5% 分位，孤立的尖峰不撑大量程，再留 12% 余量
-        y: yRange ? { range: () => yRange } : { auto: true, range: (u) => fitVisible(u) },
+        y: yRange ? { range: () => yRange } : {
+          auto: true,
+          range: (u) => {
+            const r = cur();
+            return fitVisible(u, [(r.s - info.startMs) / 1000, (r.e - info.startMs) / 1000]);
+          },
+        },
       },
       axes: [
         { stroke: axisColor, grid: { stroke: "rgba(128,128,128,.15)" }, size: 22, font: "10px sans-serif",
@@ -550,10 +569,20 @@ function MiniPlot({
     <div style={{ position: "relative" }}>
       <div ref={el} />
       {live && (
+        // 播放线：品红色、带白描边和光晕，上下各一个三角——原来那条 2px 的橙线跟「活动」那条橙色色带、
+        // 红色 X 轴混在一起，很难一眼找到
         <div
           ref={headRef}
-          style={{ position: "absolute", width: 2, background: "#fa8c16", pointerEvents: "none", display: "none" }}
-        />
+          style={{
+            position: "absolute", width: 3, marginLeft: -1, background: "#eb2f96", pointerEvents: "none", display: "none", zIndex: 3,
+            boxShadow: "0 0 0 1px rgba(255,255,255,.85), 0 0 8px 2px rgba(235,47,150,.75)",
+          }}
+        >
+          <div style={{ position: "absolute", top: -2, left: -5, width: 0, height: 0,
+            borderLeft: "6.5px solid transparent", borderRight: "6.5px solid transparent", borderTop: "9px solid #eb2f96" }} />
+          <div style={{ position: "absolute", bottom: -2, left: -5, width: 0, height: 0,
+            borderLeft: "6.5px solid transparent", borderRight: "6.5px solid transparent", borderBottom: "9px solid #eb2f96" }} />
+        </div>
       )}
     </div>
   );
@@ -921,7 +950,7 @@ export default function LoopWaveform({
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, marginTop: 2 }}>
             {chans.map((c) => <span key={c.key} style={{ color: c.color }}>━ {c.label}</span>)}
-            <Tooltip title="底色 = 片段，橙线 = 播放位置，顶上细色条 = 前后挨着的别的片段">
+            <Tooltip title="底色 = 片段，品红竖线 = 播放位置，顶上细色条 = 前后挨着的别的片段">
               <QuestionCircleOutlined style={{ color: token.colorTextTertiary, cursor: "help" }} />
             </Tooltip>
             <span style={{ flex: 1 }} />
