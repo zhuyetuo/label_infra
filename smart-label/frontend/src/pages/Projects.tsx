@@ -195,7 +195,9 @@ export default function Projects() {
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean };
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
+    /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
+    minSec?: number | null };
   // 筛选和展开的项目记在 localStorage：刷新页面回来还是刚才那个视图（比如只看抓挠），不用重新点
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>(() => {
     try {
@@ -231,6 +233,13 @@ export default function Projects() {
     status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
     ...(taskFilters[projectId] as Partial<TaskFilter> | undefined),
   });
+  const projLabelNames = (projectId: number, ids: number[]) =>
+    ids.map((id) => labelsOf(projectId).find((l) => l.id === id)?.display_name).filter((x): x is string => !!x);
+  const minMsOf = (projectId: number) => {
+    const f = filterOf(projectId);
+    return f.labels.length && f.minSec ? f.minSec * 1000 : 0;
+  };
+  const fmtSecShort = (sec: number) => (sec >= 60 ? `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒` : `${sec.toFixed(1)}s`);
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
@@ -1143,6 +1152,19 @@ export default function Projects() {
             const wantLabelIds = f.labels.length
               ? descendantIds(labelsOf(p.id), f.labels)
               : new Set<number>();
+            // 选中类别（含子类）在这个任务里的最长一段 / 合计时长
+            const focusDur = (t: Task) => {
+              let max = 0, sum = 0, n = 0;
+              for (const [lid, c] of Object.entries(t.label_counts ?? {})) {
+                if (!wantLabelIds.has(Number(lid))) continue;
+                max = Math.max(max, c.max_ms ?? 0);
+                sum += c.ms ?? 0;
+                n += c.n;
+              }
+              return { max, sum, n };
+            };
+            const minMs = f.labels.length && f.minSec ? f.minSec * 1000 : 0;
+            const focusNames = projLabelNames(p.id, f.labels);
             const matchLabels = (t: Task) => {
               const lc = t.label_counts ?? {};
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
@@ -1183,6 +1205,7 @@ export default function Projects() {
                 (!f.noCsv || noCsv(t)) &&
                 (!f.unassigned || t.assigned_to == null) &&
                 (!f.segReturned || segReturnedOf(t) > 0) &&
+                (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
@@ -1302,6 +1325,30 @@ export default function Projects() {
                     </Checkbox>
                   </Tooltip>
                 )}
+                {f.labels.length > 0 && (
+                  <Tooltip title="只看这几类里最长一段不短于这么多秒的任务；每行写着最长一段和合计多长">
+                    <InputNumber size="small" min={0} step={5} value={f.minSec ?? null} placeholder="片段"
+                      onChange={(v) => setFilter(p.id, { minSec: v ?? null })} addonAfter="秒以上" style={{ width: 130 }} />
+                  </Tooltip>
+                )}
+                {f.labels.length > 0 && (isAdmin || role === "reviewer") && (
+                  <Popconfirm
+                    title={`把筛出来的 ${rows.length} 个任务里${f.minSec ? ` ≥${f.minSec} 秒的` : "的全部"}「${focusNames.join("、")}」加入数据池？`}
+                    description="只加这几类（含子类），别的类别不动；待定的不进；已在池里的不重复"
+                    onConfirm={async () => {
+                      const r = await poolAdd({
+                        task_ids: rows.map((t) => t.id), label_names: focusNames,
+                        min_sec: f.minSec || undefined, source: "all",
+                      });
+                      message.success(`加入 ${r.added} 段`);
+                      refresh();
+                    }}
+                  >
+                    <Button size="small" type="primary" ghost disabled={!rows.length}>
+                      {f.minSec ? `≥${f.minSec}s 的` : ""}{focusNames.join("、")}加入数据池
+                    </Button>
+                  </Popconfirm>
+                )}
                 {segReturnedTasks > 0 && (
                   <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
                     <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
@@ -1345,7 +1392,7 @@ export default function Projects() {
                     </Button>
                   </Tooltip>
                 )}
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned) && (
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned || !!minMs) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
@@ -1572,6 +1619,11 @@ export default function Projects() {
                                   <Space size={0} style={{ cursor: "pointer" }}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id] })}>{l.display_name} {c.n}</Tag>
+                                    {(c.max_ms ?? 0) > 0 && (
+                                      <Tag style={{ marginRight: 2 }} color={minMsOf(p.id) && (c.max_ms ?? 0) >= minMsOf(p.id) ? "cyan" : undefined}>
+                                        最长 {((c.max_ms ?? 0) / 1000).toFixed(1)}s · 共 {fmtSecShort((c.ms ?? 0) / 1000)}
+                                      </Tag>
+                                    )}
                                     {/* 每个小标签单独点：只看这一类里通过的 / 退回的 / 还没审的 / AI 待确认的 */}
                                     {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_approved" })}>✓通过 {ok}</Tag>}
@@ -1714,10 +1766,17 @@ export default function Projects() {
                               <>
                                 {inPool < n && (
                                   <Popconfirm
-                                    title="这个任务整份加入数据池？"
-                                    description={`当前 ${n} 段（待定的不进）。之后片段再被改，会自动出池`}
+                                    title={filterOf(p.id).labels.length
+                                      ? `只把「${projLabelNames(p.id, filterOf(p.id).labels).join("、")}」${filterOf(p.id).minSec ? `里 ≥${filterOf(p.id).minSec} 秒的` : ""}加入数据池？`
+                                      : "这个任务整份加入数据池？"}
+                                    description={filterOf(p.id).labels.length
+                                      ? "按上面选的类别 / 秒数只加这一部分，别的类别不动；待定的不进"
+                                      : `当前 ${n} 段（待定的不进）。之后片段再被改，会自动出池`}
                                     onConfirm={async () => {
-                                      const r = await poolAdd({ task_ids: [task.id], source: "all" });
+                                      const fl = filterOf(p.id);
+                                      const r = await poolAdd(fl.labels.length
+                                        ? { task_ids: [task.id], label_names: projLabelNames(p.id, fl.labels), min_sec: fl.minSec || undefined, source: "all" }
+                                        : { task_ids: [task.id], source: "all" });
                                       message.success(`加入 ${r.added} 段`);
                                       refresh();
                                     }}
