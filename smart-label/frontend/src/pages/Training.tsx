@@ -19,6 +19,7 @@ import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import { fmtSecs } from "@/utils/fmtDuration";
 import ModelCompare from "@/components/ModelCompare";
 import DataPoolPanel from "@/components/DataPoolPanel";
+import ClassCompare from "@/components/ClassCompare";
 import type { LabelDefinition, Task } from "@/types";
 import {
   type DatasetCheck,
@@ -782,6 +783,11 @@ export default function Training() {
             key: "pool",
             label: "数据池",
             children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms, item) => openTask(id, ms, item)} />,
+          },
+          {
+            key: "compare",
+            label: "类别对比",
+            children: <ClassCompare />,
           },
           {
             key: "ds",
