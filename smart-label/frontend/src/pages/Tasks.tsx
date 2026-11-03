@@ -32,7 +32,7 @@ export default function Tasks() {
     queryKey: ["projects"],
     queryFn: listProjects,
   });
-  const { data: tasks, isLoading } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
+  const { data: tasks, isLoading } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   // /users 只对管理员开放，其他角色拿不到就退回显示ID
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });

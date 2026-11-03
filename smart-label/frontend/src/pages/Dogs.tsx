@@ -144,7 +144,7 @@ export default function Dogs() {
   const isAdmin = userInfo?.role === "admin" || userInfo?.role === "super_admin";
   const canEdit = hasFeature(userInfo, "dogs_edit");
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
-  const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), enabled: isAdmin });
+  const { data: tasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), enabled: isAdmin, staleTime: 30_000 });
 
   // 当前看哪个场所（all / 公司影棚 / 佛山博朗旺狗场…）。记住选择：管狗场的人不该每次都先切一下
   const [savedSiteTab, setSiteTab] = useState(() => getSavedText(SITE_TAB_KEY, "all"));

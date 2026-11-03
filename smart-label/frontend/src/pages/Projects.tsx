@@ -165,7 +165,7 @@ export default function Projects() {
   const isAdmin = role === "admin" || role === "super_admin";
 
   const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  const { data: allTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks() });
+  const { data: allTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
