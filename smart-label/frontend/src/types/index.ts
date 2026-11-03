@@ -82,6 +82,8 @@ export interface Task {
   cand_count?: number;
   /** 同一轨上有重叠的片段数（同类重复 / 父子 / 类别冲突；只有列表接口会算） */
   overlap_count?: number;
+  /** 按类别分：每类有多少段卷进了重叠 {label_id: n} */
+  overlap_by_label?: Record<number, number>;
   cand_pending?: number;
   /** 候选按类别分 {类别名: {n, pending}}。候选存的是名字，不是 label_id。
    *  项目页的「含类别」要连候选一起算（不然一句话找画面刚写的那条在项目页上找不着），

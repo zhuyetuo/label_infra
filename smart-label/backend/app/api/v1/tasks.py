@@ -10,7 +10,7 @@ import time
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, delete, func, insert, literal, select
+from sqlalchemy import and_, case, delete, func, insert, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -375,6 +375,7 @@ async def list_tasks(
     # 口径：同一条记录、同一轨里按开始时间排，跟它前面任一段重叠 ≥0.2s 的算一处
     # （所以 N = 多出来的那几段；三段压在一起算 2 处）
     overlap_counts: dict[int, int] = {}
+    overlap_by_label: dict[int, dict[int, int]] = {}
     if task_ids:
         from app.models.label import LabelDefinition
         from app.services.label_tracks import OVERLAP_MIN_MS, track_of
@@ -386,23 +387,29 @@ async def list_tasks(
         trk_map = {i: t for i, t in trk_of.items() if t}
         it = AnnotationLabelItem
         trk = case(trk_map, value=it.label_id, else_="") if trk_map else literal("")
-        prev_end = func.max(it.end_time_ms).over(
-            partition_by=(it.annotation_record_id, trk), order_by=(it.start_time_ms, it.id), rows=(None, -1))
+        win = {"partition_by": (it.annotation_record_id, trk), "order_by": (it.start_time_ms, it.id)}
+        prev_end = func.max(it.end_time_ms).over(rows=(None, -1), **win)
+        next_start = func.lead(it.start_time_ms).over(**win)
         inner = (
-            select(AnnotationRecord.task_id.label("tid"), it.start_time_ms.label("s"), it.end_time_ms.label("e"),
-                   prev_end.label("pe"))
+            select(AnnotationRecord.task_id.label("tid"), it.label_id.label("lid"), it.start_time_ms.label("s"),
+                   it.end_time_ms.label("e"), prev_end.label("pe"), next_start.label("ns"))
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
             .join(it, it.annotation_record_id == AnnotationRecord.id)
             .where(AnnotationRecord.round_no == Task.round_no)
         ).subquery()
+        # 一段算「有重叠」：跟前面任一段压了 ≥0.2s，或者后面紧跟的那段在它结束前 0.2s 以上就开始了。
+        # 数的是**卷进重叠的片段数**（跟工作台里「⚠ 重叠 N」一个口径），按类别分开数，
+        # 项目页按某个类别看时只算那一类
         ov_end = case((inner.c.pe < inner.c.e, inner.c.pe), else_=inner.c.e)
+        hit = or_(and_(inner.c.pe.is_not(None), ov_end - inner.c.s >= OVERLAP_MIN_MS),
+                  and_(inner.c.ns.is_not(None), inner.c.e - inner.c.ns >= OVERLAP_MIN_MS))
         rows = await db.execute(
-            select(inner.c.tid, func.count())
-            .where(inner.c.pe.is_not(None), ov_end - inner.c.s >= OVERLAP_MIN_MS)
-            .group_by(inner.c.tid)
+            select(inner.c.tid, inner.c.lid, func.count()).where(hit).group_by(inner.c.tid, inner.c.lid)
         )
-        overlap_counts = {int(t): int(n) for t, n in rows.all()}
+        for t, lid, n in rows.all():
+            overlap_counts[int(t)] = overlap_counts.get(int(t), 0) + int(n)
+            overlap_by_label.setdefault(int(t), {})[int(lid)] = int(n)
 
     _lap("overlap")
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
@@ -494,6 +501,7 @@ async def list_tasks(
                 "draft_item_count": draft_counts.get(t.id, 0),
                 "label_counts": label_counts.get(t.id, {}),
                 "overlap_count": overlap_counts.get(t.id, 0),
+                "overlap_by_label": overlap_by_label.get(t.id, {}),
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出

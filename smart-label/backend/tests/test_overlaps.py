@@ -38,6 +38,8 @@ def test_列表接口给重叠数(db, run):
                                end_time_ms=a.end_time_ms + 500, source_type=LabelItemSource.human_added))
     run(db.commit())
     rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
-    got = {r["id"]: r["overlap_count"] for r in rows}
-    assert got[w.t.id] == 1
+    got = {r["id"]: r for r in rows}
+    # 卷进重叠的片段数：a 和新加的那条，共 2 段，都是 a 的类别
+    assert got[w.t.id]["overlap_count"] == 2
+    assert got[w.t.id]["overlap_by_label"] == {a.label_id: 2}
     assert len(run(db.execute(_select(AnnotationLabelItem))).scalars().all()) >= 6
