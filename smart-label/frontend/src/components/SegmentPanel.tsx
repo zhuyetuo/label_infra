@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
+import LabelTreeSelect from "@/components/LabelTreeSelect";
 import { Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
-import type { SelectProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
-import { TRACK_NAME, byId, descendantIds, flatten, trackOf } from "@/utils/labelTree";
+import { TRACK_NAME, byId, descendantIds, trackOf } from "@/utils/labelTree";
 import { REASON_LABEL, candTitle } from "@/utils/candReason";
 import BoundaryEditsTag from "@/components/BoundaryEditsTag";
 
@@ -450,46 +450,6 @@ export default function SegmentPanel({
     setPicked([]);
   }, [projectKey]);
 
-  const labelOptions = flatten(labels).map(({ label: l, depth }) => ({
-    value: l.id,
-    // 能搜：标签树有上百条，「抓挠-头颈耳-耳/耳后」翻到手酸。
-    // 搜的是纯文本，所以单独给一个 title——label 是 ReactNode，搜不了
-    title: l.display_name,
-    label: (
-      <span style={{ paddingLeft: depth * 12, whiteSpace: "nowrap" }}>
-        {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
-        <Tag color={l.color || colorOf(l.id)} style={{ marginRight: 0 }}>{l.display_name}</Tag>
-      </span>
-    ),
-  }));
-  /** 下拉选项，最近用过的那几条置顶。
-   *
-   *  标签树有上百条、三四级深，而实际连着改的往往就那一两个（「抓挠-头颈耳」
-   *  连点几十次）。置顶之后不用每次都翻或者搜。分组标题让人知道下面还有全量。 */
-  const labelOptionsWithRecent: SelectProps["options"] = useMemo(() => {
-    const usable = recent.filter((id) => labels.some((l) => l.id === id));
-    if (!usable.length) return labelOptions;
-    const pick = (id: number) => labelOptions.find((o) => o.value === id)!;
-    return [
-      { label: "最近用过", title: "最近用过", options: usable.map(pick) },
-      { label: "全部类别", title: "全部类别", options: labelOptions },
-    ];
-    // labelOptions 每次渲染都是新数组，用 labels/recent 当依赖就够
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labels, recent]);
-
-  /** 类别下拉的公共设置。
-   *
-   *  **下拉不能跟着框的宽度走**：框只有 130~140px，而选项前面还有缩进和「└」，
-   *  于是二级、三级标签整条被截成「└ ...」——人看到的是一列一模一样的省略号，
-   *  根本没法选。popupMatchSelectWidth=false 让弹层按内容撑开。
-   *  顺带打开搜索：标签树上百条，翻不如打两个字。 */
-  const labelSelectProps = {
-    showSearch: true,
-    optionFilterProp: "title" as const,
-    popupMatchSelectWidth: false,
-    styles: { popup: { root: { maxHeight: 420, overflow: "auto" } } },
-  };
   // 筛选用：只列当前片段里实际出现过的类别（带数量），项目里配了但一段都没有的不出现
   const usedCounts = useMemo(() => {
     const m = new Map<number, number>();
@@ -600,15 +560,13 @@ export default function SegmentPanel({
                 不分的话一整排看着是平级的，人分不清哪个按钮动的是哪些行 */}
             <span style={{ color: "#555" }}>|</span>
             <Typography.Text strong>已选 {picked.length} 条</Typography.Text>
-            <Select
-              size="small"
-              style={{ width: 150 }}
+            <LabelTreeSelect
+              labels={labels}
+              style={{ width: 160 }}
               placeholder="全部改成…"
-              value={undefined}
-              {...labelSelectProps}
-              options={labelOptionsWithRecent}
-              onChange={(v) => {
-                const id = Number(v);
+              value={null}
+              recent={recent}
+              onChange={(id) => {
                 noteLabel(id);
                 update(picked, { label_id: id });
                 setPicked([]);
@@ -778,14 +736,13 @@ export default function SegmentPanel({
                   </Button>
                   {loopButton(g.start, g.end)}
                   {!readOnly && onCreate && (
-                    <Select<number | null>
-                      size="small"
+                    <LabelTreeSelect
+                      labels={labels}
                       placeholder="补标为…"
-                      style={{ width: 130 }}
+                      style={{ width: 140 }}
                       value={null}
-                      {...labelSelectProps}
-                      options={labelOptionsWithRecent}
-                      onChange={(v) => { if (v != null) { noteLabel(Number(v)); onCreate(g.start, g.end, v); } }}
+                      recent={recent}
+                      onChange={(v) => { noteLabel(v); onCreate(g.start, g.end, v); }}
                     />
                   )}
                 </Space>
@@ -852,23 +809,16 @@ export default function SegmentPanel({
                 {readOnly ? (
                   <Tag color={colorOf(i.label_id)}>{nameOf(i.label_id)}</Tag>
                 ) : (
-                  <Select
-                    size="small"
+                  // 层级下拉：默认只展开到当前类别那一层（抓挠 → 头颈耳 / 肩胸 / 躯干），
+                  // 更细的部位点开才有；收起来框里只显示带颜色的类别名
+                  <LabelTreeSelect
+                    labels={labels}
                     variant="borderless"
+                    tagLabel
                     value={i.label_id}
-                    style={{ width: 170 }}
-                    {...labelSelectProps}
-                    // 收起来之后**只显示标签本身**。选中项默认复用下拉里那份渲染，
-                    // 而那份带着缩进和「└」（在列表里用来看层级），塞进这个窄框里
-                    // 又被截成「└ ...」——层级信息在下拉里已经给过了，收起来之后
-                    // 人要看的就是"这条现在是什么类别"
-                    labelRender={({ value }) => (
-                      <Tag color={colorOf(Number(value))} style={{ marginRight: 0 }}>
-                        {nameOf(Number(value))}
-                      </Tag>
-                    )}
-                    options={labelOptionsWithRecent}
-                    onChange={(v) => { noteLabel(Number(v)); update([i.id], { label_id: v }); }}
+                    style={{ width: 180 }}
+                    recent={recent}
+                    onChange={(v) => { noteLabel(v); update([i.id], { label_id: v }); }}
                     title="改类别"
                   />
                 )}
