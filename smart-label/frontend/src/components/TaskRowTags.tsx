@@ -29,9 +29,12 @@ export function ImuTag({ task, sampleCode }: { task: Task; sampleCode: string | 
 export function CandKindTags({
   task,
   labels = [],
+  onPick,
 }: {
   task: Task;
   labels?: { display_name: string; color?: string | null }[];
+  /** 点某一类：打开工作台，疑似片段面板只看这一类 */
+  onPick?: (candName: string) => void;
 }) {
   const kinds = Object.entries(task.cand_labels ?? {}).filter(([, v]) => v.n > 0);
   if (!kinds.length) return null;
@@ -49,7 +52,8 @@ export function CandKindTags({
             <Tag
               color={findLabel(labels, name)?.color || undefined}
               bordered
-              style={{ marginRight: 0, borderStyle: "dashed", opacity: v.pending ? 1 : 0.6 }}
+              style={{ marginRight: 0, borderStyle: "dashed", opacity: v.pending ? 1 : 0.6, cursor: onPick ? "pointer" : undefined }}
+              onClick={onPick ? () => onPick(name) : undefined}
             >
               {candTitle(shown)} {v.n}
               {v.pending ? <span style={{ opacity: 0.75 }}>/{v.pending}待判</span> : null}

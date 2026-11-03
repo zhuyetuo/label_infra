@@ -77,6 +77,9 @@ interface Props {
   focusLabelIds?: number[];
   /** 「疑似片段」面板打开时先只看这几类候选（候选按名字存，所以是名字不是 id） */
   focusCandLabels?: string[];
+  /** 从列表里点某个类别标签进来的：不恢复上次的位置，直接跳到这一类的第一段循环，
+   *  对应面板（片段列表 / 疑似片段）隐藏了就显示、收起了就展开 */
+  jumpToFocus?: boolean;
   labels: LabelDefinition[];
   /** 只读模式：审核/已提交的任务只能看不能改 */
   readOnly?: boolean;
@@ -172,6 +175,7 @@ export default function AnnotationWorkspace({
   focusLabelName,
   focusLabelIds,
   focusCandLabels,
+  jumpToFocus,
   labels,
   readOnly,
   onClose,
@@ -622,7 +626,7 @@ export default function AnnotationWorkspace({
       } else if (urlSegId) {
         message.warning("链接里的那一段已经不在了（可能被删了或重新拆过）");
       }
-      const restore = !urlSeg && initialSeekMs == null && !segReview && savedPos != null;
+      const restore = !urlSeg && !jumpToFocus && initialSeekMs == null && !segReview && savedPos != null;
       if (restore) {
         bus.seek(savedPos.sec);
         if (savedPos.loop) setLoop(savedPos.loop);
@@ -643,10 +647,10 @@ export default function AnnotationWorkspace({
           setCandidates(cs);
           const flaggedCands = cs.filter((c) => c.review_note).sort((a, b) => a.start_time_ms - b.start_time_ms);
           setCandFlagFocus(!readOnly && flaggedCands.length > 0);
-          if (autoJump && !readOnly && flagged.length) {
+          if (autoJump && !jumpToFocus && !readOnly && flagged.length) {
             // 被退回来改的：先看审核标了问题的那几条，比按类别筛更具体
             jumpTo(flagged[0], `有问题：${flagged[0].review_note}`, flagged.length + flaggedCands.length);
-          } else if (autoJump && !readOnly && flaggedCands.length) {
+          } else if (autoJump && !jumpToFocus && !readOnly && flaggedCands.length) {
             jumpTo(flaggedCands[0], `${candTitle(flaggedCands[0].label_name)} 有问题：${flaggedCands[0].review_note}`, flaggedCands.length);
           } else if (autoJump) {
             // 候选类别优先：按「疑似进食」筛进来，要看的就是疑似片段；先挑还没判过的
@@ -1610,6 +1614,15 @@ export default function AnnotationWorkspace({
     setPanelHidden(next);
     saveHidden(next);
   };
+  // 点类别标签进来：把要看的那个面板亮出来
+  useEffect(() => {
+    if (!jumpToFocus || taskId == null) return;
+    const k: PanelKey | null = focusCandLabels?.length ? "cands" : focusLabelIds?.length ? "segs" : null;
+    if (!k) return;
+    if (panelHidden.includes(k)) showPanel(k);
+    if (!isPanelOpen(k)) setPanelOpen(k, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, jumpToFocus]);
   const panelTools = (k: PanelKey) => {
     const i = shownPanels.indexOf(k);
     return (
