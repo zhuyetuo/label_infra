@@ -42,4 +42,7 @@ def test_列表接口给重叠数(db, run):
     # 卷进重叠的片段数：a 和新加的那条，共 2 段，都是 a 的类别
     assert got[w.t.id]["overlap_count"] == 2
     assert got[w.t.id]["overlap_by_label"] == {a.label_id: 2}
+    # 只刷一行：ids 给了就只回这几个，统计照样带
+    one = run(tasks_api.list_tasks(project_id=None, ids=str(w.t.id), db=db, user=w.admin))["data"]
+    assert [r["id"] for r in one] == [w.t.id] and one[0]["overlap_count"] == 2
     assert len(run(db.execute(_select(AnnotationLabelItem))).scalars().all()) >= 6

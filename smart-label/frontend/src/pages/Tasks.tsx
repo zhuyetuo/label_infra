@@ -3,7 +3,7 @@ import { currentName } from "@/utils/labelTree";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
+import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, listTasksByIds, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -103,6 +103,17 @@ export default function Tasks() {
     refresh();
   };
 
+  // 只刷改过的那一行（整份任务列表要几秒）
+  const refreshTasks = async (ids: number[]) => {
+    try {
+      const fresh = await listTasksByIds(ids);
+      const byId = new Map(fresh.map((t) => [t.id, t]));
+      qc.setQueryData<Task[]>(["tasks"], (old) =>
+        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old);
+    } catch {
+      refresh();
+    }
+  };
   const openWorkspace = (task: Task, readOnly: boolean) => {
     setWorkspaceReadOnly(readOnly);
     // 跟项目页同理：列表已经按类别筛过，带进去当片段列表的初始筛选
@@ -769,9 +780,9 @@ export default function Tasks() {
         initialSimilar={urlSimilar}
         initialSimilarLabel={urlSimilarLabel}
         // 存草稿 / 关掉都刷一遍：不刷的话列表上的段数和类别汇总还是进去之前那份
-        onClose={() => { setWorkspaceTask(null); refresh(); }}
-        onSaved={refresh}
-        onSubmitted={refresh}
+        onClose={() => { const id = workspaceTask?.id; setWorkspaceTask(null); if (id != null) refreshTasks([id]); }}
+        onSaved={() => workspaceTask && refreshTasks([workspaceTask.id])}
+        onSubmitted={() => workspaceTask && refreshTasks([workspaceTask.id])}
       />
     </div>
   );

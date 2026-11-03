@@ -57,6 +57,7 @@ import {
   deleteTask,
   deleteTasksBatch,
   editAgain,
+  listTasksByIds,
   listTasks,
   releaseAllTasks,
   releaseTask,
@@ -983,10 +984,25 @@ export default function Projects() {
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), task.project_id, undefined, true);
   });
 
+  // 只刷这几个任务那几行：整份任务列表要几秒（几千个任务的片段统计），改一个任务没必要全重算。
+  // 拉到了就直接替换缓存里那几行，项目行的汇总数也是从这份缓存算的，跟着变
+  const refreshTasks = async (ids: number[]) => {
+    if (!ids.length) return;
+    try {
+      const fresh = await listTasksByIds(ids);
+      const byId = new Map(fresh.map((t) => [t.id, t]));
+      qc.setQueryData<Task[]>(["tasks"], (old) =>
+        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old);
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    } catch {
+      refresh();
+    }
+  };
+
   const handleClaimTask = async (id: number) => {
     await claimTask(id);
     message.success("认领成功");
-    refresh();
+    refreshTasks([id]);
   };
 
 
@@ -997,7 +1013,7 @@ export default function Projects() {
     const nt = await editAgain(t.id);
     message.success("可以接着改了，改完记得再提交");
     open({ ...t, ...nt });
-    refresh();
+    refreshTasks([t.id]);
   };
 
   // 行里点类别标签打开：自己正在标的就可编辑，其余只读（跟「查看标注 / 编辑标注」同一个判断）
@@ -1007,13 +1023,13 @@ export default function Projects() {
   const handleReleaseTask = async (id: number) => {
     await releaseTask(id);
     message.success("已放弃，任务退回公共池，草稿已保留");
-    refresh();
+    refreshTasks([id]);
   };
 
   const handleReopenTask = async (id: number) => {
     await reopenTask(id);
     message.success("已退回重标，上一轮内容已带到新一轮");
-    refresh();
+    refreshTasks([id]);
   };
 
   const handleDeleteTask = async (id: number) => {
@@ -1785,7 +1801,7 @@ export default function Projects() {
                                         ? { task_ids: [task.id], label_names: projLabelNames(p.id, fl.labels), min_sec: fl.minSec || undefined, source: "all" }
                                         : { task_ids: [task.id], source: "all" });
                                       message.success(`加入 ${r.added} 段`);
-                                      refresh();
+                                      refreshTasks([task.id]);
                                     }}
                                   >
                                     <Button size="small" type="link">
@@ -1799,7 +1815,7 @@ export default function Projects() {
                                     onConfirm={async () => {
                                       const r = await poolRemove({ task_ids: [task.id] });
                                       message.success(`移出 ${r.removed} 段`);
-                                      refresh();
+                                      refreshTasks([task.id]);
                                     }}
                                   >
                                     <Button size="small" type="link">
@@ -1817,7 +1833,7 @@ export default function Projects() {
                               onConfirm={async () => {
                                 await unapprove({ taskIds: [task.id] });
                                 message.success("已退回待审核");
-                                refresh();
+                                refreshTasks([task.id]);
                               }}
                             >
                               <Button size="small" type="link">
@@ -3238,9 +3254,9 @@ export default function Projects() {
           ? () => handleEditAgain(workspaceTask!, (t) => { setWorkspaceReadOnly(false); setWorkspaceTask(t); })
           : undefined}
         // 关掉也刷一遍：中途改过类别、删过段，不刷的话列表上的数还是进去之前那份
-        onClose={() => { setWorkspaceTask(null); refresh(); }}
-        onSaved={refresh}
-        onSubmitted={refresh}
+        onClose={() => { const id = workspaceTask?.id; setWorkspaceTask(null); if (id != null) refreshTasks([id]); }}
+        onSaved={() => workspaceTask && refreshTasks([workspaceTask.id])}
+        onSubmitted={() => workspaceTask && refreshTasks([workspaceTask.id])}
       />
     </div>
   );
