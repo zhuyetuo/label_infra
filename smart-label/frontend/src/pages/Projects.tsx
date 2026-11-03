@@ -59,6 +59,7 @@ import {
   deleteTasksBatch,
   editAgain,
   listTasksByIds,
+  listTasksLite,
   listTasks,
   releaseAllTasks,
   releaseTask,
@@ -167,7 +168,12 @@ export default function Projects() {
   const isAdmin = role === "admin" || role === "super_admin";
 
   const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  const { data: allTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
+  // 两步拉：轻量的（只有任务状态、样本名，快）先到，项目行「共几个 / 待认领几个」马上出来；
+  // 带片段统计的完整列表（要几秒）后到，到了替换掉。完整的一旦有了就一直用它（改动后只刷那几行）
+  const { data: liteTasks } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
+  const { data: fullTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
+  const allTasks = fullTasks ?? liteTasks;
+  const statsLoading = !fullTasks;
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
@@ -1416,6 +1422,11 @@ export default function Projects() {
                   </Typography.Text>
                 )}
               </Space>
+              {statsLoading && (
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                  片段统计加载中…（类别、时长、重叠这些马上就到）
+                </Typography.Text>
+              )}
               {(labelTotals.length > 0 || candTotal > 0) && (
                 // 各类别在这个项目里总共有多少段/在几个任务里，点一个 Tag 就只看含这个类别的任务
                 <Space wrap size={4} style={{ marginBottom: 8 }}>
