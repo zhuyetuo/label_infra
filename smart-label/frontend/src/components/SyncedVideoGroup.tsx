@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, Checkbox, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
-import { PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined, StepForwardOutlined } from "@ant-design/icons";
+import {
+  BlockOutlined, LockOutlined, PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined,
+  StepForwardOutlined, UnlockOutlined,
+} from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
 import { NIGHT_VISION } from "@/config/features";
 import { getSavedHeight, saveHeight } from "@/utils/persistedSize";
+
+const FLOAT_KEY = "video-float-cfg";
 
 const VIDEO_HEIGHT_KEY = "smart-label:video-area-height";
 
@@ -383,6 +388,76 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // null = 沿用默认的自动铺满高度，拖过一次之后才切换成固定高度。拖过的高度记
   // 到 localStorage，下次打开别的任务还是这个高度，不用每次重新拖。
   const [customHeight, setCustomHeightState] = useState<number | null>(() => (fill ? getSavedHeight(VIDEO_HEIGHT_KEY) : null));
+  // ── 窗口化：画面从页面里拿出来，变成能拖、能改大小、能锁住位置的浮窗 ──
+  // 只是同一组 DOM 换成 position:fixed，<video> 不重建，播放进度、循环都不断。
+  // 位置 / 大小 / 开没开都记在 localStorage，下次打开任务还是那样
+  type FloatCfg = { on: boolean; left: number; top: number; w: number; h: number; locked: boolean };
+  const [flt, setFltState] = useState<FloatCfg>(() => {
+    const d: FloatCfg = { on: false, left: Math.max(0, window.innerWidth - 700), top: 80, w: 640, h: 400, locked: false };
+    try {
+      const v = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
+      if (!v || typeof v !== "object") return d;
+      const c = { ...d, ...v } as FloatCfg;
+      c.w = Math.min(Math.max(240, c.w), window.innerWidth - 20);
+      c.h = Math.min(Math.max(160, c.h), window.innerHeight - 20);
+      c.left = Math.min(Math.max(0, c.left), Math.max(0, window.innerWidth - 120));
+      c.top = Math.min(Math.max(0, c.top), Math.max(0, window.innerHeight - 60));
+      return c;
+    } catch {
+      return d;
+    }
+  });
+  const floating = !!fill && flt.on;
+  const saveFlt = (next: FloatCfg) => {
+    try {
+      localStorage.setItem(FLOAT_KEY, JSON.stringify(next));
+    } catch {
+      /* 存不了就算了 */
+    }
+  };
+  const setFlt = (patch: Partial<FloatCfg>) =>
+    setFltState((c) => {
+      const next = { ...c, ...patch };
+      saveFlt(next);
+      return next;
+    });
+  // kind：move = 拖标题栏；n/s/w/e 及组合 = 从那条边 / 角改大小
+  const fltDrag = (e: React.MouseEvent, kind: string) => {
+    if (flt.locked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sx = e.clientX, sy = e.clientY, c0 = flt;
+    let last = c0;
+    const move = (ev: MouseEvent) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let { left, top, w, h } = c0;
+      if (kind === "move") {
+        left = Math.min(Math.max(0, c0.left + dx), window.innerWidth - 120);
+        top = Math.min(Math.max(0, c0.top + dy), window.innerHeight - 40);
+      } else {
+        if (kind.includes("e")) w = Math.min(Math.max(240, c0.w + dx), window.innerWidth - c0.left);
+        if (kind.includes("w")) {
+          left = Math.min(Math.max(0, c0.left + dx), c0.left + c0.w - 240);
+          w = c0.w + (c0.left - left);
+        }
+        if (kind.includes("s")) h = Math.min(Math.max(160, c0.h + dy), window.innerHeight - c0.top);
+        if (kind.includes("n")) {
+          top = Math.min(Math.max(0, c0.top + dy), c0.top + c0.h - 160);
+          h = c0.h + (c0.top - top);
+        }
+      }
+      last = { ...c0, left, top, w, h };
+      setFltState(last);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      saveFlt(last);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   const setCustomHeight = (h: number | null) => {
     setCustomHeightState(h);
     if (fill) saveHeight(VIDEO_HEIGHT_KEY, h);
@@ -828,7 +903,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const rowHeight =
     rowSize.w <= 0
       ? 0
-      : shrinkToFit
+      : shrinkToFit && !floating
         ? rowSize.w / sumAspect
         : rowSize.h > 0
           ? Math.min(rowSize.h, rowSize.w / sumAspect)
@@ -906,6 +981,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   const speedControls = (
     <Space wrap>
+      {fill && (
+        <Tooltip title={floating ? "画面放回页面里" : "画面窗口化：变成浮窗，随意拖动、拖边角改大小，可以锁住位置。下面的波形 / 片段列表就有更多地方"}>
+          <Button size="small" type={floating ? "primary" : "default"} icon={<BlockOutlined />} onClick={() => setFlt({ on: !flt.on })}>
+            {floating ? "放回" : "窗口化"}
+          </Button>
+        </Tooltip>
+      )}
       <Button
         size="small"
         type="primary"
@@ -1005,9 +1087,15 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   return (
     <div
-      className={fill ? "ws-videos" : undefined}
+      className={fill && !floating ? "ws-videos" : undefined}
       style={
-        fill
+        floating
+          ? {
+              position: "fixed", left: flt.left, top: flt.top, width: flt.w, height: flt.h, zIndex: 1090,
+              display: "flex", flexDirection: "column", background: "#111", borderRadius: 8,
+              border: "1px solid #444", boxShadow: "0 8px 28px rgba(0,0,0,.55)", overflow: "hidden",
+            }
+          : fill
           ? // flex: 1 with minHeight: 0 让这个div占满剩余高度；display:flex + flexDirection:column
             // 使内部子元素按竖向排列（播放速度控制条 + 视频组）。shrinkToFit 或拖过高度
             // 之后改成 flex:"0 0 auto"——按内容（算出来的画面高度）撑开，不抢占整份可用
@@ -1024,6 +1112,28 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       {controlsPortalTarget ? createPortal(speedControls, controlsPortalTarget) : (
         <div style={{ marginBottom: 8 }}>{speedControls}</div>
       )}
+      {/* 浮窗标题栏：按住拖走；锁住后不能拖、不能改大小。放在固定位置（不浮时渲染 null），
+          下面那排视频的位置不变，<video> 就不会被 React 重建 */}
+      {floating ? (
+        <div
+          onMouseDown={(e) => fltDrag(e, "move")}
+          onDoubleClick={() => setFlt({ on: false })}
+          style={{
+            flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "2px 6px",
+            cursor: flt.locked ? "default" : "move", userSelect: "none", background: "#1d1d1d", color: "#ccc", fontSize: 12,
+          }}
+        >
+          <span style={{ flex: 1 }}>画面{flt.locked ? "（已锁定位置）" : "（拖这里移动，拖边角改大小，双击放回）"}</span>
+          <Tooltip title={flt.locked ? "解锁：可以拖动 / 改大小" : "锁住位置和大小，免得误拖"}>
+            <Button size="small" type="text" style={{ color: "#ccc" }} icon={flt.locked ? <LockOutlined /> : <UnlockOutlined />}
+              onMouseDown={(e) => e.stopPropagation()} onClick={() => setFlt({ locked: !flt.locked })} />
+          </Tooltip>
+          <Tooltip title="放回页面里">
+            <Button size="small" type="text" style={{ color: "#ccc" }} icon={<BlockOutlined />}
+              onMouseDown={(e) => e.stopPropagation()} onClick={() => setFlt({ on: false })} />
+          </Tooltip>
+        </div>
+      ) : null}
       <div
         ref={rowRef}
         className={fill ? "ws-videos-row" : undefined}
@@ -1036,8 +1146,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
               {
                 display: "flex",
                 gap: 0,
-                flex: customHeight != null ? "0 0 auto" : shrinkToFit ? "0 0 auto" : 1,
-                height: customHeight ?? undefined,
+                flex: floating ? 1 : customHeight != null ? "0 0 auto" : shrinkToFit ? "0 0 auto" : 1,
+                height: floating ? undefined : customHeight ?? undefined,
                 minHeight: 0,
                 justifyContent: "center",
                 alignItems: "center",
@@ -1120,7 +1230,22 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
           );
         })}
       </div>
-      {fill && (
+      {floating &&
+        // 浮窗四条边、四个角都能拖着改大小（锁住时不响应）
+        ([
+          ["n", { top: 0, left: 12, right: 12, height: 5, cursor: "ns-resize" }],
+          ["s", { bottom: 0, left: 12, right: 12, height: 5, cursor: "ns-resize" }],
+          ["w", { left: 0, top: 12, bottom: 12, width: 5, cursor: "ew-resize" }],
+          ["e", { right: 0, top: 12, bottom: 12, width: 5, cursor: "ew-resize" }],
+          ["nw", { left: 0, top: 0, width: 12, height: 12, cursor: "nwse-resize" }],
+          ["ne", { right: 0, top: 0, width: 12, height: 12, cursor: "nesw-resize" }],
+          ["sw", { left: 0, bottom: 0, width: 12, height: 12, cursor: "nesw-resize" }],
+          ["se", { right: 0, bottom: 0, width: 12, height: 12, cursor: "nwse-resize" }],
+        ] as [string, React.CSSProperties][]).map(([k, st]) => (
+          <div key={k} onMouseDown={(e) => fltDrag(e, k)}
+            style={{ position: "absolute", zIndex: 5, ...st, cursor: flt.locked ? "default" : st.cursor }} />
+        ))}
+      {fill && !floating && (
         // 三路视频是一整块区域，拖这个把手改这块区域的高度，视频跟着自适应铺满；
         // 双击恢复自动铺满可用高度
         <div
