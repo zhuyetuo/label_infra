@@ -99,3 +99,25 @@ async def post_remove(body: PoolRemoveIn, db: AsyncSession = Depends(get_db), us
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "移出要指定片段或条件")
     n = await data_pool.remove(db, f, body.item_ids)
     return ok({"removed": n})
+
+
+class CompareIn(BaseModel):
+    a: list[str]
+    b: list[str]
+    project_ids: list[int] | None = None
+    pool_only: bool = False
+    win_s: float = 10.0
+    max_segments: int = 80
+
+
+@router.post("/compare")
+async def post_compare(body: CompareIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """两类片段的原始 IMU 数据逐个维度对比（见 services/class_compare）"""
+    from app.services import class_compare
+
+    _require_curator(user)
+    if not body.a or not body.b:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "两边都要选类别")
+    win_s = min(max(body.win_s, 1.0), 120.0)
+    n = min(max(body.max_segments, 5), 300)
+    return ok(await class_compare.compare(db, body.a, body.b, body.project_ids, body.pool_only, win_s, n))

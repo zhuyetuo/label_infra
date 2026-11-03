@@ -77,3 +77,35 @@ export const poolAdd = (body: PoolFilter & { source: "reviewed" | "approved_task
 
 export const poolRemove = (body: PoolFilter & { item_ids?: number[] }) =>
   request.post<never, { removed: number }>("/data-pool/remove", body);
+
+/** 类别对比：两类片段的原始 IMU 数据逐个维度比 */
+export interface CompareFeature {
+  key: string;
+  name: string;
+  hint: string;
+  /** P(A > B)：0.5 = 分不开 */
+  auc: number;
+  /** |AUC-0.5|×2：0 分不开，1 一刀分开 */
+  sep: number;
+  cut: number;
+  cut_acc: number;
+  cut_side: string;
+  /** 两类的 5% / 25% / 50% / 75% / 95% 分位 */
+  qa: number[];
+  qb: number[];
+  edges: number[];
+  /** 直方图（各自归一化成占比） */
+  ha: number[];
+  hb: number[];
+}
+export interface CompareResult {
+  a: { names: string[]; segments: number; windows: number; samples: number };
+  b: { names: string[]; segments: number; windows: number; samples: number };
+  win_s: number;
+  unreadable: string[];
+  features: CompareFeature[];
+  error?: string;
+}
+export const classCompare = (body: {
+  a: string[]; b: string[]; project_ids?: number[]; pool_only?: boolean; win_s?: number; max_segments?: number;
+}) => request.post<never, CompareResult>("/data-pool/compare", body, { timeout: 300_000 });
