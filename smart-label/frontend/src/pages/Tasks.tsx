@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { currentName } from "@/utils/labelTree";
+import { currentName, descendantIds } from "@/utils/labelTree";
+import { buildLabelTotals, fmtSecShort, focusDur } from "@/utils/labelSummary";
 import { usePersistedSort } from "@/utils/persistedSort";
-import { Button, Checkbox, Empty, Input, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Checkbox, Empty, Input, InputNumber, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, listTasksByIds, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
@@ -170,7 +171,13 @@ export default function Tasks() {
   // cand：只看还有「疑似片段」待判断的任务。候选不在片段里，一个"抓挠 0 段"的任务
   // 照样可能压着十几条候选，光按类别筛会整个漏掉
   // candLabels：「疑似片段」里只看某几类（疑似舔 / 疑似抓挠…），跟项目页那个二级筛选一样
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string };
+  type TaskFilter = {
+    status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string;
+    /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务 */
+    minSec?: number | null;
+  };
+  // 片段汇总里展开了哪些大类（看细类）
+  const [sumOpen, setSumOpen] = useState<Set<number>>(new Set());
   // 项目完成情况：片段总数 / 还没人确认的 AI 片段、疑似总数 / 没判的。按列表里的任务汇总
   const progressOf = (projectId: number) => {
     let segs = 0, segPending = 0, cands = 0, candPending = 0;
@@ -207,12 +214,16 @@ export default function Tasks() {
     };
     const inProgress = all.filter((t) => t.status === "IN_PROGRESS");
     const startedCount = inProgress.filter((t) => (t.draft_item_count ?? 0) > 0).length;
+    // 选「抓挠」连同它的细类（抓挠-头颈耳…）一起算，跟项目页一样
+    const wantIds = descendantIds(projLabels, f.labels);
+    const minMs = f.labels.length && f.minSec ? f.minSec * 1000 : 0;
     const matchLabels = (t: Task) => {
       const lc = t.label_counts ?? {};
+      if (minMs && focusDur(t, wantIds).max < minMs) return false;
       if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
       if (f.cand && !(t.cand_pending ?? 0)) return false;
       if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
-      if (f.labels.length && !f.labels.some((id) => (lc[id]?.n ?? 0) > 0)) return false;
+      if (f.labels.length && ![...wantIds].some((id) => (lc[id]?.n ?? 0) > 0)) return false;
       return true;
     };
     // 按样本编号 _imu{N} 归成目录，一个 imu 对应一只狗
@@ -230,18 +241,9 @@ export default function Tasks() {
         (!q || String(sampleCode(t)).toLowerCase().includes(q) || sampleName(t).includes(q) || String(t.id) === q)
     );
     // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
-    const labelTotals = projLabels
-      .map((l) => {
-        let n = 0, pending = 0, tasksN = 0;
-        for (const t of all) {
-          const c = t.label_counts?.[l.id];
-          if (!c?.n) continue;
-          n += c.n; pending += c.ai_pending; tasksN += 1;
-        }
-        return { label: l, n, pending, tasksN };
-      })
-      .filter((x) => x.n > 0);
-    const totalPending = labelTotals.reduce((s, x) => s + x.pending, 0);
+    // 按层级：默认只摆大类（数含全部细类），点 ▸ 展开细类
+    const labelTotals = buildLabelTotals(projLabels, all, sumOpen);
+    const totalPending = labelTotals.filter((x) => x.depth === 0).reduce((s, x) => s + x.pending, 0);
     // 「疑似片段」候选跟上面那些类别并排显示：它不是一个 label，是另一张表，
     // 但对"这个项目还剩多少活"来说是同一个问题
     const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
@@ -328,6 +330,12 @@ export default function Tasks() {
           onChange={(v) => setFilter(p.id, { labels: v })}
           options={projLabels.map((l) => ({ value: l.id, label: l.display_name }))}
         />
+        {f.labels.length > 0 && (
+          <Tooltip title="只看这几类里最长一段不短于这么多秒的任务；每行写着最长一段和合计多长">
+            <InputNumber size="small" min={0} step={5} value={f.minSec ?? null} placeholder="片段"
+              onChange={(v) => setFilter(p.id, { minSec: v ?? null })} addonAfter="秒以上" style={{ width: 130 }} />
+          </Tooltip>
+        )}
         <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
           只看有 AI 待确认
         </Checkbox>
@@ -342,18 +350,37 @@ export default function Tasks() {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
           </Typography.Text>
-          {labelTotals.map(({ label, n, pending, tasksN }) => (
-            <Tooltip key={label.id} title={`${n} 段，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}；点击只看含「${label.display_name}」的任务`}>
+          {labelTotals.map(({ label, n, pending, tasksN, depth, hasKids }) => (
+            <Tooltip key={label.id} title={`${n} 段${hasKids ? "（含细类）" : ""}，分布在 ${tasksN} 个任务里${pending ? `，其中 ${pending} 段 AI 待确认` : ""}；点击只看含「${label.display_name}」的任务${hasKids ? "，点 ▸ 展开细类" : ""}`}>
               <Tag
                 color={label.color ?? undefined}
-                style={{ cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined }}
+                style={{
+                  cursor: "pointer", outline: f.labels.includes(label.id) ? "2px solid #1677ff" : undefined,
+                  ...(depth > 0 ? { fontSize: 11, borderStyle: "dashed", opacity: 0.9 } : {}),
+                }}
                 onClick={() =>
                   setFilter(p.id, {
                     labels: f.labels.includes(label.id) ? f.labels.filter((x) => x !== label.id) : [...f.labels, label.id],
                   })
                 }
               >
-                {label.display_name} {n}
+                {hasKids && (
+                  <span
+                    style={{ marginRight: 4, display: "inline-block", width: 10 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSumOpen((s) => {
+                        const nx = new Set(s);
+                        if (nx.has(label.id)) nx.delete(label.id);
+                        else nx.add(label.id);
+                        return nx;
+                      });
+                    }}
+                  >
+                    {sumOpen.has(label.id) ? "▾" : "▸"}
+                  </span>
+                )}
+                {depth > 0 ? "└ " : ""}{label.display_name} {n}
                 {pending ? <span style={{ opacity: 0.75 }}>（待确认 {pending}）</span> : null}
                 <span style={{ opacity: 0.6 }}> · {tasksN} 任务</span>
               </Tag>
@@ -483,19 +510,29 @@ export default function Tasks() {
             sortDirections: ["descend", "ascend", "descend"],
             render: (_, task: Task) => {
               const lc = task.label_counts ?? {};
-              const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0);
-              const candN = task.cand_count ?? 0;
+              // 选了类别：只摆这几类（含细类），每类后面写最长一段 / 合计时长，挑长片段标
+              const focus = f.labels.length > 0;
+              const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0 && (!focus || wantIds.has(l.id)));
+              const candN = focus ? 0 : task.cand_count ?? 0;
               if (!entries.length && !candN) return <Typography.Text type="secondary">-</Typography.Text>;
               return (
                 <Space size={2} wrap>
                   {entries.map((l) => {
                     const c = lc[l.id];
                     return (
-                      <Tooltip key={l.id} title={c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}>
-                        <Tag color={l.color ?? undefined} style={{ marginRight: 0 }}>
-                          {l.display_name} {c.n}
-                          {c.ai_pending ? <span style={{ opacity: 0.7 }}>/{c.ai_pending}待确认</span> : null}
-                        </Tag>
+                      <Tooltip key={l.id}
+                        title={`${c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}${c.max_ms ? `；最长 ${(c.max_ms / 1000).toFixed(1)}s，合计 ${fmtSecShort((c.ms ?? 0) / 1000)}` : ""}`}>
+                        <span style={{ whiteSpace: "nowrap" }}>
+                          <Tag color={l.color ?? undefined} style={{ marginRight: focus ? 2 : 0 }}>
+                            {l.display_name} {c.n}
+                            {c.ai_pending ? <span style={{ opacity: 0.7 }}>/{c.ai_pending}待确认</span> : null}
+                          </Tag>
+                          {focus && (c.max_ms ?? 0) > 0 && (
+                            <Tag style={{ marginRight: 0 }} color={minMs && (c.max_ms ?? 0) >= minMs ? "cyan" : undefined}>
+                              最长 {((c.max_ms ?? 0) / 1000).toFixed(1)}s · 共 {fmtSecShort((c.ms ?? 0) / 1000)}
+                            </Tag>
+                          )}
+                        </span>
                       </Tooltip>
                     );
                   })}
