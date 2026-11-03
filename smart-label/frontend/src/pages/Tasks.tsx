@@ -3,7 +3,7 @@ import { currentName } from "@/utils/labelTree";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimAllTasks, claimTask, deleteTask, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
+import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -89,6 +89,17 @@ export default function Tasks() {
   const handleRelease = async (id: number) => {
     await releaseTask(id);
     message.success("已放弃，任务退回公共池，草稿已保留");
+    refresh();
+  };
+
+
+  // 提交之后自己再改（轮次不变，回到标注中）：自己名下的，或者管理员
+  const canEditAgain = (t: Task | null) =>
+    !!t && ["SUBMITTED", "APPROVED", "REJECTED"].includes(t.status) && (t.assigned_to === userId || isAdmin);
+  const handleEditAgain = async (t: Task, open: (t: Task) => void) => {
+    const nt = await editAgain(t.id);
+    message.success("可以接着改了，改完记得再提交");
+    open({ ...t, ...nt });
     refresh();
   };
 
@@ -531,6 +542,16 @@ export default function Tasks() {
                   >
                     {editable ? "编辑标注" : "查看标注"}
                   </Button>
+                  {canEditAgain(task) && (
+                    <Tooltip title="提交之后再改：回到「标注中」，轮次和片段不变，改完再提交">
+                      <Button size="small" type="link" onClick={() => handleEditAgain(task, (t) => {
+                        setWorkspaceLabels(projLabels);
+                        openWorkspace(t, false);
+                      })}>
+                        继续编辑
+                      </Button>
+                    </Tooltip>
+                  )}
                   {editable && (
                     <Popconfirm
                       title="放弃任务"
@@ -740,6 +761,9 @@ export default function Tasks() {
         focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
+        onEditAgain={workspaceReadOnly && canEditAgain(workspaceTask)
+          ? () => handleEditAgain(workspaceTask!, (t) => { setWorkspaceReadOnly(false); setWorkspaceTask(t); })
+          : undefined}
         initialSeekMs={urlSeekMs}
         initialCandFilter={urlCandFilter}
         initialSimilar={urlSimilar}
