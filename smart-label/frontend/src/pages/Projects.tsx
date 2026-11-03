@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
 import { currentName, descendantIds } from "@/utils/labelTree";
+import { buildLabelTotals, loadSummaryFlat, saveSummaryFlat } from "@/utils/labelSummary";
 import {
   Alert,
   Badge,
@@ -250,6 +251,8 @@ export default function Projects() {
   const [workspaceJump, setWorkspaceJump] = useState(false);
   // 项目片段汇总里展开了哪些大类（看细类）
   const [sumOpen, setSumOpen] = useState<Set<number>>(new Set());
+  const [sumFlat, setSumFlatState] = useState(loadSummaryFlat);
+  const setSumFlat = (v: boolean) => { setSumFlatState(v); saveSummaryFlat(v); };
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
@@ -1237,50 +1240,9 @@ export default function Projects() {
             );
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
-            // 片段汇总按层级：每个类别的数都含它底下全部细类（抓挠 = 抓挠 + 头颈耳 + 肩胸 + 躯干…）。
-            // 默认只摆大类，点 ▸ 展开细类。上级：parent_id；老标签没挂上级、名字是「抓挠-头颈耳」的按前缀认
-            const byName = new Map(projLabels.map((l) => [l.display_name, l]));
-            const parentOf = (l: LabelDefinition): number | null => {
-              if (l.parent_id != null) return l.parent_id;
-              const i = l.display_name.lastIndexOf("-");
-              const pl = i > 0 ? byName.get(l.display_name.slice(0, i)) : undefined;
-              return pl && pl.id !== l.id ? pl.id : null;
-            };
-            const kidsOf = new Map<number | null, LabelDefinition[]>();
-            for (const l of projLabels) {
-              const pid = parentOf(l);
-              kidsOf.set(pid, [...(kidsOf.get(pid) ?? []), l]);
-            }
-            const subtree = (id: number): number[] => [id, ...(kidsOf.get(id) ?? []).flatMap((k) => subtree(k.id))];
-            const totalOf = (l: LabelDefinition) => {
-              const ids = subtree(l.id);
-              let n = 0, pending = 0, tasksN = 0, okN = 0, retN = 0;
-              for (const t of all) {
-                let hit = false;
-                for (const id of ids) {
-                  const c = t.label_counts?.[id];
-                  if (!c?.n) continue;
-                  hit = true;
-                  n += c.n; pending += c.ai_pending;
-                  okN += c.approved ?? 0; retN += c.returned ?? 0;
-                }
-                if (hit) tasksN += 1;
-              }
-              return { label: l, n, pending, tasksN, okN, retN };
-            };
-            type LTotal = ReturnType<typeof totalOf> & { depth: number; hasKids: boolean };
-            const labelTotals: LTotal[] = [];
-            const walk = (pid: number | null, depth: number) => {
-              for (const l of kidsOf.get(pid) ?? []) {
-                const t = totalOf(l);
-                if (!t.n) continue;
-                const hasKids = (kidsOf.get(l.id) ?? []).some((k) => totalOf(k).n > 0);
-                labelTotals.push({ ...t, depth, hasKids });
-                if (hasKids && sumOpen.has(l.id)) walk(l.id, depth + 1);
-              }
-            };
-            walk(null, 0);
-            const totalPending = labelTotals.filter((x) => x.depth === 0).reduce((s, x) => s + x.pending, 0);
+            // 片段汇总：按大类（数含全部细类，点 ▸ 展开）/ 全部标签（老样子平铺），顶上切换
+            const labelTotals = buildLabelTotals(projLabels, all, sumOpen, sumFlat);
+            const totalPending = labelTotals.filter((x) => sumFlat || x.depth === 0).reduce((s, x) => s + x.pending, 0);
             // 「疑似片段」候选跟上面那些类别并排显示。它不是一个 label，是另一张表，
             // 但对"这个项目还剩多少活"来说是同一个问题，分开放两处反而要人自己去合
             const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
@@ -1457,6 +1419,8 @@ export default function Projects() {
               {(labelTotals.length > 0 || candTotal > 0) && (
                 // 各类别在这个项目里总共有多少段/在几个任务里，点一个 Tag 就只看含这个类别的任务
                 <Space wrap size={4} style={{ marginBottom: 8 }}>
+                  <Radio.Group size="small" value={sumFlat ? "flat" : "tree"} onChange={(e) => setSumFlat(e.target.value === "flat")}
+                    optionType="button" options={[{ value: "tree", label: "按大类" }, { value: "flat", label: "全部标签" }]} />
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
                   </Typography.Text>

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { currentName, descendantIds } from "@/utils/labelTree";
-import { buildLabelTotals, fmtSecShort, focusDur } from "@/utils/labelSummary";
+import { buildLabelTotals, fmtSecShort, focusDur, loadSummaryFlat, saveSummaryFlat } from "@/utils/labelSummary";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, InputNumber, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -178,6 +178,8 @@ export default function Tasks() {
   };
   // 片段汇总里展开了哪些大类（看细类）
   const [sumOpen, setSumOpen] = useState<Set<number>>(new Set());
+  const [sumFlat, setSumFlatState] = useState(loadSummaryFlat);
+  const setSumFlat = (v: boolean) => { setSumFlatState(v); saveSummaryFlat(v); };
   // 项目完成情况：片段总数 / 还没人确认的 AI 片段、疑似总数 / 没判的。按列表里的任务汇总
   const progressOf = (projectId: number) => {
     let segs = 0, segPending = 0, cands = 0, candPending = 0;
@@ -242,8 +244,8 @@ export default function Tasks() {
     );
     // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
     // 按层级：默认只摆大类（数含全部细类），点 ▸ 展开细类
-    const labelTotals = buildLabelTotals(projLabels, all, sumOpen);
-    const totalPending = labelTotals.filter((x) => x.depth === 0).reduce((s, x) => s + x.pending, 0);
+    const labelTotals = buildLabelTotals(projLabels, all, sumOpen, sumFlat);
+    const totalPending = labelTotals.filter((x) => sumFlat || x.depth === 0).reduce((s, x) => s + x.pending, 0);
     // 「疑似片段」候选跟上面那些类别并排显示：它不是一个 label，是另一张表，
     // 但对"这个项目还剩多少活"来说是同一个问题
     const candTotal = all.reduce((s, t) => s + (t.cand_count ?? 0), 0);
@@ -347,6 +349,8 @@ export default function Tasks() {
       </Space>
       {(labelTotals.length > 0 || candTotal > 0) && (
         <Space wrap size={4} style={{ marginBottom: 8 }}>
+          <Radio.Group size="small" value={sumFlat ? "flat" : "tree"} onChange={(e) => setSumFlat(e.target.value === "flat")}
+            optionType="button" options={[{ value: "tree", label: "按大类" }, { value: "flat", label: "全部标签" }]} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             片段汇总{totalPending ? `（AI 待确认 ${totalPending} 段）` : ""}：
           </Typography.Text>
