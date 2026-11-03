@@ -410,6 +410,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     }
   });
   const floating = !!fill && flt.on;
+  const [fltHover, setFltHover] = useState(false);
   const saveFlt = (next: FloatCfg) => {
     try {
       localStorage.setItem(FLOAT_KEY, JSON.stringify(next));
@@ -454,6 +455,13 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      // 改完大小贴合画面比例，不留黑边：拖的是上下边就按高度定宽，否则按宽度定高
+      if (kind !== "move") {
+        const total = videos.reduce((sum, _v, i) => sum + (aspects[i] ?? 16 / 9), 0) || 16 / 9;
+        if (kind === "n" || kind === "s") last = { ...last, w: Math.round(Math.min(window.innerWidth - last.left, last.h * total)) };
+        else last = { ...last, h: Math.round(Math.min(window.innerHeight - last.top, last.w / total)) };
+        setFltState(last);
+      }
       saveFlt(last);
     };
     window.addEventListener("mousemove", move);
@@ -1003,7 +1011,11 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     <Space wrap>
       {fill && (
         <Tooltip title={floating ? "画面放回页面里" : "画面窗口化：变成浮窗，随意拖动、拖边角改大小，可以锁住位置。下面的波形 / 片段列表就有更多地方"}>
-          <Button size="small" type={floating ? "primary" : "default"} icon={<BlockOutlined />} onClick={() => setFlt({ on: !flt.on })}>
+          <Button size="small" type={floating ? "primary" : "default"} icon={<BlockOutlined />} onClick={() => {
+            // 浮出来时按画面比例定高度，一出来就不带黑边
+            const total = videos.reduce((sum, _v, i) => sum + (aspects[i] ?? 16 / 9), 0) || 16 / 9;
+            setFlt(flt.on ? { on: false } : { on: true, h: Math.round(Math.min(window.innerHeight - flt.top, flt.w / total)) });
+          }}>
             {floating ? "放回" : "窗口化"}
           </Button>
         </Tooltip>
@@ -1131,12 +1143,14 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     ) : null}
     <div
       className={fill && !floating ? "ws-videos" : undefined}
+      onMouseEnter={floating ? () => setFltHover(true) : undefined}
+      onMouseLeave={floating ? () => setFltHover(false) : undefined}
       style={
         floating
           ? {
               position: "fixed", left: flt.left, top: flt.top, width: flt.w, height: flt.h, zIndex: 1090,
-              display: "flex", flexDirection: "column", background: "#111", borderRadius: 8,
-              border: "1px solid #444", boxShadow: "0 8px 28px rgba(0,0,0,.55)", overflow: "hidden",
+              display: "flex", flexDirection: "column", background: "#000", borderRadius: 6,
+              border: "1px solid rgba(255,255,255,.18)", boxShadow: "0 8px 28px rgba(0,0,0,.55)", overflow: "hidden",
             }
           : fill
           ? // flex: 1 with minHeight: 0 让这个div占满剩余高度；display:flex + flexDirection:column
@@ -1161,18 +1175,22 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         <div
           onMouseDown={(e) => fltDrag(e, "move")}
           onDoubleClick={() => setFlt({ on: false })}
+          // 标题栏叠在画面上、半透明，只在鼠标放到浮窗上时出现：平时整个浮窗都是画面
           style={{
-            flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "2px 6px",
-            cursor: flt.locked ? "default" : "move", userSelect: "none", background: "#1d1d1d", color: "#ccc", fontSize: 12,
+            position: "absolute", top: 0, left: 0, right: 0, zIndex: 4,
+            display: "flex", alignItems: "center", gap: 6, padding: "2px 6px",
+            cursor: flt.locked ? "default" : "move", userSelect: "none", color: "#fff", fontSize: 12,
+            background: "linear-gradient(rgba(0,0,0,.6), rgba(0,0,0,0))",
+            opacity: fltHover ? 1 : 0, transition: "opacity .15s",
           }}
         >
-          <span style={{ flex: 1 }}>画面{flt.locked ? "（已锁定位置）" : "（拖这里移动，拖边角改大小，双击放回）"}</span>
+          <span style={{ flex: 1, textShadow: "0 1px 2px #000" }}>{flt.locked ? "已锁定位置" : "拖这里移动 · 拖边角改大小 · 双击放回"}</span>
           <Tooltip title={flt.locked ? "解锁：可以拖动 / 改大小" : "锁住位置和大小，免得误拖"}>
-            <Button size="small" type="text" style={{ color: "#ccc" }} icon={flt.locked ? <LockOutlined /> : <UnlockOutlined />}
+            <Button size="small" type="text" style={{ color: "#fff" }} icon={flt.locked ? <LockOutlined /> : <UnlockOutlined />}
               onMouseDown={(e) => e.stopPropagation()} onClick={() => setFlt({ locked: !flt.locked })} />
           </Tooltip>
           <Tooltip title="放回页面里">
-            <Button size="small" type="text" style={{ color: "#ccc" }} icon={<BlockOutlined />}
+            <Button size="small" type="text" style={{ color: "#fff" }} icon={<BlockOutlined />}
               onMouseDown={(e) => e.stopPropagation()} onClick={() => setFlt({ on: false })} />
           </Tooltip>
         </div>
