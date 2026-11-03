@@ -153,6 +153,9 @@ interface Props {
   onCreate?: (startMs: number, endMs: number, labelId: number) => void;
   /** 打开时默认只看这几个标签（皮肤评估的跟踪表跳过来复看抓挠时用），之后用户可以自己改 */
   initialFilterLabels?: number[];
+  /** 给了就把这里的类别 / 来源筛选记在 sessionStorage（按任务）：刷新回来还是刚才那个筛选；
+   *  换个标签页 / 下次从别的筛选点进来不受影响 */
+  persistKey?: string | null;
   /** 审核标「有问题」/ 清掉。不给就不显示那个按钮（没权限的人）。note=null 是清掉 */
   onReviewNote?: (item: LabelItem, note: string | null) => void;
   /** 只有清掉的权限（标注员改好了）：不显示「有问题」，只显示「已改好」 */
@@ -191,6 +194,7 @@ export default function SegmentPanel({
   dupIds,
   onCreate,
   initialFilterLabels,
+  persistKey,
   onReviewNote,
   onSegApprove,
   reviewNoteClearOnly,
@@ -218,16 +222,34 @@ export default function SegmentPanel({
         </Tooltip>
       )
     ) : null;
-  const [filterLabels, setFilterLabels] = useState<number[]>(initialFilterLabels ?? []);
+  const saved = useMemo<{ labels?: number[]; source?: SourceFilter } | null>(() => {
+    if (!persistKey) return null;
+    try {
+      return JSON.parse(sessionStorage.getItem(persistKey) || "null");
+    } catch {
+      return null;
+    }
+  }, [persistKey]);
+  const [filterLabels, setFilterLabels] = useState<number[]>(saved?.labels ?? initialFilterLabels ?? []);
   // 层级：筛「舔」把「舔-前爪」「舔-前左爪」一起带上（标了细的也算上级）
   const filterLabelSet = useMemo(() => descendantIds(labels, filterLabels), [labels, filterLabels]);
-  // 换任务（比如从跟踪表连着看好几条）时把默认筛选重新套上
+  // 换任务（比如从跟踪表连着看好几条）时把默认筛选重新套上；这个任务记过自己的筛选（刷新回来）就用记的
   useEffect(() => {
-    if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
+    if (saved?.labels) setFilterLabels(saved.labels);
+    else if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialFilterLabels]);
   // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注
   const [viewGaps, setViewGaps] = useState(false);
-  const [filterSource, setFilterSource] = useState<SourceFilter>(initialFlaggedOnly ? "flagged" : "all");
+  const [filterSource, setFilterSource] = useState<SourceFilter>(initialFlaggedOnly ? "flagged" : saved?.source ?? "all");
+  useEffect(() => {
+    if (!persistKey) return;
+    try {
+      sessionStorage.setItem(persistKey, JSON.stringify({ labels: filterLabels, source: filterSource }));
+    } catch {
+      /* 存不了就算了 */
+    }
+  }, [persistKey, filterLabels, filterSource]);
   useEffect(() => {
     if (initialFlaggedOnly) setFilterSource("flagged");
   }, [initialFlaggedOnly]);

@@ -280,6 +280,46 @@ export default function AnnotationWorkspace({
   // 「找相似」：视频当前在第几秒（高频更新，放 ref 不放 state）
   const curSecRef = useRef(0);
   useEffect(() => bus.onTime((sec) => { curSecRef.current = sec; }), [bus]);
+
+  // 刷新页面回来：停在刚才播到的那一刻、接着循环刚才那一段（波形小窗也就跟着回来）。
+  // 每个任务一份，存在 localStorage；在任何 effect 之前读出来，免得开头的 0 秒先把它盖掉
+  const posKey = taskId != null ? `ws-pos:${taskId}` : null;
+  const savedPos = useMemo<{ sec: number; loop: { startMs: number; endMs: number } | null } | null>(() => {
+    if (!posKey) return null;
+    try {
+      const v = JSON.parse(localStorage.getItem(posKey) || "null");
+      return v && typeof v.sec === "number" ? v : null;
+    } catch {
+      return null;
+    }
+  }, [posKey]);
+  const posReady = useRef(false);
+  const writePos = () => {
+    if (!posKey || !posReady.current) return;
+    try {
+      const l = bus.getLoop();
+      const loop = l ? { startMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) } : null;
+      localStorage.setItem(posKey, JSON.stringify({ sec: curSecRef.current, loop, at: Date.now() }));
+    } catch {
+      /* 存不了就算了 */
+    }
+  };
+  useEffect(() => {
+    posReady.current = false;
+    let last = 0;
+    const offTime = bus.onTime(() => {
+      const now = Date.now();
+      if (now - last < 1000) return;
+      last = now;
+      writePos();
+    });
+    const offLoop = bus.onLoopChange(() => writePos());
+    return () => {
+      offTime();
+      offLoop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus, posKey]);
   const [similarOpen, setSimilarOpen] = useState(false);
   const [similarLabel, setSimilarLabel] = useState<string | null>(null);
   const [similarText, setSimilarText] = useState("");
@@ -539,7 +579,14 @@ export default function AnnotationWorkspace({
       setFlagFocus(!readOnly && flagged.length > 0);
       // 从筛过类别的列表点进来（项目页筛了「进食」/候选类别「进食」），又没指定具体时刻：
       // 直接停到第一段对得上的，循环播放。不然进来还是从 0 秒开始，几十段里要自己去找
-      const autoJump = initialSeekMs == null;
+      // 刷新回来：回到上次的位置和循环（不是从别处指定了时刻点进来的才这么做）
+      const restore = initialSeekMs == null && !segReview && savedPos != null;
+      if (restore) {
+        bus.seek(savedPos.sec);
+        if (savedPos.loop) setLoop(savedPos.loop);
+      }
+      posReady.current = true;
+      const autoJump = initialSeekMs == null && !restore;
       const jumpTo = (r: { start_time_ms: number; end_time_ms: number }, what: string, n: number) => {
         bus.seek(r.start_time_ms / 1000);
         setLoop({ startMs: r.start_time_ms, endMs: r.end_time_ms });
@@ -1707,6 +1754,7 @@ export default function AnnotationWorkspace({
     ),
     children: (
       <SegmentPanel
+        persistKey={taskId != null && !segReview ? `seg-panel:${taskId}` : null}
         controlsPortalTarget={segControlsHost}
         projectKey={task?.project_id ?? null}
         focusMs={initialSeekMs}
