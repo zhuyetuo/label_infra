@@ -286,7 +286,8 @@ export default function AnnotationWorkspace({
   // 刷新页面回来：停在刚才播到的那一刻、接着循环刚才那一段（波形小窗也就跟着回来）。
   // 每个任务一份，存在 localStorage；在任何 effect 之前读出来，免得开头的 0 秒先把它盖掉
   const posKey = taskId != null ? `ws-pos:${taskId}` : null;
-  const savedPos = useMemo<{ sec: number; loop: { startMs: number; endMs: number } | null } | null>(() => {
+  type MsRange = { startMs: number; endMs: number };
+  const savedPos = useMemo<{ sec: number; loop: MsRange | null; view?: MsRange | null } | null>(() => {
     if (!posKey) return null;
     try {
       const v = JSON.parse(localStorage.getItem(posKey) || "null");
@@ -296,12 +297,14 @@ export default function AnnotationWorkspace({
     }
   }, [posKey]);
   const posReady = useRef(false);
+  const viewRangeRef = useRef<MsRange | null>(null);
   const writePos = () => {
     if (!posKey || !posReady.current) return;
     try {
       const l = bus.getLoop();
       const loop = l ? { startMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) } : null;
-      localStorage.setItem(posKey, JSON.stringify({ sec: curSecRef.current, loop, at: Date.now() }));
+      // view：停了循环、浮窗还留着（「停止循环后保留」）时浮窗里那段，也要记
+      localStorage.setItem(posKey, JSON.stringify({ sec: curSecRef.current, loop, view: viewRangeRef.current, at: Date.now() }));
     } catch {
       /* 存不了就算了 */
     }
@@ -457,6 +460,11 @@ export default function AnnotationWorkspace({
     if (loopRange) setStickyRange(loopRange);
   }, [loopRange]);
   const viewRange = loopRange ?? (keepPopup ? stickyRange : null);
+  useEffect(() => {
+    viewRangeRef.current = viewRange;
+    writePos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewRange?.startMs, viewRange?.endMs]);
   // 浮窗里显示的那段，不在循环时也能改（拆完 / 调完起止后跟着换到新的那段）
   const showRange = (r: { startMs: number; endMs: number }) => {
     if (loopRange) setLoop(r);
@@ -586,6 +594,7 @@ export default function AnnotationWorkspace({
       if (restore) {
         bus.seek(savedPos.sec);
         if (savedPos.loop) setLoop(savedPos.loop);
+        else if (savedPos.view) setStickyRange(savedPos.view);
       }
       posReady.current = true;
       const autoJump = initialSeekMs == null && !restore;

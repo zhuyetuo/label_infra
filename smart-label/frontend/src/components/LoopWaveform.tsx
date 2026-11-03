@@ -144,9 +144,36 @@ function movingAvg(v: number[], k = 3): number[] {
 
 const spline = uPlot.paths.spline?.();
 
+/** 纵轴自适应：只看当前横轴范围里的点，按 0.5% ~ 99.5% 分位定上下限，留 12% 余量 */
+function fitVisible(u: uPlot): [number, number] {
+  const xs = u.data[0] as number[];
+  const mn = u.scales.x.min ?? -Infinity, mx = u.scales.x.max ?? Infinity;
+  const vals: number[] = [];
+  for (let s = 1; s < u.data.length; s++) {
+    const ys = u.data[s] as (number | null)[];
+    for (let i = 0; i < xs.length; i++) {
+      if (xs[i] < mn || xs[i] > mx) continue;
+      const v = ys[i];
+      if (v != null && Number.isFinite(v)) vals.push(v);
+    }
+  }
+  if (!vals.length) return [-1, 1];
+  vals.sort((a, b) => a - b);
+  const q = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
+  let lo = vals.length > 200 ? q(0.005) : vals[0];
+  let hi = vals.length > 200 ? q(0.995) : vals[vals.length - 1];
+  if (hi - lo < 0.05) {
+    const m = (hi + lo) / 2;
+    lo = m - 0.05;
+    hi = m + 0.05;
+  }
+  const pad = (hi - lo) * 0.12;
+  return [lo - pad, hi + pad];
+}
+
 function MiniPlot({
   snap, chans, smooth, yRange, xRange, width, height, bus, live, follow, winSec, axisColor,
-  rangeRef, editable, onEdge, onScrub, onMove, onDragEnd, version, resetKey, neighbors,
+  rangeRef, editable, onEdge, onScrub, onMove, onDragEnd, version, resetKey, neighbors, widen = 1,
 }: {
   snap: Snap;
   chans: typeof ACC;
@@ -173,6 +200,8 @@ function MiniPlot({
   onMove?: (s: number, e: number) => void;
   /** 拖边 / 拖整段松手 */
   onDragEnd?: () => void;
+  /** 浮窗拉宽了几倍：初始视图前后按比例多看一些（一秒的像素宽度不变，宽了就是看得更多） */
+  widen?: number;
   /** 外面改了 rangeRef（「起点设到播放线」）时加一，图跟着重画 */
   version?: number;
   /** 加一 = 视图回到初始（取消 Shift+滚轮的缩放 / 平移） */
@@ -205,9 +234,10 @@ function MiniPlot({
     // 起止已经被拖到原来视图外面（往外多拉了数据、图重建）：初始视图要把现在的起止也包进来
     const r0 = cur();
     const rs0 = (r0.s - info.startMs) / 1000, re0 = (r0.e - info.startMs) / 1000;
+    const extra = ((dur + 2 * pad) * (widen - 1)) / 2;
     const initX: [number, number] = scrolling
       ? [-pad, -pad + winSec]
-      : xRange ?? [Math.min(-pad, rs0 - pad), Math.max(dur + pad, re0 + pad)];
+      : xRange ?? [Math.max(-info.startMs / 1000, Math.min(-pad, rs0 - pad) - extra), Math.max(dur + pad, re0 + pad) + extra];
     initXRef.current = initX;
     zoomedRef.current = false;
     const opts: uPlot.Options = {
@@ -219,7 +249,10 @@ function MiniPlot({
         // 不能给 x 一个固定返回 initX 的 range 函数：uPlot 的 setScale 也会过一遍 range，
         // 那样跟随模式怎么 setScale 都被拉回原位。这里原样放行，初始窗口在建好之后 setScale
         x: { time: false, auto: false, range: (_u, mn, mx) => [mn, mx] },
-        y: yRange ? { range: () => yRange } : {},
+        // 纵轴：钉住了几段要并排比时用共用的范围；平时按**当前看得见的那一截**自适应——
+        // 原来按拉回来的整截数据（前后各 30 秒）取最大最小，别处一个大冲击就把这一段压成一条线。
+        // 取 0.5% ~ 99.5% 分位，孤立的尖峰不撑大量程，再留 12% 余量
+        y: yRange ? { range: () => yRange } : { auto: true, range: (u) => fitVisible(u) },
       },
       axes: [
         { stroke: axisColor, grid: { stroke: "rgba(128,128,128,.15)" }, size: 22, font: "10px sans-serif",
@@ -463,7 +496,7 @@ function MiniPlot({
     };
     // 宽高单独用 setSize 改，拖大小时不用每一下都重建
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snap, chans, smooth, yRange, xRange, scrolling, winSec, axisColor]);
+  }, [snap, chans, smooth, yRange, xRange, scrolling, winSec, axisColor, widen]);
 
   useEffect(() => {
     plotRef.current?.setSize({ width, height });
@@ -556,6 +589,12 @@ export default function LoopWaveform({
 }) {
   const { token } = theme.useToken();
   const [cfg, setCfgState] = useState<Cfg>(loadCfg);
+  // 图按哪个宽度排视图：拖大小时不跟着每一下变（变一下就要重建图），松手才更新
+  const [viewW, setViewW] = useState(() => cfg.w);
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+  const widen = Math.max(1, viewW / 460);
+  const winEff = Math.round(cfg.winSec * widen);
   const setCfg = (patch: Partial<Cfg>) =>
     setCfgState((c) => {
       const next = { ...c, ...patch };
@@ -623,6 +662,8 @@ export default function LoopWaveform({
   // 纵轴共用一个范围：当前这段和钉住的几段放在一起比，量级不同的话形状会骗人
   const chans = cfg.gyro ? GYRO : ACC;
   const yRange = useMemo<[number, number] | null>(() => {
+    // 只有一张图：各自按看得见的那一截自适应（MiniPlot 里），不给共用范围
+    if (!pins.length) return null;
     let lo = Infinity, hi = -Infinity;
     for (const s of [cur, ...pins]) {
       if (!s) continue;
@@ -640,13 +681,15 @@ export default function LoopWaveform({
   // 横轴也共用：一秒在几张图上一样宽，抖得快慢（频率）才能直接比。
   // 跟随模式下钉住的那几张也只看前 winSec 秒，跟主图同一个比例尺
   const xRange = useMemo<[number, number] | null>(() => {
+    const winSec = winEff;
     const all = [cur, ...pins].filter(Boolean) as Snap[];
     if (all.length < 2) return null;
     const pad = Math.max(...all.map((s) => s.padMs)) / 1000;
     const dur = Math.max(...all.map((s) => (s.info.endMs - s.info.startMs) / 1000));
-    if (cfg.follow && dur > cfg.winSec * 1.2) return [-pad, -pad + cfg.winSec];
+    if (cfg.follow && dur > winSec * 1.2) return [-pad, -pad + winSec];
     return [-pad, dur + pad];
-  }, [cur, pins, cfg.follow, cfg.winSec]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur, pins, cfg.follow, winEff]);
 
   const show = (info && (cfg.auto || forceOpen ? !closed : opened)) || (!info && pins.length > 0);
 
@@ -752,8 +795,10 @@ export default function LoopWaveform({
   }
   if (!show) return null;
 
-  const dragFrom = (e: React.MouseEvent, kind: "move" | "resize") => {
+  // kind：move = 拖标题栏挪位置；其余是从哪条边 / 哪个角改大小（n 上 s 下 w 左 e 右，可组合）
+  const dragFrom = (e: React.MouseEvent, kind: "move" | string) => {
     e.preventDefault();
+    e.stopPropagation();
     const sx = e.clientX, sy = e.clientY, c0 = cfg;
     const move = (ev: MouseEvent) => {
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
@@ -763,19 +808,32 @@ export default function LoopWaveform({
           left: Math.min(Math.max(0, c0.left + dx), window.innerWidth - 80),
           top: Math.min(Math.max(0, c0.top + dy), window.innerHeight - 40),
         }));
-      } else {
-        setCfgState((c) => ({
-          ...c,
-          w: Math.min(Math.max(300, c0.w + dx), window.innerWidth - c0.left - 24),
-          h: Math.min(Math.max(90, c0.h + dy), window.innerHeight - c0.top - 120),
-        }));
+        return;
       }
+      setCfgState((c) => {
+        let { left, top, w, h } = c0;
+        if (kind.includes("e")) w = Math.min(Math.max(300, c0.w + dx), window.innerWidth - c0.left - 48);
+        if (kind.includes("w")) {
+          const nl = Math.min(Math.max(0, c0.left + dx), c0.left + c0.w - 300);
+          w = c0.w + (c0.left - nl);
+          left = nl;
+        }
+        if (kind.includes("s")) h = Math.min(Math.max(90, c0.h + dy), window.innerHeight - c0.top - 120);
+        if (kind.includes("n")) {
+          const nt = Math.min(Math.max(0, c0.top + dy), c0.top + c0.h - 90);
+          h = c0.h + (c0.top - nt);
+          top = nt;
+        }
+        return { ...c, left, top, w, h };
+      });
     };
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
       // 松手才落盘，拖的过程中不用每一下都写 localStorage
       setCfg({});
+      // 宽度定下来再按新宽度重排视图（拖的过程中每一下都重建图会卡）
+      if (kind !== "move") setViewW(cfgRef.current.w);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -783,7 +841,7 @@ export default function LoopWaveform({
 
   const pinH = Math.max(70, Math.round(cfg.h * 0.55));
   const dur = info ? (info.endMs - info.startMs) / 1000 : 0;
-  const plotProps = { chans, smooth: cfg.smooth, yRange, xRange, width: cfg.w, winSec: cfg.winSec, axisColor: token.colorTextSecondary };
+  const plotProps = { chans, smooth: cfg.smooth, yRange, xRange, width: cfg.w, winSec: winEff, widen, axisColor: token.colorTextSecondary };
 
   return (
     // 浮窗本身是 zIndex 1100，antd 的下拉 / 提示默认 1050——浮窗里的类别下拉会被浮窗自己挡住。
@@ -860,9 +918,9 @@ export default function LoopWaveform({
             <Tooltip title="平滑：曲线连线 + 轻微去毛刺（约 0.1 秒）。想看原始采样点就关掉">
               <Checkbox checked={cfg.smooth} onChange={(e) => setCfg({ smooth: e.target.checked })} style={{ fontSize: 11 }}>平滑</Checkbox>
             </Tooltip>
-            <Tooltip title={`长片段只看播放位置附近 ${cfg.winSec} 秒，跟着播放滚动；关掉 = 整段压在一张图里`}>
+            <Tooltip title={`长片段只看播放位置附近 ${winEff} 秒，跟着播放滚动（浮窗拉宽了就看得更长）；关掉 = 整段压在一张图里`}>
               <Checkbox checked={cfg.follow} onChange={(e) => setCfg({ follow: e.target.checked })} style={{ fontSize: 11 }}>
-                跟随（{cfg.winSec}s）
+                跟随（{winEff}s）
               </Checkbox>
             </Tooltip>
             <Tooltip title="关掉后循环时不自动弹出，只在这个位置留一个「波形」小按钮，点了才打开">
@@ -928,9 +986,20 @@ export default function LoopWaveform({
           ))}
         </>
       )}
-      {/* 右下角拖着改大小 */}
+      {/* 四条边、四个角都能拖着改大小：往左右拉宽看得更长，往上下拉高看得更细 */}
+      {([
+        ["n", { top: 0, left: 10, right: 10, height: 5, cursor: "ns-resize" }],
+        ["s", { bottom: 0, left: 10, right: 14, height: 5, cursor: "ns-resize" }],
+        ["w", { left: 0, top: 10, bottom: 10, width: 5, cursor: "ew-resize" }],
+        ["e", { right: 0, top: 10, bottom: 14, width: 5, cursor: "ew-resize" }],
+        ["nw", { left: 0, top: 0, width: 10, height: 10, cursor: "nwse-resize" }],
+        ["ne", { right: 0, top: 0, width: 10, height: 10, cursor: "nesw-resize" }],
+        ["sw", { left: 0, bottom: 0, width: 10, height: 10, cursor: "nesw-resize" }],
+      ] as [string, React.CSSProperties][]).map(([k, st]) => (
+        <div key={k} onMouseDown={(e) => dragFrom(e, k)} style={{ position: "absolute", zIndex: 2, ...st }} />
+      ))}
       <div
-        onMouseDown={(e) => dragFrom(e, "resize")}
+        onMouseDown={(e) => dragFrom(e, "se")}
         title="拖着改大小"
         style={{
           position: "absolute", right: 0, bottom: 0, width: 14, height: 14, cursor: "nwse-resize",
