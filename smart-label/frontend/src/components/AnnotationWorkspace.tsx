@@ -1652,8 +1652,7 @@ export default function AnnotationWorkspace({
   // 点类别标签进来：把要看的那个面板亮出来
   useEffect(() => {
     if (!jumpToFocus || taskId == null) return;
-    const k: PanelKey | null = focusCandLabels?.length ? "cands" : focusLabelIds?.length ? "segs" : null;
-    if (!k) return;
+    const k: PanelKey = focusCandLabels?.length ? "cands" : "segs";
     if (panelHidden.includes(k)) showPanel(k);
     if (!isPanelOpen(k)) setPanelOpen(k, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
