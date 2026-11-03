@@ -2,7 +2,10 @@
 
 from types import SimpleNamespace as L
 
+from app.api.v1 import tasks as tasks_api  # noqa: F401  建表要先把模型都导进来
+from app.models.annotation import AnnotationLabelItem, LabelItemSource
 from app.services.label_tracks import overlapping_ids
+from tests.test_segment_review import _world
 
 LABELS = [
     L(id=1, parent_id=None, track="behavior"),   # 抓挠
@@ -23,3 +26,18 @@ def test_overlap_rules():
         (16, 3, 29_000, 31_000),   # 同轨不同类：冲突
     ]
     assert overlapping_ids(items, LABELS) == {10, 11, 14, 15, 16}
+
+
+def test_列表接口给重叠数(db, run):
+    from sqlalchemy import select as _select
+
+    w = _world(db, run)
+    a = w.items[0]
+    # 同一类别再标一遍、压住 a 的大半：1 处
+    db.add(AnnotationLabelItem(annotation_record_id=w.rec.id, label_id=a.label_id, start_time_ms=a.start_time_ms + 500,
+                               end_time_ms=a.end_time_ms + 500, source_type=LabelItemSource.human_added))
+    run(db.commit())
+    rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+    got = {r["id"]: r["overlap_count"] for r in rows}
+    assert got[w.t.id] == 1
+    assert len(run(db.execute(_select(AnnotationLabelItem))).scalars().all()) >= 6

@@ -8,7 +8,7 @@ import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, delete, func, insert, select
+from sqlalchemy import case, delete, func, insert, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
@@ -348,28 +348,40 @@ async def list_tasks(
 
     # 有重叠的片段数（同一轨上互相压着的：同类重复 / 父子 / 类别冲突）。项目页每行标个
     # 「重叠 N」，点进去只看这些——不然重复、矛盾的段只能一个个任务点开去找
+    #
+    # 在数据库里用窗口函数算，只回每个任务一个数：原来把所有任务的所有片段拉到 Python 里扫，
+    # 超级管理员看全部项目时是几十万行，列表接口直接超时。
+    # 口径：同一条记录、同一轨里按开始时间排，跟它前面任一段重叠 ≥0.2s 的算一处
+    # （所以 N = 多出来的那几段；三段压在一起算 2 处）
     overlap_counts: dict[int, int] = {}
     if task_ids:
         from app.models.label import LabelDefinition
-        from app.services.label_tracks import overlapping_ids
+        from app.services.label_tracks import OVERLAP_MIN_MS, track_of
 
-        rows = await db.execute(
-            select(AnnotationRecord.task_id, AnnotationLabelItem.id, AnnotationLabelItem.label_id,
-                   AnnotationLabelItem.start_time_ms, AnnotationLabelItem.end_time_ms)
+        lab_rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.parent_id, LabelDefinition.track))).all()
+        parent_of = {i: p_ for i, p_, _t in lab_rows}
+        own = {i: t for i, _p, t in lab_rows}
+        trk_of = {i: track_of(parent_of, own, i) for i, _p, _t in lab_rows}
+        trk_map = {i: t for i, t in trk_of.items() if t}
+        it = AnnotationLabelItem
+        trk = case(trk_map, value=it.label_id, else_="") if trk_map else literal("")
+        prev_end = func.max(it.end_time_ms).over(
+            partition_by=(it.annotation_record_id, trk), order_by=(it.start_time_ms, it.id), rows=(None, -1))
+        inner = (
+            select(AnnotationRecord.task_id.label("tid"), it.start_time_ms.label("s"), it.end_time_ms.label("e"),
+                   prev_end.label("pe"))
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
-            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .join(it, it.annotation_record_id == AnnotationRecord.id)
             .where(AnnotationRecord.round_no == Task.round_no)
+        ).subquery()
+        ov_end = case((inner.c.pe < inner.c.e, inner.c.pe), else_=inner.c.e)
+        rows = await db.execute(
+            select(inner.c.tid, func.count())
+            .where(inner.c.pe.is_not(None), ov_end - inner.c.s >= OVERLAP_MIN_MS)
+            .group_by(inner.c.tid)
         )
-        per_task: dict[int, list[tuple[int, int, int, int]]] = {}
-        for tid, iid, lid, s_, e_ in rows.all():
-            per_task.setdefault(tid, []).append((iid, lid, int(s_), int(e_)))
-        if per_task:
-            all_labels = (await db.execute(select(LabelDefinition))).scalars().all()
-            for tid, its in per_task.items():
-                n = len(overlapping_ids(its, all_labels))
-                if n:
-                    overlap_counts[tid] = n
+        overlap_counts = {int(t): int(n) for t, n in rows.all()}
 
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
     # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，

@@ -1541,10 +1541,10 @@ export default function Projects() {
                         return (
                           <Space size={2} wrap>
                             {(task.overlap_count ?? 0) > 0 && (
-                            <Tooltip title={`${task.overlap_count} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
+                            <Tooltip title={`${task.overlap_count} 处片段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看有重叠的`}>
                               <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
                                 onClick={() => pickOpen(task, p.id, { overlap: true })}>
-                                ⚠ 重叠 {task.overlap_count}
+                                ⚠ 重叠 {task.overlap_count} 处
                               </Tag>
                             </Tooltip>
                           )}
@@ -1574,10 +1574,10 @@ export default function Projects() {
                       return (
                         <Space size={2} wrap>
                           {(task.overlap_count ?? 0) > 0 && (
-                            <Tooltip title={`${task.overlap_count} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
+                            <Tooltip title={`${task.overlap_count} 处片段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看有重叠的`}>
                               <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
                                 onClick={() => pickOpen(task, p.id, { overlap: true })}>
-                                ⚠ 重叠 {task.overlap_count}
+                                ⚠ 重叠 {task.overlap_count} 处
                               </Tag>
                             </Tooltip>
                           )}
