@@ -31,6 +31,7 @@ router = APIRouter(
 )
 
 LOG_FILES = ("api.log", "access.log", "scheduler.log")
+_svc_cache: tuple[float, list[dict]] | None = None
 
 
 def _read(path: str) -> str:
@@ -125,18 +126,27 @@ async def get_status(db: AsyncSession = Depends(get_db)):
         if bind is not None and bind.dialect.name == "mysql":
             r = (await db.execute(text("SHOW STATUS LIKE 'Threads_connected'"))).first()
             dbinfo["connections"] = int(r[1]) if r else None
-            rows = (await db.execute(text(
-                "SELECT ID, TIME, STATE, LEFT(INFO, 300) FROM information_schema.PROCESSLIST "
-                "WHERE COMMAND <> 'Sleep' AND TIME >= 3 AND INFO IS NOT NULL ORDER BY TIME DESC LIMIT 10"
-            ))).all()
+            # performance_schema.processlist（8.0.22+）；老版本退回 information_schema——后者在新版
+            # 每查一次就往日志里打一条 deprecated 警告，5 秒刷一次能把日志刷满
+            sql = ("SELECT ID, TIME, STATE, LEFT(INFO, 300) FROM {t} "
+                   "WHERE COMMAND <> 'Sleep' AND TIME >= 3 AND INFO IS NOT NULL ORDER BY TIME DESC LIMIT 10")
+            try:
+                rows = (await db.execute(text(sql.format(t="performance_schema.processlist")))).all()
+            except Exception:  # noqa: BLE001
+                await db.rollback()
+                rows = (await db.execute(text(sql.format(t="information_schema.PROCESSLIST")))).all()
             dbinfo["slow_queries"] = [{"id": r[0], "sec": r[1], "state": r[2], "sql": r[3]} for r in rows]
     except Exception as e:  # noqa: BLE001
         dbinfo = {"ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
 
-    services = await asyncio.gather(
-        _probe(settings.algo_service_url),
-        _probe(settings.vision_service_url),
-    )
+    # 依赖服务 1 分钟探一次就够：页面 5 秒刷一次，每次都探的话 httpx 往日志里每 5 秒打两行
+    global _svc_cache
+    if _svc_cache is None or time.monotonic() - _svc_cache[0] > 60:
+        _svc_cache = (time.monotonic(), await asyncio.gather(
+            _probe(settings.algo_service_url),
+            _probe(settings.vision_service_url),
+        ))
+    services = _svc_cache[1]
     return ok({
         "cpu": {"percent": cpu_pct, "count": os.cpu_count(), "load": [float(x) for x in load] if load else None},
         "mem": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),

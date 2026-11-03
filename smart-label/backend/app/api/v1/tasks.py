@@ -5,6 +5,8 @@
 """
 
 import json
+import logging
+import time
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -54,6 +56,7 @@ from app.services.task_service import (
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+logger = logging.getLogger("smart-label.tasks")
 
 
 @router.post("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
@@ -271,6 +274,17 @@ async def delete_tasks_batch(body: TaskIdsRequest, db: AsyncSession = Depends(ge
 async def list_tasks(
     project_id: int | None = None, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    # 分段计时：整个接口超过 2 秒就把各段耗时记到 api.log（系统监控页搜 tasks-timing），
+    # 好知道慢在哪一段，不用猜
+    _t0 = _tl = time.perf_counter()
+    _laps: list[str] = []
+
+    def _lap(name: str) -> None:
+        nonlocal _tl
+        now = time.perf_counter()
+        _laps.append(f"{name}={now - _tl:.2f}s")
+        _tl = now
+
     query = apply_task_scope(select(Task), user)
     if project_id is not None:
         query = query.where(Task.project_id == project_id)
@@ -286,6 +300,7 @@ async def list_tasks(
         scoped_ids = scoped_ids.where(Task.project_id == project_id)
     scope = scoped_ids.subquery()
 
+    _lap("tasks")
     # 待认领但已经有人标过一部分（比如中途放弃）的任务，前端要标出来提示
     # "有草稿"，不是从零开始
     # 同时带上当前轮已经存了多少段：标注中的任务光看状态分不出"只是认领了进去
@@ -303,6 +318,7 @@ async def list_tasks(
         )
         draft_counts = {task_id: int(n) for task_id, n in rows.all()}
 
+    _lap("draft")
     # 每个任务当前轮各类别有几段、其中多少是 AI 给的还没人确认的——列表里直接
     # 显示"抓挠 5 / 睡觉 3"，想专门审抓挠的一眼就能挑出哪些任务去看，不用逐个点开
     label_counts: dict[int, dict[int, dict[str, int]]] = {}
@@ -346,6 +362,7 @@ async def list_tasks(
                 "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
             }
 
+    _lap("labels")
     # 有重叠的片段数（同一轨上互相压着的：同类重复 / 父子 / 类别冲突）。项目页每行标个
     # 「重叠 N」，点进去只看这些——不然重复、矛盾的段只能一个个任务点开去找
     #
@@ -383,6 +400,7 @@ async def list_tasks(
         )
         overlap_counts = {int(t): int(n) for t, n in rows.all()}
 
+    _lap("overlap")
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
     # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，
     # 其实底下压着十几条待判断的候选。两个数一起给：待确认多少、总共多少。
@@ -412,6 +430,7 @@ async def list_tasks(
             cand_labels.setdefault(task_id, {})[label_name] = {
                 "n": int(n), "pending": int(n_pending or 0)}
 
+    _lap("cands")
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
     review_comments: dict[int, str | None] = {}
@@ -423,6 +442,7 @@ async def list_tasks(
         )
         review_comments = dict(rows.all())
 
+    _lap("review")
     # 样本编号 + 指派人名字：非管理员拿不到 /samples、/users，列表里不能只给 ID。
     # 同样用 JOIN 子查询取，不拼上万个 sample_id 的 IN 列表
     brief_rows = await db.execute(
@@ -458,6 +478,10 @@ async def list_tasks(
                 user_names[uid] = dn or un
                 user_roles[uid] = role.value if hasattr(role, "value") else str(role)
 
+    _lap("briefs")
+    if time.perf_counter() - _t0 > 2:
+        logger.warning("tasks-timing n=%d project=%s total=%.2fs %s", len(tasks), project_id,
+                       time.perf_counter() - _t0, " ".join(_laps))
     return ok(
         [
             {
