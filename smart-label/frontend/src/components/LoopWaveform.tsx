@@ -1,5 +1,5 @@
 import { Button, Checkbox, ConfigProvider, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
-import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined } from "@ant-design/icons";
+import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -913,7 +913,9 @@ export default function LoopWaveform({
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, marginTop: 2 }}>
             {chans.map((c) => <span key={c.key} style={{ color: c.color }}>━ {c.label}</span>)}
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>底色 = 片段，橙线 = 播放位置</Typography.Text>
+            <Tooltip title="底色 = 片段，橙线 = 播放位置，顶上细色条 = 前后挨着的别的片段">
+              <QuestionCircleOutlined style={{ color: token.colorTextTertiary, cursor: "help" }} />
+            </Tooltip>
             <span style={{ flex: 1 }} />
             <Tooltip title="平滑：曲线连线 + 轻微去毛刺（约 0.1 秒）。想看原始采样点就关掉">
               <Checkbox checked={cfg.smooth} onChange={(e) => setCfg({ smooth: e.target.checked })} style={{ fontSize: 11 }}>平滑</Checkbox>
@@ -943,6 +945,21 @@ export default function LoopWaveform({
                   {(((edit?.e ?? info.endMs) - (edit?.s ?? info.startMs)) / 1000).toFixed(2)}s
                   {edit && `（原 ${fmtMs(info.startMs)} ~ ${fmtMs(info.endMs)}）`}
                 </Typography.Text>
+                {/* 操作说明收进问号：常驻一大段字占地方，只有头几次用得上 */}
+                <Tooltip
+                  overlayStyle={{ maxWidth: 360 }}
+                  title={
+                    <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                      · 拖底色两边的竖线改起止；按住顶上那条拖动整段，视频跟着停在那一帧<br />
+                      · 点 / 拖图上别处，视频跳过去<br />
+                      · <b>Shift+滚轮</b>缩放、<b>Shift+拖</b>左右平移，看前后的全貌<br />
+                      · 拖到窗口边上按住不放，视图会继续往外延伸<br />
+                      · 改好点「保存起止」，会记下这次调整
+                    </div>
+                  }
+                >
+                  <QuestionCircleOutlined style={{ color: token.colorTextTertiary, cursor: "help" }} />
+                </Tooltip>
                 <span style={{ flex: 1 }} />
                 <Tooltip title="先在图上点 / 拖到动作真正开始的那一帧，再点这个">
                   <Button size="small" onClick={() => { const n = setRange(lastSec.current * 1000, rangeRef.current.e); seekTo(n.s, true); }}>起点 = 播放线</Button>
@@ -953,12 +970,6 @@ export default function LoopWaveform({
                 {edit && <Button size="small" onClick={revert}>还原</Button>}
                 <Button size="small" type="primary" disabled={!edit} loading={saving} onClick={save}>保存起止</Button>
               </div>
-              {!edit && (
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  拖底色两边的竖线改起止、按住顶上那条拖动整段，视频跟着停在那一帧；点 / 拖图上别处把视频跳过去；
-                  <b>Shift+滚轮</b>缩放、<b>Shift+拖</b>左右平移，看前后的全貌。改好点「保存起止」，会记下这次调整
-                </Typography.Text>
-              )}
             </div>
           )}
 
