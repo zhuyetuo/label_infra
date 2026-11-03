@@ -313,6 +313,7 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
         select(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id == record.id)
     )
     existing_by_id = {item.id: item for item in existing_result.scalars().all()}
+    deleted_by_others = 0
     # 前端拉草稿之后别人改过 / 新建的：这次保存不碰它们
     protected = {
         i.id for i in existing_by_id.values()
@@ -398,6 +399,10 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
         if winner_by_span.get(_span(incoming)) is not incoming:
             continue        # 同标签同起止的另一条已经留下了
         origin = existing_by_id.get(incoming.origin_item_id) if incoming.origin_item_id else None
+        if loaded_at is not None and incoming.origin_item_id and origin is None:
+            # 带着库里的 id、库里却没有了：拉草稿之后被别人（管理员）删掉的。不按旧版本重建
+            deleted_by_others += 1
+            continue
         if origin is not None and origin.id in protected:
             continue        # 别人刚改过，前端这份是旧的：保留别人的（下面也不删）
         if origin is not None:
@@ -477,7 +482,7 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
 
     await db.commit()
     await db.refresh(record)
-    record.kept_others = len(protected)      # 非持久字段：给接口回给前端
+    record.kept_others = len(protected) + deleted_by_others      # 非持久字段：给接口回给前端
     return record
 
 

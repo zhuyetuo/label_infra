@@ -241,3 +241,25 @@ def test_标注员开着任务时管理员直接改_不被他的旧草稿冲掉(
     rec = run(task_service.save_draft(db, w.t.id, w.ann, stale))
     got = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == a.id))).scalar_one()
     assert got.start_time_ms == 0
+
+
+def test_管理员直接删片段_标注员旧草稿不重建(db, run):
+    from datetime import datetime, timedelta
+
+    w = _world(db, run)
+    w.t.status = TaskStatus.IN_PROGRESS
+    w.t.locked_by = w.ann.id
+    run(db.commit())
+    all_items = run(db.execute(select(AnnotationLabelItem))).scalars().all()
+    stale = [SimpleNamespace(label_id=x.label_id, start_time_ms=x.start_time_ms, end_time_ms=x.end_time_ms,
+                             origin_item_id=x.id, source_type=None, ai_confidence=None, ai_confirmed=None,
+                             uncertain=None, uncertain_reason=None) for x in all_items]
+    loaded_at = datetime.now() - timedelta(seconds=1)
+    gone = w.items[0].id
+    r = run(api.delete_item(gone, db, w.admin))
+    assert r["data"]["deleted"]
+    n = len(run(db.execute(select(AnnotationLabelItem))).scalars().all())
+    rec = run(task_service.save_draft(db, w.t.id, w.ann, stale, loaded_at))
+    assert rec.kept_others >= 1
+    ids = [x.id for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()]
+    assert gone not in ids and len(ids) == n

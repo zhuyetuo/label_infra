@@ -414,6 +414,29 @@ class SplitIn(BaseModel):
 SPLIT_MIN_MS = 300
 
 
+@router.delete("/{item_id}")
+async def delete_item(item_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """删掉一条片段（重复的、标错不要的）。审核员 / 管理员不用认领，标注员只能删自己名下任务里的。
+
+    标注员正开着这个任务也照样删：他下次存草稿时，前端拉草稿之后被删掉的片段不会被他手里
+    的旧版本重建回来（save_draft 的 loaded_at）。
+    从「疑似片段」确认来的那条，对应候选一起标成「排除」——不然打开工作台时「补回确认过的
+    候选」会按候选再建一条回来。"""
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+
+    it, task = await _load(db, item_id, user)
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这条不在你名下")
+    if it.from_candidate_id is not None:
+        cand = await db.get(AiCandidate, it.from_candidate_id)
+        if cand is not None and cand.status == CandidateStatus.confirmed:
+            cand.status = CandidateStatus.rejected
+            cand.decided_by, cand.decided_at = user.id, _now()
+    await db.delete(it)
+    await db.commit()
+    return ok({"id": item_id, "deleted": True})
+
+
 @router.post("/{item_id}/split")
 async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
                 user: User = Depends(get_current_user)):
