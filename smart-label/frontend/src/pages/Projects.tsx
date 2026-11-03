@@ -1163,6 +1163,13 @@ export default function Projects() {
               }
               return { max, sum, n };
             };
+            // 重叠数跟着类别筛选走：选了甩头就只数甩头（含子类）里卷进重叠的段
+            const overlapOf = (t: Task) => {
+              if (!f.labels.length) return t.overlap_count ?? 0;
+              let n = 0;
+              for (const [lid, c] of Object.entries(t.overlap_by_label ?? {})) if (wantLabelIds.has(Number(lid))) n += c;
+              return n;
+            };
             const minMs = f.labels.length && f.minSec ? f.minSec * 1000 : 0;
             const focusNames = projLabelNames(p.id, f.labels);
             const matchLabels = (t: Task) => {
@@ -1599,11 +1606,11 @@ export default function Projects() {
                       if (focus) {
                         return (
                           <Space size={2} wrap>
-                            {(task.overlap_count ?? 0) > 0 && (
-                            <Tooltip title={`${task.overlap_count} 处片段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看有重叠的`}>
+                            {overlapOf(task) > 0 && (
+                            <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${overlapOf(task)} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
                               <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
-                                onClick={() => pickOpen(task, p.id, { overlap: true })}>
-                                ⚠ 重叠 {task.overlap_count} 处
+                                onClick={() => pickOpen(task, p.id, { overlap: true, labels: f.labels.length ? f.labels : undefined })}>
+                                ⚠ 重叠 {overlapOf(task)} 段
                               </Tag>
                             </Tooltip>
                           )}
@@ -1643,11 +1650,11 @@ export default function Projects() {
                       }
                       return (
                         <Space size={2} wrap>
-                          {(task.overlap_count ?? 0) > 0 && (
-                            <Tooltip title={`${task.overlap_count} 处片段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看有重叠的`}>
+                          {overlapOf(task) > 0 && (
+                            <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${overlapOf(task)} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
                               <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
-                                onClick={() => pickOpen(task, p.id, { overlap: true })}>
-                                ⚠ 重叠 {task.overlap_count} 处
+                                onClick={() => pickOpen(task, p.id, { overlap: true, labels: f.labels.length ? f.labels : undefined })}>
+                                ⚠ 重叠 {overlapOf(task)} 段
                               </Tag>
                             </Tooltip>
                           )}

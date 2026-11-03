@@ -40,6 +40,7 @@ class TaskOut(BaseModel):
     cand_pending: int = 0
     # 同一轨上有重叠的片段数（只有列表接口会算）
     overlap_count: int = 0
+    overlap_by_label: dict[int, int] = {}
     # 候选按类别分 {类别名: {n, pending}}。候选存的是名字，不是 label_id。
     # 没有它，项目页按「舔」筛就只能筛片段——一句话找画面刚给某个任务写的那条
     # 「舔-后爪」候选，在项目页上根本找不着
