@@ -1,5 +1,5 @@
 import { Button, Checkbox, ConfigProvider, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
-import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined, QuestionCircleOutlined } from "@ant-design/icons";
+import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined, QuestionCircleOutlined, UnlockOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -83,6 +83,8 @@ interface Cfg {
   /** 长片段只看播放头附近 winSec 秒，跟着播放滚动；关掉 = 整段压在一张图里 */
   follow: boolean;
   winSec: number;
+  /** 锁住位置和大小：标题栏拖不动、边角不能改大小，免得点按钮时误拖 */
+  locked?: boolean;
 }
 const CFG_KEY = "loop-waveform-cfg";
 const defaultCfg = (): Cfg => ({
@@ -797,6 +799,7 @@ export default function LoopWaveform({
 
   // kind：move = 拖标题栏挪位置；其余是从哪条边 / 哪个角改大小（n 上 s 下 w 左 e 右，可组合）
   const dragFrom = (e: React.MouseEvent, kind: "move" | string) => {
+    if (cfg.locked) return;
     e.preventDefault();
     e.stopPropagation();
     const sx = e.clientX, sy = e.clientY, c0 = cfg;
@@ -859,7 +862,7 @@ export default function LoopWaveform({
     >
       <div
         onMouseDown={(e) => dragFrom(e, "move")}
-        style={{ display: "flex", alignItems: "center", gap: 6, cursor: "move", userSelect: "none", marginBottom: 4 }}
+        style={{ display: "flex", alignItems: "center", gap: 6, cursor: cfg.locked ? "default" : "move", userSelect: "none", marginBottom: 4 }}
       >
         <Typography.Text strong style={{ fontSize: 12, flex: 1, minWidth: 0 }} ellipsis>
           {info ? <>波形 · {info.title} <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -889,6 +892,11 @@ export default function LoopWaveform({
                 onClick={() => setPins((p) => [{ ...cur, id: ++idRef.current }, ...p].slice(0, 3))} />
             </Tooltip>
           )}
+          <Tooltip title={cfg.locked ? "已锁住位置和大小，点一下解锁" : "锁住位置和大小，免得误拖"}>
+            <Button size="small" type="text" icon={cfg.locked ? <LockOutlined /> : <UnlockOutlined />}
+              style={cfg.locked ? { color: token.colorPrimary } : undefined}
+              onClick={() => setCfg({ locked: !cfg.locked })} />
+          </Tooltip>
           <Button size="small" type="text" icon={collapsed ? <PlusOutlined /> : <MinusOutlined />} onClick={() => setCollapsed((c) => !c)} />
           <Tooltip title="关掉这个浮窗（循环照旧）。不想每次都弹，取消下面的「循环时自动弹出」">
             <Button size="small" type="text" icon={<CloseOutlined />}
@@ -1007,13 +1015,13 @@ export default function LoopWaveform({
         ["ne", { right: 0, top: 0, width: 10, height: 10, cursor: "nesw-resize" }],
         ["sw", { left: 0, bottom: 0, width: 10, height: 10, cursor: "nesw-resize" }],
       ] as [string, React.CSSProperties][]).map(([k, st]) => (
-        <div key={k} onMouseDown={(e) => dragFrom(e, k)} style={{ position: "absolute", zIndex: 2, ...st }} />
+        <div key={k} onMouseDown={(e) => dragFrom(e, k)} style={{ position: "absolute", zIndex: 2, ...st, ...(cfg.locked ? { cursor: "default" } : {}) }} />
       ))}
       <div
         onMouseDown={(e) => dragFrom(e, "se")}
         title="拖着改大小"
         style={{
-          position: "absolute", right: 0, bottom: 0, width: 14, height: 14, cursor: "nwse-resize",
+          position: "absolute", right: 0, bottom: 0, width: 14, height: 14, cursor: cfg.locked ? "default" : "nwse-resize", display: cfg.locked ? "none" : undefined,
           background: `linear-gradient(135deg, transparent 50%, ${token.colorTextQuaternary} 50%)`,
           borderBottomRightRadius: 8,
         }}
