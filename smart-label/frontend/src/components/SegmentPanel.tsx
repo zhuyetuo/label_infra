@@ -143,6 +143,8 @@ interface Props {
     >
   ) => void;
   onDelete: (id: number) => void;
+  /** 一键去重（给了才显示按钮）：同类重叠并成一条、父子压在一起删粗的 */
+  onDedupe?: () => Promise<void>;
   /** 只读时也能删（管理员 / 审核员直接删到服务器，不用认领）。删前都要确认 */
   canDeleteReadOnly?: boolean;
   /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
@@ -194,6 +196,7 @@ export default function SegmentPanel({
   onUpdate,
   onDelete,
   canDeleteReadOnly,
+  onDedupe,
   onSplit,
   onLowlight,
   onReturnToCandidate,
@@ -575,6 +578,22 @@ export default function SegmentPanel({
               ⚠ 重叠 {nOverlap}
             </Button>
           </Tooltip>
+        )}
+        {nOverlap > 0 && onDedupe && (
+          <Popconfirm
+            title="一键去重？"
+            description={
+              <div style={{ maxWidth: 340, fontSize: 12 }}>
+                · 同一类别重叠的：并成一条（起止取并集），留审核通过 / 人确认过 / 更长的那条<br />
+                · 父子压在一起（抓挠 + 抓挠-躯干）、细的盖住粗的八成以上：删粗的<br />
+                · 不同类别冲突的不动，要看画面判断
+              </div>
+            }
+            okText="去重"
+            onConfirm={onDedupe}
+          >
+            <Button size="small">一键去重</Button>
+          </Popconfirm>
         )}
         {cov.gaps.length > 0 && (
           <Tooltip title={`还有 ${cov.gaps.length} 段 ≥${GAP_MIN_MS / 1000}s 的时间既没有 AI 预测也没有人工标注，点开单独查看`}>

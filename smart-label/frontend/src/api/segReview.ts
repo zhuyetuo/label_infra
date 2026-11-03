@@ -73,6 +73,10 @@ export const segEdit = (id: number, body: { start_time_ms: number; end_time_ms: 
 /** 删掉一条片段（重复的 / 不要的）。审核员 / 管理员不用认领；从候选来的，候选一起标成排除 */
 export const segDelete = (id: number) => request.delete<never, { id: number; deleted: boolean }>(`/segments/${id}`);
 
+/** 一键去重：同类重叠的并成一条、父子压在一起的删粗的；类别冲突不动只报数 */
+export const segDedupe = (taskId: number) =>
+  request.post<never, { merged: number; removed_parent: number; conflicts_left: number }>("/segments/dedupe", { task_id: taskId });
+
 /** 从 at_ms 拆成两条（类别不变，两条都回到待审）。退回原因是「应该拆成几段」时用 */
 export const segSplit = (id: number, atMs: number) =>
   request.post<never, { left: { id: number; start_time_ms: number; end_time_ms: number };

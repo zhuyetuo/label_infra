@@ -263,3 +263,27 @@ def test_管理员直接删片段_标注员旧草稿不重建(db, run):
     assert rec.kept_others >= 1
     ids = [x.id for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()]
     assert gone not in ids and len(ids) == n
+
+
+def test_一键去重(db, run):
+    w = _world(db, run)
+    a, b, c = w.items
+    # a、b 同类别重叠：并成一条；c 跟它们不重叠
+    b.start_time_ms, b.end_time_ms = a.start_time_ms + 1000, a.end_time_ms + 2000
+    # 父子：父类「抓挠」一条，被子类 c 完全盖住 → 删父
+    rec = w.rec
+    parent_item = AnnotationLabelItem(annotation_record_id=rec.id, label_id=w.parent.id, start_time_ms=c.start_time_ms,
+                                      end_time_ms=c.end_time_ms, source_type=LabelItemSource.human_added)
+    db.add(parent_item)
+    run(db.commit())
+    a_span = (a.start_time_ms, b.end_time_ms)
+    run(api.decide(b.id, api.DecideIn(decision="approved"), db, w.rev))       # b 审核通过 → b 留下
+    r = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.admin))["data"]
+    assert r["merged"] == 1 and r["removed_parent"] == 1
+    ids = {x.id for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()}
+    assert b.id in ids and a.id not in ids and parent_item.id not in ids and c.id in ids
+    got = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == b.id))).scalar_one()
+    assert (got.start_time_ms, got.end_time_ms) == a_span and got.seg_status == "approved"
+    # 再跑一次没东西可去
+    r = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.admin))["data"]
+    assert r["merged"] == 0 and r["removed_parent"] == 0
