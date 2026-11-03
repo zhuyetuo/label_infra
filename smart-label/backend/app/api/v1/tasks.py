@@ -272,8 +272,12 @@ async def delete_tasks_batch(body: TaskIdsRequest, db: AsyncSession = Depends(ge
 
 @router.get("")
 async def list_tasks(
-    project_id: int | None = None, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    project_id: int | None = None, ids: str | None = None,
+    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
 ):
+    """ids：逗号分隔的任务 id，只算这几个（工作台关掉 / 存草稿 / 通过一段之后只刷那一行，
+    不用把几千个任务整份重算一遍）"""
+    only_ids = [int(x) for x in ids.split(",") if x.strip()] if ids else None
     # 分段计时：整个接口超过 2 秒就把各段耗时记到 api.log（系统监控页搜 tasks-timing），
     # 好知道慢在哪一段，不用猜
     _t0 = _tl = time.perf_counter()
@@ -288,6 +292,8 @@ async def list_tasks(
     query = apply_task_scope(select(Task), user)
     if project_id is not None:
         query = query.where(Task.project_id == project_id)
+    if only_ids:
+        query = query.where(Task.id.in_(only_ids))
     query = query.order_by(Task.created_at.desc())
     result = await db.execute(query)
     tasks = result.scalars().all()
@@ -298,6 +304,8 @@ async def list_tasks(
     scoped_ids = apply_task_scope(select(Task.id), user)
     if project_id is not None:
         scoped_ids = scoped_ids.where(Task.project_id == project_id)
+    if only_ids:
+        scoped_ids = scoped_ids.where(Task.id.in_(only_ids))
     scope = scoped_ids.subquery()
 
     _lap("tasks")

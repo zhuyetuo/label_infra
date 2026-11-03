@@ -8,6 +8,10 @@ export const listTasks = (projectId?: number) =>
 
 export const getTask = (id: number) => request.get<never, Task>(`/tasks/${id}`);
 
+/** 只拉这几个任务的列表行（带片段统计）：改了一个任务只刷那一行，不用整份重拉 */
+export const listTasksByIds = (ids: number[]) =>
+  request.get<never, Task[]>("/tasks", { params: { ids: ids.join(",") } });
+
 export const createTask = (body: {
   project_id: number;
   sample_id: number;
