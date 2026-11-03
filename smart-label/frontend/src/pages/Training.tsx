@@ -302,12 +302,22 @@ export default function Training() {
   const [wsSeekMs, setWsSeekMs] = useState<number | null>(null);
   const [wsOpening, setWsOpening] = useState<number | null>(null);
   const userId = useAuthStore((st) => st.userInfo?.id);
-  const openTask = async (taskId: number, seekMs?: number | null) => {
+  // item：从数据池点「看」——打开就循环那一段（波形浮窗弹出来，能直接改类别 / 起止），片段列表只看那一类
+  const [wsSeg, setWsSeg] = useState<{ id: number; labelId: number } | null>(null);
+  const openTask = async (taskId: number, seekMs?: number | null, item?: { id: number; labelId: number }) => {
     setWsOpening(taskId);
     try {
       const t = await getTask(taskId);
       setWsLabels(await listLabels(t.project_id));
-      setWsSeekMs(seekMs ?? null);
+      setWsSeg(item ?? null);
+      if (item) {
+        try {
+          sessionStorage.removeItem(`seg-panel:${taskId}`);
+        } catch {
+          /* 无所谓 */
+        }
+      }
+      setWsSeekMs(item ? null : seekMs ?? null);
       setWsTask(t);
     } finally {
       setWsOpening(null);
@@ -771,7 +781,7 @@ export default function Training() {
           {
             key: "pool",
             label: "数据池",
-            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms) => openTask(id, ms)} />,
+            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms, item) => openTask(id, ms, item)} />,
           },
           {
             key: "ds",
@@ -1390,6 +1400,9 @@ export default function Training() {
         task={wsTask}
         labels={wsLabels}
         initialSeekMs={wsSeekMs}
+        initialSegId={wsSeg?.id ?? null}
+        focusLabelIds={wsSeg ? [wsSeg.labelId] : undefined}
+        jumpToFocus={!!wsSeg}
         readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
         onClaim={
           wsTask && wsTask.status !== "APPROVED"

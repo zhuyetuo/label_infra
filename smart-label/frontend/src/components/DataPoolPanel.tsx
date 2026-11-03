@@ -34,7 +34,7 @@ export default function DataPoolPanel({
 }: {
   onTrain: (ds: TrainDataset) => void;
   /** 在工作台打开这个任务，跳到这一刻 */
-  onOpen: (taskId: number, seekMs: number) => void;
+  onOpen: (taskId: number, seekMs: number, item?: { id: number; labelId: number }) => void;
 }) {
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.userInfo?.role);
@@ -367,7 +367,7 @@ export default function DataPoolPanel({
             width: 120,
             render: (_, r) => (
               <Space size={0}>
-                <Button size="small" type="link" onClick={() => onOpen(r.task_id, r.start_time_ms)}>
+                <Button size="small" type="link" onClick={() => onOpen(r.task_id, r.start_time_ms, { id: r.id, labelId: r.label_id })}>
                   看
                 </Button>
                 {curator && (
