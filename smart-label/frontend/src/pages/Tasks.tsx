@@ -178,6 +178,8 @@ export default function Tasks() {
     status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务 */
     minSec?: number | null;
+    /** 选了类别时片段栏照样摆全部类别（找「静止被判成未佩戴」这种要看左右是什么） */
+    showAll?: boolean;
   };
   // 片段汇总里展开了哪些大类（看细类）
   const [sumOpen, setSumOpen] = useState<Set<number>>(new Set());
@@ -339,6 +341,13 @@ export default function Tasks() {
           <Tooltip title="只看这几类里最长一段不短于这么多秒的任务；每行写着最长一段和合计多长">
             <InputNumber size="small" min={0} step={5} value={f.minSec ?? null} placeholder="片段"
               onChange={(v) => setFilter(p.id, { minSec: v ?? null })} addonAfter="秒以上" style={{ width: 130 }} />
+          </Tooltip>
+        )}
+        {f.labels.length > 0 && (
+          <Tooltip title="按类别筛的同时，片段栏照样显示这个任务的全部类别（比如筛未佩戴，同时看它旁边是不是一大段静止）">
+            <Checkbox checked={!!f.showAll} onChange={(e) => setFilter(p.id, { showAll: e.target.checked })}>
+              片段栏显示全部类别
+            </Checkbox>
           </Tooltip>
         )}
         <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
@@ -518,7 +527,7 @@ export default function Tasks() {
             render: (_, task: Task) => {
               const lc = task.label_counts ?? {};
               // 选了类别：只摆这几类（含细类），每类后面写最长一段 / 合计时长，挑长片段标
-              const focus = f.labels.length > 0;
+              const focus = f.labels.length > 0 && !f.showAll;
               const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0 && (!focus || wantIds.has(l.id)));
               const candN = focus ? 0 : task.cand_count ?? 0;
               if (!entries.length && !candN) return <Typography.Text type="secondary">-</Typography.Text>;
