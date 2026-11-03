@@ -239,13 +239,16 @@ export default function SegmentPanel({
       return null;
     }
   }, [persistKey]);
-  const [filterLabels, setFilterLabels] = useState<number[]>(saved?.labels ?? initialFilterLabels ?? []);
+  // 从哪个类别点进来的（项目页筛了饮水 / 点了饮水标签）就看哪一类；没带类别进来时才用记住的（刷新回来那份）。
+  // 原来记住的优先，结果上回在这个任务里看的是「全部类别」，这回从「饮水」点进来还是全部，饮水那几段淹在里面
+  const [filterLabels, setFilterLabels] = useState<number[]>(
+    initialFilterLabels?.length ? initialFilterLabels : saved?.labels ?? []);
   // 层级：筛「舔」把「舔-前爪」「舔-前左爪」一起带上（标了细的也算上级）
   const filterLabelSet = useMemo(() => descendantIds(labels, filterLabels), [labels, filterLabels]);
   // 换任务（比如从跟踪表连着看好几条）时把默认筛选重新套上；这个任务记过自己的筛选（刷新回来）就用记的
   useEffect(() => {
-    if (saved?.labels) setFilterLabels(saved.labels);
-    else if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
+    if (initialFilterLabels?.length) setFilterLabels(initialFilterLabels);
+    else if (saved?.labels) setFilterLabels(saved.labels);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialFilterLabels]);
   // "未预测片段"不是模型的类别，单独一个视图：打开后表格列的是空白段而不是标注

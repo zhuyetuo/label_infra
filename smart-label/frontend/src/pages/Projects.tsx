@@ -894,7 +894,8 @@ export default function Projects() {
   const labelsOf = (projectId: number): LabelDefinition[] =>
     allLabels?.filter((l) => l.project_id === projectId) ?? [];
 
-  const openWorkspace = (task: Task, readOnly: boolean, projectId: number, pick?: { labels?: number[]; cands?: string[]; overlap?: boolean }) => {
+  const openWorkspace = (task: Task, readOnly: boolean, projectId: number,
+    pick?: { labels?: number[]; cands?: string[]; overlap?: boolean; source?: string }, fromRefresh = false) => {
     setWorkspaceLabels(labelsOf(projectId));
     setWorkspaceReadOnly(readOnly);
     if (pick) {
@@ -902,7 +903,10 @@ export default function Projects() {
       // 片段列表上次在这个任务里手动选的筛选（刷新用的那份）清掉，不然会盖过这次点的
       try {
         // 点「重叠 N」进来：片段列表直接切到「有重叠的」
-        if (pick.overlap) sessionStorage.setItem(`seg-panel:${task.id}`, JSON.stringify({ labels: [], source: "overlap" }));
+        // 点「✓通过 / 退回 / 还没审」进来：来源筛选也一起带上
+        if (pick.overlap || pick.source)
+          sessionStorage.setItem(`seg-panel:${task.id}`,
+            JSON.stringify({ labels: pick.labels ?? [], source: pick.overlap ? "overlap" : pick.source }));
         else sessionStorage.removeItem(`seg-panel:${task.id}`);
       } catch {
         /* 无所谓 */
@@ -914,6 +918,14 @@ export default function Projects() {
       return;
     }
     setWorkspaceJump(false);
+    // 片段列表记住的筛选只给「刷新页面回来」用；从列表重新点开就从项目页的筛选开始
+    if (!fromRefresh) {
+      try {
+        sessionStorage.removeItem(`seg-panel:${task.id}`);
+      } catch {
+        /* 无所谓 */
+      }
+    }
     // 列表这一层已经按类别筛过了（比如只看「抓挠」），带进工作台当片段列表的
     // 初始筛选——否则进去看到的是全部类别，还得在片段面板里把同一个筛选再点一遍，
     // 而一份任务动辄几十段，要找的那 3 段抓挠就淹在里面
@@ -959,7 +971,7 @@ export default function Projects() {
   // 刷新页面还能回到打开着的任务（?task=ID），顺便把它所在的项目行展开
   useUrlTask(allTasks, workspaceTask?.id ?? null, (task) => {
     setExpandedKeys((prev) => (prev.includes(task.project_id) ? prev : [...prev, task.project_id]));
-    openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), task.project_id);
+    openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), task.project_id, undefined, true);
   });
 
   const handleClaimTask = async (id: number) => {
@@ -980,7 +992,7 @@ export default function Projects() {
   };
 
   // 行里点类别标签打开：自己正在标的就可编辑，其余只读（跟「查看标注 / 编辑标注」同一个判断）
-  const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[]; overlap?: boolean }) =>
+  const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[]; overlap?: boolean; source?: string }) =>
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), projectId, pick);
 
   const handleReleaseTask = async (id: number) => {
@@ -1557,13 +1569,19 @@ export default function Projects() {
                                   key={l.id}
                                   title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
-                                  <Space size={0} style={{ cursor: "pointer" }} onClick={() => pickOpen(task, p.id, { labels: [l.id] })}>
-                                    <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}>{l.display_name} {c.n}</Tag>
-                                    {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}>✓通过 {ok}</Tag>}
+                                  <Space size={0} style={{ cursor: "pointer" }}>
+                                    <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id] })}>{l.display_name} {c.n}</Tag>
+                                    {/* 每个小标签单独点：只看这一类里通过的 / 退回的 / 还没审的 / AI 待确认的 */}
+                                    {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_approved" })}>✓通过 {ok}</Tag>}
                                     {/* 退回 = 你标了有问题、在等标注员改；未审 = 你还没看过 */}
-                                    {ret > 0 && <Tag color="error" style={{ marginRight: 2 }}>退回·待标注员改 {ret}</Tag>}
-                                    {todo > 0 && <Tag style={{ marginRight: 2 }}>还没审 {todo}</Tag>}
-                                    {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}>AI待确认 {c.ai_pending}</Tag>}
+                                    {ret > 0 && <Tag color="error" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "flagged" })}>退回·待标注员改 {ret}</Tag>}
+                                    {todo > 0 && <Tag style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_unreviewed" })}>还没审 {todo}</Tag>}
+                                    {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "ai_pending" })}>AI待确认 {c.ai_pending}</Tag>}
                                   </Space>
                                 </Tooltip>
                               );
