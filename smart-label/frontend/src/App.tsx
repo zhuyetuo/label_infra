@@ -9,6 +9,7 @@ import Labels from "@/pages/Labels";
 import Projects from "@/pages/Projects";
 import Users from "@/pages/Users";
 import LlmProviders from "@/pages/LlmProviders";
+import System from "@/pages/System";
 import Tooth from "@/pages/Tooth";
 import DailyStats from "@/pages/DailyStats";
 import AnnotatorStats from "@/pages/AnnotatorStats";
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="/training" element={<Training />} />
         <Route path="/users" element={<Users />} />
         <Route path="/llm-providers" element={<LlmProviders />} />
+        <Route path="/system" element={<System />} />
         <Route path="/" element={<Navigate to="/tasks" replace />} />
       </Route>
     </Routes>

@@ -28,6 +28,7 @@ const ALL_ITEMS = [
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
   { key: "/llm-providers", label: "模型服务", roles: ["super_admin", "admin"] },
   { key: "/users", label: "账号管理", roles: ["super_admin", "admin"] },
+  { key: "/system", label: "系统监控", roles: ["super_admin", "admin"] },
 ] as { key: string; label: string; roles: string[]; feature?: string }[];
 
 export default function AppLayout() {

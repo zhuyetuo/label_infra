@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -76,6 +77,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# 慢请求记一笔（api.log 里搜 SLOW）：页面一片 timeout 时，一眼看出是哪个接口慢、慢多少。
+# 访问日志里没有耗时，只靠它看不出来
+SLOW_MS = 3000
+
+
+@app.middleware("http")
+async def _log_slow(request: Request, call_next):
+    t0 = time.perf_counter()
+    resp = await call_next(request)
+    ms = (time.perf_counter() - t0) * 1000
+    if ms >= SLOW_MS:
+        logging.getLogger("slow").warning("SLOW %s %s %.0fms -> %s", request.method, request.url.path, ms, resp.status_code)
+    return resp
 
 
 @app.exception_handler(HTTPException)
