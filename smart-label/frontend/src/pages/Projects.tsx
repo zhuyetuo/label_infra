@@ -195,10 +195,41 @@ export default function Projects() {
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean };
-  const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
-  const [expandedKeys, setExpandedKeys] = useState<number[]>([]);
-  const filterOf = (projectId: number): TaskFilter =>
-    taskFilters[projectId] ?? { status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false };
+  // 筛选和展开的项目记在 localStorage：刷新页面回来还是刚才那个视图（比如只看抓挠），不用重新点
+  const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("projects-task-filters") || "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("projects-task-filters", JSON.stringify(taskFilters));
+    } catch {
+      /* 存不了就算了 */
+    }
+  }, [taskFilters]);
+  const [expandedKeys, setExpandedKeys] = useState<number[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("projects-expanded") || "[]");
+      return Array.isArray(v) ? v.filter((x) => typeof x === "number") : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("projects-expanded", JSON.stringify(expandedKeys));
+    } catch {
+      /* 存不了就算了 */
+    }
+  }, [expandedKeys]);
+  const filterOf = (projectId: number): TaskFilter => ({
+    status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
+    ...(taskFilters[projectId] as Partial<TaskFilter> | undefined),
+  });
   const setFilter = (projectId: number, patch: Partial<TaskFilter>) =>
     setTaskFilters((prev) => ({ ...prev, [projectId]: { ...filterOf(projectId), ...patch } }));
   const [workspaceReadOnly, setWorkspaceReadOnly] = useState(false);
