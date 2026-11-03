@@ -32,6 +32,8 @@ import SimilarClipPlayer, { type Clip } from "@/components/SimilarClipPlayer";
 import type { SimilarThumbView } from "@/api/candidates";
 import { ACTION_QUERIES, queryFor } from "@/utils/actionQueries";
 import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, decideCandidate, listCandidates, setCandidateReviewNote, setCandidateSpan, type AiCandidate, type SimilarHit } from "@/api/candidates";
+import LabelTreeSelect from "@/components/LabelTreeSelect";
+import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import { DRAFT_STALE_EVENT, getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
 import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
@@ -904,19 +906,17 @@ export default function AnnotationWorkspace({
           {formatMs(menuItem.start_time_ms)} → {formatMs(menuItem.end_time_ms)}
         </div>
         <ConfigProvider theme={{ token: { zIndexPopupBase: 1250 } }}>
-          <Select
-            size="small"
-            showSearch
+          <LabelTreeSelect
+            labels={labels}
             autoFocus
             defaultOpen
+            size="middle"
             placeholder="改成…（可输入搜索）"
             style={{ width: "100%" }}
-            optionFilterProp="label"
             value={menuItem.label_id}
             listHeight={260}
-            onChange={(v: number) => relabelFromMenu(menuItem, v)}
-            options={labels.filter((l) => l.is_active !== false || l.id === menuItem.label_id)
-              .map((l) => ({ value: l.id, label: l.display_name }))}
+            recent={recentLabels(task?.project_id)}
+            onChange={(v) => { rememberLabel(task?.project_id, v); relabelFromMenu(menuItem, v); }}
           />
         </ConfigProvider>
         <Space size={4} style={{ marginTop: 6 }} wrap>
@@ -986,16 +986,12 @@ export default function AnnotationWorkspace({
               {formatMs(it.start_time_ms)} → {formatMs(it.end_time_ms)}
             </span>
             <span style={{ color: "#888" }}>{((it.end_time_ms - it.start_time_ms) / 1000).toFixed(1)}s</span>
-            <Select
-              size="small"
-              showSearch
-              style={{ width: 130, marginLeft: "auto" }}
+            <LabelTreeSelect
+              labels={labels}
+              style={{ width: 150, marginLeft: "auto" }}
               value={it.label_id}
-              optionFilterProp="label"
-              popupMatchSelectWidth={false}
-              onChange={(v: number) => relabelFromMenu(it, v)}
-              options={labels.filter((l) => l.is_active !== false || l.id === it.label_id)
-                .map((l) => ({ value: l.id, label: l.display_name }))}
+              recent={recentLabels(task?.project_id)}
+              onChange={(v) => { rememberLabel(task?.project_id, v); relabelFromMenu(it, v); }}
             />
             {!readOnly && (
               <Button size="small" type="link" danger style={{ padding: 0 }}
@@ -1016,16 +1012,12 @@ export default function AnnotationWorkspace({
       <span style={{ flex: 1 }} />
       {readOnly && (
         <Tooltip title="类别不对就在这里改（只读任务里也能改，不用认领）">
-          <Select
-            size="small"
-            showSearch
-            style={{ width: 140 }}
+          <LabelTreeSelect
+            labels={labels}
+            style={{ width: 160 }}
             value={it.label_id}
-            optionFilterProp="label"
-            popupMatchSelectWidth={false}
-            onChange={(v: number) => relabelItem(it, v)}
-            options={labels.filter((l) => l.is_active !== false || l.id === it.label_id)
-              .map((l) => ({ value: l.id, label: l.display_name }))}
+            recent={recentLabels(task?.project_id)}
+            onChange={(v) => { rememberLabel(task?.project_id, v); relabelItem(it, v); }}
           />
         </Tooltip>
       )}
