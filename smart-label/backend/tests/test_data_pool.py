@@ -28,6 +28,9 @@ def test_审核通过自动进池_手动加入移出(db, run):
 
     s = run(data_pool.summary(db, data_pool.PoolFilter()))
     assert s["n"] == 1 and s["n_approved"] == 1 and s["by_root"][0]["name"] == "抓挠"
+    tree = {x["name"]: x for x in s["tree"]}
+    assert tree["抓挠"]["parent"] is None and tree["抓挠"]["n"] == 1
+    assert tree["抓挠-头颈耳"]["parent"] == "抓挠" and tree["抓挠-头颈耳"]["n"] == 1
 
     # 标注员不能动池子；整批加入要给条件
     with pytest.raises(HTTPException):
