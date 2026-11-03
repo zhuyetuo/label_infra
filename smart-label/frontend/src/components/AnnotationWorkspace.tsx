@@ -59,7 +59,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segDelete, segEdit, segSplit } from "@/api/segReview";
+import { segDecide, segDedupe, segDelete, segEdit, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -1142,6 +1142,20 @@ export default function AnnotationWorkspace({
   }, [segReview?.reloadKey]);
 
   // 审核员 / 管理员在只读任务里改类别（走片段接口，不用认领）
+  // 一键去重：服务器上做（只读的管理员也能用）；自己在编辑时先把手上的改动存了，免得被重拉冲掉
+  const handleDedupe = async () => {
+    if (taskId == null) return;
+    if (!readOnly) await saveDraft(taskId, toDraftPayload(items));
+    const r = await segDedupe(taskId);
+    const d = await getDraft(taskId);
+    setItems(d.items);
+    const n = r.merged + r.removed_parent;
+    message.success(
+      `${n ? `去掉 ${n} 段（合并同类 ${r.merged}、删父类 ${r.removed_parent}）` : "没有能自动去掉的重复"}` +
+        (r.conflicts_left ? `；还有 ${r.conflicts_left} 段是不同类别冲突，要人看` : ""),
+      4,
+    );
+  };
   // 只读（管理员 / 审核员旁观）时删一段：直接走片段接口删到库里，不用认领。
   // 正在循环它的话停掉循环，地址栏的 seg 也清掉
   const deleteItemRemote = async (it: LabelItem) => {
@@ -1868,6 +1882,7 @@ export default function AnnotationWorkspace({
           }
         }}
         canDeleteReadOnly={canFlag && !segReview}
+        onDedupe={taskId != null && !segReview && (!readOnly || canFlag) ? handleDedupe : undefined}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];

@@ -437,6 +437,153 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db), user: Us
     return ok({"id": item_id, "deleted": True})
 
 
+class DedupeIn(BaseModel):
+    task_id: int
+
+
+@router.post("/dedupe")
+async def dedupe(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """一键去重（当前这一轮）：
+      · 同一类别互相重叠（≥0.2s）的：并成一条，起止取并集。留「最靠谱」的那条——审核通过的 >
+        人确认 / 改过 / 人加的 > 时长长的，其余删掉
+      · 父子类别压在一起（抓挠 + 抓挠-躯干），细的盖住了粗的八成以上：删粗的
+      · 同一轨的不同类别（类别冲突）不动：得人看画面判断，只报个数
+    审核员 / 管理员不用认领；标注员只能动自己名下的。并过之后起止变了的，跟片段接口的改一样处理
+    （审核员改的算通过；改了就离开手动加入的数据池）。"""
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.services.label_tracks import OVERLAP_MIN_MS, conflict_checker, track_of
+    from app.services.task_service import _append_boundary_edit
+
+    task = await db.get(Task, body.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    reviewer = _is_reviewer(user)
+    if not reviewer and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+    items = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+    )).scalars().all()
+    labels = (await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == task.project_id))).scalars().all()
+    parent_of = {l.id: l.parent_id for l in labels}
+    own = {l.id: l.track for l in labels}
+    now = _now()
+
+    def rank(x: AnnotationLabelItem):
+        human = bool(x.ai_confirmed or x.is_modified or x.source_type == LabelItemSource.human_added)
+        return (x.seg_status == "approved", human, x.end_time_ms - x.start_time_ms, -x.id)
+
+    deleted: set[int] = set()
+    cand_to_reject: set[int] = set()
+
+    def drop(x: AnnotationLabelItem, keeper: AnnotationLabelItem | None):
+        deleted.add(x.id)
+        if x.from_candidate_id is not None:
+            # 出处挪给留下的那条（它没有的话），不然打开工作台「补回确认过的候选」会按候选再建一条
+            if keeper is not None and keeper.from_candidate_id is None:
+                keeper.from_candidate_id = x.from_candidate_id
+            else:
+                cand_to_reject.add(x.from_candidate_id)
+
+    def touched(x: AnnotationLabelItem, old: tuple[int, int]):
+        if (x.start_time_ms, x.end_time_ms) == old:
+            return
+        x.boundary_edits = _append_boundary_edit(x.boundary_edits, old, (x.start_time_ms, x.end_time_ms), user)
+        if x.source_type == LabelItemSource.ai_generated:
+            x.is_modified = True
+        x.touched_at, x.touched_by = now, user.id
+        if x.pool_state == "in":
+            x.pool_state = None
+        if reviewer:
+            x.seg_status = "approved"
+            x.seg_reviewed_by, x.seg_reviewed_at = user.id, now
+        else:
+            x.seg_status = None
+
+    # 1) 同类别重叠的并成一条
+    n_merged = 0
+    by_label: dict[int, list[AnnotationLabelItem]] = {}
+    for x in items:
+        by_label.setdefault(x.label_id, []).append(x)
+    for group in by_label.values():
+        group.sort(key=lambda x: x.start_time_ms)
+        cluster: list[AnnotationLabelItem] = []
+        end = -1
+
+        def flush():
+            nonlocal n_merged
+            if len(cluster) < 2:
+                return
+            keeper = max(cluster, key=rank)
+            old = (keeper.start_time_ms, keeper.end_time_ms)
+            keeper.start_time_ms = min(c.start_time_ms for c in cluster)
+            keeper.end_time_ms = max(c.end_time_ms for c in cluster)
+            keeper.uncertain = all(c.uncertain for c in cluster)
+            for c in cluster:
+                if c is not keeper:
+                    drop(c, keeper)
+                    n_merged += 1
+            touched(keeper, old)
+
+        for x in group:
+            if cluster and x.start_time_ms <= end - OVERLAP_MIN_MS:
+                cluster.append(x)
+                end = max(end, x.end_time_ms)
+            else:
+                flush()
+                cluster, end = [x], x.end_time_ms
+        flush()
+
+    # 2) 父子压在一起：细的盖住粗的八成以上，删粗的
+    def ancestors(i: int) -> set[int]:
+        out: set[int] = set()
+        cur = parent_of.get(i)
+        while cur is not None and cur not in out:
+            out.add(cur)
+            cur = parent_of.get(cur)
+        return out
+
+    alive = [x for x in items if x.id not in deleted]
+    n_parent = 0
+    for coarse in alive:
+        if coarse.id in deleted:
+            continue
+        dur = max(1, coarse.end_time_ms - coarse.start_time_ms)
+        for fine in alive:
+            if fine.id in deleted or fine is coarse or coarse.label_id not in ancestors(fine.label_id):
+                continue
+            ov = min(coarse.end_time_ms, fine.end_time_ms) - max(coarse.start_time_ms, fine.start_time_ms)
+            if ov >= 0.8 * dur:
+                drop(coarse, fine)
+                n_parent += 1
+                break
+
+    # 3) 剩下的同轨不同类冲突：只数一下
+    conflicts = conflict_checker(labels)
+    alive = sorted((x for x in items if x.id not in deleted), key=lambda x: x.start_time_ms)
+    conflict_ids: set[int] = set()
+    for i, a in enumerate(alive):
+        for b in alive[i + 1:]:
+            if b.start_time_ms >= a.end_time_ms:
+                break
+            if min(a.end_time_ms, b.end_time_ms) - b.start_time_ms < OVERLAP_MIN_MS:
+                continue
+            if track_of(parent_of, own, a.label_id) == track_of(parent_of, own, b.label_id) and conflicts(a.label_id, b.label_id):
+                conflict_ids.update((a.id, b.id))
+
+    for x in items:
+        if x.id in deleted:
+            await db.delete(x)
+    for cid in cand_to_reject:
+        cand = await db.get(AiCandidate, cid)
+        if cand is not None and cand.status == CandidateStatus.confirmed:
+            cand.status = CandidateStatus.rejected
+            cand.decided_by, cand.decided_at = user.id, now
+    await db.commit()
+    return ok({"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)})
+
+
 @router.post("/{item_id}/split")
 async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
                 user: User = Depends(get_current_user)):
