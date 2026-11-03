@@ -346,6 +346,31 @@ async def list_tasks(
                 "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
             }
 
+    # 有重叠的片段数（同一轨上互相压着的：同类重复 / 父子 / 类别冲突）。项目页每行标个
+    # 「重叠 N」，点进去只看这些——不然重复、矛盾的段只能一个个任务点开去找
+    overlap_counts: dict[int, int] = {}
+    if task_ids:
+        from app.models.label import LabelDefinition
+        from app.services.label_tracks import overlapping_ids
+
+        rows = await db.execute(
+            select(AnnotationRecord.task_id, AnnotationLabelItem.id, AnnotationLabelItem.label_id,
+                   AnnotationLabelItem.start_time_ms, AnnotationLabelItem.end_time_ms)
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(scope, scope.c.id == Task.id)
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .where(AnnotationRecord.round_no == Task.round_no)
+        )
+        per_task: dict[int, list[tuple[int, int, int, int]]] = {}
+        for tid, iid, lid, s_, e_ in rows.all():
+            per_task.setdefault(tid, []).append((iid, lid, int(s_), int(e_)))
+        if per_task:
+            all_labels = (await db.execute(select(LabelDefinition))).scalars().all()
+            for tid, its in per_task.items():
+                n = len(overlapping_ids(its, all_labels))
+                if n:
+                    overlap_counts[tid] = n
+
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
     # 统计不到——而列表上只显示正式片段的话，一个"抓挠 0 段"的任务看着像没事干，
     # 其实底下压着十几条待判断的候选。两个数一起给：待确认多少、总共多少。
@@ -428,6 +453,7 @@ async def list_tasks(
                 "has_draft": draft_counts.get(t.id, 0) > 0,
                 "draft_item_count": draft_counts.get(t.id, 0),
                 "label_counts": label_counts.get(t.id, {}),
+                "overlap_count": overlap_counts.get(t.id, 0),
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出

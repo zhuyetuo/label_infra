@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import LabelTreeSelect from "@/components/LabelTreeSelect";
-import { Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, trackOf } from "@/utils/labelTree";
 import { REASON_LABEL, candTitle } from "@/utils/candReason";
 import BoundaryEditsTag from "@/components/BoundaryEditsTag";
+import { OVERLAP_KIND_NAME, computeOverlaps, type OverlapHit } from "@/utils/overlaps";
 
 // 已标注片段列表：筛选、统计、AI 片段的人工确认/纠正都在这里。
 // 标注和审核共用（审核 readOnly，只能看不能改）。
@@ -27,10 +28,12 @@ type SourceFilter =
   | "uncertain"
   | "uncertain_no_view"
   | "uncertain_ambiguous"
-  | "uncertain_needs_split";
+  | "uncertain_needs_split"
+  | "overlap";
 
 const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "全部来源" },
+  { value: "overlap", label: "⚠ 有重叠的" },
   { value: "flagged", label: "审核：退回（有问题）" },
   { value: "seg_approved", label: "审核：已通过" },
   { value: "seg_unreviewed", label: "审核：还没审" },
@@ -322,11 +325,61 @@ export default function SegmentPanel({
     return [...hits, ...base.filter((i) => !ids.has(i.id))];
   }, [items, focusMs]);
 
+  // 同一轨上互相重叠的片段（同类重复 / 父子 / 类别冲突）：每行标出来跟谁重叠、重叠多少
+  const overlaps = useMemo(() => computeOverlaps(items, labelMap), [items, labelMap]);
+  const nOverlap = overlaps.size;
+  // 行里的「重叠」标：鼠标放上去列出跟哪几段重叠、重叠几秒、各占多少；点某一条就循环那一段
+  const overlapTag = (i: LabelItem, hits: OverlapHit[]) => {
+    const worst = hits.some((h) => h.kind === "conflict") ? "conflict" : hits.some((h) => h.kind === "dup") ? "dup" : "nested";
+    const color = worst === "conflict" ? "error" : worst === "dup" ? "volcano" : "warning";
+    const maxMs = Math.max(...hits.map((h) => h.ms));
+    return (
+      <Popover
+        title={`跟 ${hits.length} 段重叠`}
+        content={
+          <div style={{ fontSize: 12, lineHeight: 1.9, maxWidth: 460 }}>
+            {hits.map((h) => {
+              const o = items.find((x) => x.id === h.other);
+              if (!o) return null;
+              return (
+                <div key={h.other}>
+                  <Tag color={h.kind === "conflict" ? "error" : h.kind === "dup" ? "volcano" : "warning"} style={{ marginRight: 4 }}>
+                    {OVERLAP_KIND_NAME[h.kind]}
+                  </Tag>
+                  与 <Tag color={colorOf(o.label_id)} style={{ marginRight: 4 }}>{nameOf(o.label_id)}</Tag>
+                  {formatMs(o.start_time_ms)} ~ {formatMs(o.end_time_ms)}，重叠 <b>{(h.ms / 1000).toFixed(2)}s</b>
+                  （占本段 {Math.round(h.pctSelf * 100)}%、对方 {Math.round(h.pctOther * 100)}%）
+                  {onLoop && (
+                    <Button size="small" type="link" style={{ padding: "0 4px" }}
+                      onClick={() => onLoop({ startMs: o.start_time_ms, endMs: o.end_time_ms })}>
+                      看对方
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              同类重复 = 同一类标了两遍，删一条；父子重叠 = 粗类和细类压在一起，一般留细的；类别冲突 = 同一时刻标了两种互斥的类别
+            </Typography.Text>
+          </div>
+        }
+      >
+        <Tag color={color} style={{ marginLeft: 4, marginRight: 0, cursor: "help" }}>
+          ⚠ 重叠{hits.length > 1 ? ` ×${hits.length}` : ""} {(maxMs / 1000).toFixed(1)}s
+        </Tag>
+      </Popover>
+    );
+  };
   const filtered = useMemo(
     () =>
       sorted.filter((i) => {
         // 刚改过的一律留着，好让人核对自己改成了什么
         if (justEdited.has(i.id)) return true;
+        if (filterSource === "overlap") {
+          if (!overlaps.has(i.id)) return false;
+          if (filterLabels.length && !filterLabelSet.has(i.label_id)) return false;
+          return true;
+        }
         if (filterLabels.length && !filterLabelSet.has(i.label_id)) return false;
         const st = aiState(i);
         if (filterSource === "ai" && !st) return false;
@@ -350,7 +403,7 @@ export default function SegmentPanel({
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
       }),
-    [sorted, filterLabelSet, filterSource, minConf, maxConf, justEdited]
+    [sorted, filterLabelSet, filterSource, minConf, maxConf, justEdited, overlaps]
   );
 
   // 按类别统计：数量、总时长、置信度范围、待确认/已确认/已纠正/人工各多少
@@ -515,6 +568,14 @@ export default function SegmentPanel({
         <Button size="small" icon={<BarChartOutlined />} type={showStats ? "primary" : "default"} onClick={() => setShowStats((v) => !v)}>
           统计
         </Button>
+        {nOverlap > 0 && (
+          <Tooltip title={`${nOverlap} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突），点一下只看这些`}>
+            <Button size="small" danger={filterSource !== "overlap"} type={filterSource === "overlap" ? "primary" : "default"}
+              onClick={() => setFilterSource(filterSource === "overlap" ? "all" : "overlap")}>
+              ⚠ 重叠 {nOverlap}
+            </Button>
+          </Tooltip>
+        )}
         {cov.gaps.length > 0 && (
           <Tooltip title={`还有 ${cov.gaps.length} 段 ≥${GAP_MIN_MS / 1000}s 的时间既没有 AI 预测也没有人工标注，点开单独查看`}>
             <Button
@@ -852,7 +913,12 @@ export default function SegmentPanel({
             title: "时长",
             width: 90,
             sorter: (a: LabelItem, b: LabelItem) => a.end_time_ms - a.start_time_ms - (b.end_time_ms - b.start_time_ms),
-            render: (_, i: LabelItem) => `${((i.end_time_ms - i.start_time_ms) / 1000).toFixed(2)}s`,
+            render: (_, i: LabelItem) => (
+              <span style={{ whiteSpace: "nowrap" }}>
+                {`${((i.end_time_ms - i.start_time_ms) / 1000).toFixed(2)}s`}
+                {overlaps.has(i.id) && overlapTag(i, overlaps.get(i.id)!)}
+              </span>
+            ),
           },
           {
             title: "置信度",

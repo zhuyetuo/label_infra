@@ -52,6 +52,32 @@ def track_of(parent_of: dict[int, int | None], own: dict[int, str | None], label
     return ""
 
 
+OVERLAP_MIN_MS = 200   # 跟前端 utils/overlaps.ts 一致：拖边界的几十毫秒误差不算
+
+
+def overlapping_ids(items, labels, min_ms: int = OVERLAP_MIN_MS) -> set[int]:
+    """同一轨上互相重叠（≥ min_ms）的片段 id：同类重复、父子压在一起、同轨不同类都算；
+    不同轨（卧着 + 舔）本来就该同时标，不算。items 是 (id, label_id, start_ms, end_ms)。"""
+    parent_of = {l.id: l.parent_id for l in labels}
+    own = {l.id: l.track for l in labels}
+    rows = sorted(items, key=lambda x: x[2])
+    hit: set[int] = set()
+    for i, (ia, la, sa, ea) in enumerate(rows):
+        ta = None
+        for ib, lb, sb, eb in rows[i + 1:]:
+            if sb >= ea:
+                break
+            if min(ea, eb) - sb < min_ms:
+                continue
+            if ta is None:
+                ta = track_of(parent_of, own, la)
+            if track_of(parent_of, own, lb) != ta:
+                continue
+            hit.add(ia)
+            hit.add(ib)
+    return hit
+
+
 def conflict_checker(labels) -> Callable[[int, int], bool]:
     """给一组 LabelDefinition，返回 conflicts(a_id, b_id)：两个标签在时间上重叠算不算矛盾。
     同一个 / 父子（细的本来就在粗的里面）不算；不同轨不算；其余算。"""

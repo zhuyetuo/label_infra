@@ -894,14 +894,16 @@ export default function Projects() {
   const labelsOf = (projectId: number): LabelDefinition[] =>
     allLabels?.filter((l) => l.project_id === projectId) ?? [];
 
-  const openWorkspace = (task: Task, readOnly: boolean, projectId: number, pick?: { labels?: number[]; cands?: string[] }) => {
+  const openWorkspace = (task: Task, readOnly: boolean, projectId: number, pick?: { labels?: number[]; cands?: string[]; overlap?: boolean }) => {
     setWorkspaceLabels(labelsOf(projectId));
     setWorkspaceReadOnly(readOnly);
     if (pick) {
       // 点了行里某个类别标签：就看这一类，直接跳到它的第一段。
       // 片段列表上次在这个任务里手动选的筛选（刷新用的那份）清掉，不然会盖过这次点的
       try {
-        sessionStorage.removeItem(`seg-panel:${task.id}`);
+        // 点「重叠 N」进来：片段列表直接切到「有重叠的」
+        if (pick.overlap) sessionStorage.setItem(`seg-panel:${task.id}`, JSON.stringify({ labels: [], source: "overlap" }));
+        else sessionStorage.removeItem(`seg-panel:${task.id}`);
       } catch {
         /* 无所谓 */
       }
@@ -978,7 +980,7 @@ export default function Projects() {
   };
 
   // 行里点类别标签打开：自己正在标的就可编辑，其余只读（跟「查看标注 / 编辑标注」同一个判断）
-  const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[] }) =>
+  const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[]; overlap?: boolean }) =>
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), projectId, pick);
 
   const handleReleaseTask = async (id: number) => {
@@ -1538,7 +1540,15 @@ export default function Projects() {
                       if (focus) {
                         return (
                           <Space size={2} wrap>
-                            {entries.map((l) => {
+                            {(task.overlap_count ?? 0) > 0 && (
+                            <Tooltip title={`${task.overlap_count} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
+                              <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
+                                onClick={() => pickOpen(task, p.id, { overlap: true })}>
+                                ⚠ 重叠 {task.overlap_count}
+                              </Tag>
+                            </Tooltip>
+                          )}
+                          {entries.map((l) => {
                               const c = lc[l.id];
                               const ok = c.approved ?? 0, ret = c.returned ?? 0;
                               const todo = Math.max(0, c.n - ok - ret);
@@ -1563,6 +1573,14 @@ export default function Projects() {
                       }
                       return (
                         <Space size={2} wrap>
+                          {(task.overlap_count ?? 0) > 0 && (
+                            <Tooltip title={`${task.overlap_count} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
+                              <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
+                                onClick={() => pickOpen(task, p.id, { overlap: true })}>
+                                ⚠ 重叠 {task.overlap_count}
+                              </Tag>
+                            </Tooltip>
+                          )}
                           {entries.map((l) => {
                             const c = lc[l.id];
                             return (
