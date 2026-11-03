@@ -9,6 +9,9 @@ export const listTasks = (projectId?: number) =>
 export const getTask = (id: number) => request.get<never, Task>(`/tasks/${id}`);
 
 /** 只拉这几个任务的列表行（带片段统计）：改了一个任务只刷那一行，不用整份重拉 */
+/** 轻量列表：只有任务本身 + 样本 / 指派人名字，不带片段统计。项目页先用它把每个项目的数秒出来 */
+export const listTasksLite = () => request.get<never, Task[]>("/tasks", { params: { lite: true } });
+
 export const listTasksByIds = (ids: number[]) =>
   request.get<never, Task[]>("/tasks", { params: { ids: ids.join(",") } });
 

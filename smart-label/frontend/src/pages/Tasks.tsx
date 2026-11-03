@@ -4,7 +4,7 @@ import { buildLabelTotals, fmtSecShort, focusDur, loadSummaryFlat, saveSummaryFl
 import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, InputNumber, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, listTasksByIds, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
+import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, listTasksByIds, listTasksLite, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -33,7 +33,10 @@ export default function Tasks() {
     queryKey: ["projects"],
     queryFn: listProjects,
   });
-  const { data: tasks, isLoading } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
+  // 跟项目页一样两步拉：轻量的先出列表，带片段统计的后到再替换
+  const { data: liteTasks, isLoading } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
+  const { data: fullTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
+  const tasks = fullTasks ?? liteTasks;
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   // /users 只对管理员开放，其他角色拿不到就退回显示ID
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });

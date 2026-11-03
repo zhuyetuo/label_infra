@@ -45,4 +45,7 @@ def test_列表接口给重叠数(db, run):
     # 只刷一行：ids 给了就只回这几个，统计照样带
     one = run(tasks_api.list_tasks(project_id=None, ids=str(w.t.id), db=db, user=w.admin))["data"]
     assert [r["id"] for r in one] == [w.t.id] and one[0]["overlap_count"] == 2
+    # 轻量列表：任务都在，统计不算
+    lite = run(tasks_api.list_tasks(project_id=w.p.id, lite=True, db=db, user=w.admin))["data"]
+    assert {r["id"] for r in lite} == set(got) and all(r["overlap_count"] == 0 and r["label_counts"] == {} for r in lite)
     assert len(run(db.execute(_select(AnnotationLabelItem))).scalars().all()) >= 6

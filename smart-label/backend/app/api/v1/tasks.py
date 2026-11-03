@@ -272,11 +272,13 @@ async def delete_tasks_batch(body: TaskIdsRequest, db: AsyncSession = Depends(ge
 
 @router.get("")
 async def list_tasks(
-    project_id: int | None = None, ids: str | None = None,
+    project_id: int | None = None, ids: str | None = None, lite: bool = False,
     db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
 ):
     """ids：逗号分隔的任务 id，只算这几个（工作台关掉 / 存草稿 / 通过一段之后只刷那一行，
-    不用把几千个任务整份重算一遍）"""
+    不用把几千个任务整份重算一遍）
+    lite：只要任务本身 + 样本 / 指派人名字，不算片段 / 重叠 / 候选这些统计。项目页先用它把
+    每个项目「共几个、待认领几个」秒出来，完整统计后到再补上"""
     only_ids = [int(x) for x in ids.split(",") if x.strip()] if ids else None
     # 分段计时：整个接口超过 2 秒就把各段耗时记到 api.log（系统监控页搜 tasks-timing），
     # 好知道慢在哪一段，不用猜
@@ -314,7 +316,8 @@ async def list_tasks(
     # 同时带上当前轮已经存了多少段：标注中的任务光看状态分不出"只是认领了进去
     # 看了一眼"和"已经标了一堆"，列表里要靠这个数区分
     draft_counts: dict[int, int] = {}
-    task_ids = [t.id for t in tasks]
+    # lite 时下面几段统计都跳过（task_ids 置空）
+    task_ids = [] if lite else [t.id for t in tasks]
     if task_ids:
         rows = await db.execute(
             select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
@@ -451,7 +454,7 @@ async def list_tasks(
 
     _lap("cands")
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
-    rejected_ids = [t.id for t in tasks if t.status == TaskStatus.REJECTED]
+    rejected_ids = [] if lite else [t.id for t in tasks if t.status == TaskStatus.REJECTED]
     review_comments: dict[int, str | None] = {}
     if rejected_ids:
         rows = await db.execute(
