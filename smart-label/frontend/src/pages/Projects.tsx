@@ -237,6 +237,7 @@ export default function Projects() {
   // 打开工作台时带过去的类别筛选，见 openWorkspace
   const [workspaceFocusLabels, setWorkspaceFocusLabels] = useState<number[]>([]);
   const [workspaceFocusCands, setWorkspaceFocusCands] = useState<string[]>([]);
+  const [workspaceJump, setWorkspaceJump] = useState(false);
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
@@ -893,9 +894,24 @@ export default function Projects() {
   const labelsOf = (projectId: number): LabelDefinition[] =>
     allLabels?.filter((l) => l.project_id === projectId) ?? [];
 
-  const openWorkspace = (task: Task, readOnly: boolean, projectId: number) => {
+  const openWorkspace = (task: Task, readOnly: boolean, projectId: number, pick?: { labels?: number[]; cands?: string[] }) => {
     setWorkspaceLabels(labelsOf(projectId));
     setWorkspaceReadOnly(readOnly);
+    if (pick) {
+      // 点了行里某个类别标签：就看这一类，直接跳到它的第一段。
+      // 片段列表上次在这个任务里手动选的筛选（刷新用的那份）清掉，不然会盖过这次点的
+      try {
+        sessionStorage.removeItem(`seg-panel:${task.id}`);
+      } catch {
+        /* 无所谓 */
+      }
+      setWorkspaceFocusLabels(pick.labels ?? []);
+      setWorkspaceFocusCands(pick.cands ?? []);
+      setWorkspaceJump(true);
+      setWorkspaceTask(task);
+      return;
+    }
+    setWorkspaceJump(false);
     // 列表这一层已经按类别筛过了（比如只看「抓挠」），带进工作台当片段列表的
     // 初始筛选——否则进去看到的是全部类别，还得在片段面板里把同一个筛选再点一遍，
     // 而一份任务动辄几十段，要找的那 3 段抓挠就淹在里面
@@ -960,6 +976,10 @@ export default function Projects() {
     open({ ...t, ...nt });
     refresh();
   };
+
+  // 行里点类别标签打开：自己正在标的就可编辑，其余只读（跟「查看标注 / 编辑标注」同一个判断）
+  const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[] }) =>
+    openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), projectId, pick);
 
   const handleReleaseTask = async (id: number) => {
     await releaseTask(id);
@@ -1527,7 +1547,7 @@ export default function Projects() {
                                   key={l.id}
                                   title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
-                                  <Space size={0}>
+                                  <Space size={0} style={{ cursor: "pointer" }} onClick={() => pickOpen(task, p.id, { labels: [l.id] })}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}>{l.display_name} {c.n}</Tag>
                                     {ok > 0 && <Tag color="success" style={{ marginRight: 2 }}>✓通过 {ok}</Tag>}
                                     {/* 退回 = 你标了有问题、在等标注员改；未审 = 你还没看过 */}
@@ -1546,8 +1566,9 @@ export default function Projects() {
                           {entries.map((l) => {
                             const c = lc[l.id];
                             return (
-                              <Tooltip key={l.id} title={c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}>
-                                <Tag color={l.color ?? undefined} style={{ marginRight: 0 }}>
+                              <Tooltip key={l.id} title={`${c.ai_pending ? `${c.n} 段，其中 ${c.ai_pending} 段 AI 待确认` : `${c.n} 段`}。点一下打开，只看这一类，从第一段开始循环`}>
+                                <Tag color={l.color ?? undefined} style={{ marginRight: 0, cursor: "pointer" }}
+                                  onClick={() => pickOpen(task, p.id, { labels: [l.id] })}>
                                   {l.display_name} {c.n}
                                   {c.ai_pending ? <span style={{ opacity: 0.7 }}>/{c.ai_pending}待确认</span> : null}
                                 </Tag>
@@ -1562,14 +1583,15 @@ export default function Projects() {
                                   : `${candN} 条疑似片段候选，都判断过了`
                               }
                             >
-                              <Tag color="magenta" bordered style={{ marginRight: 0, background: "transparent" }}>
+                              <Tag color="magenta" bordered style={{ marginRight: 0, background: "transparent", cursor: "pointer" }}
+                                onClick={() => pickOpen(task, p.id, { cands: Object.keys(task.cand_labels ?? {}) })}>
                                 疑似片段 {candN}
                                 {(task.cand_pending ?? 0) ? <span style={{ opacity: 0.7 }}>/{task.cand_pending}待判断</span> : null}
                               </Tag>
                             </Tooltip>
                           )}
                           {/* 疑似片段里各类别各几条，不用点进工作台就知道有没有舔 / 吠叫… */}
-                          <CandKindTags task={task} labels={projLabels} />
+                          <CandKindTags task={task} labels={projLabels} onPick={(name) => pickOpen(task, p.id, { cands: [name] })} />
                         </Space>
                       );
                     },
@@ -3109,6 +3131,7 @@ export default function Projects() {
         focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
+        jumpToFocus={workspaceJump}
         onEditAgain={workspaceReadOnly && canEditAgain(workspaceTask)
           ? () => handleEditAgain(workspaceTask!, (t) => { setWorkspaceReadOnly(false); setWorkspaceTask(t); })
           : undefined}
