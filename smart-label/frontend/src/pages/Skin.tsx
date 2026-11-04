@@ -381,7 +381,7 @@ function ChartsTab() {
           allowClear
           placeholder="全部狗"
           showSearch
-          style={{ minWidth: 240 }}
+          style={{ width: 240 }}
           value={f.dogs}
           onChange={(v) => setFilter({ dogs: v })}
           options={dogOptions(metaRows)}
@@ -884,7 +884,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           allowClear
           placeholder="全部狗"
           showSearch
-          style={{ minWidth: 220 }}
+          style={{ width: 220 }}
           value={f.dogs}
           onChange={(v) => setFilter({ dogs: v })}
           options={dogOptions(metaRows)}
@@ -1692,7 +1692,7 @@ function LinkTab(p: {
         />
         <Select allowClear placeholder="全部项目" style={{ width: 220 }} value={f.projectId ?? undefined} onChange={(v) => setFilter({ projectId: v ?? null })}
           options={(projects ?? []).map((pr) => ({ value: pr.id, label: pr.name }))} />
-        <Select mode="multiple" allowClear showSearch placeholder="全部狗" style={{ minWidth: 180 }} maxTagCount="responsive"
+        <Select mode="multiple" allowClear showSearch placeholder="全部狗" style={{ width: 200 }} maxTagCount="responsive"
           value={f.dogs ?? []} onChange={(v) => setFilter({ dogs: v })}
           options={dogOptions(metaRows)} />
         <DogMetaFilter rows={allRows} value={f} onChange={setFilter} />
