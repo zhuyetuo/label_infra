@@ -152,6 +152,11 @@ export function MlFeatureTable() {
   const [model, setModel] = useState<"all" | "a" | "b">("all");
   const [groupSel, setGroupSel] = useState<string[]>([]);
   const [hideZero, setHideZero] = useState(false);
+  // 分组看（先看组、展开看组里的）/ 全部平铺一张表（好排序、好整体比）
+  const [view, setViewState] = useState<"group" | "flat">(() => {
+    try { return localStorage.getItem("smart-label:ml-feature-view") === "flat" ? "flat" : "group"; } catch { return "group"; }
+  });
+  const setView = (v: "group" | "flat") => { setViewState(v); try { localStorage.setItem("smart-label:ml-feature-view", v); } catch { /* ignore */ } };
   const all = data?.features ?? [];
   const impOf = (f: MlFeatureInfo) => (model === "a" ? (f.in_a ? f.imp_a ?? 0 : 0) : model === "b" ? (f.in_b ? f.imp_b ?? 0 : 0) : Math.max(f.in_a ? f.imp_a ?? 0 : 0, f.in_b ? f.imp_b ?? 0 : 0));
   const rows = all.filter((f) =>
@@ -185,6 +190,8 @@ export function MlFeatureTable() {
       </Typography.Paragraph>
       {error && <Alert type="error" showIcon message={(error as Error).message} />}
       <Space wrap style={{ marginBottom: 12 }}>
+        <Radio.Group optionType="button" buttonStyle="solid" size="small" value={view} onChange={(e) => setView(e.target.value)}
+          options={[{ value: "group", label: "分组看" }, { value: "flat", label: "全部平铺" }]} />
         <Radio.Group optionType="button" size="small" value={model} onChange={(e) => setModel(e.target.value)}
           options={[{ value: "all", label: "全部" }, { value: "a", label: "模型 A 用的" }, { value: "b", label: "模型 B 用的" }]} />
         <Select mode="multiple" allowClear size="small" placeholder="全部分组" style={{ width: 260 }} maxTagCount="responsive"
@@ -195,8 +202,20 @@ export function MlFeatureTable() {
       </Space>
       {isFetching && !data && <Space><Spin /><Typography.Text type="secondary">第一次要算一两分钟（之后存下来，重训后才重算）</Typography.Text></Space>}
 
+      {view === "flat" && (
+        <Table size="small" rowKey="feature" dataSource={rows} pagination={false} scroll={{ x: "max-content" }}
+          columns={[
+            { title: "维度", fixed: "left" as const, render: (_: unknown, f: MlFeatureInfo) => <div>{f.name}<div style={{ fontSize: 11, color: "#888" }}>{f.feature}</div></div> },
+            { title: "分组", dataIndex: "group", sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => GROUPS.findIndex((g) => g.name === a.group) - GROUPS.findIndex((g) => g.name === b.group) },
+            { title: "模型 A 重要性", sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_a ?? -1) - (b.imp_a ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_a ? f.imp_a : null, maxA, "#fa8c16") },
+            { title: "模型 B 重要性", defaultSortOrder: "descend" as const, sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_b ?? -1) - (b.imp_b ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_b ? f.imp_b : null, maxB, "#722ed1") },
+            { title: "怎么算", dataIndex: "calc", width: 280, render: (v: string) => <Typography.Text style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
+            { title: "有什么用", dataIndex: "role", width: 280, render: (v: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
+          ]} />
+      )}
+
       {/* 先看分组：每组几个维度、各占模型多少分量 */}
-      {all.length > 0 && (
+      {view === "group" && all.length > 0 && (
         <Table<{ name: string; desc: string; fs: MlFeatureInfo[] }> size="small" rowKey="name" pagination={false} style={{ marginBottom: 12 }}
           dataSource={GROUPS.map((g) => ({ ...g, fs: all.filter((f) => f.group === g.name) })).filter((g) => g.fs.length)}
           onRow={(g) => ({ onClick: () => setGroupSel(groupSel.length === 1 && groupSel[0] === g.name ? [] : [g.name]), style: { cursor: "pointer" } })}
@@ -209,7 +228,7 @@ export function MlFeatureTable() {
           ]} />
       )}
 
-      <Collapse
+      {view === "group" && <Collapse
         defaultActiveKey={[]}
         items={groups.map((g) => ({
           key: g.name,
@@ -236,7 +255,7 @@ export function MlFeatureTable() {
               ]} />
           ),
         }))}
-      />
+      />}
     </div>
   );
 }
