@@ -626,6 +626,10 @@ export default function LoopWaveform({
   cfgRef.current = cfg;
   const widen = Math.max(1, viewW / 460);
   const winEff = Math.round(cfg.winSec * widen);
+  // 顶栏「全段」按钮：临时看完整片段（整段压一张图），再点回到跟随。不改「跟随」那个默认设置，
+  // 刷新页面后还是默认样子
+  const [wholeView, setWholeView] = useState(false);
+  const followEff = cfg.follow && !wholeView;
   const setCfg = (patch: Partial<Cfg>) =>
     setCfgState((c) => {
       const next = { ...c, ...patch };
@@ -717,10 +721,10 @@ export default function LoopWaveform({
     if (all.length < 2) return null;
     const pad = Math.max(...all.map((s) => s.padMs)) / 1000;
     const dur = Math.max(...all.map((s) => (s.info.endMs - s.info.startMs) / 1000));
-    if (cfg.follow && dur > winSec * 1.2) return [-pad, -pad + winSec];
+    if (followEff && dur > winSec * 1.2) return [-pad, -pad + winSec];
     return [-pad, dur + pad];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cur, pins, cfg.follow, winEff]);
+  }, [cur, pins, followEff, winEff]);
 
   const show = (info && (cfg.auto || forceOpen ? !closed : opened)) || (!info && pins.length > 0);
 
@@ -912,6 +916,15 @@ export default function LoopWaveform({
               </Tooltip>
             </>
           )}
+          {cfg.follow && cur && (cur.info.endMs - cur.info.startMs) / 1000 > winEff * 1.2 && (
+            <Tooltip title={wholeView
+              ? `现在看的是整段（${((cur.info.endMs - cur.info.startMs) / 1000).toFixed(0)} 秒压在一张图里），点一下回到跟随播放位置（${winEff} 秒窗口）`
+              : `现在只看播放位置附近 ${winEff} 秒、跟着滚；点一下看整段`}>
+              <Tag color={wholeView ? "purple" : undefined} style={{ cursor: "pointer", margin: 0 }} onClick={() => setWholeView((v) => !v)}>
+                {wholeView ? "整段" : "跟随"}
+              </Tag>
+            </Tooltip>
+          )}
           <Tooltip title={cfg.gyro ? "现在看陀螺仪，点一下换回加速度" : "现在看加速度，点一下换成陀螺仪（只有 6 轴数据才有）"}>
             <Tag style={{ cursor: "pointer", margin: 0 }} onClick={() => setCfg({ gyro: !cfg.gyro })}>{cfg.gyro ? "陀螺仪" : "加速度"}</Tag>
           </Tooltip>
@@ -940,7 +953,7 @@ export default function LoopWaveform({
               {error ? (
                 <Typography.Text type="danger" style={{ fontSize: 12 }}>波形读不到：{error}</Typography.Text>
               ) : cur ? (
-                <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={cfg.follow}
+                <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={followEff}
                   rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} onMove={onMove} onDragEnd={extendData} version={version}
                   resetKey={resetKey} neighbors={info.neighbors} />
               ) : (
