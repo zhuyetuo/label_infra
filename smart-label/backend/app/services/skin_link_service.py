@@ -37,6 +37,7 @@ from app.models.task import Task, TaskStatus
 from app.services import site_layout
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
 from app.services.dog_name_service import dog_index
+from app.services.wear_assign import assign_worn, clip, minute_notworn, seconds as span_seconds
 
 _logger = logging.getLogger(__name__)
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
@@ -311,6 +312,61 @@ async def collect_link_stats(
                         (csv_start + timedelta(milliseconds=s_ms), csv_start + timedelta(milliseconds=e_ms))
                     )
 
+    # ── 一只狗两个项圈轮换：合成一行 ─────────────────────────────────────
+    # 两个项圈 24 小时一换，换下来的放充电座上**也在记录**。不处理的话一只狗一天两行，
+    # 两个都显示戴了 23 小时多，充电座上那个的数据（误判出来的抓挠）也算进去。
+    # 这里按 (日期, 狗场, 狗) 把同一只狗的几个 IMU 归到一起，每分钟按「未佩戴」概率的
+    # 相对高低定哪个戴着（见 services/wear_assign），每个 IMU 的抓挠 / 佩戴时段只留戴着的
+    # 那部分，再合成一行，key 的 IMU 写成「IMU1+IMU2」——基线、C 值、S 值都按这只狗算。
+    devices_by_key: dict[tuple, list[dict]] = {}
+    idx = await dog_index(db)
+    site_of_key: dict[tuple, str | None] = {}
+    nw_by_key: dict[tuple, dict] = defaultdict(dict)
+    for s in valid:
+        key = key_of(s)
+        site_of_key.setdefault(key, site_layout.site_of(s.sample_code, s.video_cam1_path, s.imu_csv_path))
+        wins = [(t, w.get("probs") or {}) for w in ((ai_data.get(s.id) or {}).get("windows") or [])
+                if (t := parse_ts(w.get("ts"))) is not None]
+        nw_by_key[key].update(minute_notworn(wins))
+    groups: dict[tuple, list[tuple]] = defaultdict(list)
+    for key in list(counts):
+        if key[1] is None:
+            continue
+        site = site_of_key.get(key)
+        dog = idx.name(key[1], site)
+        if dog and dog != key[1]:
+            groups[(key[0], site, dog)].append(key)
+
+    def _imu_num(k: tuple) -> int:
+        m = re.search(r"(\d+)", k[1] or "")
+        return int(m.group(1)) if m else 0
+
+    for (day, _site, dog), members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=_imu_num)
+        if any(not nw_by_key.get(k) for k in members):
+            warnings.append(f"{day} {dog}：有设备拿不到「未佩戴」概率（模型没有这一类，或者没跑 AI），"
+                            "分不出哪个戴着，两个设备分开显示")
+            continue
+        worn = assign_worn({k[1]: nw_by_key[k] for k in members})
+        gk = (day, "+".join(k[1] for k in members))
+        devs = []
+        for k in members:
+            keep = worn.get(k[1], [])
+            ai_events[gk] += clip(ai_events.pop(k, []), keep)
+            human_events[gk] += clip(human_events.pop(k, []), keep)
+            # 有效佩戴 = 戴着的时段（再扣掉其中掉数据的部分）
+            wear_spans[gk] += keep
+            missing_spans[gk] += clip(missing_spans.pop(k, []), keep)
+            wear_spans.pop(k, None)
+            for f, v in counts.pop(k).items():
+                counts[gk][f] += v
+            ai_modes[gk] |= ai_modes.pop(k, set())
+            devs.append({"imu": k[1], "worn_s": round(span_seconds(keep)),
+                         "spans": [[_fmt(a), _fmt(b)] for a, b in keep]})
+        devices_by_key[gk] = devs
+
     def _merge_events(spans):
         """把真正压在一起的事件并成一条。返回排好序的 [(起, 止), ...]。
 
@@ -350,7 +406,7 @@ async def collect_link_stats(
         if counts[k]["total"] - counts[k]["no_ai"] > 0 or ai_events.get(k):
             ai_rows.append({"date": k[0], "imu": k[1],
                             "events": [[_fmt(a), _fmt(b)] for a, b in _merge_events(ai_events.get(k, []))],
-                            "wear_seconds": wear})
+                            "wear_seconds": wear, "devices": devices_by_key.get(k)})
         # 人工版：默认要有任务提交/通过；include_drafts 时只要这天有任务就出一行
         has_human = (
             counts[k]["total"] > 0
@@ -360,7 +416,7 @@ async def collect_link_stats(
         if has_human:
             human_rows.append({"date": k[0], "imu": k[1],
                                "events": [[_fmt(a), _fmt(b)] for a, b in _merge_events(human_events.get(k, []))],
-                               "wear_seconds": wear})
+                               "wear_seconds": wear, "devices": devices_by_key.get(k)})
 
     # 这一趟算出来的事件先落库（同 日期+IMU+来源 覆盖），再连同库里其它天一起
     # 送去算——基线是"这只狗别的日子的中位数"，只拿本次选的范围算会偏，范围里
@@ -382,6 +438,7 @@ async def collect_link_stats(
         out_rows.append({
             "date": k[0],
             "imu": k[1],
+            "devices": devices_by_key.get(k),
             "tasks": c,
             "ai_mode": sorted(ai_modes.get(k, [])),
             "ai": ai_stats.get(k),
@@ -413,7 +470,9 @@ async def attach_dog_names(db: AsyncSession, rows: list[dict]) -> None:
             site_by_key.setdefault((sdate.isoformat(), imu), site)
     idx = await dog_index(db)
     for r in rows:
-        r["dog_name"] = idx.name(r["imu"], site_by_key.get((r["date"], r["imu"])))
+        # 合成的一行（IMU1+IMU2）按第一个设备认狗：两个本来就是同一只狗的
+        first = (r["imu"] or "").split("+")[0]
+        r["dog_name"] = idx.name(first, site_by_key.get((r["date"], first)))
 
 
 # ── 落库 & 用全部历史天数算基线 ──────────────────────────────────────────
@@ -436,6 +495,15 @@ async def _upsert_events(db: AsyncSession, source: str, rows: list[dict], counts
         row.events = json.dumps(r["events"], ensure_ascii=False)
         row.wear_seconds = float(r.get("wear_seconds") or 0.0)
         row.tasks = json.dumps(counts.get(key, {}), ensure_ascii=False)
+        row.devices = json.dumps(r["devices"], ensure_ascii=False) if r.get("devices") else None
+        # 合成一行（IMU1+IMU2）之后，这天这几个 IMU 原来各自那一行作废，删掉，不然跟踪表里还会重复
+        if "+" in r["imu"]:
+            for part in r["imu"].split("+"):
+                old = (await db.execute(select(SkinDailyStat).where(
+                    SkinDailyStat.stat_date == stat_date, SkinDailyStat.imu == part,
+                    SkinDailyStat.source == source))).scalar_one_or_none()
+                if old is not None:
+                    await db.delete(old)
         row.ai_mode = ",".join(sorted(ai_modes.get(key, []))) or None
         if existing is None:
             db.add(row)
@@ -528,6 +596,11 @@ async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: dat
             key,
             {"date": key[0], "imu": key[1], "tasks": {}, "ai_mode": [], "ai": None, "human": None, "human_status": "none"},
         )
+        if r.devices and not entry.get("devices"):
+            try:
+                entry["devices"] = json.loads(r.devices)
+            except ValueError:
+                pass
         if r.stats:
             entry[r.source] = {
                 "stats": json.loads(r.stats),

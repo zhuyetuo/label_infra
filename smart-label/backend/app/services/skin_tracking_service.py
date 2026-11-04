@@ -346,7 +346,7 @@ async def daily_tracking(
     imu_dog_map = imu_dog_map or {}
 
     # 先把 (日期, IMU) 的两份 C 值合到一起
-    merged: dict[tuple[str, str], dict] = defaultdict(lambda: {"ai": None, "human": None, "stats": {}})
+    merged: dict[tuple[str, str], dict] = defaultdict(lambda: {"ai": None, "human": None, "stats": {}, "devices": None})
     for s in stats:
         key = (s.stat_date.isoformat(), s.imu)
         merged[key][s.source] = {
@@ -356,6 +356,8 @@ async def daily_tracking(
             "c_inputs": _loads(s.c_inputs),
             "c_detail": _loads(s.c_detail),
         }
+        if s.devices and not merged[key]["devices"]:
+            merged[key]["devices"] = _loads(s.devices)
         if s.stats and not merged[key]["stats"]:
             try:
                 merged[key]["stats"] = json.loads(s.stats)
@@ -378,12 +380,14 @@ async def daily_tracking(
     for key in sorted(merged):
         day, imu = key
         m = merged[key]
-        site = site_by_key.get(key)
-        dog = dog_idx.name(imu, site) or imu_dog_map.get(imu) or imu
+        # 一只狗两个项圈合成的一行：imu 是「IMU1+IMU2」，场地 / 狗名 / 别名 / 任务都按里面每个设备找
+        parts = imu.split("+")
+        site = next((site_by_key[(day, p)] for p in parts if (day, p) in site_by_key), None)
+        dog = dog_idx.name(parts[0], site) or imu_dog_map.get(parts[0]) or imu
         rec = rec_by_key.get((day, dog))
-        aliases = alias_by_key.get((site, imu)) if site else None
+        aliases = set().union(*[alias_by_key.get((site, p), set()) for p in parts]) or None if site else None
         if aliases is None:     # 认不出场地：这个 IMU 在各狗场的别名都算上（老行为）
-            aliases = set().union(*[v for (s, k), v in alias_by_key.items() if k == imu]) or None
+            aliases = set().union(*[v for (s, k), v in alias_by_key.items() if k in parts]) or None
         photo_n, photo_dog = _match_photos(photo_index, day, dog, aliases)
         if c_prefer == "ai":
             primary = m["ai"]
@@ -398,6 +402,8 @@ async def daily_tracking(
             "date": day,
             "imu": imu,
             "dog_name": dog,
+            # 每个设备戴了多久、哪几段（两个项圈合成一行时才有）
+            "devices": m["devices"],
             "stats": m["stats"],
             # 基线（这只狗别的日子的中位数）单独拎出来，图上要画成参考线
             "baseline_count": (m["stats"] or {}).get("baseline_count"),
@@ -419,7 +425,7 @@ async def daily_tracking(
             "record_id": rec.id if rec else None,
             "q_score": rec.q_score if rec else None,
             "filler": rec.filler if rec else None,
-            "tasks_detail": tasks_by_key.get(key, []),
+            "tasks_detail": [t for p in parts for t in tasks_by_key.get((day, p), [])],
             "photo_count": photo_n,
             # NAS 上实际的目录名，前端弹窗按它去筛图（可能跟 PM 的狗名不一样）
             "photo_dog": photo_dog,

@@ -162,8 +162,11 @@ export interface STotalOut {
 }
 export interface TrackingRow {
   date: string;
+  /** 一只狗两个项圈合成一行时是「IMU1+IMU2」 */
   imu: string;
   dog_name: string;
+  /** 两个项圈合成一行时：每个设备戴了多久、哪几段 */
+  devices?: { imu: string; worn_s: number; spans: [string, string][] }[] | null;
   stats: Record<string, number | string | boolean | null>;
   baseline_count: number | null;
   baseline_duration_min: number | null;

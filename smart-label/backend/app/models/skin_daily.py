@@ -43,5 +43,7 @@ class SkinDailyStat(Base):
     # 任务进度 / AI 用的哪个版本，前端表格要显示
     tasks: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：各状态任务数")
     ai_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # 一只狗两个项圈合成一行时（imu 写成 IMU1+IMU2），每个设备戴了多久、哪几段
+    devices: Mapped[str | None] = mapped_column(Text, nullable=True, comment='JSON [{imu, worn_s, spans}]')
 
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
