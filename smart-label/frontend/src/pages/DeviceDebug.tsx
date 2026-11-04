@@ -27,8 +27,10 @@ const PLOT_S = 10;
 type BtChar = { startNotifications(): Promise<BtChar>; addEventListener(t: string, f: (e: Event) => void): void; writeValueWithoutResponse?(v: BufferSource): Promise<void>; writeValue(v: BufferSource): Promise<void>; value?: DataView; properties: { notify: boolean } };
 type BtService = { getCharacteristic(u: string): Promise<BtChar>; getCharacteristics(): Promise<BtChar[]> };
 type BtServer = { connected: boolean; getPrimaryService(u: string): Promise<BtService>; disconnect(): void };
-type BtDevice = { name?: string; id: string; gatt?: { connect(): Promise<BtServer> }; addEventListener(t: string, f: () => void): void };
-const bt = () => (navigator as unknown as { bluetooth?: { requestDevice(o: unknown): Promise<BtDevice> } }).bluetooth;
+type BtDevice = { name?: string; id: string; gatt?: { connect(): Promise<BtServer>; connected?: boolean }; addEventListener(t: string, f: () => void): void };
+// getDevices：拿到之前授权过的设备，不用再弹选择框（Chrome 要开 #enable-web-bluetooth-new-permissions-backend）
+const bt = () => (navigator as unknown as { bluetooth?: { requestDevice(o: unknown): Promise<BtDevice>; getDevices?(): Promise<BtDevice[]> } }).bluetooth;
+const LAST_KEY = "smart-label:ble-last";
 
 export default function DeviceDebug() {
   const { token } = theme.useToken();
@@ -83,6 +85,11 @@ export default function DeviceDebug() {
     }
     samples.current.push(s);
     total.current++;
+    if (prev && prev.dev != null && s.dev != null && Math.abs(s.dev - prev.dev) > 10_000) resetSess();
+    if (!sess.current.n) { sess.current.host0 = s.host; sess.current.dev0 = s.dev; }
+    sess.current.n++;
+    sess.current.hostN = s.host;
+    sess.current.devN = s.dev;
     if (rec.current) rec.current.push(s);
     const cut = s.host - KEEP_S * 1000;
     if (samples.current.length > 4000 || samples.current[0].host < cut) {
@@ -131,6 +138,104 @@ export default function DeviceDebug() {
     }
   };
 
+  const device = useRef<BtDevice | null>(null);
+  const userClosed = useRef(false);
+  const [autoReconnect, setAutoReconnect] = useState(true);
+  const autoReconnectRef = useRef(autoReconnect);
+  autoReconnectRef.current = autoReconnect;
+  // 整次连接：真实时间里收了多少个、设备时间走了多久——分清「传感器真的慢」还是「设备时间戳算得不对」
+  const sess = useRef<{ n: number; host0: number; hostN: number; dev0: number | null; devN: number | null }>({ n: 0, host0: 0, hostN: 0, dev0: null, devN: null });
+  const [sessView, setSessView] = useState<typeof sess.current | null>(null);
+  const resetSess = () => { sess.current = { n: 0, host0: 0, hostN: 0, dev0: null, devN: null }; };
+
+  // 回调每次渲染都是新函数；监听挂的是这两个固定的转发函数，同一个特征只挂一次——
+  // 重连时浏览器可能给回同一个特征对象，再挂一次每个样本就收两遍（全是 0 ms 间隔）
+  const pcRef = useRef(onPcNotify);
+  pcRef.current = onPcNotify;
+  const witRef = useRef(onWitNotify);
+  witRef.current = onWitNotify;
+  const pcHandler = useRef((e: Event) => pcRef.current(e)).current;
+  const witHandler = useRef((e: Event) => witRef.current(e)).current;
+  const hooked = useRef(new WeakSet<object>());
+  const listen = async (c: BtChar, h: (e: Event) => void) => {
+    if (!hooked.current.has(c)) {
+      c.addEventListener("characteristicvaluechanged", h);
+      hooked.current.add(c);
+    }
+    await c.startNotifications();
+  };
+
+  /** 连 GATT + 订阅；断线自动重连也走这里（不再弹选择框） */
+  const attach = async (dev: BtDevice) => {
+    const srv = await dev.gatt!.connect();
+    server.current = srv;
+    samples.current = [];
+    resetSess();
+    connectedAt.current = performance.now();
+    if (kind === "pc") {
+      const svc = await srv.getPrimaryService(PC.service);
+      rx.current = await svc.getCharacteristic(PC.rx);
+      const tx = await svc.getCharacteristic(PC.tx);
+      await listen(tx, pcHandler);
+      try {
+        const tx2 = await svc.getCharacteristic(PC.tx2);
+        await listen(tx2, pcHandler);
+      } catch {
+        addLog("TX2（0203）订阅不了：这个固件可能没开原始采样镜像");
+      }
+      await timeSync();
+    } else {
+      rx.current = null;
+      witStream.current = new WitStream();
+      let ok = false;
+      for (const su of WIT.services) {
+        try {
+          const svc = await srv.getPrimaryService(su);
+          for (const c of await svc.getCharacteristics()) {
+            if (!c.properties.notify) continue;
+            await listen(c, witHandler);
+            ok = true;
+          }
+        } catch { /* 这个服务没有，试下一个 */ }
+      }
+      if (!ok) throw new Error("没找到 WitMotion 的数据通道（ffe5 / ffe0 服务）");
+    }
+    setStatus("connected");
+    addLog(`已连接 ${dev.name || dev.id}`);
+  };
+
+  const onDisconnected = async () => {
+    setStatus("idle");
+    if (userClosed.current || !autoReconnectRef.current || !device.current) { addLog("设备断开了"); return; }
+    // 信号弱时常常掉：同一个设备直接重连，不用重新选
+    for (let i = 1; i <= 8 && !userClosed.current; i++) {
+      addLog(`设备断开了，第 ${i} 次重连…`);
+      setStatus("connecting");
+      try {
+        await attach(device.current);
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, Math.min(8000, 1000 * i)));
+      }
+    }
+    setStatus("idle");
+    addLog("重连不上：靠近一点再点「连接设备」");
+  };
+
+  const useDevice = async (dev: BtDevice) => {
+    device.current = dev;
+    userClosed.current = false;
+    setDevName(dev.name || dev.id);
+    try { localStorage.setItem(LAST_KEY, JSON.stringify({ kind, id: dev.id, name: dev.name })); } catch { /* ignore */ }
+    dev.addEventListener("gattserverdisconnected", () => { void onDisconnected(); });
+    total.current = 0;
+    lastSeq.current = 0;
+    setSegs([]);
+    setBehav(null);
+    setNoRawHint(false);
+    await attach(dev);
+  };
+
   const connect = async () => {
     const b = bt();
     if (!b) return;
@@ -139,58 +244,33 @@ export default function DeviceDebug() {
       const dev = await b.requestDevice(kind === "pc"
         ? { filters: [{ namePrefix: "HICC" }, { services: [PC.service] }], optionalServices: [PC.service] }
         : { filters: [{ namePrefix: "WT" }], optionalServices: WIT.services });
-      setDevName(dev.name || dev.id);
-      dev.addEventListener("gattserverdisconnected", () => { setStatus("idle"); addLog("设备断开了"); });
-      const srv = await dev.gatt!.connect();
-      server.current = srv;
-      samples.current = [];
-      total.current = 0;
-      lastSeq.current = 0;
-      setSegs([]);
-      setBehav(null);
-      setNoRawHint(false);
-      connectedAt.current = performance.now();
-      if (kind === "pc") {
-        const svc = await srv.getPrimaryService(PC.service);
-        rx.current = await svc.getCharacteristic(PC.rx);
-        const tx = await svc.getCharacteristic(PC.tx);
-        tx.addEventListener("characteristicvaluechanged", onPcNotify);
-        await tx.startNotifications();
-        try {
-          const tx2 = await svc.getCharacteristic(PC.tx2);
-          tx2.addEventListener("characteristicvaluechanged", onPcNotify);
-          await tx2.startNotifications();
-        } catch {
-          addLog("TX2（0203）订阅不了：这个固件可能没开原始采样镜像");
-        }
-        await timeSync();
-      } else {
-        rx.current = null;
-        witStream.current = new WitStream();
-        let ok = false;
-        for (const su of WIT.services) {
-          try {
-            const svc = await srv.getPrimaryService(su);
-            for (const c of await svc.getCharacteristics()) {
-              if (!c.properties.notify) continue;
-              c.addEventListener("characteristicvaluechanged", onWitNotify);
-              await c.startNotifications();
-              ok = true;
-            }
-          } catch { /* 这个服务没有，试下一个 */ }
-        }
-        if (!ok) throw new Error("没找到 WitMotion 的数据通道（ffe5 / ffe0 服务）");
-      }
-      setStatus("connected");
-      addLog(`已连接 ${dev.name || dev.id}`);
+      await useDevice(dev);
     } catch (e) {
       setStatus("idle");
       const msg = e instanceof Error ? e.message : String(e);
       if (!/cancel/i.test(msg)) message.error(`连接失败：${msg}`);
     }
   };
-  const disconnect = () => { server.current?.disconnect(); setStatus("idle"); };
-  useEffect(() => () => server.current?.disconnect(), []);
+
+  // 上次连过的设备：浏览器支持 getDevices 时直接连，不弹选择框
+  const last = (() => { try { return JSON.parse(localStorage.getItem(LAST_KEY) || "null") as { kind: Kind; id: string; name?: string } | null; } catch { return null; } })();
+  const canQuick = !!bt()?.getDevices && !!last && last.kind === kind;
+  const connectLast = async () => {
+    const b = bt();
+    if (!b?.getDevices || !last) return;
+    setStatus("connecting");
+    try {
+      const dev = (await b.getDevices()).find((d) => d.id === last.id);
+      if (!dev) throw new Error("浏览器里找不到上次那个设备的授权，用「连接设备」重新选一次");
+      await useDevice(dev);
+    } catch (e) {
+      setStatus("idle");
+      message.error(`连不上：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const disconnect = () => { userClosed.current = true; server.current?.disconnect(); setStatus("idle"); };
+  useEffect(() => () => { userClosed.current = true; server.current?.disconnect(); }, []);
 
   // 每秒评估一次 + 刷新波形（不在每个样本上重画）
   useEffect(() => {
@@ -204,9 +284,15 @@ export default function DeviceDebug() {
         : win.length >= 3 ? { ...assessRate(win.map((s) => s.host), win.map((s) => s.host), expectHz), problems: ["设备没带时间戳，下面按浏览器收到的时间算（蓝牙成批送，间隔会偏乱）"] } : null);
       if (kind === "pc" && status === "connected" && total.current === 0 && now - connectedAt.current > 6000) setNoRawHint(true);
       const u = plot.current;
-      const pts = samples.current.filter((s) => s.host >= now - PLOT_S * 1000);
+      // 横轴按设备时间戳（有的话）：蓝牙一批一批到，按浏览器收到的时间画，一批挤在一点、批与批之间连成直线
+      const lastS = samples.current[samples.current.length - 1];
+      const byDev = !!lastS && lastS.dev != null;
+      const pts = byDev
+        ? samples.current.filter((s) => s.dev != null && s.dev >= lastS.dev! - PLOT_S * 1000)
+        : samples.current.filter((s) => s.host >= now - PLOT_S * 1000);
+      setSessView({ ...sess.current });
       if (u) {
-        const xs = pts.map((s) => (s.host - now) / 1000);
+        const xs = pts.map((s) => (byDev ? (s.dev! - lastS.dev!) / 1000 : (s.host - now) / 1000));
         const g = showGyro;
         u.setData([xs, pts.map((s) => (g ? s.gx ?? 0 : s.ax)), pts.map((s) => (g ? s.gy ?? 0 : s.ay)), pts.map((s) => (g ? s.gz ?? 0 : s.az))]);
       }
@@ -265,6 +351,14 @@ export default function DeviceDebug() {
         {status === "connected"
           ? <Button danger onClick={disconnect}>断开 {devName}</Button>
           : <Button type="primary" loading={status === "connecting"} disabled={!supported} onClick={connect}>连接设备</Button>}
+        {status === "idle" && canQuick && (
+          <Tooltip title="直接连上次选过的那个，不弹选择框">
+            <Button disabled={!supported} onClick={connectLast}>重连 {last?.name ?? "上次的设备"}</Button>
+          </Tooltip>
+        )}
+        <Tooltip title="信号弱掉线时，自动重连同一个设备（不用重新选）">
+          <Checkbox checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)}>掉线自动重连</Checkbox>
+        </Tooltip>
         {status === "connected" && kind === "pc" && <Button onClick={timeSync}>校时</Button>}
         {status === "connected" && (recording
           ? <Button onClick={download}>停止并下载 CSV（{rec.current?.length ?? 0}）</Button>
@@ -336,6 +430,26 @@ export default function DeviceDebug() {
               </>
             )}
           </Card>
+          {sessView && sessView.n > 10 && (() => {
+            const realS = (sessView.hostN - sessView.host0) / 1000;
+            const devS = sessView.dev0 != null && sessView.devN != null ? (sessView.devN - sessView.dev0) / 1000 : null;
+            const realHz = realS > 0 ? (sessView.n - 1) / realS : NaN;
+            const devHz = devS && devS > 0 ? (sessView.n - 1) / devS : NaN;
+            const drift = devS != null && realS > 0 ? (devS / realS - 1) * 100 : NaN;
+            return (
+              <Card size="small" title="整次连接（真实时间 vs 设备时间）" style={{ marginTop: 12 }}>
+                <Space size={24} wrap>
+                  <Statistic title="真实时间里每秒收到" value={Number.isFinite(realHz) ? realHz.toFixed(2) : "-"} suffix="个" />
+                  <Statistic title="按设备时间戳" value={Number.isFinite(devHz) ? devHz.toFixed(2) : "-"} suffix="Hz" />
+                </Space>
+                <div style={{ fontSize: 12, marginTop: 6, color: token.colorTextSecondary, lineHeight: 1.8 }}>
+                  {sessView.n} 个样本 · 真实 {realS.toFixed(0)} 秒{devS != null ? ` · 设备时间走了 ${devS.toFixed(1)} 秒（${drift >= 0 ? "快" : "慢"} ${Math.abs(drift).toFixed(1)}%）` : ""}
+                  <br />两个数接近 = 传感器就是这个速率；真实时间收到的明显多于设备时间戳算的 = 设备时间戳算得不对（比如按错的周期给每个样本插时间）。
+                  前十几秒可能是连上后补发的积压，看久一点再下结论
+                </div>
+              </Card>
+            );
+          })()}
           {kind === "pc" && (
             <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
               {behav ? (
