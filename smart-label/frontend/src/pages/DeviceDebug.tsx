@@ -3,6 +3,7 @@ import {
   Alert, Button, Card, Checkbox, Col, InputNumber, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme,
 } from "antd";
 import uPlot from "uplot";
+import DeviceServerCompare, { type BoardEvent } from "@/components/DeviceServerCompare";
 import "uplot/dist/uPlot.min.css";
 import {
   BEHAV_NAMES, CMD, DP, PC, WIT, WitStream, assessRate, buildAckFrame, buildTimeFrame, parseDps, parseFrame, parseSegments,
@@ -20,7 +21,7 @@ import {
 type Kind = "pc" | "wit";
 interface Sample { host: number; dev: number | null; ax: number; ay: number; az: number; gx?: number; gy?: number; gz?: number }
 
-const KEEP_S = 20;          // 波形和评估保留最近这么多秒
+const KEEP_S = 600;         // 保留最近这么多秒（服务端预测要拿最近几分钟的原始采样去跑）
 const PLOT_S = 10;
 
 // Web Bluetooth 的类型 TS 自带的 lib 里没有，这里只声明用到的那几样
@@ -47,6 +48,8 @@ export default function DeviceDebug() {
   const [showGyro, setShowGyro] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [behav, setBehav] = useState<{ cls: number; conf: number; at: number } | null>(null);
+  // 板子 0x07 的历史：跟服务端预测放一条时间轴上比
+  const [boardEvents, setBoardEvents] = useState<BoardEvent[]>([]);
   const [segs, setSegs] = useState<PcSegment[]>([]);
   const [rate, setRate] = useState<RateAssess | null>(null);
   const [count, setCount] = useState(0);
@@ -97,7 +100,7 @@ export default function DeviceDebug() {
     sess.current.devN = s.dev;
     if (rec.current) rec.current.push(s);
     const cut = s.host - KEEP_S * 1000;
-    if (samples.current.length > 4000 || samples.current[0].host < cut) {
+    if (samples.current.length > 40000 || samples.current[0].host < cut) {
       let i = 0;
       while (i < samples.current.length && samples.current[i].host < cut) i++;
       samples.current = samples.current.slice(i);
@@ -116,7 +119,9 @@ export default function DeviceDebug() {
     }
     if (p.cmd === CMD.BEHAVIOR) {
       const d = parseDps(p.payload);
-      setBehav({ cls: d[DP.CLS] ?? -1, conf: d[DP.CONF] ?? 0, at: d[DP.TS] ?? Date.now() });
+      const ev = { cls: d[DP.CLS] ?? -1, conf: d[DP.CONF] ?? 0, at: d[DP.TS] ?? Date.now() };
+      setBehav(ev);
+      setBoardEvents((old) => [...old, { ts: ev.at, cls: ev.cls, conf: ev.conf }].slice(-2000));
       return;
     }
     if (p.cmd === CMD.SEGMENT) {
@@ -237,6 +242,7 @@ export default function DeviceDebug() {
     lastSeq.current = 0;
     setSegs([]);
     setBehav(null);
+    setBoardEvents([]);
     setNoRawHint(false);
     await attach(dev);
   };
@@ -515,6 +521,9 @@ export default function DeviceDebug() {
         </Col>
       </Row>
 
+      {kind === "pc" && (
+        <DeviceServerCompare getSamples={() => samples.current} boardEvents={boardEvents} segs={segs} hz={expectHz} connected={status === "connected"} />
+      )}
       {kind === "pc" && (
         <Card size="small" title={`行为片段（0x09）· ${segs.length} 条`} style={{ marginTop: 12 }}
           extra={<Tooltip title="收到就回 0x0A 确认，设备才会释放这些片段；关掉用来验证「不确认会补发」">
