@@ -1,3 +1,4 @@
+import PoolCharts from "@/components/PoolCharts";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, Col, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic,
@@ -48,6 +49,9 @@ export default function DataPoolPanel({
   // 只要不短于这么多秒的片段：长片段往往更干净，先拿它们训
   const [minSec, setMinSec] = useState<number | null>(null);
   const [pickLabels, setPickLabels] = useState<string[]>([]);
+  const [chartsOpen, setChartsOpen] = useState(() => {
+    try { return localStorage.getItem("smart-label:pool-charts-open") !== "0"; } catch { return true; }
+  });
 
   const filters: PoolFilter = useMemo(
     () => ({
@@ -200,21 +204,6 @@ export default function DataPoolPanel({
     }
   };
 
-  const bucketTable = (title: string, rows: PoolBucket[] | undefined) => (
-    <Table
-      size="small"
-      rowKey="name"
-      title={() => <strong>{title}</strong>}
-      dataSource={rows ?? []}
-      pagination={false}
-      scroll={{ y: 220 }}
-      columns={[
-        { title: "名称", dataIndex: "name" },
-        { title: "段数", dataIndex: "n", width: 70 },
-        { title: "小时", dataIndex: "hours", width: 70 },
-      ]}
-    />
-  );
 
   return (
     <div>
@@ -282,38 +271,39 @@ export default function DataPoolPanel({
       <Row gutter={24} align="middle" style={{ marginBottom: 8 }}>
         <Col><Statistic title="片段" value={sum?.n ?? 0} loading={loadingSum} /></Col>
         <Col><Statistic title="时长" value={fmtSecs((sum?.hours ?? 0) * 3600)} loading={loadingSum} /></Col>
-        <Col flex="auto">
-          <Space size={4} wrap>
-            {(sum?.by_root ?? []).map((b) => (
-              <Tag key={b.name} style={{ cursor: "pointer" }} onClick={() => setPickLabels([b.name])}>
-                {b.name} {b.n} 段 · {fmtSecs(b.hours * 3600)}
-              </Tag>
-            ))}
-          </Space>
-        </Col>
+        <Col flex="auto" />
         <Col>
           <Button type="primary" disabled={!sum?.n} onClick={() => setTrainOpen(true)}>
             用这批训练
           </Button>
         </Col>
       </Row>
+      {/* 统计图：每个维度一张条形图 + 按天柱图，点条就按它筛。整块能收起（记住） */}
       <Collapse
         size="small"
         style={{ marginBottom: 12 }}
-        items={[
-          {
-            key: "more",
-            label: "更多统计（细类 / 项目 / 狗 / 采样率）",
-            children: (
-              <Row gutter={12}>
-                <Col span={6}>{bucketTable("细类", sum?.by_label)}</Col>
-                <Col span={6}>{bucketTable("项目", sum?.by_project)}</Col>
-                <Col span={6}>{bucketTable("狗", sum?.by_dog)}</Col>
-                <Col span={6}>{bucketTable("采样率", sum?.by_hz)}</Col>
-              </Row>
-            ),
-          },
-        ]}
+        activeKey={chartsOpen ? ["charts"] : []}
+        onChange={(k) => {
+          const open = (Array.isArray(k) ? k : [k]).includes("charts");
+          setChartsOpen(open);
+          try { localStorage.setItem("smart-label:pool-charts-open", open ? "1" : "0"); } catch { /* ignore */ }
+        }}
+        items={[{
+          key: "charts",
+          label: "统计图（类别 / 按天 / 细类 / 项目 / 狗 / 采样率）",
+          children: (
+            <PoolCharts
+              sum={sum}
+              picked={{ labels: pickLabels, projects: projectIds, dogs: dogIds, hzs }}
+              onPickRoot={(n) => setPickLabels([n])}
+              onPickLabel={(n) => setPickLabels([n])}
+              onPickProject={(id) => setProjectIds([id])}
+              onPickDog={(id) => setDogIds([id])}
+              onPickHz={(hz) => setHzs([hz])}
+              onPickDate={(d) => setRange([dayjs(d), dayjs(d)])}
+            />
+          ),
+        }]}
       />
 
       {/* 一条条的片段 */}
