@@ -236,12 +236,44 @@ class MlActivateIn(BaseModel):
 async def ml_activate(body: MlActivateIn, db: AsyncSession = Depends(get_db)):
     """切换模型 B 用哪一版，然后把库里所有天的 ML 结果按新模型重算一遍（一个请求，几秒）"""
     st = await _algo("POST", "ml/activate-b", {"which": body.which})
+    return ok({**st, "warnings": await _recompute_ml(db)})
+
+
+async def _recompute_ml(db: AsyncSession) -> list[str]:
+    """模型换了：库里所有天的 ML 结果按新模型重算（整批一个请求）"""
     warnings: list[str] = []
     for source in ("ai", "human"):
         rows = (await db.execute(select(SkinDailyStat).where(SkinDailyStat.source == source))).scalars().all()
         await ml_for(db, rows, warnings)
     await db.commit()
-    return ok({**st, "warnings": warnings})
+    return warnings
+
+
+@router.get("/ml/scenarios")
+async def ml_scenarios():
+    return ok(await _algo("GET", "ml/scenarios"))
+
+
+@router.post("/ml/simulate")
+async def ml_simulate(body: dict):
+    return ok(await _algo("POST", "ml/simulate", body, timeout=300))
+
+
+@router.post("/ml/extra-scenarios")
+async def ml_add_extra(body: dict):
+    return ok(await _algo("POST", "ml/extra-scenarios", body))
+
+
+@router.post("/ml/extra-scenarios/remove")
+async def ml_remove_extra(body: dict):
+    return ok(await _algo("POST", "ml/extra-scenarios/remove", body))
+
+
+@router.post("/ml/retrain-synthetic")
+async def ml_retrain_synthetic(db: AsyncSession = Depends(get_db)):
+    """合成数据（含加进来的模拟场景）重训模型 A 和合成版 B，然后库里的 ML 结果全部重算"""
+    st = await _algo("POST", "ml/retrain-synthetic", {}, timeout=900)
+    return ok({**st, "warnings": await _recompute_ml(db)})
 
 
 @router.get("/data-range")
