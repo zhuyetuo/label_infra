@@ -23,6 +23,7 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import LowlightModal from "@/components/LowlightModal";
+import DogPicker from "@/components/DogPicker";
 import { NIGHT_VISION } from "@/config/features";
 import SegmentPanel, { formatMs, REVIEW_NOTE_PRESETS } from "@/components/SegmentPanel";
 import CandidatePanel, { candFocus } from "@/components/CandidatePanel";
@@ -206,6 +207,9 @@ export default function AnnotationWorkspace({
   // 这个样本实际有哪几路，给夜视弹窗切机位用
   const [camList, setCamList] = useState<{ value: string; label: string }[]>([]);
   const role = useAuthStore((s) => s.userInfo?.role);
+  // 标题上换了狗：先本地显示新名字（任务对象是外面传进来的，等它刷新太慢）；换任务时清掉
+  const [dogLabelOverride, setDogLabelOverride] = useState<string | null | undefined>(undefined);
+  useEffect(() => setDogLabelOverride(undefined), [task?.id]);
 
   const [loading, setLoading] = useState(false);
   // 打开的任务里有审核标过「有问题」的片段、而且是来改的（不是只读看）：片段列表先只看那几条
@@ -2385,10 +2389,14 @@ export default function AnnotationWorkspace({
           )}
           {/* 一个画面里同时有四只狗，这条 IMU 是谁身上的必须一眼看见，
               不然逐条确认时很容易确认成别的狗的动作 */}
-          {task?.dog_label && (
-            <Tag color="purple" style={{ fontSize: 14, padding: "2px 10px", fontWeight: 600 }}>
-              🐕 {task.dog_label}
-            </Tag>
+          {task && (
+            // 管理员点开能换狗：老数据当时这个 IMU 戴在哪只狗身上，要对着画面才知道
+            <DogPicker
+              sampleId={task.sample_id}
+              label={dogLabelOverride !== undefined ? dogLabelOverride : task.dog_label}
+              canEdit={role === "admin" || role === "super_admin"}
+              onChanged={setDogLabelOverride}
+            />
           )}
           <Tag>
             {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
