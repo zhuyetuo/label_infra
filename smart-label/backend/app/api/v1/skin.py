@@ -26,7 +26,7 @@ from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
-from app.services.skin_link_service import SkinLinkError, collect_link_stats, read_stored_link_stats
+from app.services.skin_link_service import SkinLinkError, ml_for, collect_link_stats, ml_inputs, read_stored_link_stats
 from app.services.skin_tracking_service import SkinTrackingError, daily_tracking
 
 router = APIRouter(prefix="/skin", tags=["skin"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
@@ -194,6 +194,54 @@ async def get_daily_tracking(
         return ok(await daily_tracking(db, date_from, date_to, imu_map, c_prefer=c_prefer))
     except SkinTrackingError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+
+
+# ── ML 版：用兽医照片评级重训模型 B / 切换用哪一版 ──────────────────────────
+
+async def _all_tracking(db: AsyncSession, c_prefer: str = "ai") -> list[dict]:
+    lo, hi = (await db.execute(select(func.min(SkinDailyStat.stat_date), func.max(SkinDailyStat.stat_date)))).one()
+    if lo is None:
+        return []
+    return (await daily_tracking(db, lo, hi, await imu_dog_map(), c_prefer=c_prefer))["rows"]
+
+
+@router.get("/ml/model-status")
+async def ml_model_status():
+    return ok(await _algo("GET", "ml/model-status"))
+
+
+@router.post("/ml/train-real")
+async def ml_train_real(c_prefer: str = "ai", db: AsyncSession = Depends(get_db)):
+    """标准答案 = 兽医（账号管理里勾了「兽医」的人）看照片评的档，几个兽医不一致取重的。
+    输入特征用 c_prefer 那一版的抓挠事件（默认 AI 版：线上就是纯 AI）。"""
+    rows = await _all_tracking(db, c_prefer)
+    labels = [{"pet_id": r["imu"], "date": r["date"], "s_tier": r["photo_grade_vet"],
+               "pm_s_tier": (r.get("s_with_q") or r.get("s_no_q") or {}).get("s_tier")}
+              for r in rows if r.get("photo_grade_vet")]
+    if not labels:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "还没有兽医评过的天：先在「账号管理」里给兽医勾上「兽医」，再让他们在「皮肤照片」里评级")
+    pets = {x["pet_id"] for x in labels}
+    stats = (await db.execute(select(SkinDailyStat).where(SkinDailyStat.source == c_prefer))).scalars().all()
+    payload, answers, _ = await ml_inputs(db, [s for s in stats if s.imu in pets])
+    res = await _algo("POST", "ml/train-b-real", {"rows": payload, "labels": labels, "answers": answers}, timeout=600)
+    return ok(res)
+
+
+class MlActivateIn(BaseModel):
+    which: str
+
+
+@router.post("/ml/activate")
+async def ml_activate(body: MlActivateIn, db: AsyncSession = Depends(get_db)):
+    """切换模型 B 用哪一版，然后把库里所有天的 ML 结果按新模型重算一遍（一个请求，几秒）"""
+    st = await _algo("POST", "ml/activate-b", {"which": body.which})
+    warnings: list[str] = []
+    for source in ("ai", "human"):
+        rows = (await db.execute(select(SkinDailyStat).where(SkinDailyStat.source == source))).scalars().all()
+        await ml_for(db, rows, warnings)
+    await db.commit()
+    return ok({**st, "warnings": warnings})
 
 
 @router.get("/data-range")

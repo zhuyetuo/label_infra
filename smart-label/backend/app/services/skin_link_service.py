@@ -620,8 +620,62 @@ async def _stats_with_full_baseline(
 
     ai = await _one_source("ai", "AI 版")
     human = await _one_source("human", "人工版")
+    for source in ("ai", "human"):
+        await ml_for(db, by_source.get(source) or [], warnings)
     await db.commit()
     return ai, human
+
+
+def _answer_letter(v: str | None) -> str | None:
+    """问卷存的是选项字母（A），ML 那边认「A. xxx」这种写法"""
+    return f"{v}." if v and len(v) == 1 else v
+
+
+async def ml_inputs(db: AsyncSession, rows: list[SkinDailyStat]) -> tuple[list[dict], list[dict], dict]:
+    """ML 版要的输入：每只狗全部历史的事件 / 佩戴时长 / 品种，加上填过的问卷。
+    返回 (rows, answers, dog_of_imu)"""
+    from app.models.skin import SkinRecord
+
+    idx = await dog_index(db)
+    profiles = await dog_profiles(db)
+    dog_of: dict[str, str | None] = {}
+    out = []
+    for r in rows:
+        if r.imu not in dog_of:
+            dog_of[r.imu] = idx.name(r.imu.split("+")[0])
+        dog = dog_of[r.imu]
+        out.append({"pet_id": r.imu, "date": r.stat_date.isoformat(), "events": json.loads(r.events),
+                    "wear_seconds": r.wear_seconds,
+                    "breed": dog_meta(profiles, None, r.imu, dog).get("breed") or "未知"})
+    imu_of_dog: dict[str, list[str]] = defaultdict(list)
+    for imu, dog in dog_of.items():
+        if dog:
+            imu_of_dog[dog].append(imu)
+    answers = []
+    for rec in (await db.execute(select(SkinRecord))).scalars().all():
+        for imu in imu_of_dog.get(rec.dog_name, []):
+            answers.append({"pet_id": imu, "date": rec.fill_date.isoformat(),
+                            **{k: _answer_letter(getattr(rec, k)) for k in
+                               ("color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")}})
+    return out, answers, dog_of
+
+
+async def ml_for(db: AsyncSession, rows: list[SkinDailyStat], warnings: list[str]) -> None:
+    """ML 版：整批一个请求，结果写回每行的 ml 列。AI 服务旧版本没这个接口 / 出错都只记一条提示"""
+    if not rows:
+        return
+    payload, answers, _ = await ml_inputs(db, rows)
+    try:
+        res = await _algo_post("ml/predict-batch", {"rows": payload, "answers": answers})
+    except SkinLinkError as e:
+        if " 404" not in str(e):
+            warnings.append(f"ML 版没算成：{e}")
+        return
+    by_key = {(x["pet_id"], x["date"]): x for x in res.get("rows") or []}
+    for r in rows:
+        x = by_key.get((r.imu, r.stat_date.isoformat()))
+        if x is not None:
+            r.ml = json.dumps({**x, "model_b": res.get("model_b")}, ensure_ascii=False)
 
 
 async def read_stored_link_stats(db: AsyncSession, date_from: date, date_to: date) -> dict:

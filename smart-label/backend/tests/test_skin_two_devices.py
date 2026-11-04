@@ -51,6 +51,10 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
         if path == "stats/c-batch":
             sent["c_batch"] = len(payload["rows"])
             return [{"c_inputs": {}, "c": {"total": 10, "tier": "C0", "red_flags": []}} for _ in payload["rows"]]
+        if path == "ml/predict-batch":
+            sent["ml"] = payload
+            return {"rows": [{"pet_id": r["pet_id"], "date": r["date"], "c_tier": "C1", "s_tier": "S2"}
+                             for r in payload["rows"]], "model_b": "synthetic"}
         if path == "stats/to-c-inputs":
             return {}
         return {"total": 10, "tier": "C0", "red_flags": []}
@@ -60,7 +64,9 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     assert [r["imu"] for r in res["rows"]] == ["IMU1+IMU2"] and res["rows"][0]["dog_name"] == "bibi"
     assert res["rows"][0]["breed"] == "比熊" and res["rows"][0]["site_name"] == "公司影棚"
     row = sent["rows"][0]
-    assert sent["c_batch"] >= 1   # C 值整批一个请求，不再逐行两次 HTTP
+    assert sent["c_batch"] >= 1
+    # ML 版跟着一起算：按合成后的 IMU1+IMU2 一只狗送，品种从狗档案取
+    assert {r["pet_id"] for r in sent["ml"]["rows"]} == {"IMU1+IMU2"} and sent["ml"]["rows"][0]["breed"] == "比熊"   # C 值整批一个请求，不再逐行两次 HTTP
     assert row["imu"] == "IMU1+IMU2"
     assert len(row["events"]) == 2                                   # 15:00 那次（充电座上）不算
     assert abs(row["wear_seconds"] - 86400) <= 600                   # 合起来一天，不是 48 小时
@@ -88,6 +94,7 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     assert [(r["imu"], r["dog_name"]) for r in out["rows"]] == [("IMU1+IMU2", "bibi")]
     row = out["rows"][0]
     assert {d["imu"] for d in row["devices"]} == {"IMU1", "IMU2"}
+    assert row["ml"]["s_tier"] == "S2" and row["ml"]["model_b"] == "synthetic"
     assert row["breed"] == "比熊" and row["site_name"] == "公司影棚" and row["room"] is None
     assert row["photo_count"] == 12 and row["photo_folder"] == "2026-11-01-ok"
     assert row["photo_grade"] == "S1" and row["photo_ratings"][0]["grade"] == "S1"
@@ -102,3 +109,34 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     monkeypatch.setattr(trk, "_algo_post", old_service)
     out = run(trk.daily_tracking(db, date(2026, 11, 1), date(2026, 11, 1)))
     assert out["rows"][0]["s_no_q"]["total"] == 7
+
+
+def test_train_real_uses_vet_labels_and_pm_tier(db, run, monkeypatch):
+    """重训模型 B：标签只取兽医评级（photo_grade_vet），同时带上 PM 那天的 S 档拿来比"""
+    from app.api.v1 import skin as api
+
+    rows = [
+        {"imu": "IMU1+IMU2", "date": "2026-11-01", "photo_grade_vet": "S1", "s_no_q": {"s_tier": "S0"}, "s_with_q": None},
+        {"imu": "IMU1+IMU2", "date": "2026-11-02", "photo_grade_vet": None, "s_no_q": {"s_tier": "S2"}},
+    ]
+
+    async def fake_tracking(db, c_prefer="ai"):
+        return rows
+
+    sent = {}
+
+    async def fake_algo(method, path, payload=None, timeout=None):
+        sent[path] = payload
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "_all_tracking", fake_tracking)
+    monkeypatch.setattr(api, "_algo", fake_algo)
+    run(api.ml_train_real("ai", db))
+    assert sent["ml/train-b-real"]["labels"] == [
+        {"pet_id": "IMU1+IMU2", "date": "2026-11-01", "s_tier": "S1", "pm_s_tier": "S0"}]
+
+    rows[0]["photo_grade_vet"] = None
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        run(api.ml_train_real("ai", db))

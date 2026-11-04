@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models.skin_photo_rating import SkinPhotoRating
+from app.core import permissions as perms
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import tooth_service as svc
@@ -73,7 +74,7 @@ async def list_ratings(album: str, db: AsyncSession = Depends(get_db), user: Use
     """这个相册里的评级。管理员看所有人的（对一致性、看实习生评得准不准）；
     其他人（兽医 / 实习生）只看自己的——看得到别人的评级会被带着走，几个人各评各的才有对照价值"""
     _check_album(album, user)
-    q = (select(SkinPhotoRating, User.display_name, User.username, User.role)
+    q = (select(SkinPhotoRating, User.display_name, User.username, User.role, User.permissions)
          .join(User, User.id == SkinPhotoRating.user_id)
          .where(SkinPhotoRating.album == album))
     if user.role not in (UserRole.admin, UserRole.super_admin):
@@ -82,9 +83,9 @@ async def list_ratings(album: str, db: AsyncSession = Depends(get_db), user: Use
     return ok([{
         "folder": r.folder, "dog_folder": r.dog_folder, "user_id": r.user_id,
         "user_name": dn or un, "user_role": getattr(role, "value", str(role)),
-        "grade": r.grade, "note": r.note,
+        "grade": r.grade, "note": r.note, "is_vet": perms.is_vet(pm),
         "updated_at": r.updated_at.isoformat(sep=" ", timespec="minutes") if r.updated_at else None,
-    } for r, dn, un, role in rows])
+    } for r, dn, un, role, pm in rows])
 
 
 class RatingIn(BaseModel):
