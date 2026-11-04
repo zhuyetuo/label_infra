@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Input, Radio, Space, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Input, Radio, Space, Tag, Tooltip, Typography, message } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { putPhotoRating, type PhotoRating, type SkinGrade } from "@/api/material";
 
@@ -56,7 +56,7 @@ export default function SkinRatingBar({
   useEffect(() => setNote(mine?.note ?? ""), [mine?.note]);
   const save = async (grade: SkinGrade | null, n = note) => {
     await putPhotoRating("skin", { folder, dog_folder: dog, grade, note: n || null });
-    if (grade) message.success({ content: `${dog}：${gradeMeta(grade).label}`, key: "skin-rate", duration: 1 });
+    message.success({ content: grade ? `${dog}：${gradeMeta(grade).label}` : `${dog}：已撤销，算没评过`, key: "skin-rate", duration: 1 });
     onChanged();
   };
   return (
@@ -69,6 +69,12 @@ export default function SkinRatingBar({
           </Tooltip>
         ))}
       </Radio.Group>
+      {/* 点错了还原成「没评过」（备注一起清掉）。再点一下已选的那档也一样 */}
+      {mine && (
+        <Tooltip title="还原成没评过（备注一起清掉），不算进跟踪表">
+          <Button size="small" type="text" onClick={() => save(null, "")}>撤销</Button>
+        </Tooltip>
+      )}
       <Input
         size="small"
         placeholder="备注（哪里、什么样）"
