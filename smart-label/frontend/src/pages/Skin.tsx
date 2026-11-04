@@ -7,6 +7,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
+import { SkinGradeHelp } from "@/components/SkinRatingBar";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
@@ -41,7 +42,30 @@ const tierColor = (t?: string | null) => (t?.endsWith("2") ? "red" : t?.endsWith
 const fmt = (v: unknown, nd = 2) => (v == null || v === "" ? "—" : typeof v === "number" ? v.toFixed(nd) : String(v));
 const SOURCE_LABEL: Record<CSource, string> = { ai: "来源：标注平台 AI 版", human: "来源：标注平台人工版", stats: "来源：stats.csv", manual: "来源：手填" };
 
+// 兽医 / 实习生（非管理员）只看「皮肤照片」评 S0 / S1 / S2：同一个页面，只是只显示这一块
+// （C / S、问答这些接口只给管理员）。不再单独一个「皮肤评级」菜单
 export default function Skin() {
+  const role = useAuthStore((s) => s.userInfo?.role);
+  if (role !== "admin" && role !== "super_admin") return <SkinPhotosOnly />;
+  return <SkinFull />;
+}
+
+function SkinPhotosOnly() {
+  return (
+    <div>
+      <Space style={{ marginBottom: 12 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>皮肤照片</Typography.Title>
+        <SkinGradeHelp />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          看完一只狗的全部照片，在它标题栏右边点一档；点已选的那档撤销。各评各的，别人的评级显示在旁边
+        </Typography.Text>
+      </Space>
+      <PhotoGallery album="skin" rating hint="皮肤瘙痒问诊照片，来自素材库 NAS" />
+    </div>
+  );
+}
+
+function SkinFull() {
   const qc = useQueryClient();
   const userInfo = useAuthStore((s) => s.userInfo);
   const { data: opts, isLoading, error } = useQuery({ queryKey: ["skin-options"], queryFn: getSkinOptions });
@@ -1106,7 +1130,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: (
-              <Tooltip title="兽医 / 实习生看这天照片评的级（「皮肤评级」页，或者点这里直接评）。几个人不一致取最重的；跟 S 档不一样标黄，提醒回头看看是算法还是照片判断有偏差">
+              <Tooltip title="兽医 / 实习生看这天照片评的级（「皮肤照片」标签页，或者点这里直接评）。几个人不一致取最重的；跟 S 档不一样标黄，提醒回头看看是算法还是照片判断有偏差">
                 照片评级
               </Tooltip>
             ),

@@ -114,7 +114,7 @@ def _consensus(ratings: list[dict]) -> str | None:
 
 
 def _photo_index() -> list[tuple[str, str, int, str]]:
-    """[(日期, 目录里的狗名, 张数, 日期目录)]。跟「皮肤照片 / 皮肤评级」页同一份扫描（tooth_service.list_photos），
+    """[(日期, 目录里的狗名, 张数, 日期目录)]。跟「皮肤照片」标签页同一份扫描（tooth_service.list_photos），
     主目录（视频问诊）和狗场那几棵树（博朗旺 / 雷喏斯达…）都算——原来只扫主目录，狗场的照片在跟踪表上对不上。
     日期目录要带上：照片评级是按 (日期目录, 狗目录) 记的"""
     from app.services import tooth_service
@@ -408,7 +408,7 @@ async def daily_tracking(
         if aliases is None:     # 认不出场地：这个 IMU 在各狗场的别名都算上（老行为）
             aliases = set().union(*[v for (s, k), v in alias_by_key.items() if k in parts]) or None
         photo_n, photo_dog, photo_pairs = _match_photos(photo_index, day, dog, aliases)
-        # 兽医 / 实习生看这天照片给的评级（皮肤评级页），跟 C / S 放一行对照
+        # 兽医 / 实习生看这天照片给的评级（皮肤照片标签页），跟 C / S 放一行对照
         p_ratings = [r for pair in photo_pairs for r in ratings_by_pair.get(pair, [])]
         if c_prefer == "ai":
             primary = m["ai"]
