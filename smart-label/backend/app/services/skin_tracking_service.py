@@ -40,7 +40,9 @@ from app.services import label_tree
 from app.models.sample import Sample
 from app.models.skin import SkinRecord
 from app.models.skin_daily import SkinDailyStat
+from app.models.skin_photo_rating import SkinPhotoRating
 from app.models.task import Task
+from app.models.user import User
 from app.services import site_layout
 from app.services.dog_name_service import DogIndex, imu_keys_of_dog
 
@@ -105,44 +107,51 @@ def _norm_dog(name: str, extra: set[str] | None = None) -> set[str]:
     return {p for p in parts if p}
 
 
-def _photo_index() -> list[tuple[str, str, int]]:
-    """[(日期, 目录里的狗名, 张数)]。目录是 {material_root}/{skin_photo_dir}/{日期[-ok]}/{狗}/*.jpg"""
-    root = os.path.join(settings.material_root, settings.skin_photo_dir)
-    out: list[tuple[str, str, int]] = []
-    if not os.path.isdir(root):
-        return out
-    exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-    for folder in os.listdir(root):
-        fpath = os.path.join(root, folder)
-        if not os.path.isdir(fpath):
-            continue
-        day = folder[:10]  # 目录名可能带 -ok 后缀
-        for dog in os.listdir(fpath):
-            dpath = os.path.join(fpath, dog)
-            if not os.path.isdir(dpath):
-                continue
-            n = sum(1 for fn in os.listdir(dpath) if os.path.splitext(fn)[1].lower() in exts)
+def _consensus(ratings: list[dict]) -> str | None:
+    """几个人的照片评级合成一个：「看不清」不算；都一样就是它，不一样取最重的（宁可多关注）"""
+    gs = sorted({r["grade"] for r in ratings if r["grade"] in ("S0", "S1", "S2")})
+    return gs[-1] if gs else None
+
+
+def _photo_index() -> list[tuple[str, str, int, str]]:
+    """[(日期, 目录里的狗名, 张数, 日期目录)]。跟「皮肤照片 / 皮肤评级」页同一份扫描（tooth_service.list_photos），
+    主目录（视频问诊）和狗场那几棵树（博朗旺 / 雷喏斯达…）都算——原来只扫主目录，狗场的照片在跟踪表上对不上。
+    日期目录要带上：照片评级是按 (日期目录, 狗目录) 记的"""
+    from app.services import tooth_service
+
+    try:
+        folders = tooth_service.list_photos("skin")
+    except Exception:  # noqa: BLE001 —— NAS 没挂上就当没照片，别把整张表带崩
+        return []
+    out: list[tuple[str, str, int, str]] = []
+    for f in folders:
+        day = f.get("date") or (f.get("folder") or "")[:10]
+        for d in f.get("dogs") or []:
+            n = len(d.get("photos") or [])
             if n:
-                out.append((day, dog, n))
+                out.append((day, d["name"], n, f["folder"]))
     return out
 
 
 def _match_photos(
-    index: list[tuple[str, str, int]], day: str, dog: str, extra: set[str] | None = None
-) -> tuple[int, str | None]:
-    """返回 (张数, NAS 上实际的狗目录名)。目录名跟 PM 狗名对不上是常态，做宽松匹配。"""
+    index: list[tuple[str, str, int, str]], day: str, dog: str, extra: set[str] | None = None
+) -> tuple[int, str | None, list[tuple[str, str]]]:
+    """返回 (张数, NAS 上实际的狗目录名, 对上的 [(日期目录, 狗目录)])。目录名跟 PM 狗名对不上是常态，做宽松匹配。"""
     aliases = _norm_dog(dog, extra)
     total, matched = 0, None
-    for d, folder_dog, n in index:
+    pairs: list[tuple[str, str]] = []
+    for d, folder_dog, n, folder in index:
         if d != day:
             continue
         fd = folder_dog.strip()
         fdl = fd.lower()
+        # 狗场目录是「002拉布拉多小七」这种：编号 + 品种 + 名字，按包含关系认
         hit = fd in aliases or fdl in aliases or any(a in fdl or fdl in a.lower() for a in aliases if len(a) >= 2)
         if hit:
             total += n
             matched = matched or fd
-    return total, matched
+            pairs.append((folder, folder_dog))
+    return total, matched, pairs
 
 
 async def daily_tracking(
@@ -181,6 +190,16 @@ async def daily_tracking(
         rec_by_key[(r.fill_date.isoformat(), r.dog_name)] = r
 
     photo_index = await asyncio.to_thread(_photo_index)
+    # 照片评级：按 (日期目录, 狗目录) 分好
+    ratings_by_pair: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r, dn, un, role in (await db.execute(
+        select(SkinPhotoRating, User.display_name, User.username, User.role)
+        .join(User, User.id == SkinPhotoRating.user_id)
+        .where(SkinPhotoRating.album == "skin")
+    )).all():
+        ratings_by_pair[(r.folder, r.dog_folder)].append({
+            "user_name": dn or un, "user_role": getattr(role, "value", str(role)), "grade": r.grade, "note": r.note,
+        })
     # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、设备号 IMU1）
     # 唯一能对上的地方。一只狗配两个 IMU 轮换充电，两个都要挂上同一套别名，
     # 否则换了设备的那几天照片就对不上了
@@ -388,7 +407,9 @@ async def daily_tracking(
         aliases = set().union(*[alias_by_key.get((site, p), set()) for p in parts]) or None if site else None
         if aliases is None:     # 认不出场地：这个 IMU 在各狗场的别名都算上（老行为）
             aliases = set().union(*[v for (s, k), v in alias_by_key.items() if k in parts]) or None
-        photo_n, photo_dog = _match_photos(photo_index, day, dog, aliases)
+        photo_n, photo_dog, photo_pairs = _match_photos(photo_index, day, dog, aliases)
+        # 兽医 / 实习生看这天照片给的评级（皮肤评级页），跟 C / S 放一行对照
+        p_ratings = [r for pair in photo_pairs for r in ratings_by_pair.get(pair, [])]
         if c_prefer == "ai":
             primary = m["ai"]
             p_source = "ai" if m["ai"] else None
@@ -429,6 +450,9 @@ async def daily_tracking(
             "photo_count": photo_n,
             # NAS 上实际的目录名，前端弹窗按它去筛图（可能跟 PM 的狗名不一样）
             "photo_dog": photo_dog,
+            "photo_folder": photo_pairs[0][0] if photo_pairs else None,
+            "photo_ratings": p_ratings,
+            "photo_grade": _consensus(p_ratings),
             "s_no_q": None,
             "s_with_q": None,
         }
