@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Collapse, Drawer, Input, Progress, Space, Spin, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, Checkbox, Collapse, Drawer, Input, Progress, Radio, Select, Space, Spin, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { mlExplain, mlFeatures, type MlFeatureInfo, type MlFeatureValue } from "@/api/skin";
 
@@ -134,15 +134,39 @@ export function MlExplainDrawer({ target, cPrefer, onClose }: {
   );
 }
 
-/** ML 用了哪些维度、每个多重要 */
+/** 每组是干什么的（顺序 = 页面上的顺序） */
+const GROUPS: { name: string; desc: string }[] = [
+  { name: "抓挠频率 / 时长", desc: "当天抓了几次、抓了多久、单次多长；按佩戴小时折算后跨天可比" },
+  { name: "跟自己基线比", desc: "今天比这只狗自己平时多了几倍（不同长短的历史窗口各算一份），连续几天高于基线" },
+  { name: "近期趋势 / 发作史", desc: "最近 3 / 7 / 14 / 30 天的平均水平和波动，90 天内发作过几次、上次发作结束多久" },
+  { name: "时间分布 / 睡眠", desc: "夜里抓的占比、两次之间隔多久（扎堆还是分散）、睡着被抓醒几次" },
+  { name: "数据质量 / 背景", desc: "当天戴得全不全、已经积累了几天历史、品种" },
+  { name: "模型A的判断", desc: "模型 A 判成 C0 / C1 / C2 的概率，只有模型 B 用——相当于把抓挠的结论交给模型 B" },
+  { name: "问卷", desc: "7 道皮肤 / 毛发问卷题，只有模型 B 用；没填问卷的天这几项是空的" },
+];
+
+/** ML 用了哪些维度、每个多重要：先按组看，展开看组里每个维度 */
 export function MlFeatureTable() {
   const { data, isFetching, error } = useQuery({ queryKey: ["skin-ml-features"], queryFn: mlFeatures, staleTime: 5 * 60_000 });
   const [q, setQ] = useState("");
-  const rows = (data?.features ?? []).filter((f) => !q || f.name.includes(q) || f.feature.includes(q) || f.group.includes(q));
-  const maxA = Math.max(0.001, ...rows.map((f) => f.imp_a ?? 0));
-  const maxB = Math.max(0.001, ...rows.map((f) => f.imp_b ?? 0));
+  const [model, setModel] = useState<"all" | "a" | "b">("all");
+  const [groupSel, setGroupSel] = useState<string[]>([]);
+  const [hideZero, setHideZero] = useState(false);
+  const all = data?.features ?? [];
+  const impOf = (f: MlFeatureInfo) => (model === "a" ? (f.in_a ? f.imp_a ?? 0 : 0) : model === "b" ? (f.in_b ? f.imp_b ?? 0 : 0) : Math.max(f.in_a ? f.imp_a ?? 0 : 0, f.in_b ? f.imp_b ?? 0 : 0));
+  const rows = all.filter((f) =>
+    (model === "all" || (model === "a" ? f.in_a : f.in_b)) &&
+    (!groupSel.length || groupSel.includes(f.group)) &&
+    (!q || f.name.includes(q) || f.feature.includes(q) || (f.calc ?? "").includes(q)) &&
+    (!hideZero || impOf(f) >= 0.001));
+  const maxA = Math.max(0.001, ...all.map((f) => f.imp_a ?? 0));
+  const maxB = Math.max(0.001, ...all.map((f) => f.imp_b ?? 0));
+  const sum = (fs: MlFeatureInfo[], k: "a" | "b") => fs.reduce((n, f) => n + ((k === "a" ? f.in_a && f.imp_a : f.in_b && f.imp_b) || 0), 0);
+  const totA = sum(all, "a"), totB = sum(all, "b");
+  const groups = GROUPS.map((g) => ({ ...g, all: all.filter((f) => f.group === g.name), shown: rows.filter((f) => f.group === g.name) }))
+    .filter((g) => g.shown.length);
   const bar = (v: number | null | undefined, max: number, color: string) =>
-    v == null ? <Typography.Text type="secondary">不用</Typography.Text> : (
+    v == null ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>不用</Typography.Text> : (
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <div style={{ width: 90, height: 8, background: "#8882", borderRadius: 4 }}>
           <div style={{ width: `${Math.max(0, (v / max) * 100)}%`, height: 8, borderRadius: 4, background: color }} />
@@ -150,26 +174,69 @@ export function MlFeatureTable() {
         <span style={{ fontSize: 11 }}>{(v * 100).toFixed(1)}%</span>
       </div>
     );
+  const share = (v: number, tot: number) => (tot > 0 ? `${Math.round((v / tot) * 100)}%` : "—");
+
   return (
     <div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        模型 A 用 IMU 抓挠数据算出来的维度预测 C 档；模型 B 在这些之上再加「模型 A 的判断」和 7 个问卷维度，预测 S 档。
-        <b>重要性</b> = 在训练数据里把这一列打乱，模型准确率掉多少（掉得越多说明模型越依赖它；0 = 基本没用上）。
-        训练数据见过的品种：{data?.breeds_seen?.join("、") ?? "…"}——别的品种模型当「不知道品种」处理。
-        点表头排序；每只狗每天具体怎么判，在「ML 结果」里点档位看。
+        模型 A 用 IMU 抓挠数据算出来的维度预测 C 档；模型 B 在这些之上再加「模型 A 的判断」和 7 道问卷，预测 S 档。
+        <b>重要性</b> = 在训练数据里把这一列打乱，模型准确率掉多少（越多越依赖它；0 = 基本没用上）。
+        训练数据见过的品种：{data?.breeds_seen?.join("、") ?? "…"}。每只狗每天具体怎么判，在「ML 结果」里点档位看。
       </Typography.Paragraph>
       {error && <Alert type="error" showIcon message={(error as Error).message} />}
-      <Input.Search allowClear placeholder="搜维度 / 分组" style={{ width: 240, marginBottom: 8 }} onChange={(e) => setQ(e.target.value)} />
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Radio.Group optionType="button" size="small" value={model} onChange={(e) => setModel(e.target.value)}
+          options={[{ value: "all", label: "全部" }, { value: "a", label: "模型 A 用的" }, { value: "b", label: "模型 B 用的" }]} />
+        <Select mode="multiple" allowClear size="small" placeholder="全部分组" style={{ width: 260 }} maxTagCount="responsive"
+          value={groupSel} onChange={setGroupSel} options={GROUPS.map((g) => ({ value: g.name, label: g.name }))} />
+        <Checkbox checked={hideZero} onChange={(e) => setHideZero(e.target.checked)}>只看起作用的（重要性 &gt; 0）</Checkbox>
+        <Input.Search size="small" allowClear placeholder="搜维度 / 怎么算" style={{ width: 200 }} onChange={(e) => setQ(e.target.value)} />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{rows.length} / {all.length} 个维度</Typography.Text>
+      </Space>
       {isFetching && !data && <Space><Spin /><Typography.Text type="secondary">第一次要算一两分钟（之后存下来，重训后才重算）</Typography.Text></Space>}
-      <Table size="small" rowKey="feature" dataSource={rows} pagination={false} scroll={{ x: "max-content" }}
-        columns={[
-          { title: "维度", fixed: "left" as const, render: (_: unknown, f: MlFeatureInfo) => <div>{f.name}<div style={{ fontSize: 11, color: "#888" }}>{f.feature}</div></div> },
-          { title: "分组", dataIndex: "group", filters: [...new Set((data?.features ?? []).map((f) => f.group))].map((g) => ({ text: g, value: g })), onFilter: (v, f: MlFeatureInfo) => f.group === v },
-          { title: "模型 A 重要性", sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_a ?? -1) - (b.imp_a ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_a ? f.imp_a : null, maxA, "#fa8c16") },
-          { title: "模型 B 重要性", defaultSortOrder: "descend" as const, sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_b ?? -1) - (b.imp_b ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_b ? f.imp_b : null, maxB, "#722ed1") },
-          { title: "怎么算", dataIndex: "calc", width: 280, render: (v: string) => <Typography.Text style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
-          { title: "有什么用", dataIndex: "role", width: 280, render: (v: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
-        ]} />
+
+      {/* 先看分组：每组几个维度、各占模型多少分量 */}
+      {all.length > 0 && (
+        <Table<{ name: string; desc: string; fs: MlFeatureInfo[] }> size="small" rowKey="name" pagination={false} style={{ marginBottom: 12 }}
+          dataSource={GROUPS.map((g) => ({ ...g, fs: all.filter((f) => f.group === g.name) })).filter((g) => g.fs.length)}
+          onRow={(g) => ({ onClick: () => setGroupSel(groupSel.length === 1 && groupSel[0] === g.name ? [] : [g.name]), style: { cursor: "pointer" } })}
+          columns={[
+            { title: "分组", dataIndex: "name", render: (v: string) => <b>{v}</b> },
+            { title: "是什么", dataIndex: "desc", render: (v: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v}</Typography.Text> },
+            { title: "维度数", render: (_: unknown, g: { fs: MlFeatureInfo[] }) => g.fs.length },
+            { title: <Tooltip title="这一组重要性加起来占模型 A 全部的多少">占模型 A</Tooltip>, render: (_: unknown, g: { fs: MlFeatureInfo[] }) => g.fs.some((f) => f.in_a) ? share(sum(g.fs, "a"), totA) : "不用" },
+            { title: <Tooltip title="这一组重要性加起来占模型 B 全部的多少">占模型 B</Tooltip>, render: (_: unknown, g: { fs: MlFeatureInfo[] }) => g.fs.some((f) => f.in_b) ? share(sum(g.fs, "b"), totB) : "不用" },
+          ]} />
+      )}
+
+      <Collapse
+        defaultActiveKey={[]}
+        items={groups.map((g) => ({
+          key: g.name,
+          label: (
+            <Space wrap>
+              <b>{g.name}</b>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{g.desc}</Typography.Text>
+              <Tag>{g.shown.length}{g.shown.length !== g.all.length ? ` / ${g.all.length}` : ""} 个</Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {g.shown.slice().sort((a, b) => impOf(b) - impOf(a)).slice(0, 3).map((f) => f.name).join("、")}
+                {g.shown.length > 3 ? "…" : ""}
+              </Typography.Text>
+            </Space>
+          ),
+          children: (
+            <Table size="small" rowKey="feature" pagination={false} scroll={{ x: "max-content" }}
+              dataSource={g.shown.slice().sort((a, b) => impOf(b) - impOf(a))}
+              columns={[
+                { title: "维度", render: (_: unknown, f: MlFeatureInfo) => <div>{f.name}<div style={{ fontSize: 11, color: "#888" }}>{f.feature}</div></div> },
+                { title: "模型 A 重要性", sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_a ?? -1) - (b.imp_a ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_a ? f.imp_a : null, maxA, "#fa8c16") },
+                { title: "模型 B 重要性", sorter: (a: MlFeatureInfo, b: MlFeatureInfo) => (a.imp_b ?? -1) - (b.imp_b ?? -1), render: (_: unknown, f: MlFeatureInfo) => bar(f.in_b ? f.imp_b : null, maxB, "#722ed1") },
+                { title: "怎么算", dataIndex: "calc", width: 300, render: (v: string) => <Typography.Text style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
+                { title: "有什么用", dataIndex: "role", width: 300, render: (v: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v ?? "—"}</Typography.Text> },
+              ]} />
+          ),
+        }))}
+      />
     </div>
   );
 }
