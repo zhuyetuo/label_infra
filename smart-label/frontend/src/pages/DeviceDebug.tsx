@@ -27,7 +27,12 @@ const PLOT_S = 10;
 type BtChar = { startNotifications(): Promise<BtChar>; addEventListener(t: string, f: (e: Event) => void): void; writeValueWithoutResponse?(v: BufferSource): Promise<void>; writeValue(v: BufferSource): Promise<void>; value?: DataView; properties: { notify: boolean } };
 type BtService = { getCharacteristic(u: string): Promise<BtChar>; getCharacteristics(): Promise<BtChar[]> };
 type BtServer = { connected: boolean; getPrimaryService(u: string): Promise<BtService>; disconnect(): void };
-type BtDevice = { name?: string; id: string; gatt?: { connect(): Promise<BtServer>; connected?: boolean }; addEventListener(t: string, f: () => void): void };
+type BtDevice = {
+  name?: string; id: string; gatt?: { connect(): Promise<BtServer>; connected?: boolean };
+  addEventListener(t: string, f: () => void): void; removeEventListener?(t: string, f: () => void): void;
+  // 设备不在旁边时直接 connect 会失败：先等它的广播，收到再连
+  watchAdvertisements?(): Promise<void>;
+};
 // getDevices：拿到之前授权过的设备，不用再弹选择框（Chrome 要开 #enable-web-bluetooth-new-permissions-backend）
 const bt = () => (navigator as unknown as { bluetooth?: { requestDevice(o: unknown): Promise<BtDevice>; getDevices?(): Promise<BtDevice[]> } }).bluetooth;
 const LAST_KEY = "smart-label:ble-last";
@@ -255,19 +260,54 @@ export default function DeviceDebug() {
   // 上次连过的设备：浏览器支持 getDevices 时直接连，不弹选择框
   const last = (() => { try { return JSON.parse(localStorage.getItem(LAST_KEY) || "null") as { kind: Kind; id: string; name?: string } | null; } catch { return null; } })();
   const canQuick = !!bt()?.getDevices && !!last && last.kind === kind;
-  const connectLast = async () => {
+  const connectLast = async (silent = false) => {
     const b = bt();
     if (!b?.getDevices || !last) return;
     setStatus("connecting");
     try {
       const dev = (await b.getDevices()).find((d) => d.id === last.id);
       if (!dev) throw new Error("浏览器里找不到上次那个设备的授权，用「连接设备」重新选一次");
-      await useDevice(dev);
+      try {
+        await useDevice(dev);
+      } catch (e) {
+        // 刚打开页面时浏览器还没「看见」它：等它的广播（最多 20 秒），收到再连
+        if (!dev.watchAdvertisements) throw e;
+        addLog(`等 ${dev.name ?? "设备"} 的广播…`);
+        await dev.watchAdvertisements();
+        await new Promise<void>((resolve, reject) => {
+          const timer = window.setTimeout(() => reject(new Error("20 秒没收到它的广播：设备在不在旁边、开没开")), 20000);
+          const on = () => { window.clearTimeout(timer); dev.removeEventListener?.("advertisementreceived", on); resolve(); };
+          dev.addEventListener("advertisementreceived", on);
+        });
+        await useDevice(dev);
+      }
     } catch (e) {
       setStatus("idle");
-      message.error(`连不上：${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (silent) addLog(`自动连上次的设备没成：${msg}`);
+      else message.error(`连不上：${msg}`);
     }
   };
+
+  // 刷新 / 重新打开页面：蓝牙连接跟着页面没了（浏览器的规定，网页留不住）。
+  // 浏览器支持 getDevices 时自动连回上次那个，不用再选
+  const [autoOpen, setAutoOpenState] = useState(() => { try { return localStorage.getItem("smart-label:ble-auto-open") !== "0"; } catch { return true; } });
+  const setAutoOpen = (v: boolean) => { setAutoOpenState(v); try { localStorage.setItem("smart-label:ble-auto-open", v ? "1" : "0"); } catch { /* ignore */ } };
+  const triedAuto = useRef(false);
+  useEffect(() => {
+    if (triedAuto.current || !supported || !last || !bt()?.getDevices || !autoOpen) return;
+    if (last.kind !== kind) { setKind(last.kind); return; }   // 先切到上次的设备类型，切过去这个 effect 再跑一次
+    triedAuto.current = true;
+    void connectLast(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+  // 连着的时候刷新 / 关页面先问一句
+  useEffect(() => {
+    if (status !== "connected") return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [status]);
 
   const disconnect = () => { userClosed.current = true; server.current?.disconnect(); setStatus("idle"); };
   useEffect(() => () => { userClosed.current = true; server.current?.disconnect(); }, []);
@@ -353,12 +393,17 @@ export default function DeviceDebug() {
           : <Button type="primary" loading={status === "connecting"} disabled={!supported} onClick={connect}>连接设备</Button>}
         {status === "idle" && canQuick && (
           <Tooltip title="直接连上次选过的那个，不弹选择框">
-            <Button disabled={!supported} onClick={connectLast}>重连 {last?.name ?? "上次的设备"}</Button>
+            <Button disabled={!supported} onClick={() => connectLast()}>重连 {last?.name ?? "上次的设备"}</Button>
           </Tooltip>
         )}
         <Tooltip title="信号弱掉线时，自动重连同一个设备（不用重新选）">
           <Checkbox checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)}>掉线自动重连</Checkbox>
         </Tooltip>
+        {!!bt()?.getDevices && (
+          <Tooltip title="刷新 / 重新打开这页时自动连回上次那个设备">
+            <Checkbox checked={autoOpen} onChange={(e) => setAutoOpen(e.target.checked)}>打开页面自动连</Checkbox>
+          </Tooltip>
+        )}
         {status === "connected" && kind === "pc" && <Button onClick={timeSync}>校时</Button>}
         {status === "connected" && (recording
           ? <Button onClick={download}>停止并下载 CSV（{rec.current?.length ?? 0}）</Button>
@@ -390,6 +435,12 @@ export default function DeviceDebug() {
               <div style={{ marginTop: 4, opacity: 0.8 }}>以后要所有电脑都免设置，平台改成 https 就行。</div>
             </div>
           ) : undefined} />
+      )}
+
+      {supported && !bt()?.getDevices && (
+        <Alert type="info" showIcon closable style={{ marginBottom: 12 }}
+          message="刷新页面蓝牙会断开（浏览器规定，连接跟着页面走），默认刷新后要重新选设备"
+          description={<span>想刷新后自动连回上次的设备：Chrome 打开 <Typography.Text copyable code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</Typography.Text>，选 Enabled，重启浏览器。</span>} />
       )}
 
       <Row gutter={12}>
