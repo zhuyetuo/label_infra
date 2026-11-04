@@ -249,6 +249,26 @@ async def _recompute_ml(db: AsyncSession) -> list[str]:
     return warnings
 
 
+@router.get("/ml/features")
+async def ml_features():
+    """ML 用了哪些维度 + 全局重要性（第一次要算一两分钟）"""
+    return ok(await _algo("GET", "ml/features", timeout=600))
+
+
+@router.get("/ml/explain")
+async def ml_explain(imu: str, date: _dt.date, c_prefer: str = "ai", db: AsyncSession = Depends(get_db)):
+    """某只狗某一天 ML 为什么这么判。特征要用这只狗的全部历史（基线 / 滚动均值），所以把它的所有天都送过去"""
+    src = c_prefer if c_prefer in ("ai", "human") else "ai"
+    stats = (await db.execute(select(SkinDailyStat).where(SkinDailyStat.imu == imu, SkinDailyStat.source == src))).scalars().all()
+    if not stats and src == "human":
+        stats = (await db.execute(select(SkinDailyStat).where(SkinDailyStat.imu == imu, SkinDailyStat.source == "ai"))).scalars().all()
+    if not stats:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "库里没有这只狗的数据，先去项目联动「重新拉取」")
+    payload, answers, _ = await ml_inputs(db, stats)
+    return ok(await _algo("POST", "ml/explain", {"rows": payload, "pet_id": imu, "date": date.isoformat(),
+                                                 "answers": answers}, timeout=120))
+
+
 @router.get("/ml/scenarios")
 async def ml_scenarios():
     return ok(await _algo("GET", "ml/scenarios"))

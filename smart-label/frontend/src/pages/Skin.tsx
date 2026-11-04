@@ -9,6 +9,7 @@ import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import SkinAccuracy from "@/components/SkinAccuracy";
 import { MlResults, MlSimulate, MlTraining } from "@/components/SkinMl";
+import { MlFeatureTable } from "@/components/SkinMlExplain";
 import { SkinGradeHelp } from "@/components/SkinRatingBar";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
@@ -90,7 +91,7 @@ function SkinFull() {
   const [sCValue, setSCValue] = useState<number | null>(null);
   const [sCTierHint, setSCTierHint] = useState<string | null>(null);
   // 两个版本：PM 版（问答/IMU/C 值/S 总分/周报/历史/照片）和 ML 版（模型对比，后续在这里加）
-  const ML_TABS = new Set(["ml-results", "ml-sim", "ml-train", "ml"]);
+  const ML_TABS = new Set(["ml-results", "ml-features", "ml-sim", "ml-train", "ml"]);
   const [version, setVersion] = useState<"pm" | "ml">("pm");
   // PM 版里再分两块：auto = 每天每只狗自动跑出来的长期跟踪；manual = 自己编数据验算规则
   const [pmMode, setPmMode] = useState<"auto" | "manual">("auto");
@@ -174,6 +175,7 @@ function SkinFull() {
         onChange={setTab}
         items={(version === "ml" ? [
           { key: "ml-results", label: "ML 结果", children: <MlResults /> },
+          { key: "ml-features", label: "特征维度", children: <MlFeatureTable /> },
           { key: "ml-sim", label: "模拟（合成数据）", children: <MlSimulate /> },
           { key: "ml-train", label: "模型与训练", children: <MlTraining /> },
           { key: "ml", label: "逐天调试（老）", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setVersion("pm"); setPmTab("q"); }} /> },
