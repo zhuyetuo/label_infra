@@ -1548,7 +1548,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
 
 // 筛选条件记在浏览器本地；结果本身存在后端 skin_daily_stats 表里，打开页面直接读库
 const LINK_FILTER_KEY = "skin-link-filter";
-type LinkFilter = { from: string; to: string; projectId: number | null; includeDrafts: boolean };
+type LinkFilter = { from: string; to: string; projectId: number | null; includeDrafts: boolean; dogs?: string[] };
 const loadLinkFilter = (): LinkFilter => {
   try {
     const raw = localStorage.getItem(LINK_FILTER_KEY);
@@ -1611,7 +1611,13 @@ function LinkTab(p: {
     queryFn: skinLinkStaleness,
     refetchOnWindowFocus: false,
   });
-  const rows = data?.rows ?? [];
+  const allRows = data?.rows ?? [];
+  // 只看某几只狗：纯前端筛，不用重新拉取
+  const dogOptions = useMemo(
+    () => [...new Set(allRows.map((r) => r.dog_name).filter((d): d is string => !!d))].sort((a, b) => a.localeCompare(b, "zh")),
+    [allRows],
+  );
+  const rows = f.dogs?.length ? allRows.filter((r) => r.dog_name && f.dogs!.includes(r.dog_name)) : allRows;
   const warnings = data?.warnings ?? [];
   const loading = isFetching || recomputing;
 
@@ -1678,6 +1684,9 @@ function LinkTab(p: {
         />
         <Select allowClear placeholder="全部项目" style={{ width: 220 }} value={f.projectId ?? undefined} onChange={(v) => setFilter({ projectId: v ?? null })}
           options={(projects ?? []).map((pr) => ({ value: pr.id, label: pr.name }))} />
+        <Select mode="multiple" allowClear showSearch placeholder="全部狗" style={{ minWidth: 180 }} maxTagCount="responsive"
+          value={f.dogs ?? []} onChange={(v) => setFilter({ dogs: v })}
+          options={dogOptions.map((d) => ({ value: d, label: d }))} />
         <Checkbox checked={f.includeDrafts} onChange={(e) => setFilter({ includeDrafts: e.target.checked })}>
           人工版包含未审核的草稿
         </Checkbox>
@@ -1709,7 +1718,7 @@ function LinkTab(p: {
         })()}
         {data && !loading && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            共 {rows.length} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}
+            共 {rows.length}{rows.length !== allRows.length ? ` / ${allRows.length}` : ""} 行{data.from_cache ? "（存在服务器上，打开就有）" : "（刚算完并已保存）"}
             {/* 过几天再看这张表，得知道它是不是还反映当前的标注 */}
             {data.computed_at && <>，数据算于 <b>{data.computed_at}</b></>}；
             标注有更新、或者改了上面的条件，再点「重新拉取」

@@ -48,6 +48,9 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
         if path == "stats/from-events":
             sent["rows"] = payload["rows"]
             return {"rows": [{"date": r["date"], "imu": r["imu"], "count": len(r["events"])} for r in payload["rows"]]}
+        if path == "stats/c-batch":
+            sent["c_batch"] = len(payload["rows"])
+            return [{"c_inputs": {}, "c": {"total": 10, "tier": "C0", "red_flags": []}} for _ in payload["rows"]]
         if path == "stats/to-c-inputs":
             return {}
         return {"total": 10, "tier": "C0", "red_flags": []}
@@ -56,6 +59,7 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     res = run(svc.collect_link_stats(db, date(2026, 11, 1), date(2026, 11, 1)))
     assert [r["imu"] for r in res["rows"]] == ["IMU1+IMU2"] and res["rows"][0]["dog_name"] == "bibi"
     row = sent["rows"][0]
+    assert sent["c_batch"] >= 1   # C 值整批一个请求，不再逐行两次 HTTP
     assert row["imu"] == "IMU1+IMU2"
     assert len(row["events"]) == 2                                   # 15:00 那次（充电座上）不算
     assert abs(row["wear_seconds"] - 86400) <= 600                   # 合起来一天，不是 48 小时
@@ -68,6 +72,8 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     from app.services import skin_tracking_service as trk
 
     async def fake_s(path, payload):
+        if path == "s-batch":
+            return [{"total": 5, "tier": "S0"} for _ in payload["rows"]]
         return {"total": 5, "tier": "S0"}
 
     monkeypatch.setattr(trk, "_algo_post", fake_s)
@@ -84,3 +90,13 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     assert row["photo_count"] == 12 and row["photo_folder"] == "2026-11-01-ok"
     assert row["photo_grade"] == "S1" and row["photo_ratings"][0]["grade"] == "S1"
     assert trk._consensus([{"grade": "S0"}, {"grade": "S2"}, {"grade": "unsure"}]) == "S2"
+
+    # AI 服务是老版本（没有 s-batch）：退回逐行，结果一样
+    async def old_service(path, payload):
+        if path == "s-batch":
+            raise trk.SkinTrackingError("AI 服务返回 404: Not Found")
+        return {"total": 7, "tier": "S0"}
+
+    monkeypatch.setattr(trk, "_algo_post", old_service)
+    out = run(trk.daily_tracking(db, date(2026, 11, 1), date(2026, 11, 1)))
+    assert out["rows"][0]["s_no_q"]["total"] == 7
