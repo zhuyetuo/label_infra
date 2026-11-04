@@ -249,7 +249,9 @@ function MiniPlot({
     // 起止已经被拖到原来视图外面（往外多拉了数据、图重建）：初始视图要把现在的起止也包进来
     const r0 = cur();
     const rs0 = (r0.s - info.startMs) / 1000, re0 = (r0.e - info.startMs) / 1000;
-    const extra = ((dur + 2 * pad) * (widen - 1)) / 2;
+    // 浮窗拉宽了多看点上下文——只给短片段。长片段（整段看）再按比例往两边加，
+    // 224 秒的片段横轴会拉到 400 秒，右边一大块空白
+    const extra = dur > winSec * 1.2 ? 0 : ((dur + 2 * pad) * (widen - 1)) / 2;
     const initX: [number, number] = scrolling
       ? [-pad, -pad + winSec]
       : xRange ?? [Math.max(-info.startMs / 1000, Math.min(-pad, rs0 - pad) - extra), Math.max(dur + pad, re0 + pad) + extra];
@@ -626,9 +628,17 @@ export default function LoopWaveform({
   cfgRef.current = cfg;
   const widen = Math.max(1, viewW / 460);
   const winEff = Math.round(cfg.winSec * widen);
-  // 顶栏「全段」按钮：临时看完整片段（整段压一张图），再点回到跟随。不改「跟随」那个默认设置，
-  // 刷新页面后还是默认样子
-  const [wholeView, setWholeView] = useState(false);
+  // 顶栏「跟随 / 整段」：长片段整段压一张图看。记在浏览器里——挑长时间活动片段时一直要整段看，
+  // 每开一段都要重点一次太麻烦
+  const [wholeView, setWholeViewState] = useState(() => {
+    try { return localStorage.getItem("smart-label:loop-wave-whole") === "1"; } catch { return false; }
+  });
+  const setWholeView = (f: (v: boolean) => boolean) =>
+    setWholeViewState((v) => {
+      const n = f(v);
+      try { localStorage.setItem("smart-label:loop-wave-whole", n ? "1" : "0"); } catch { /* ignore */ }
+      return n;
+    });
   const followEff = cfg.follow && !wholeView;
   const setCfg = (patch: Partial<Cfg>) =>
     setCfgState((c) => {

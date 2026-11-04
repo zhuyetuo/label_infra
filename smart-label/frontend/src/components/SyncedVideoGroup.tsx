@@ -69,6 +69,7 @@ const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4];
 // 是浏览器解码吞吐跟不上，不是代码问题，前端修不了。先把上限收到解码顶得住的
 // 范围，比瞎放开到卡顿强。
 const MAX_SPEED = 5;
+const SPEED_KEY = "smart-label:video-speed";
 // 夜视增强：夜里那几路黑得看不出狗在干嘛。
 //
 // **按这一帧的实际直方图自动拉伸，不用固定倍数。** 固定倍数（brightness(2.8)）
@@ -230,7 +231,37 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     q.shift();
     return true;
   };
-  const [speed, setSpeed] = useState(1);
+  // 播放速度记在浏览器里：挑长片段时一直开着 4x / 5x，每开一个任务都要重新点太麻烦
+  const [speed, setSpeedState] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem(SPEED_KEY));
+      return v >= 0.25 && v <= MAX_SPEED ? v : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const speedRef = useRef(speed);
+  const setSpeed = (v: number) => {
+    speedRef.current = v;
+    setSpeedState(v);
+    try { localStorage.setItem(SPEED_KEY, String(v)); } catch { /* ignore */ }
+  };
+  // 视频换了 / 刚加载：按记住的速度来（换源时浏览器会把 playbackRate 重置成 defaultPlaybackRate）
+  useEffect(() => {
+    const cleanups: (() => void)[] = [];
+    for (const v of refs.current) {
+      if (!v) continue;
+      const apply = () => {
+        v.defaultPlaybackRate = speedRef.current;
+        if (v.playbackRate !== speedRef.current) v.playbackRate = speedRef.current;
+      };
+      apply();
+      v.addEventListener("loadedmetadata", apply);
+      cleanups.push(() => v.removeEventListener("loadedmetadata", apply));
+    }
+    return () => cleanups.forEach((fn) => fn());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videos]);
   const [frame, setFrame] = useState(0);
   // 总的播放状态（以第一路为准），给总播放/暂停按钮显示用
   const [playing, setPlaying] = useState(false);
@@ -886,7 +917,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     markProgrammatic();
     const wasPlaying = refs.current.some((v) => v && !v.paused);
     for (const v of refs.current) {
-      if (v) v.playbackRate = rate;
+      if (v) {
+        v.defaultPlaybackRate = rate;
+        v.playbackRate = rate;
+      }
     }
     // 播放中途改速率，Chrome 的音画同步管线经常从这一刻开始卡顿，得暂停再播放
     // 才能重新同步——用户手动暂停/播放能验证不卡，这里就直接把这个动作自动做一遍。
