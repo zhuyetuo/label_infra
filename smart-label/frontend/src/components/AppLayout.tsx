@@ -19,9 +19,8 @@ const ALL_ITEMS = [
   // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
   { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"], feature: "tooth" },
-  { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin"] },
-  // 兽医 / 实习生看问诊照片评 S0 / S1 / S2：所有角色都能进
-  { key: "/skin-rating", label: "皮肤评级", roles: ["super_admin", "admin", "annotator", "reviewer"] },
+  // 非管理员（兽医 / 实习生）进来只看到「皮肤照片」评级那一块
+  { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/daily-stats", label: "日常统计", roles: ["super_admin", "admin"] },
   { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
   { key: "/workforce", label: "人力管理", roles: ["super_admin", "admin"] },
