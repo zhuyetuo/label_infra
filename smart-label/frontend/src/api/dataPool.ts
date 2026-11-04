@@ -97,6 +97,8 @@ export interface CompareFeature {
   /** 直方图（各自归一化成占比） */
   ha: number[];
   hb: number[];
+  /** 主要随设备标定 / 放置角度变的维度（跨设备比出来的差多半是换了项圈） */
+  device_sensitive?: boolean;
 }
 export interface CompareResult {
   a: { names: string[]; segments: number; windows: number; samples: number };
@@ -105,7 +107,17 @@ export interface CompareResult {
   unreadable: string[];
   features: CompareFeature[];
   error?: string;
+  warnings?: string[];
 }
+export interface ComparePreviewSide {
+  segments: number; samples: number; total_s: number;
+  /** 够一个窗口的 / 比窗口短但 ≥1 秒（整段算一个窗口）/ 不到 1 秒（不用） */
+  long: number; short: number; too_short: number;
+  /** 大概能切出多少个窗口 */
+  windows: number;
+}
+export const comparePreview = (body: { a: string[]; b: string[]; project_ids?: number[]; pool_only?: boolean; win_s?: number }) =>
+  request.post<never, { a: ComparePreviewSide; b: ComparePreviewSide }>("/data-pool/compare-preview", body);
 export const classCompare = (body: {
   a: string[]; b: string[]; project_ids?: number[]; pool_only?: boolean; win_s?: number; max_segments?: number;
 }) => request.post<never, CompareResult>("/data-pool/compare", body, { timeout: 300_000 });

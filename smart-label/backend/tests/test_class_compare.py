@@ -47,7 +47,16 @@ def test_compare_endpoint(db, run, monkeypatch):
     df.loc[(t >= 50_000) & (t < 60_000), "acc_x"] += 0.3 * np.sin(t[(t >= 50_000) & (t < 60_000)] / 50)   # 活动那段晃
     monkeypatch.setattr(cc.imu_service, "_load_dataframe", lambda _p: df)
     monkeypatch.setattr(cc, "resolve_nas_path", lambda p: p)
-    r = run(pool_api.post_compare(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=1.0), db, w.rev))["data"]
+    r = run(pool_api.post_compare(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=1.0, pool_only=False), db, w.rev))["data"]
     assert r["a"]["windows"] >= 6 and r["b"]["windows"] >= 9
     top = r["features"][0]
-    assert top["sep"] > 0.9 and len(top["ha"]) == 30
+    assert top["sep"] > 0.9 and len(top["ha"]) == 30 and not top["device_sensitive"]
+    assert r["warnings"]                         # 都只来自 1 个样本
+    # 窗口比片段长：短片段整段算一个窗口（抓挠 3 秒一段，窗口 10 秒）
+    r = run(pool_api.post_compare(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=10.0, pool_only=False), db, w.rev))["data"]
+    assert r["a"]["segments"] >= 3 and r["a"]["windows"] == r["a"]["segments"]   # 每段 3 秒：整段一个窗口
+    # 预览：不读 CSV，给段数 / 能切出的窗口
+    pv = run(pool_api.post_compare_preview(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=5.0, pool_only=False), db, w.rev))["data"]
+    assert pv["a"]["short"] >= 3 and pv["b"]["long"] == 1 and pv["b"]["windows"] == 2
+    pv = run(pool_api.post_compare_preview(pool_api.CompareIn(a=["抓挠"], b=["活动"]), db, w.rev))["data"]
+    assert pv["a"]["segments"] == 0              # 默认只用数据池：池里还没东西
