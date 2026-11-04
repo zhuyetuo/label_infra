@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import date
 
@@ -113,7 +114,20 @@ def _consensus(ratings: list[dict]) -> str | None:
     return gs[-1] if gs else None
 
 
+_photo_cache: tuple[float, list] | None = None
+
+
 def _photo_index() -> list[tuple[str, str, int, str]]:
+    """带 60 秒缓存：每点一次「刷新」都把 NAS 上整棵照片树走一遍太重"""
+    global _photo_cache
+    if _photo_cache is not None and time.monotonic() - _photo_cache[0] < 60:
+        return _photo_cache[1]
+    out = _scan_photos()
+    _photo_cache = (time.monotonic(), out)
+    return out
+
+
+def _scan_photos() -> list[tuple[str, str, int, str]]:
     """[(日期, 目录里的狗名, 张数, 日期目录)]。跟「皮肤照片」标签页同一份扫描（tooth_service.list_photos），
     主目录（视频问诊）和狗场那几棵树（博朗旺 / 雷喏斯达…）都算——原来只扫主目录，狗场的照片在跟踪表上对不上。
     日期目录要带上：照片评级是按 (日期目录, 狗目录) 记的"""
@@ -462,14 +476,28 @@ async def daily_tracking(
             if rec is not None:
                 jobs.append((row, "s_with_q", {k: getattr(rec, k) for k in _ANSWER_FIELDS}))
 
-    sem = asyncio.Semaphore(8)
+    sem = asyncio.Semaphore(4)
 
     async def _run(row: dict, field: str, answers: dict | None) -> None:
         async with sem:
             row[field] = await _s_total(row["c_value"], row["c_tier"], answers)
 
     if jobs:
-        await asyncio.gather(*(_run(r, f, a) for r, f, a in jobs))
+        # 整批一个请求（AI 服务的 s-batch）；以前每行一两次 HTTP，几百行就是几百个请求挤在
+        # 单进程的 AI 服务上，点一次「刷新」别的页面跟着超时。AI 服务是老版本没这个接口时退回逐行
+        try:
+            payloads = []
+            for r, _f, a in jobs:
+                p = {"c_value": r["c_value"], "c_tier_hint": r["c_tier"]}
+                p.update({k: (a or {}).get(k) for k in _ANSWER_FIELDS})
+                payloads.append(p)
+            for i in range(0, len(jobs), 500):
+                res = await _algo_post("s-batch", {"rows": payloads[i:i + 500]})
+                for (r, f, _a), x in zip(jobs[i:i + 500], res):
+                    r[f] = x
+        except SkinTrackingError as e:
+            if " 404" in str(e) or " 405" in str(e):
+                await asyncio.gather(*(_run(r, f, a) for r, f, a in jobs))
         if all(r["s_no_q"] is None for r in rows if r["c_value"] is not None):
             warnings.append("S 总分没算出来，检查 AI 服务是否正常")
 

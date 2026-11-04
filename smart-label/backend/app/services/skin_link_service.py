@@ -46,6 +46,13 @@ HUMAN_STATUSES = (TaskStatus.SUBMITTED, TaskStatus.APPROVED)
 # 预读 NAS 上的 AI JSON / CSV 头时同时开几个：太少还是慢，太多会把 NAS 和默认
 # 线程池（默认就 40 个槽）占满，反过来卡住别的请求
 _IO_CONCURRENCY = 16
+# AI JSON 一份里有逐窗口的 probs，一天的文件解析成 Python 对象能到几百 MB。以前 16 份一起读、
+# 而且全部留在内存里到算完，一次「重新拉取」能把服务器内存吃光（整个平台卡死 / 被 OOM 杀）。
+# 现在每份读完马上在线程里压成摘要（只留要用的几样）再扔掉原文，同时只读这么几份
+_AI_JSON_CONCURRENCY = 3
+# 「重新拉取」同一时间只跑一个：每次都要读一遍 NAS 再把库里全历史送去算 C，
+# 两个窗口 / 两个人同时点就是双倍的量。后来的排队等前一个算完
+_refresh_lock = asyncio.Lock()
 
 
 class SkinLinkError(Exception):
@@ -73,6 +80,36 @@ async def _algo_post(path: str, payload: dict) -> dict:
     return resp.json()
 
 
+def _ai_summary(relpath: str, scratch_label: str, ai_min_conf: float) -> dict | None:
+    """读一份 AI JSON，当场压成后面要用的几样：模式、抓挠片段、覆盖时段、掉数据时段、
+    每分钟「未佩戴」概率。原文（逐窗口 probs）不往外带——见 _AI_JSON_CONCURRENCY"""
+    data = _read_ai_json(relpath)
+    if not data:
+        return None
+    segs = []
+    for seg in (data.get("segments") or {}).get(scratch_label) or []:
+        st, en = parse_ts(seg.get("start_ts")), parse_ts(seg.get("end_ts"))
+        if st is None or en is None or en <= st:
+            continue
+        conf = seg.get("conf_mean")
+        if ai_min_conf and conf is not None and float(conf) < ai_min_conf:
+            continue
+        segs.append((st, en))
+    wins = [(t, w.get("probs") or {}) for w in data.get("windows") or [] if (t := parse_ts(w.get("ts"))) is not None]
+    missing = []
+    for m in data.get("missing") or []:
+        a, b = parse_ts(m.get("start_ts")), parse_ts(m.get("end_ts"))
+        if a and b and b > a:
+            missing.append((a, b))
+    return {
+        "mode": str(data.get("mode") or "raw"),
+        "segs": segs,
+        "span": (min(t for t, _ in wins), max(t for t, _ in wins)) if wins else None,
+        "missing": missing,
+        "notworn": minute_notworn(wins),
+    }
+
+
 def _read_ai_json(relpath: str) -> dict | None:
     full = os.path.join(settings.nas_root, relpath)
     if not os.path.isfile(full):
@@ -84,7 +121,12 @@ def _read_ai_json(relpath: str) -> dict | None:
         return None
 
 
-async def collect_link_stats(
+async def collect_link_stats(*args, **kwargs) -> dict:
+    async with _refresh_lock:
+        return await _collect_link_stats(*args, **kwargs)
+
+
+async def _collect_link_stats(
     db: AsyncSession,
     date_from: date,
     date_to: date,
@@ -204,18 +246,18 @@ async def collect_link_stats(
 
     sem = asyncio.Semaphore(_IO_CONCURRENCY)
 
-    async def _guarded(fn, *a):
-        async with sem:
-            return await asyncio.to_thread(fn, *a)
-
     ai_data: dict[int, dict | None] = {}
     # 没登记 CSV 路径的样本连 AI JSON 的路径都拼不出来，直接当没有
     with_csv = [s for s in valid if s.imu_csv_path]
+    ai_sem = asyncio.Semaphore(_AI_JSON_CONCURRENCY)
+
+    async def _summary_of(s: Sample):
+        async with ai_sem:
+            return await asyncio.to_thread(_ai_summary, ai_label_relpath(s.imu_csv_path), scratch_label, ai_min_conf)
+
     for s, res in zip(
         with_csv,
-        await asyncio.gather(
-            *(_guarded(_read_ai_json, ai_label_relpath(s.imu_csv_path)) for s in with_csv), return_exceptions=True
-        ),
+        await asyncio.gather(*(_summary_of(s) for s in with_csv), return_exceptions=True),
     ):
         if isinstance(res, BaseException):
             warnings.append(f"样本 {s.sample_code} 的 AI 结果读不出来：{type(res).__name__}: {res}")
@@ -224,24 +266,10 @@ async def collect_link_stats(
             ai_data[s.id] = res
 
     # 第二趟：哪些样本还需要 CSV 起点（有人工片段要换算，或者没 AI JSON 拿不到佩戴时段）
-    def _span_of(data: dict | None) -> tuple[datetime, datetime] | None:
-        if not data:
-            return None
-        ts = [t for t in (parse_ts(w.get("ts")) for w in data.get("windows") or []) if t is not None]
-        return (min(ts), max(ts)) if ts else None
-
-    def _missing_of(data: dict | None) -> list[tuple[datetime, datetime]]:
-        """AI 结果里记的掉数据时间段（六轴全 0 / MISSING）。这段没有真实数据，
-        算有效佩戴时要扣掉——不扣的话每天都是 23.9 小时，这个指标就没意义了。"""
-        out = []
-        for m in (data or {}).get("missing") or []:
-            a, b = parse_ts(m.get("start_ts")), parse_ts(m.get("end_ts"))
-            if a and b and b > a:
-                out.append((a, b))
-        return out
-
-    spans_by_sample = {s.id: _span_of(ai_data.get(s.id)) for s in valid}
-    missing_by_sample = {s.id: _missing_of(ai_data.get(s.id)) for s in valid}
+    # missing：AI 结果里记的掉数据时间段（六轴全 0 / MISSING），算有效佩戴时要扣掉——
+    # 不扣的话每天都是 23.9 小时，这个指标就没意义了
+    spans_by_sample = {s.id: (ai_data.get(s.id) or {}).get("span") for s in valid}
+    missing_by_sample = {s.id: (ai_data.get(s.id) or {}).get("missing") or [] for s in valid}
     need_start = [
         s
         for s in valid
@@ -286,15 +314,8 @@ async def collect_link_stats(
         data = ai_data.get(s.id)
         span = spans_by_sample.get(s.id)
         if data:
-            ai_modes[key].add(str(data.get("mode") or "raw"))
-            for seg in (data.get("segments") or {}).get(scratch_label) or []:
-                st, en = parse_ts(seg.get("start_ts")), parse_ts(seg.get("end_ts"))
-                if st is None or en is None or en <= st:
-                    continue
-                conf = seg.get("conf_mean")
-                if ai_min_conf and conf is not None and float(conf) < ai_min_conf:
-                    continue
-                ai_events[key].append((st, en))
+            ai_modes[key].add(data["mode"])
+            ai_events[key].extend(data["segs"])
         else:
             c["no_ai"] += 1
 
@@ -325,9 +346,7 @@ async def collect_link_stats(
     for s in valid:
         key = key_of(s)
         site_of_key.setdefault(key, site_layout.site_of(s.sample_code, s.video_cam1_path, s.imu_csv_path))
-        wins = [(t, w.get("probs") or {}) for w in ((ai_data.get(s.id) or {}).get("windows") or [])
-                if (t := parse_ts(w.get("ts"))) is not None]
-        nw_by_key[key].update(minute_notworn(wins))
+        nw_by_key[key].update((ai_data.get(s.id) or {}).get("notworn") or {})
     groups: dict[tuple, list[tuple]] = defaultdict(list)
     for key in list(counts):
         if key[1] is None:
@@ -522,7 +541,7 @@ async def _stats_with_full_baseline(
         by_source[r.source].append(r)
 
     # C 值每行要两次 HTTP，天数多了别一个个串着等
-    sem = asyncio.Semaphore(8)
+    sem = asyncio.Semaphore(4)
 
     async def _c_of(stat_row: dict) -> dict | None:
         async with sem:
@@ -539,6 +558,28 @@ async def _stats_with_full_baseline(
             except SkinLinkError:
                 return None
 
+    async def _c_all(stat_rows: list[dict]) -> list[dict | None]:
+        """整批一个请求算完（AI 服务的 stats/c-batch）；AI 服务还是老版本没有这个接口时退回逐行。
+        逐行是每行两次 HTTP，库里几百天就是上千个请求，AI 服务单进程，别的页面跟着超时"""
+        out: list[dict | None] = []
+        try:
+            for i in range(0, len(stat_rows), 500):
+                res = await _algo_post("stats/c-batch", {"rows": stat_rows[i:i + 500]})
+                for x in res:
+                    if not x:
+                        out.append(None)
+                        continue
+                    c = x["c"]
+                    out.append({"c_inputs": x["c_inputs"],
+                                "c": {"total": c.get("total"), "tier": c.get("tier"), "red_flags": c.get("red_flags")},
+                                "c_detail": c})
+            return out
+        except SkinLinkError as e:
+            if " 404" not in str(e) and " 405" not in str(e):
+                warnings.append(f"C 值没算成：{e}")
+                return [None] * len(stat_rows)
+        return list(await asyncio.gather(*(_c_of(sr) for sr in stat_rows)))
+
     async def _one_source(source: str, which: str) -> dict[tuple, dict]:
         rows = by_source.get(source) or []
         if not rows:
@@ -553,7 +594,7 @@ async def _stats_with_full_baseline(
             warnings.append(f"{which}的统计没算成：{e}")
             return {}
         stat_rows = res.get("rows") or []
-        cs = await asyncio.gather(*(_c_of(sr) for sr in stat_rows))
+        cs = await _c_all(stat_rows)
         by_key = {(r.stat_date.isoformat(), r.imu): r for r in rows}
         out: dict[tuple, dict] = {}
         for sr, cres in zip(stat_rows, cs):
