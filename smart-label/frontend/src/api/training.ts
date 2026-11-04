@@ -245,6 +245,8 @@ export const submitTrain = (body: {
     channel_mode?: "tilt" | "inv";
     /** 训练集旋转增强：每窗另加几份随机 3D 旋转 */
     rot_aug?: number;
+    /** 短促动作补齐的类别（甩动…），见 imu_train labelstudio_to_custom._extract_short_event */
+    short_labels?: string[];
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
     /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */

@@ -36,6 +36,9 @@ class DatasetSpecIn(BaseModel):
     # 用户怎么戴都一样。rot_aug：训练集每窗另加几份随机 3D 旋转
     channel_mode: str = "tilt"
     rot_aug: int = 0
+    # 短促动作（甩动这类一两秒的）：比训练窗口短的片段以事件为中心带上前后真实上下文补成完整窗口，
+    # 不再被丢掉 / 被多数投票吞掉。填训练用的类别名（归并后的名字）
+    short_labels: list[str] = []
     # 端侧尺寸：用 imu_train 的 configs/ml_edge.yaml（限深限棵数），模型才塞得进
     # 板子给模型留的约 128KB flash。默认那份是 200 棵不限深的森林，几十 MB
     edge_size: bool = False

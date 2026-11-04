@@ -84,6 +84,8 @@ type TrainOpts = {
   hz?: number;
   axes?: number;
   orientFree?: boolean;
+  /** 短促动作补齐的类别；undefined = 自动（名字里带甩 / 抖的） */
+  shortLabels?: string[];
   edgeSize?: boolean;
   edgeTrees?: number | null;
   edgeDepth?: number | null;
@@ -138,8 +140,8 @@ function saveTrainOpts(dataset: string, opts: TrainOpts) {
     if (names.length > 30) {
       for (const n of names.slice(0, names.length - 30)) delete cur.byDataset[n];
     }
-    const { modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance } = opts;
-    cur.last = { modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance };
+    const { modelType, sourceHz, hz, axes, orientFree, shortLabels, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance } = opts;
+    cur.last = { modelType, sourceHz, hz, axes, orientFree, shortLabels, edgeSize, skipSyn, edgeTrees, edgeDepth, edgeFilters, balance };
     localStorage.setItem(TRAIN_OPTS_KEY, JSON.stringify(cur));
   } catch {
     // 存不了就算了，不影响这次提交
@@ -249,6 +251,8 @@ export default function Training() {
   const [axes, setAxes] = useState<number>(3);
   // 方向无关：输入只用跟佩戴方向无关的量 + 训练集随机旋转增强。用户怎么戴都不限制，默认开
   const [orientFree, setOrientFree] = useState(true);
+  // 短促动作补齐：null = 自动（训练类别里名字带「甩」「抖」的）
+  const [shortLabels, setShortLabels] = useState<string[] | null>(null);
   // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
   const [edgeSize, setEdgeSize] = useState(false);
   // 端侧尺寸里具体的规格。空 = 默认（rf 20 棵 × 深 10；cnn filters 32/64/128）。
@@ -556,6 +560,13 @@ export default function Training() {
     () => [...new Set(trainCats.map((c) => remapEdits[c.name]).filter(Boolean))] as string[],
     [trainCats, remapEdits]
   );
+  // 短促动作补齐可选的类别：训练类别 + 归并前的原名（甩头/抖身 并进「活动」当负样本时也要补）。
+  // 只列这次真的会进训练的（有归并目标的）
+  const shortOptions = useMemo(
+    () => [...new Set([...trainTargets, ...trainCats.filter((c) => remapEdits[c.name]).map((c) => c.name)])],
+    [trainTargets, trainCats, remapEdits]
+  );
+  const shortEffective = (shortLabels ?? shortOptions.filter((t) => /甩|抖/.test(t))).filter((t) => shortOptions.includes(t));
 
   // 类别查出来之后预填，按这个顺序：
   //   1. 上次训练时这个类别算作了什么（跨数据集记的习惯：舔-大腿内侧 → 舔）
@@ -605,6 +616,7 @@ export default function Training() {
       if (base.hz) setHz(base.hz);
       if (base.axes) setAxes(base.axes);
       if (typeof base.orientFree === "boolean") setOrientFree(base.orientFree);
+      setShortLabels(base.shortLabels ?? null);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
       setBalance(base.balance || "none");
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
@@ -649,6 +661,7 @@ export default function Training() {
           axes,
           channel_mode: orientFree ? "inv" : "tilt",
           rot_aug: orientFree ? 2 : 0,
+          short_labels: shortEffective,
           edge_size: edgeSize,
           edge_trees: edgeSize && modelType !== "cnn" ? edgeTrees : null,
           edge_depth: edgeSize && modelType !== "cnn" ? edgeDepth : null,
@@ -663,7 +676,7 @@ export default function Training() {
       // 记下这次每个类别算作了什么，下一份数据集里同名的类别直接照这个预填
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, orientFree, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
+        modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -1874,6 +1887,25 @@ export default function Training() {
                   <span style={{ borderBottom: "1px dashed #666" }}>方向无关（怎么戴都识别，推荐）</span>
                 </Tooltip>
               </Checkbox>
+            </Space>
+            <Space wrap>
+              <Tooltip title="甩动这类一两秒的动作比训练窗口（默认 2 秒）还短：按片段切时整段被丢掉，按记录切时被前后别的片段多数投票吞掉——模型没见过甩动，一甩就判成抓挠。选上的类别：比窗口短的片段以事件为中心、带上前后真实的上下文补成一段，每个训练窗口都完整包含这次事件；上下文碰到别的类别的标注就截住，不够长用这段真实数据镜像补齐，不编造信号。比窗口长的片段不动">
+                <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>短促动作补齐</span>
+              </Tooltip>
+              <Select
+                mode="multiple"
+                size="small"
+                allowClear
+                style={{ width: 280 }}
+                placeholder="不补（这次训练里没有短促动作类别）"
+                value={shortEffective}
+                onChange={(v) => setShortLabels(v)}
+                options={shortOptions.map((t) => ({ value: t, label: trainTargets.includes(t) ? t : `${t}（并进 ${remapEdits[t]}）` }))}
+                maxTagCount="responsive"
+              />
+              {shortLabels === null && shortEffective.length > 0 && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>自动选了名字带「甩 / 抖」的</Typography.Text>
+              )}
             </Space>
             <Space>
               <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
