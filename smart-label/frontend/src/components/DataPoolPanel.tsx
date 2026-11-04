@@ -4,6 +4,7 @@ import {
   Table, Tag, Tooltip, TreeSelect, Typography, message,
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import { listDogs } from "@/api/dogs";
@@ -193,16 +194,11 @@ export default function DataPoolPanel({
 
   return (
     <div>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message="数据池 = 你认可、可以拿去训练的片段"
-        description="进池：在项目页看过觉得行，点任务的「加入数据池」（或项目行的「加入数据池」= 已提交的任务整份）。片段之后被改过会自动出池。训练时在这里按条件挑一批，「用这批训练」导出并打开训练弹窗（类别合并在弹窗的归并表里做）。"
-      />
-
-      {/* 筛选：同时作用于统计、列表、训练 */}
+      {/* 筛选：同时作用于统计、列表、训练。说明收进最前面的问号 */}
       <Space wrap style={{ marginBottom: 12 }}>
+        <Tooltip overlayStyle={{ maxWidth: 460 }} title={<div><b>数据池 = 你认可、可以拿去训练的片段</b><div style={{ marginTop: 4 }}>进池：在项目页看过觉得行，点任务的「加入数据池」（或项目行的「加入数据池」= 已提交的任务整份）。片段之后被改过会自动出池。训练时在这里按条件挑一批，「用这批训练」导出并打开训练弹窗（类别合并在弹窗的归并表里做）。</div></div>}>
+          <QuestionCircleOutlined style={{ color: "#888", cursor: "help", fontSize: 15 }} />
+        </Tooltip>
         <TreeSelect
           multiple
           allowClear

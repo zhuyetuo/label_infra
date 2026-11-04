@@ -4,6 +4,7 @@ import {
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import TrainReviewModal from "@/components/TrainReviewModal";
@@ -766,14 +767,13 @@ export default function Training() {
 
   return (
     <div>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message="AI 辅助标注闭环"
-        description="AI 预标注（稳定版）→ 人工在工作台确认/纠正片段、逐条处理「疑似片段」→ 这里把审核通过的标注导成数据集 → 提交训练 → 训练完「启用」，下一轮预标注就用新模型。"
-      />
+      {/* 说明收进问号，放在页签栏最右边，不占一整块地方 */}
       <Tabs
+        tabBarExtraContent={
+          <Tooltip overlayStyle={{ maxWidth: 460 }} title={<div><b>AI 辅助标注闭环</b><div style={{ marginTop: 4 }}>AI 预标注（稳定版）→ 人工在工作台确认/纠正片段、逐条处理「疑似片段」→ 这里把审核通过的标注导成数据集 → 提交训练 → 训练完「启用」，下一轮预标注就用新模型。</div></div>}>
+          <QuestionCircleOutlined style={{ color: "#888", cursor: "help", fontSize: 15 }} />
+        </Tooltip>
+        }
         items={[
           {
             key: "cmp",
