@@ -22,12 +22,14 @@ from app.models.sample import Sample
 from app.models.sample_vision_scan import SampleVisionScan
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.skin_daily import SkinDailyStat
+from app.models.skin_photo_rating import SkinPhotoRating
 from app.models.task import Task
 from app.models.tooth_photo import ToothPhotoResult
 from app.models.user import User
 from app.models.vision_annotation import VisionAnnotation, VisionAssignment, VisionAsset
 
 __all__ = [
+    "SkinPhotoRating",
     "AiCandidate",
     "DogMeasurement",
     "SampleInferenceRun",

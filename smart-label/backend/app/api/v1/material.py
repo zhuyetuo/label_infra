@@ -5,21 +5,36 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import require_role
-from app.models.user import UserRole
+from app.core.deps import get_current_user
+from app.db.session import get_db
+from app.models.skin_photo_rating import SkinPhotoRating
+from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import tooth_service as svc
 from app.services.range_stream import stream_file
 
-router = APIRouter(prefix="/material", tags=["material"], dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+router = APIRouter(prefix="/material", tags=["material"])
+
+# 皮肤照片：兽医 / 实习生要看图评级，登录了就能看；口腔照片照旧只给管理员
+OPEN_ALBUMS = {"skin"}
+GRADES = ("S0", "S1", "S2", "unsure")
+
+
+def _check_album(album: str, user: User) -> None:
+    if album not in OPEN_ALBUMS and user.role not in (UserRole.admin, UserRole.super_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "没有权限看这个相册")
 stream_router = APIRouter(prefix="/material", tags=["material"])
 
 _CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".bmp": "image/bmp"}
 
 
 @router.get("/{album}/photos")
-async def list_photos(album: str):
+async def list_photos(album: str, user: User = Depends(get_current_user)):
+    _check_album(album, user)
     try:
         # sources：每个来源扫到多少张、多少张分不出品类——页面靠它说清「这个狗场为什么一张都没有」
         return ok({"root": svc.album_root(album), "folders": svc.list_photos(album),
@@ -29,7 +44,8 @@ async def list_photos(album: str):
 
 
 @router.post("/{album}/photos/token")
-async def photo_token(album: str, body: dict):
+async def photo_token(album: str, body: dict, user: User = Depends(get_current_user)):
+    _check_album(album, user)
     rel_path = body.get("path") or ""
     try:
         svc.resolve_photo(rel_path, album)
@@ -48,3 +64,56 @@ async def photo_stream(album: str, path: str, token: str, request: Request):
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
     ext = full[full.rfind("."):].lower()
     return await stream_file(request, full, _CONTENT_TYPES.get(ext, "application/octet-stream"))
+
+
+# ── 照片评级：每人对每只狗那一次问诊评一个档 ─────────────────────────────
+
+@router.get("/{album}/ratings")
+async def list_ratings(album: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """这个相册里所有人的评级（谁评了什么都看得到，方便对一致性）"""
+    _check_album(album, user)
+    rows = (await db.execute(
+        select(SkinPhotoRating, User.display_name, User.username, User.role)
+        .join(User, User.id == SkinPhotoRating.user_id)
+        .where(SkinPhotoRating.album == album)
+    )).all()
+    return ok([{
+        "folder": r.folder, "dog_folder": r.dog_folder, "user_id": r.user_id,
+        "user_name": dn or un, "user_role": getattr(role, "value", str(role)),
+        "grade": r.grade, "note": r.note,
+        "updated_at": r.updated_at.isoformat(sep=" ", timespec="minutes") if r.updated_at else None,
+    } for r, dn, un, role in rows])
+
+
+class RatingIn(BaseModel):
+    folder: str = Field(..., max_length=200)
+    dog_folder: str = Field(..., max_length=200)
+    # 不给 / 给 null = 撤销我对这只狗的评级
+    grade: str | None = None
+    note: str | None = Field(None, max_length=500)
+
+
+@router.put("/{album}/ratings")
+async def put_rating(album: str, body: RatingIn, db: AsyncSession = Depends(get_db),
+                     user: User = Depends(get_current_user)):
+    """我对这只狗这一次的评级（有就改，没有就新建；grade 为空 = 撤销）"""
+    _check_album(album, user)
+    if body.grade is not None and body.grade not in GRADES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"grade 只能是 {' / '.join(GRADES)}")
+    row = (await db.execute(select(SkinPhotoRating).where(
+        SkinPhotoRating.album == album, SkinPhotoRating.folder == body.folder,
+        SkinPhotoRating.dog_folder == body.dog_folder, SkinPhotoRating.user_id == user.id))).scalar_one_or_none()
+    if body.grade is None:
+        if row is not None:
+            await db.delete(row)
+            await db.commit()
+        return ok({"grade": None})
+    note = (body.note or "").strip() or None
+    if row is None:
+        row = SkinPhotoRating(album=album, folder=body.folder, dog_folder=body.dog_folder, user_id=user.id,
+                              grade=body.grade, note=note)
+        db.add(row)
+    else:
+        row.grade, row.note = body.grade, note
+    await db.commit()
+    return ok({"grade": row.grade, "note": row.note})
