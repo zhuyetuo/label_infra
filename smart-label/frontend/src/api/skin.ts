@@ -73,6 +73,8 @@ export type CSource = "ai" | "human" | "stats" | "manual";
 export interface LinkSide { stats: StatsRow; c_inputs: CInputs & { fill_date: string | null; dog_name: string | null; warnings: string[] }; c: { total: number | null; tier: string | null; red_flags: string[] } }
 export interface LinkRow {
   date: string; imu: string;
+  /** 场地全称 / 几号单间（影棚没分房间）/ 狗档案上的品种、体型 */
+  site_name?: string | null; room?: string | null; breed?: string | null; size?: string | null;
   /** 后端按当天的狗场 + IMU 找好的狗名（同一批项圈几个狗场轮着用，不能只按 IMU 查） */
   dog_name?: string | null;
   tasks: { total: number; approved: number; submitted: number; in_progress: number; pending: number; rejected: number; no_ai: number };
@@ -162,6 +164,8 @@ export interface STotalOut {
 }
 export interface TrackingRow {
   date: string;
+  /** 场地全称 / 几号单间（影棚没分房间）/ 狗档案上的品种、体型 */
+  site_name?: string | null; room?: string | null; breed?: string | null; size?: string | null;
   /** 一只狗两个项圈合成一行时是「IMU1+IMU2」 */
   imu: string;
   dog_name: string;

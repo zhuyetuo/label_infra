@@ -36,7 +36,7 @@ from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task, TaskStatus
 from app.services import site_layout
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, ai_label_relpath, parse_ts
-from app.services.dog_name_service import dog_index
+from app.services.dog_name_service import dog_index, dog_meta, dog_profiles
 from app.services.wear_assign import assign_worn, clip, minute_notworn, seconds as span_seconds
 
 _logger = logging.getLogger(__name__)
@@ -488,10 +488,13 @@ async def attach_dog_names(db: AsyncSession, rows: list[dict]) -> None:
         if sdate and imu and site:
             site_by_key.setdefault((sdate.isoformat(), imu), site)
     idx = await dog_index(db)
+    profiles = await dog_profiles(db)
     for r in rows:
         # 合成的一行（IMU1+IMU2）按第一个设备认狗：两个本来就是同一只狗的
         first = (r["imu"] or "").split("+")[0]
-        r["dog_name"] = idx.name(first, site_by_key.get((r["date"], first)))
+        site = site_by_key.get((r["date"], first))
+        r["dog_name"] = idx.name(first, site)
+        r.update(dog_meta(profiles, site, first, r["dog_name"]))
 
 
 # ── 落库 & 用全部历史天数算基线 ──────────────────────────────────────────

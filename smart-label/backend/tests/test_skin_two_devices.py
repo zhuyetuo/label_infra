@@ -32,7 +32,7 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     u = User(username="a", password_hash="x", display_name="a", role=UserRole.admin)
     db.add(u)
     run(db.flush())
-    db.add(Dog(dog_code="1", name="bibi", imu="IMU1,IMU2", site="公司影棚"))
+    db.add(Dog(dog_code="1", name="bibi", imu="IMU1,IMU2", site="公司影棚", breed="比熊"))
     for imu in ("1", "2"):
         db.add(Sample(sample_code=f"yingpeng_20261101_000000_imu{imu}", session_date=date(2026, 11, 1),
                       video_cam1_path="yingpeng/a.mp4", imu_csv_path=f"x/imu{imu}.csv", imu_row_count=100,
@@ -58,6 +58,7 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     monkeypatch.setattr(svc, "_algo_post", fake_post)
     res = run(svc.collect_link_stats(db, date(2026, 11, 1), date(2026, 11, 1)))
     assert [r["imu"] for r in res["rows"]] == ["IMU1+IMU2"] and res["rows"][0]["dog_name"] == "bibi"
+    assert res["rows"][0]["breed"] == "比熊" and res["rows"][0]["site_name"] == "公司影棚"
     row = sent["rows"][0]
     assert sent["c_batch"] >= 1   # C 值整批一个请求，不再逐行两次 HTTP
     assert row["imu"] == "IMU1+IMU2"
@@ -87,6 +88,7 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
     assert [(r["imu"], r["dog_name"]) for r in out["rows"]] == [("IMU1+IMU2", "bibi")]
     row = out["rows"][0]
     assert {d["imu"] for d in row["devices"]} == {"IMU1", "IMU2"}
+    assert row["breed"] == "比熊" and row["site_name"] == "公司影棚" and row["room"] is None
     assert row["photo_count"] == 12 and row["photo_folder"] == "2026-11-01-ok"
     assert row["photo_grade"] == "S1" and row["photo_ratings"][0]["grade"] == "S1"
     assert trk._consensus([{"grade": "S0"}, {"grade": "S2"}, {"grade": "unsure"}]) == "S2"
