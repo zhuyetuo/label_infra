@@ -276,16 +276,24 @@ export default function DeviceDebug() {
 
       {!supported && (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-          message={!bt() ? "这个浏览器不支持网页蓝牙：用电脑上的 Chrome 或 Edge 打开" : "这个地址是 http，浏览器默认不让网页用蓝牙"}
-          description={bt() || /Chrome|Edg/.test(navigator.userAgent) ? (
+          // http 页面上 Chrome 根本不给 navigator.bluetooth，所以先判是不是 http，别误报成「浏览器不支持」
+          message={!window.isSecureContext
+            ? "这个地址是 http，Chrome / Edge 默认不让网页用蓝牙，要在这台电脑上设一次"
+            : "这个浏览器不支持网页蓝牙：用电脑上的 Chrome 或 Edge 打开"}
+          description={!window.isSecureContext ? (
             <div style={{ lineHeight: 1.9 }}>
-              在要连设备的这台电脑上设一次就行：
               <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                <li>Chrome / Edge 地址栏打开 <Typography.Text copyable code>{flagUrl}</Typography.Text>（Edge 把 chrome 换成 edge）</li>
-                <li>在框里填 <Typography.Text copyable code>{window.location.origin}</Typography.Text>，右边选 Enabled</li>
-                <li>点右下角 Relaunch 重启浏览器，再回到这页</li>
+                <li>新标签页地址栏打开 <Typography.Text copyable code>{flagUrl}</Typography.Text>（Edge 把开头的 chrome 换成 edge）</li>
+                <li>页面会直接定位到黄色高亮的「<b>Insecure origins treated as secure</b>」那一项。<b>别填在最上面的搜索框里</b>——
+                  在这一项<b>下面的文本框</b>里填 <Typography.Text copyable code>{window.location.origin}</Typography.Text></li>
+                <li>这一项右边的下拉选 <b>Enabled</b>，再点右下角 <b>Relaunch</b> 重启浏览器，回到这页</li>
               </ol>
-              以后要所有电脑都免设置，平台改成 https 就行。
+              <div style={{ marginTop: 4 }}>
+                找不到这一项：搜索框里搜 <Typography.Text code>insecure</Typography.Text>（不是搜地址）。
+                还是没有（新版 Chrome 收起来了）：用命令行启动一份 Chrome，
+                <Typography.Text copyable code>{`chrome.exe --unsafely-treat-insecure-origin-as-secure=${window.location.origin} --user-data-dir=%TEMP%\\chrome-ble`}</Typography.Text>
+              </div>
+              <div style={{ marginTop: 4, opacity: 0.8 }}>以后要所有电脑都免设置，平台改成 https 就行。</div>
             </div>
           ) : undefined} />
       )}
