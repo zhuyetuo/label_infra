@@ -74,7 +74,7 @@ const EXPORT_RANGE_KEY = "export-date-range";
 const MIN_SEGMENTS = 5;
 
 /** 归并表的一行：这次数据里的一个类别（最细那一级） */
-type TrainCat = { name: string; n: number; sec: number; root: string; chain: string[] };
+type TrainCat = { name: string; n: number; sec: number; root: string; chain: string[]; nShort?: number };
 type TrainRow = TrainCat & { key: string; isGroup?: boolean; children?: TrainRow[] };
 
 /** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
@@ -84,7 +84,7 @@ type TrainOpts = {
   hz?: number;
   axes?: number;
   orientFree?: boolean;
-  /** 短促动作补齐的类别；undefined = 自动（名字里带甩 / 抖的） */
+  /** 短促动作补齐的类别；undefined = 自动（有比窗口短的片段的训练类别） */
   shortLabels?: string[];
   edgeSize?: boolean;
   edgeTrees?: number | null;
@@ -251,7 +251,7 @@ export default function Training() {
   const [axes, setAxes] = useState<number>(3);
   // 方向无关：输入只用跟佩戴方向无关的量 + 训练集随机旋转增强。用户怎么戴都不限制，默认开
   const [orientFree, setOrientFree] = useState(true);
-  // 短促动作补齐：null = 自动（训练类别里名字带「甩」「抖」的）
+  // 短促动作补齐：null = 自动（有比窗口短的片段的那些训练类别——不按名字猜，抓挠也常常很短）
   const [shortLabels, setShortLabels] = useState<string[] | null>(null);
   // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
   const [edgeSize, setEdgeSize] = useState(false);
@@ -487,13 +487,13 @@ export default function Training() {
     for (const r of trainStats?.rows ?? []) {
       const kids = r.sub_labels ?? [];
       if (!kids.length) {
-        out.push({ name: r.label, n: r.n_segments, sec: r.seconds, root: r.label, chain: [r.label] });
+        out.push({ name: r.label, n: r.n_segments, sec: r.seconds, root: r.label, chain: [r.label], nShort: r.n_short });
         continue;
       }
       for (const k of kids) {
         // 「X（未细分）」是只标到大类那部分，映射时按大类名算
         const name = k.is_root_only ? r.label : k.label;
-        out.push({ name, n: k.n_segments, sec: k.seconds, root: r.label, chain: k.chain ?? [r.label, name] });
+        out.push({ name, n: k.n_segments, sec: k.seconds, root: r.label, chain: k.chain ?? [r.label, name], nShort: k.n_short });
       }
     }
     return out.sort((a, b) => b.sec - a.sec);
@@ -566,7 +566,12 @@ export default function Training() {
     () => [...new Set([...trainTargets, ...trainCats.filter((c) => remapEdits[c.name]).map((c) => c.name)])],
     [trainTargets, trainCats, remapEdits]
   );
-  const shortEffective = (shortLabels ?? shortOptions.filter((t) => /甩|抖/.test(t))).filter((t) => shortOptions.includes(t));
+  // 每个选项有几段比窗口短 / 一共几段：训练类别按归并进来的各行加起来
+  const shortCount = (t: string) => {
+    const rows = trainTargets.includes(t) ? trainCats.filter((c) => remapEdits[c.name] === t) : trainCats.filter((c) => c.name === t);
+    return { short: rows.reduce((a, c) => a + (c.nShort ?? 0), 0), n: rows.reduce((a, c) => a + c.n, 0) };
+  };
+  const shortEffective = (shortLabels ?? trainTargets.filter((t) => shortCount(t).short > 0)).filter((t) => shortOptions.includes(t));
 
   // 类别查出来之后预填，按这个顺序：
   //   1. 上次训练时这个类别算作了什么（跨数据集记的习惯：舔-大腿内侧 → 舔）
@@ -1889,7 +1894,7 @@ export default function Training() {
               </Checkbox>
             </Space>
             <Space wrap>
-              <Tooltip title="甩动这类一两秒的动作比训练窗口（默认 2 秒）还短：按片段切时整段被丢掉，按记录切时被前后别的片段多数投票吞掉——模型没见过甩动，一甩就判成抓挠。选上的类别：比窗口短的片段以事件为中心、带上前后真实的上下文补成一段，每个训练窗口都完整包含这次事件；上下文碰到别的类别的标注就截住，不够长用这段真实数据镜像补齐，不编造信号。比窗口长的片段不动">
+              <Tooltip title="甩动、短促的抓挠这类一两秒的动作比训练窗口（默认 2 秒）还短：按片段切时整段被丢掉，按记录切时被前后别的片段多数投票吞掉——模型没见过甩动，一甩就判成抓挠。选上的类别：比窗口短的片段以事件为中心、带上前后真实的上下文补成一段，每个训练窗口都完整包含这次事件；上下文碰到别的类别的标注就截住，不够长用这段真实数据镜像补齐，不编造信号。比窗口长的片段不动">
                 <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>短促动作补齐</span>
               </Tooltip>
               <Select
@@ -1900,11 +1905,17 @@ export default function Training() {
                 placeholder="不补（这次训练里没有短促动作类别）"
                 value={shortEffective}
                 onChange={(v) => setShortLabels(v)}
-                options={shortOptions.map((t) => ({ value: t, label: trainTargets.includes(t) ? t : `${t}（并进 ${remapEdits[t]}）` }))}
+                options={shortOptions.map((t) => {
+                  const c = shortCount(t);
+                  const name = trainTargets.includes(t) ? t : `${t}（并进 ${remapEdits[t]}）`;
+                  return { value: t, label: `${name} · ${c.short}/${c.n} 段短于 2 秒` };
+                })}
                 maxTagCount="responsive"
               />
               {shortLabels === null && shortEffective.length > 0 && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>自动选了名字带「甩 / 抖」的</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  自动选了有比 2 秒短的片段的类别（{shortEffective.map((t) => `${t} ${shortCount(t).short} 段`).join("、")}）
+                </Typography.Text>
               )}
             </Space>
             <Space>
