@@ -30,7 +30,7 @@ export function SkinGradeHelp() {
               {g.desc}
             </div>
           ))}
-          <div style={{ marginTop: 6, opacity: 0.8 }}>拿不准在两档之间的，选重的那档，备注里写一句哪里拿不准。每个人各评各的，别人的评级会显示在旁边</div>
+          <div style={{ marginTop: 6, opacity: 0.8 }}>拿不准在两档之间的，选重的那档，备注里写一句哪里拿不准。每个人各评各的、互相看不到；管理员能看到所有人的，用来对一致性</div>
         </div>
       }
     >

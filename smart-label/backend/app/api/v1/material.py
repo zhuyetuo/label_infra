@@ -70,13 +70,15 @@ async def photo_stream(album: str, path: str, token: str, request: Request):
 
 @router.get("/{album}/ratings")
 async def list_ratings(album: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """这个相册里所有人的评级（谁评了什么都看得到，方便对一致性）"""
+    """这个相册里的评级。管理员看所有人的（对一致性、看实习生评得准不准）；
+    其他人（兽医 / 实习生）只看自己的——看得到别人的评级会被带着走，几个人各评各的才有对照价值"""
     _check_album(album, user)
-    rows = (await db.execute(
-        select(SkinPhotoRating, User.display_name, User.username, User.role)
-        .join(User, User.id == SkinPhotoRating.user_id)
-        .where(SkinPhotoRating.album == album)
-    )).all()
+    q = (select(SkinPhotoRating, User.display_name, User.username, User.role)
+         .join(User, User.id == SkinPhotoRating.user_id)
+         .where(SkinPhotoRating.album == album))
+    if user.role not in (UserRole.admin, UserRole.super_admin):
+        q = q.where(SkinPhotoRating.user_id == user.id)
+    rows = (await db.execute(q)).all()
     return ok([{
         "folder": r.folder, "dog_folder": r.dog_folder, "user_id": r.user_id,
         "user_name": dn or un, "user_role": getattr(role, "value", str(role)),
