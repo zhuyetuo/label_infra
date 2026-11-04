@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Alert, Button, Checkbox, InputNumber, Radio, Select, Space, Spin, Table, Tag, Tooltip, TreeSelect, Typography, theme } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { listLabels } from "@/api/labels";
 import { listProjects } from "@/api/projects";
@@ -131,14 +132,10 @@ export default function ClassCompare() {
 
   return (
     <div>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message="两类片段的原始数据逐个维度比"
-        description="从两类已标注片段里各抽一批，切成固定长度的窗口，逐个特征比分布。AUC 0.5 = 两类这个量一样、分不开；越靠近 0 或 1 越好分。所有维度都分不开，说明原始数据本来就几乎一样，模型怎么训都难，得加新的输入（更高采样率、更长窗口）或者规则；某个维度明显能分开，就把它喂给模型或做成规则。"
-      />
       <Space wrap style={{ marginBottom: 12 }}>
+        <Tooltip overlayStyle={{ maxWidth: 460 }} title={<div><b>两类片段的原始数据逐个维度比</b><div style={{ marginTop: 4 }}>从两类已标注片段里各抽一批，切成固定长度的窗口，逐个特征比分布。AUC 0.5 = 两类这个量一样、分不开；越靠近 0 或 1 越好分。所有维度都分不开，说明原始数据本来就几乎一样，模型怎么训都难，得加新的输入（更高采样率、更长窗口）或者规则；某个维度明显能分开，就把它喂给模型或做成规则。</div></div>}>
+          <QuestionCircleOutlined style={{ color: "#888", cursor: "help", fontSize: 15 }} />
+        </Tooltip>
         <Typography.Text><Tag color={COLOR_A}>A</Tag>
           <TreeSelect multiple showSearch treeLine style={{ minWidth: 220 }} popupMatchSelectWidth={false} value={valA}
             onChange={(v) => setA(v as string[])} treeData={tree} treeNodeFilterProp="full" treeNodeLabelProp="full"
