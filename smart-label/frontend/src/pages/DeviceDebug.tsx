@@ -1,0 +1,361 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert, Button, Card, Checkbox, Col, InputNumber, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme,
+} from "antd";
+import uPlot from "uplot";
+import "uplot/dist/uPlot.min.css";
+import {
+  BEHAV_NAMES, CMD, DP, PC, WIT, WitStream, assessRate, buildAckFrame, buildTimeFrame, parseDps, parseFrame, parseSegments,
+  type PcSegment, type RateAssess,
+} from "@/utils/imuProtocols";
+
+/**
+ * 设备调试：用打开网页这台电脑的蓝牙直接连 IMU（Web Bluetooth，Chrome / Edge），
+ * 实时看波形、采样率是不是期望值、每帧间隔稳不稳；自制项圈还能校时、看当前行为 / 行为片段。
+ * 不经过服务器，数据只在这个页面里；要留就「录制」下载 CSV。
+ *
+ * 浏览器只在 https 或 localhost 上开放蓝牙。平台是 http + 局域网 IP 时，要在调试的那台电脑上
+ * 把这个地址加进 Chrome 的「当作安全来源」白名单（页面上有步骤）。
+ */
+type Kind = "pc" | "wit";
+interface Sample { host: number; dev: number | null; ax: number; ay: number; az: number; gx?: number; gy?: number; gz?: number }
+
+const KEEP_S = 20;          // 波形和评估保留最近这么多秒
+const PLOT_S = 10;
+
+// Web Bluetooth 的类型 TS 自带的 lib 里没有，这里只声明用到的那几样
+type BtChar = { startNotifications(): Promise<BtChar>; addEventListener(t: string, f: (e: Event) => void): void; writeValueWithoutResponse?(v: BufferSource): Promise<void>; writeValue(v: BufferSource): Promise<void>; value?: DataView; properties: { notify: boolean } };
+type BtService = { getCharacteristic(u: string): Promise<BtChar>; getCharacteristics(): Promise<BtChar[]> };
+type BtServer = { connected: boolean; getPrimaryService(u: string): Promise<BtService>; disconnect(): void };
+type BtDevice = { name?: string; id: string; gatt?: { connect(): Promise<BtServer> }; addEventListener(t: string, f: () => void): void };
+const bt = () => (navigator as unknown as { bluetooth?: { requestDevice(o: unknown): Promise<BtDevice> } }).bluetooth;
+
+export default function DeviceDebug() {
+  const { token } = theme.useToken();
+  const [kind, setKind] = useState<Kind>("pc");
+  const [expectHz, setExpectHz] = useState<number>(31.25);
+  const [status, setStatus] = useState<"idle" | "connecting" | "connected">("idle");
+  const [devName, setDevName] = useState<string>("");
+  const [autoAck, setAutoAck] = useState(true);
+  const [showGyro, setShowGyro] = useState(false);
+  const [log, setLog] = useState<string[]>([]);
+  const [behav, setBehav] = useState<{ cls: number; conf: number; at: number } | null>(null);
+  const [segs, setSegs] = useState<PcSegment[]>([]);
+  const [rate, setRate] = useState<RateAssess | null>(null);
+  const [count, setCount] = useState(0);
+  const [recording, setRecording] = useState(false);
+  const [noRawHint, setNoRawHint] = useState(false);
+
+  const samples = useRef<Sample[]>([]);
+  const rec = useRef<Sample[] | null>(null);
+  const total = useRef(0);
+  const server = useRef<BtServer | null>(null);
+  const rx = useRef<BtChar | null>(null);
+  const lastSeq = useRef(0);
+  const plotEl = useRef<HTMLDivElement>(null);
+  const plot = useRef<uPlot | null>(null);
+  const connectedAt = useRef(0);
+
+  const supported = !!bt() && window.isSecureContext;
+  const addLog = (s: string) => setLog((l) => [`${new Date().toLocaleTimeString()}  ${s}`, ...l].slice(0, 200));
+
+  useEffect(() => setExpectHz(kind === "pc" ? 31.25 : 50), [kind]);
+
+  const write = async (frame: Uint8Array) => {
+    const c = rx.current;
+    if (!c) return;
+    const buf = frame.slice().buffer as ArrayBuffer;   // 拷一份成普通 ArrayBuffer（BufferSource 不收 SharedArrayBuffer 视图）
+    try {
+      if (c.writeValueWithoutResponse) await c.writeValueWithoutResponse(buf);
+      else await c.writeValue(buf);
+    } catch (e) {
+      addLog(`写入失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const timeSync = async () => { await write(buildTimeFrame()); addLog("已下发校时（UTC）"); };
+
+  const push = (s: Sample) => {
+    // 设备时间大跳（刚校时把时钟拨了）：评估重新开始
+    const prev = samples.current[samples.current.length - 1];
+    if (prev && prev.dev != null && s.dev != null && Math.abs(s.dev - prev.dev) > 10_000) {
+      samples.current = [];
+      addLog(`设备时间跳了 ${((s.dev - prev.dev) / 1000).toFixed(1)} 秒（多半是刚校时），重新统计`);
+    }
+    samples.current.push(s);
+    total.current++;
+    if (rec.current) rec.current.push(s);
+    const cut = s.host - KEEP_S * 1000;
+    if (samples.current.length > 4000 || samples.current[0].host < cut) {
+      let i = 0;
+      while (i < samples.current.length && samples.current[i].host < cut) i++;
+      samples.current = samples.current.slice(i);
+    }
+  };
+
+  const onPcNotify = (e: Event) => {
+    const dv = (e.target as unknown as BtChar).value!;
+    const p = parseFrame(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+    if (!p) return;
+    if (p.cmd === CMD.TIME) { void timeSync(); return; }
+    if (p.cmd === CMD.RAW) {
+      const d = parseDps(p.payload);
+      push({ host: performance.now(), dev: d[DP.TS] ?? null, ax: (d[DP.AX] ?? 0) / 1e6, ay: (d[DP.AY] ?? 0) / 1e6, az: (d[DP.AZ] ?? 0) / 1e6 });
+      return;
+    }
+    if (p.cmd === CMD.BEHAVIOR) {
+      const d = parseDps(p.payload);
+      setBehav({ cls: d[DP.CLS] ?? -1, conf: d[DP.CONF] ?? 0, at: d[DP.TS] ?? Date.now() });
+      return;
+    }
+    if (p.cmd === CMD.SEGMENT) {
+      const ss = parseSegments(p.payload);
+      if (!ss.length) return;
+      setSegs((old) => {
+        const by = new Map(old.map((x) => [x.seq, x]));
+        for (const x of ss) by.set(x.seq, x);
+        return [...by.values()].sort((a, b) => b.seq - a.seq).slice(0, 500);
+      });
+      lastSeq.current = Math.max(lastSeq.current, ...ss.map((x) => x.seq));
+      addLog(`收到 ${ss.length} 条行为片段，最新 seq ${lastSeq.current}`);
+      if (autoAckRef.current) void write(buildAckFrame(lastSeq.current));
+    }
+  };
+  const autoAckRef = useRef(autoAck);
+  autoAckRef.current = autoAck;
+
+  const witStream = useRef(new WitStream());
+  const onWitNotify = (e: Event) => {
+    const dv = (e.target as unknown as BtChar).value!;
+    for (const s of witStream.current.feed(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength))) {
+      push({ host: performance.now(), dev: s.chipMs, ax: s.acc[0], ay: s.acc[1], az: s.acc[2], gx: s.gyro[0], gy: s.gyro[1], gz: s.gyro[2] });
+    }
+  };
+
+  const connect = async () => {
+    const b = bt();
+    if (!b) return;
+    setStatus("connecting");
+    try {
+      const dev = await b.requestDevice(kind === "pc"
+        ? { filters: [{ namePrefix: "HICC" }, { services: [PC.service] }], optionalServices: [PC.service] }
+        : { filters: [{ namePrefix: "WT" }], optionalServices: WIT.services });
+      setDevName(dev.name || dev.id);
+      dev.addEventListener("gattserverdisconnected", () => { setStatus("idle"); addLog("设备断开了"); });
+      const srv = await dev.gatt!.connect();
+      server.current = srv;
+      samples.current = [];
+      total.current = 0;
+      lastSeq.current = 0;
+      setSegs([]);
+      setBehav(null);
+      setNoRawHint(false);
+      connectedAt.current = performance.now();
+      if (kind === "pc") {
+        const svc = await srv.getPrimaryService(PC.service);
+        rx.current = await svc.getCharacteristic(PC.rx);
+        const tx = await svc.getCharacteristic(PC.tx);
+        tx.addEventListener("characteristicvaluechanged", onPcNotify);
+        await tx.startNotifications();
+        try {
+          const tx2 = await svc.getCharacteristic(PC.tx2);
+          tx2.addEventListener("characteristicvaluechanged", onPcNotify);
+          await tx2.startNotifications();
+        } catch {
+          addLog("TX2（0203）订阅不了：这个固件可能没开原始采样镜像");
+        }
+        await timeSync();
+      } else {
+        rx.current = null;
+        witStream.current = new WitStream();
+        let ok = false;
+        for (const su of WIT.services) {
+          try {
+            const svc = await srv.getPrimaryService(su);
+            for (const c of await svc.getCharacteristics()) {
+              if (!c.properties.notify) continue;
+              c.addEventListener("characteristicvaluechanged", onWitNotify);
+              await c.startNotifications();
+              ok = true;
+            }
+          } catch { /* 这个服务没有，试下一个 */ }
+        }
+        if (!ok) throw new Error("没找到 WitMotion 的数据通道（ffe5 / ffe0 服务）");
+      }
+      setStatus("connected");
+      addLog(`已连接 ${dev.name || dev.id}`);
+    } catch (e) {
+      setStatus("idle");
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/cancel/i.test(msg)) message.error(`连接失败：${msg}`);
+    }
+  };
+  const disconnect = () => { server.current?.disconnect(); setStatus("idle"); };
+  useEffect(() => () => server.current?.disconnect(), []);
+
+  // 每秒评估一次 + 刷新波形（不在每个样本上重画）
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      const now = performance.now();
+      const win = samples.current.filter((s) => s.host >= now - 5000);
+      setCount(total.current);
+      const withDev = win.filter((s) => s.dev != null);
+      setRate(withDev.length >= 3
+        ? assessRate(withDev.map((s) => s.dev!), withDev.map((s) => s.host), expectHz)
+        : win.length >= 3 ? { ...assessRate(win.map((s) => s.host), win.map((s) => s.host), expectHz), problems: ["设备没带时间戳，下面按浏览器收到的时间算（蓝牙成批送，间隔会偏乱）"] } : null);
+      if (kind === "pc" && status === "connected" && total.current === 0 && now - connectedAt.current > 6000) setNoRawHint(true);
+      const u = plot.current;
+      const pts = samples.current.filter((s) => s.host >= now - PLOT_S * 1000);
+      if (u) {
+        const xs = pts.map((s) => (s.host - now) / 1000);
+        const g = showGyro;
+        u.setData([xs, pts.map((s) => (g ? s.gx ?? 0 : s.ax)), pts.map((s) => (g ? s.gy ?? 0 : s.ay)), pts.map((s) => (g ? s.gz ?? 0 : s.az))]);
+      }
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [expectHz, kind, status, showGyro]);
+
+  useEffect(() => {
+    if (!plotEl.current) return;
+    const u = new uPlot({
+      width: plotEl.current.clientWidth || 800, height: 240, legend: { show: true },
+      scales: { x: { time: false, range: [-PLOT_S, 0] } },
+      axes: [{ stroke: token.colorTextSecondary, grid: { stroke: token.colorBorderSecondary } },
+        { stroke: token.colorTextSecondary, grid: { stroke: token.colorBorderSecondary } }],
+      series: [{ label: "秒" }, { label: "X", stroke: "#ff7875", width: 1.5 }, { label: "Y", stroke: "#95de64", width: 1.5 }, { label: "Z", stroke: "#69b1ff", width: 1.5 }],
+    }, [[], [], [], []], plotEl.current);
+    plot.current = u;
+    const ro = new ResizeObserver(() => u.setSize({ width: plotEl.current!.clientWidth, height: 240 }));
+    ro.observe(plotEl.current);
+    return () => { ro.disconnect(); u.destroy(); plot.current = null; };
+  }, [token.colorTextSecondary, token.colorBorderSecondary]);
+
+  const download = () => {
+    const rows = rec.current ?? [];
+    rec.current = null;
+    setRecording(false);
+    if (!rows.length) { message.info("没录到数据"); return; }
+    const head = kind === "pc" ? "t_dev_ms,ax_g,ay_g,az_g,t_host_ms" : "t_chip_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,t_host_ms";
+    const t0 = performance.timeOrigin;
+    const lines = rows.map((s) => kind === "pc"
+      ? `${s.dev ?? ""},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${Math.round(t0 + s.host)}`
+      : `${s.dev ?? ""},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx?.toFixed(2)},${s.gy?.toFixed(2)},${s.gz?.toFixed(2)},${Math.round(t0 + s.host)}`);
+    const blob = new Blob([[head, ...lines].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(devName || kind).replace(/[^\w-]/g, "_")}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const flagUrl = "chrome://flags/#unsafely-treat-insecure-origin-as-secure";
+  const segCols = useMemo(() => [
+    { title: "seq", dataIndex: "seq", width: 80 },
+    { title: "开始", render: (_: unknown, s: PcSegment) => (s.startMs == null ? <Tag>时间未知</Tag> : new Date(s.startMs).toLocaleString()) },
+    { title: "时长", render: (_: unknown, s: PcSegment) => `${s.durS.toFixed(1)} s` },
+    { title: "类别", render: (_: unknown, s: PcSegment) => <Tag>{BEHAV_NAMES[s.cls] ?? `?${s.cls}`}</Tag> },
+    { title: "置信度", dataIndex: "conf", render: (v: number) => `${v}%` },
+  ], []);
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>设备调试</Typography.Title>
+        <Segmented value={kind} onChange={(v) => setKind(v as Kind)} disabled={status !== "idle"}
+          options={[{ value: "pc", label: "自制项圈" }, { value: "wit", label: "WitMotion" }]} />
+        {status === "connected"
+          ? <Button danger onClick={disconnect}>断开 {devName}</Button>
+          : <Button type="primary" loading={status === "connecting"} disabled={!supported} onClick={connect}>连接设备</Button>}
+        {status === "connected" && kind === "pc" && <Button onClick={timeSync}>校时</Button>}
+        {status === "connected" && (recording
+          ? <Button onClick={download}>停止并下载 CSV（{rec.current?.length ?? 0}）</Button>
+          : <Button onClick={() => { rec.current = []; setRecording(true); }}>开始录制</Button>)}
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          用这台电脑的蓝牙直接连，数据不经过服务器
+        </Typography.Text>
+      </Space>
+
+      {!supported && (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message={!bt() ? "这个浏览器不支持网页蓝牙：用电脑上的 Chrome 或 Edge 打开" : "这个地址是 http，浏览器默认不让网页用蓝牙"}
+          description={bt() || /Chrome|Edg/.test(navigator.userAgent) ? (
+            <div style={{ lineHeight: 1.9 }}>
+              在要连设备的这台电脑上设一次就行：
+              <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                <li>Chrome / Edge 地址栏打开 <Typography.Text copyable code>{flagUrl}</Typography.Text>（Edge 把 chrome 换成 edge）</li>
+                <li>在框里填 <Typography.Text copyable code>{window.location.origin}</Typography.Text>，右边选 Enabled</li>
+                <li>点右下角 Relaunch 重启浏览器，再回到这页</li>
+              </ol>
+              以后要所有电脑都免设置，平台改成 https 就行。
+            </div>
+          ) : undefined} />
+      )}
+
+      <Row gutter={12}>
+        <Col xs={24} xl={16}>
+          <Card size="small" title={`波形（最近 ${PLOT_S} 秒）`}
+            extra={kind === "wit" && <Checkbox checked={showGyro} onChange={(e) => setShowGyro(e.target.checked)}>看角速度</Checkbox>}>
+            <div ref={plotEl} style={{ width: "100%" }} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {kind === "pc" ? "加速度（g），来自 0x08 原始采样镜像" : showGyro ? "角速度（°/s）" : "加速度（g）"} · 已收 {count} 个样本
+            </Typography.Text>
+            {noRawHint && (
+              <Alert type="info" showIcon style={{ marginTop: 8 }}
+                message="连上了但收不到原始采样（0x08）：正式固件（协议 v2.0）不发，要用 PB_RAW_STREAM=1 编的调试固件。当前行为和行为片段照常能看" />
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} xl={8}>
+          <Card size="small" title="采样率 / 间隔（最近 5 秒）"
+            extra={<Space size={4}><span style={{ fontSize: 12 }}>期望</span>
+              <InputNumber size="small" min={1} max={500} step={0.25} value={expectHz} onChange={(v) => v && setExpectHz(v)} style={{ width: 80 }} />
+              <span style={{ fontSize: 12 }}>Hz</span></Space>}>
+            {!rate ? <Typography.Text type="secondary">还没有数据</Typography.Text> : (
+              <>
+                <Space size={24} wrap>
+                  <Statistic title="采样率" value={rate.rateHz?.toFixed(2) ?? "-"} suffix="Hz"
+                    valueStyle={{ color: rate.ok ? token.colorSuccess : token.colorError }} />
+                  <Statistic title={`在 ${rate.expectMs.toFixed(1)}±10% ms 内`} value={rate.within10Pct?.toFixed(0) ?? "-"} suffix="%" />
+                  <Statistic title="间隔标准差" value={rate.ivStd?.toFixed(1) ?? "-"} suffix="ms" />
+                </Space>
+                <div style={{ fontSize: 12, marginTop: 8, color: token.colorTextSecondary, lineHeight: 1.8 }}>
+                  间隔 均值 {rate.ivMean?.toFixed(1)} · p5 {rate.ivP5?.toFixed(0)} · p95 {rate.ivP95?.toFixed(0)} · 最短 {rate.ivMin?.toFixed(0)} · 最长 {rate.ivMax?.toFixed(0)} ms<br />
+                  0 ms {rate.dup} 次 · 大缝 {rate.gaps} 处 · 长短交替 {rate.alternating} 次
+                  {rate.hostHz != null && <><br />浏览器收到 {rate.hostHz.toFixed(1)} Hz（蓝牙成批送，只看有没有丢）</>}
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  {rate.ok ? <Tag color="success">正常</Tag> : rate.problems.map((p) => <div key={p}><Tag color="error" style={{ whiteSpace: "normal" }}>{p}</Tag></div>)}
+                </div>
+              </>
+            )}
+          </Card>
+          {kind === "pc" && (
+            <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
+              {behav ? (
+                <Space>
+                  <Tag color="purple" style={{ fontSize: 16, padding: "4px 12px" }}>{BEHAV_NAMES[behav.cls] ?? `?${behav.cls}`}</Tag>
+                  <span>{behav.conf}%</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{new Date(behav.at).toLocaleTimeString()}</Typography.Text>
+                </Space>
+              ) : <Typography.Text type="secondary">还没收到（约 5 秒一条）</Typography.Text>}
+            </Card>
+          )}
+        </Col>
+      </Row>
+
+      {kind === "pc" && (
+        <Card size="small" title={`行为片段（0x09）· ${segs.length} 条`} style={{ marginTop: 12 }}
+          extra={<Tooltip title="收到就回 0x0A 确认，设备才会释放这些片段；关掉用来验证「不确认会补发」">
+            <Checkbox checked={autoAck} onChange={(e) => setAutoAck(e.target.checked)}>自动确认</Checkbox>
+          </Tooltip>}>
+          <Table size="small" rowKey="seq" dataSource={segs} columns={segCols} pagination={{ pageSize: 20, hideOnSinglePage: true }} />
+        </Card>
+      )}
+
+      <Card size="small" title="日志" style={{ marginTop: 12 }}>
+        <div style={{ maxHeight: 180, overflow: "auto", fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 12 }}>
+          {log.length ? log.map((l, i) => <div key={i}>{l}</div>) : <Typography.Text type="secondary">—</Typography.Text>}
+        </div>
+      </Card>
+    </div>
+  );
+}
