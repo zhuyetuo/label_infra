@@ -20,6 +20,8 @@ const ALL_ITEMS = [
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
   { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"], feature: "tooth" },
   { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin"] },
+  // 兽医 / 实习生看问诊照片评 S0 / S1 / S2：所有角色都能进
+  { key: "/skin-rating", label: "皮肤评级", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/daily-stats", label: "日常统计", roles: ["super_admin", "admin"] },
   { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
   { key: "/workforce", label: "人力管理", roles: ["super_admin", "admin"] },

@@ -159,7 +159,7 @@ export default function Skin() {
           ) },
           { key: "weekly", label: "周报表", children: <WeeklyTab opts={opts} /> },
           { key: "history", label: "历史记录", children: <HistoryTab /> },
-          { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
+          { key: "photos", label: "皮肤照片", children: <PhotoGallery album="skin" rating hint="皮肤瘙痒问诊照片，来自素材库 NAS" /> },
         ] : [
           { key: "q", label: "填写问答", children: (
             <QuestionnaireTab opts={opts} dogName={dogName} setDogName={setDogName} fillDate={fillDate} setFillDate={setFillDate} filler={filler} setFiller={setFiller}

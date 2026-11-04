@@ -13,3 +13,14 @@ export const listMaterialPhotos = (album: Album) => request.get<never, { root: s
 export const getMaterialPhotoToken = (album: Album, path: string) => request.post<never, { token: string }>(`/material/${album}/photos/token`, { path });
 export const materialPhotoUrl = (album: Album, path: string, token: string) =>
   `/api/v1/material/${album}/photos/stream?path=${encodeURIComponent(path)}&token=${token}`;
+
+/** 皮肤照片评级：S0 正常 / S1 轻度 / S2 中重度 / unsure 看不清 */
+export type SkinGrade = "S0" | "S1" | "S2" | "unsure";
+export interface PhotoRating {
+  folder: string; dog_folder: string; user_id: number; user_name: string; user_role: string;
+  grade: SkinGrade; note: string | null; updated_at: string | null;
+}
+export const listPhotoRatings = (album: Album) => request.get<never, PhotoRating[]>(`/material/${album}/ratings`);
+/** grade 给 null = 撤销我对这只狗的评级 */
+export const putPhotoRating = (album: Album, body: { folder: string; dog_folder: string; grade: SkinGrade | null; note?: string | null }) =>
+  request.put<never, { grade: SkinGrade | null; note: string | null }>(`/material/${album}/ratings`, body);

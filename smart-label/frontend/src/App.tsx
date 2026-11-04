@@ -15,6 +15,7 @@ import DailyStats from "@/pages/DailyStats";
 import AnnotatorStats from "@/pages/AnnotatorStats";
 import Workforce from "@/pages/Workforce";
 import Skin from "@/pages/Skin";
+import SkinRating from "@/pages/SkinRating";
 import Vision from "@/pages/Vision";
 import Training from "@/pages/Training";
 import { SegmentReviewEntry } from "@/pages/SegmentReview";
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/label-templates" element={<Navigate to="/label-definitions" replace />} />
         <Route path="/tooth" element={<Tooth />} />
         <Route path="/skin" element={<Skin />} />
+        <Route path="/skin-rating" element={<SkinRating />} />
         <Route path="/daily-stats" element={<DailyStats />} />
         <Route path="/annotator-stats" element={<AnnotatorStats />} />
         <Route path="/workforce" element={<Workforce />} />

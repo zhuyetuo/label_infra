@@ -1,15 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Collapse, Empty, Image, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { getMaterialPhotoToken, listMaterialPhotos, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
+import { getMaterialPhotoToken, listMaterialPhotos, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
+import SkinRatingBar from "@/components/SkinRatingBar";
+import { useAuthStore } from "@/stores/authStore";
 import { getSavedText, saveText } from "@/utils/persistedSize";
 
 // 素材库相册只读浏览：按 日期目录 > 狗 折叠，缩略图网格，点开大图（antd Image 预览，
 // 同一只狗同一天的照片可以左右翻）。皮肤评估页的「皮肤照片」用；牙齿识别页有自己带
 // 检测结果的版本（Tooth.tsx）。
 
-export default function PhotoGallery({ album, hint, filterDate, filterDog }: { album: Album; hint?: string; filterDate?: string; filterDog?: string }) {
+export default function PhotoGallery({ album, hint, filterDate, filterDog, rating }: {
+  album: Album; hint?: string; filterDate?: string; filterDog?: string;
+  /** 每只狗标题栏上挂评级条（S0 / S1 / S2 / 看不清），兽医 / 实习生看图评级用 */
+  rating?: boolean;
+}) {
   const { data: raw, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
+  const userId = useAuthStore((s) => s.userInfo?.id);
+  const { data: ratings, refetch: refetchRatings } = useQuery({
+    queryKey: ["photo-ratings", album], queryFn: () => listPhotoRatings(album), enabled: !!rating,
+  });
+  const ratingsOf = (folder: string, dogName: string) =>
+    (ratings ?? []).filter((r) => r.folder === folder && r.dog_folder === dogName);
   // 来源（视频问诊 / 雷喏斯达 / 博朗旺…）和狗：几个地方很多天混在一起没法看，先按来源分开。
   // 从外面带了日期/狗进来（每日跟踪表里点「N 张」）时不显示这两个筛选，只看那一格
   const pinned = !!(filterDate || filterDog);
@@ -179,13 +191,29 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog }: { a
               <b>{f.folder}</b>
               {!f.ok && <Tag color="orange">未整理（目录名没有 -ok）</Tag>}
               <Typography.Text type="secondary">{f.dogs.map((d) => `${d.name} ${d.photos.length}`).join(" · ")}</Typography.Text>
+              {rating && (() => {
+                const done = f.dogs.filter((d) => ratingsOf(f.folder, d.name).some((r) => r.user_id === userId)).length;
+                return <Tag color={done === f.dogs.length ? "success" : "processing"}>我已评 {done}/{f.dogs.length}</Tag>;
+              })()}
             </Space>
           ),
           children: (
             <Collapse
               size="small"
               defaultActiveKey={f.dogs.map((d) => d.name)}
-              items={f.dogs.map((d) => ({ key: d.name, label: <Space><b>{d.name}</b><Typography.Text type="secondary">{d.photos.length} 张</Typography.Text></Space>, children: grid(d.photos) }))}
+              items={f.dogs.map((d) => {
+                const rs = rating ? ratingsOf(f.folder, d.name) : [];
+                return {
+                  key: d.name,
+                  label: <Space><b>{d.name}</b><Typography.Text type="secondary">{d.photos.length} 张</Typography.Text></Space>,
+                  // 评级条挂在标题栏右边：看完这只狗的照片顺手点一档
+                  extra: rating ? (
+                    <SkinRatingBar folder={f.folder} dog={d.name} mine={rs.find((r) => r.user_id === userId)}
+                      others={rs.filter((r) => r.user_id !== userId)} onChanged={() => refetchRatings()} />
+                  ) : undefined,
+                  children: grid(d.photos),
+                };
+              })}
             />
           ),
         }))}
