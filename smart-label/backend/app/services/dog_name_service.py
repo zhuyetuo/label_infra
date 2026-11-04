@@ -263,3 +263,38 @@ def dog_label(sample_code: str | None, mapping: dict[str, str],
     name = (site_map or {}).get((site, imu)) if site else None
     name = name or mapping.get(imu)
     return f"{name}（{imu}）" if name else imu
+
+
+# ── 跟踪表 / 项目联动每行补「场地 · 房间 · 品种」：光一个狗名分不清是哪只 ─────────────
+
+async def dog_profiles(db) -> dict[tuple[str | None, str], dict]:
+    """(场地键, 狗名) → {breed, size}；另存一份 (None, 狗名) 给认不出场地的行兜底"""
+    out: dict[tuple[str | None, str], dict] = {}
+    for name, site, breed, size in (await db.execute(select(Dog.name, Dog.site, Dog.breed, Dog.size))).all():
+        n = (name or "").strip()
+        if not n:
+            continue
+        sk = site_layout.site_key_of_name(site)
+        info = {"breed": breed, "size": size, "site": sk}
+        out[(sk, n)] = info
+        out.setdefault((None, n), info)
+    return out
+
+
+def dog_meta(profiles: dict, site_key: str | None, imu: str | None, dog_name: str | None) -> dict:
+    """{site_name, room, breed, size}。room 按采集端布局（几号单间），影棚没分房间是 None"""
+    p = profiles.get((site_key, dog_name or "")) or profiles.get((None, dog_name or "")) or {}
+    # 样本路径认不出场地时，用狗档案上登记的场地
+    site_key = site_key or p.get("site")
+    room = None
+    lay = site_layout.LAYOUT.get(site_key or "")
+    m = re.search(r"(\d+)", (imu or "").split("+")[0])
+    if lay and m:
+        r = lay["imu"].get(int(m.group(1)), (None, None))[0]
+        room = f"{r}号单间" if r is not None else None
+    return {
+        "site_name": site_layout.SITES.get(site_key or "", {}).get("name"),
+        "room": room,
+        "breed": p.get("breed"),
+        "size": p.get("size"),
+    }

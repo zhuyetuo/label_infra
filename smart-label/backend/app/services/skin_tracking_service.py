@@ -45,7 +45,7 @@ from app.models.skin_photo_rating import SkinPhotoRating
 from app.models.task import Task
 from app.models.user import User
 from app.services import site_layout
-from app.services.dog_name_service import DogIndex, imu_keys_of_dog
+from app.services.dog_name_service import DogIndex, dog_meta, dog_profiles, imu_keys_of_dog
 
 _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
@@ -408,6 +408,7 @@ async def daily_tracking(
         except SkinTrackingError:
             return None
 
+    profiles = await dog_profiles(db)
     rows: list[dict] = []
     jobs: list[tuple[dict, str, object]] = []
     for key in sorted(merged):
@@ -437,6 +438,8 @@ async def daily_tracking(
             "date": day,
             "imu": imu,
             "dog_name": dog,
+            # 场地 / 几号单间 / 品种：光一个狗名分不清是哪只，也要能按它们筛
+            **dog_meta(profiles, site, parts[0], dog),
             # 每个设备戴了多久、哪几段（两个项圈合成一行时才有）
             "devices": m["devices"],
             "stats": m["stats"],

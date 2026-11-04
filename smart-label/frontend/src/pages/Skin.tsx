@@ -9,6 +9,7 @@ import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import { SkinGradeHelp } from "@/components/SkinRatingBar";
 import DeviceTimeline from "@/components/DeviceTimeline";
+import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
 import { sampleDisplayName } from "@/utils/sampleName";
@@ -336,8 +337,8 @@ function ChartsTab() {
     refetchOnWindowFocus: false,
   });
   const all = data?.rows ?? [];
-  const dogs = [...new Set(all.map((r) => r.dog_name))].sort();
-  const rows = all.filter((r) => f.dogs.length === 0 || f.dogs.includes(r.dog_name));
+  const metaRows = all.filter((r) => matchDogMeta(r, f));
+  const rows = metaRows.filter((r) => f.dogs.length === 0 || f.dogs.includes(r.dog_name));
 
   // 每只狗一组概览数字：多少天、平均/最高 C、几天 C2、最近一天什么样
   const summary = useMemo(() => {
@@ -379,12 +380,14 @@ function ChartsTab() {
           mode="multiple"
           allowClear
           placeholder="全部狗"
+          showSearch
           style={{ minWidth: 240 }}
           value={f.dogs}
           onChange={(v) => setFilter({ dogs: v })}
-          options={dogs.map((d) => ({ value: d, label: d }))}
+          options={dogOptions(metaRows)}
           maxTagCount="responsive"
         />
+        <DogMetaFilter rows={all} value={f} onChange={setFilter} />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           跟「每日跟踪表」共用筛选条件，两边改一处另一处也跟着变。
         </Typography.Text>
@@ -508,6 +511,9 @@ const loadTrackFilter = (): {
   to: string;
   onlyTriggered: boolean;
   dogs: string[];
+  sites?: string[];
+  rooms?: string[];
+  breeds?: string[];
   /**
    * 这张表看哪一版：
    *   ai      一律用 AI 版 —— 线上就是纯 AI，没有人工审核这一环
@@ -841,8 +847,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     refetchOnWindowFocus: false,
   });
   const all = data?.rows ?? [];
-  const dogs = [...new Set(all.map((r) => r.dog_name))].sort();
-  const rows = all.filter(
+  const metaRows = all.filter((r) => matchDogMeta(r, f));
+  const rows = metaRows.filter(
     (r) => (!f.onlyTriggered || r.question_triggered) && (f.dogs.length === 0 || f.dogs.includes(r.dog_name))
   );
   // 弹窗里那张表始终跟着最新查询结果走，标完回来数字就是新的
@@ -877,12 +883,14 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           mode="multiple"
           allowClear
           placeholder="全部狗"
+          showSearch
           style={{ minWidth: 220 }}
           value={f.dogs}
           onChange={(v) => setFilter({ dogs: v })}
-          options={dogs.map((d) => ({ value: d, label: d }))}
+          options={dogOptions(metaRows)}
           maxTagCount="responsive"
         />
+        <DogMetaFilter rows={all} value={f} onChange={setFilter} />
         <Checkbox checked={f.onlyTriggered} onChange={(e) => setFilter({ onlyTriggered: e.target.checked })}>
           只看需要问答的
         </Checkbox>
@@ -914,7 +922,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             常驻在这儿只会挤掉真正要看的表。 */}
         <TabsHelp />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          共 {rows.length} 行 / {dogs.length} 只狗。C 值来自「项目联动」存下来的结果
+          共 {rows.length} 行 / {new Set(rows.map((r) => r.dog_name)).size} 只狗。C 值来自「项目联动」存下来的结果
           （
           {f.cPrefer === "ai"
             ? "一律用 AI 版，跟线上口径一致"
@@ -952,6 +960,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   <Tooltip title={`${r.dog_name}（${r.imu}）`}>
                     <span style={{ whiteSpace: "nowrap" }}>{short}</span>
                   </Tooltip>
+                  {dogMetaText(r) && (
+                    <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{dogMetaText(r)}</div>
+                  )}
                   {/* 两个项圈轮换：当天哪段戴的哪个 */}
                   {r.devices?.length ? <DeviceTimeline day={r.date} devices={r.devices} /> : null}
                 </div>
@@ -1548,7 +1559,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
 
 // 筛选条件记在浏览器本地；结果本身存在后端 skin_daily_stats 表里，打开页面直接读库
 const LINK_FILTER_KEY = "skin-link-filter";
-type LinkFilter = { from: string; to: string; projectId: number | null; includeDrafts: boolean; dogs?: string[] };
+type LinkFilter = { from: string; to: string; projectId: number | null; includeDrafts: boolean; dogs?: string[]; sites?: string[]; rooms?: string[]; breeds?: string[] };
 const loadLinkFilter = (): LinkFilter => {
   try {
     const raw = localStorage.getItem(LINK_FILTER_KEY);
@@ -1613,11 +1624,8 @@ function LinkTab(p: {
   });
   const allRows = data?.rows ?? [];
   // 只看某几只狗：纯前端筛，不用重新拉取
-  const dogOptions = useMemo(
-    () => [...new Set(allRows.map((r) => r.dog_name).filter((d): d is string => !!d))].sort((a, b) => a.localeCompare(b, "zh")),
-    [allRows],
-  );
-  const rows = f.dogs?.length ? allRows.filter((r) => r.dog_name && f.dogs!.includes(r.dog_name)) : allRows;
+  const metaRows = allRows.filter((r) => matchDogMeta(r, f));
+  const rows = f.dogs?.length ? metaRows.filter((r) => r.dog_name && f.dogs!.includes(r.dog_name)) : metaRows;
   const warnings = data?.warnings ?? [];
   const loading = isFetching || recomputing;
 
@@ -1686,7 +1694,8 @@ function LinkTab(p: {
           options={(projects ?? []).map((pr) => ({ value: pr.id, label: pr.name }))} />
         <Select mode="multiple" allowClear showSearch placeholder="全部狗" style={{ minWidth: 180 }} maxTagCount="responsive"
           value={f.dogs ?? []} onChange={(v) => setFilter({ dogs: v })}
-          options={dogOptions.map((d) => ({ value: d, label: d }))} />
+          options={dogOptions(metaRows)} />
+        <DogMetaFilter rows={allRows} value={f} onChange={setFilter} />
         <Checkbox checked={f.includeDrafts} onChange={(e) => setFilter({ includeDrafts: e.target.checked })}>
           人工版包含未审核的草稿
         </Checkbox>
@@ -1803,7 +1812,12 @@ function LinkTab(p: {
             sorter: (a: LinkRow, b: LinkRow) => a.date.localeCompare(b.date) || a.imu.localeCompare(b.imu),
             sortDirections: ["descend", "ascend"] as const,
           },
-          { title: "机位 / 狗", render: (_, r: LinkRow) => `${r.imu} / ${r.dog_name ?? p.opts.imu_dog_default_map[r.imu] ?? "?"}` },
+          { title: "机位 / 狗", render: (_, r: LinkRow) => (
+            <div>
+              {`${r.imu} / ${r.dog_name ?? p.opts.imu_dog_default_map[r.imu] ?? "?"}`}
+              {dogMetaText(r) && <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{dogMetaText(r)}</div>}
+            </div>
+          ) },
           { title: "任务进度", render: (_, r: LinkRow) => (
             <Space size={4}>
               <span>{r.tasks.approved}/{r.tasks.total} 已通过</span>
