@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
 import SkinAccuracy from "@/components/SkinAccuracy";
+import { MlResults, MlSimulate, MlTraining } from "@/components/SkinMl";
 import { SkinGradeHelp } from "@/components/SkinRatingBar";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
@@ -89,7 +90,7 @@ function SkinFull() {
   const [sCValue, setSCValue] = useState<number | null>(null);
   const [sCTierHint, setSCTierHint] = useState<string | null>(null);
   // 两个版本：PM 版（问答/IMU/C 值/S 总分/周报/历史/照片）和 ML 版（模型对比，后续在这里加）
-  const ML_TABS = new Set(["ml"]);
+  const ML_TABS = new Set(["ml-results", "ml-sim", "ml-train", "ml"]);
   const [version, setVersion] = useState<"pm" | "ml">("pm");
   // PM 版里再分两块：auto = 每天每只狗自动跑出来的长期跟踪；manual = 自己编数据验算规则
   const [pmMode, setPmMode] = useState<"auto" | "manual">("auto");
@@ -97,7 +98,7 @@ function SkinFull() {
   // 跟踪表点「去填问答」时在弹窗里填：看完不填直接关掉也能回到那张表，
   // 不像切 tab 那样把跟踪表的滚动位置和筛选弄丢
   const [qModal, setQModal] = useState(false);
-  const [mlTab, setMlTab] = useState("ml");
+  const [mlTab, setMlTab] = useState("ml-results");
   const tab = version === "pm" ? pmTab : mlTab;
   // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
   const AUTO_TABS = new Set(["tracking", "charts", "accuracy", "link", "weekly", "history", "photos"]);
@@ -165,14 +166,17 @@ function SkinFull() {
             ? "每天每只狗自动跑出来：IMU 抓挠统计 → C 值（AI 版 / 人工版）→ 要不要问答 → S 总分。长期跟踪看这里。"
             : version === "pm"
             ? "PM 版皮肤评估：问答分 → C 值（IMU 抓挠统计）→ S 总分（C×40% + 皮肤组×35% + 毛发组×25%）。分值规则全部在 imu_train/label_service 里（跟命令行 Gradio 版逐字一致），这里只做界面和记录存储。"
-            : "ML 版：同一套问答输入喂给合成数据训出来的模型 A/B，跟 PM 版结果对比。"}
+            : "ML 版：模型 A 预测 C 档、模型 B 预测 S 档。看每只狗每天的结果、造数据模拟、补数据重训都在这里。"}
         </Typography.Text>
       </Space>
       <Tabs
         activeKey={tab}
         onChange={setTab}
         items={(version === "ml" ? [
-          { key: "ml", label: "模型对比", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setVersion("pm"); setPmTab("q"); }} /> },
+          { key: "ml-results", label: "ML 结果", children: <MlResults /> },
+          { key: "ml-sim", label: "模拟（合成数据）", children: <MlSimulate /> },
+          { key: "ml-train", label: "模型与训练", children: <MlTraining /> },
+          { key: "ml", label: "逐天调试（老）", children: <MlTab opts={opts} answers={answers} dogName={dogName} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setPmMode("manual"); setVersion("pm"); setPmTab("q"); }} /> },
         ] : pmMode === "auto" ? [
           { key: "tracking", label: "每日跟踪表", children: (
             <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setQModal(true); }} />
@@ -2091,8 +2095,7 @@ function MlTab(p: { opts: SkinOptions; answers: Answers; dogName: string | null;
   return (
     <div>
       <Alert type="info" showIcon style={{ marginBottom: 12, maxWidth: 1000 }}
-        message="ML 版的日常用法已经搬到「PM 版 → 每日跟踪（自动）」里"
-        description="每日跟踪表的「ML（C / S）」列：每只狗每天都有，跟 PM 的 C / S、照片评级放一行；「准确率（对照兽医）」标签页：PM 规则和 ML 各跟兽医对上多少，还能用兽医评级重训模型 B。这一页是老的逐天调试工具，直接扫 NAS 上的 AI 结果目录。" />
+        message="这一页是老的逐天调试工具：直接扫 NAS 上的 AI 结果目录、一天一天点。每只狗每天的结果看「ML 结果」，造数据看模型怎么判看「模拟」，重训看「模型与训练」" />
       <Space.Compact style={{ width: "100%", maxWidth: 800 }}>
         <Input value={roots} onChange={(e) => setRoots(e.target.value)} />
         <Button type="primary" loading={busy === "scan"} onClick={async () => { setBusy("scan"); try { const r = await skinMlScan(roots); setRows(r.rows); setStatus(r.message); if (r.rows.length) setDateLabel(r.date_labels![r.date_labels!.length - 1]); } finally { setBusy(null); } }}>扫描</Button>

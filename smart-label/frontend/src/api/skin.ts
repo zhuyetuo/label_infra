@@ -240,7 +240,36 @@ export interface MlTrainReport {
   n_days: number; n_dogs: number; label_counts: Record<string, number>; folds: number; synthetic_weight: number;
   real: MlScore; synthetic: MlScore; pm: MlScore; trained_at: string;
 }
-export interface MlModelStatus { active: "synthetic" | "real"; has_real: boolean; real_report: MlTrainReport | null; min_real: number }
+export interface MlSyntheticReport {
+  trained_at: string; rows_a: number; rows_b: number; dogs_a: number; extra_scenarios: number;
+  c_counts: Record<string, number>; s_counts: Record<string, number>; cv_acc_a?: number; cv_acc_b?: number;
+}
+export interface MlScenario {
+  scenario_id?: string; breed?: string; n_days?: number; pattern?: string; severity_multiplier?: number;
+  onset_day?: number; peak_day?: number; recover_day?: number; spike_day?: number; cycle_period_days?: number; n_cycles?: number;
+  baseline_events_per_day?: number; baseline_duration_sec_min?: number; baseline_duration_sec_max?: number;
+  night_bias?: number; clustering_bias?: string; sleep_interrupt_injection?: boolean; long_scratch_injection?: boolean;
+  wear_quality?: string; noise_dispersion?: string; questionnaire_behavior?: string; description?: string;
+}
+export interface MlSimDay {
+  date: string; day: number; events: number; duration_min: number; wear_h: number; quality: string;
+  truth_c: string | null; ml_c: string | null; truth_s: string | null; ml_s: string | null; has_q: boolean;
+}
+export interface MlSimResult {
+  scenario: MlScenario; days: MlSimDay[]; model_b: string;
+  acc_c: { n: number; acc: number | null }; acc_s: { n: number; acc: number | null };
+}
+export interface MlModelStatus {
+  active: "synthetic" | "real"; has_real: boolean; real_report: MlTrainReport | null; min_real: number;
+  synthetic_report?: MlSyntheticReport | null;
+  extras?: { scenario_id: string; pattern?: string; breed?: string; n_days?: number; severity_multiplier?: number; description?: string }[];
+}
+export const mlScenarios = () => request.get<never, MlScenario[]>("/skin/ml/scenarios");
+export const mlSimulate = (s: MlScenario) => request.post<never, MlSimResult>("/skin/ml/simulate", s, { timeout: 300_000 });
+export const mlAddExtra = (s: MlScenario) => request.post<never, MlScenario[]>("/skin/ml/extra-scenarios", s);
+export const mlRemoveExtra = (scenario_id: string) => request.post<never, MlScenario[]>("/skin/ml/extra-scenarios/remove", { scenario_id });
+export const mlRetrainSynthetic = () =>
+  request.post<never, MlModelStatus & { warnings: string[] }>("/skin/ml/retrain-synthetic", {}, { timeout: 900_000 });
 export const mlModelStatus = () => request.get<never, MlModelStatus>("/skin/ml/model-status");
 export const mlTrainReal = (c_prefer: "ai" | "human") =>
   request.post<never, { ok: boolean; message?: string; report?: MlTrainReport }>("/skin/ml/train-real", null, { params: { c_prefer }, timeout: 600_000 });

@@ -64,9 +64,7 @@ export default function SkinAccuracy() {
     enabled: !!range?.date_from && !!range?.date_to,
     refetchOnWindowFocus: false,
   });
-  const { data: st, refetch: refetchSt } = useQuery({ queryKey: ["skin-ml-status"], queryFn: mlModelStatus, retry: false });
-  const [training, setTraining] = useState(false);
-  const [switching, setSwitching] = useState(false);
+  const { data: st } = useQuery({ queryKey: ["skin-ml-status"], queryFn: mlModelStatus, retry: false });
 
   const labeled = useMemo(() => (data?.rows ?? []).filter((r) => r.photo_grade_vet && GRADES.includes(r.photo_grade_vet)), [data]);
   const anyRated = (data?.rows ?? []).some((r) => r.photo_ratings?.length);
@@ -85,38 +83,6 @@ export default function SkinAccuracy() {
     return [...by].map(([name, pairs]) => ({ name, ...score(pairs) })).sort((a, b) => b.n - a.n);
   }, [labeled]);
   const wrong = labeled.filter((r) => pmS(r) !== r.photo_grade_vet || (r.ml?.s_tier && r.ml.s_tier !== r.photo_grade_vet));
-
-  const train = async () => {
-    setTraining(true);
-    try {
-      const r = await mlTrainReal(cPrefer);
-      if (!r.ok) message.warning(r.message ?? "没训练成");
-      else message.success("训练完了，看下面的对比再决定要不要启用");
-      refetchSt();
-    } catch (e) {
-      message.error(`训练失败：${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setTraining(false);
-    }
-  };
-  const activate = async (which: "real" | "synthetic") => {
-    setSwitching(true);
-    try {
-      const r = await mlActivate(which);
-      message.success(which === "real" ? "已启用兽医评级训练的模型 B，ML 结果已全部重算" : "已切回合成数据版模型 B");
-      r.warnings?.forEach((w) => message.warning(w));
-      refetchSt();
-      qc.invalidateQueries({ queryKey: ["skin-accuracy"] });
-      qc.invalidateQueries({ queryKey: ["skin-tracking"] });
-    } catch (e) {
-      message.error(`切换失败：${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setSwitching(false);
-    }
-  };
-
-  const rep = st?.real_report;
-  const repScore = (s?: MlScore) => (s && s.acc != null ? `${pct(s.acc)}（${s.n} 天）` : "—");
 
   return (
     <div>
@@ -215,6 +181,52 @@ export default function SkinAccuracy() {
         </>
       )}
 
+      <RealRetrainCard cPrefer={cPrefer} hasLabels={labeled.length > 0} />
+    </div>
+  );
+}
+
+
+/** 用兽医评级重训模型 B：训练、看交叉验证、启用 / 切回。准确率页和 ML 版「模型与训练」都用 */
+export function RealRetrainCard({ cPrefer, hasLabels }: { cPrefer: "ai" | "human"; hasLabels: boolean }) {
+  const qc = useQueryClient();
+  const { data: st, refetch: refetchSt } = useQuery({ queryKey: ["skin-ml-status"], queryFn: mlModelStatus, retry: false });
+  const [training, setTraining] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const train = async () => {
+    setTraining(true);
+    try {
+      const r = await mlTrainReal(cPrefer);
+      if (!r.ok) message.warning(r.message ?? "没训练成");
+      else message.success("训练完了，看下面的对比再决定要不要启用");
+      refetchSt();
+    } catch (e) {
+      message.error(`训练失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTraining(false);
+    }
+  };
+  const activate = async (which: "real" | "synthetic") => {
+    setSwitching(true);
+    try {
+      const r = await mlActivate(which);
+      message.success(which === "real" ? "已启用兽医评级训练的模型 B，ML 结果已全部重算" : "已切回合成数据版模型 B");
+      r.warnings?.forEach((w) => message.warning(w));
+      refetchSt();
+      qc.invalidateQueries({ queryKey: ["skin-accuracy"] });
+      qc.invalidateQueries({ queryKey: ["skin-ml-results"] });
+      qc.invalidateQueries({ queryKey: ["skin-tracking"] });
+    } catch (e) {
+      message.error(`切换失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const rep = st?.real_report;
+  const repScore = (s?: MlScore) => (s && s.acc != null ? `${pct(s.acc)}（${s.n} 天）` : "—");
+
+  return (
       <Card size="small" title="用兽医评级重训模型 B" style={{ marginTop: 12 }}
         extra={st && <Tag color={st.active === "real" ? "purple" : "default"}>现在用的：{st.active === "real" ? "兽医评级训练版" : "合成数据版"}</Tag>}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
@@ -223,7 +235,7 @@ export default function SkinAccuracy() {
           训练不会自动启用；启用后库里所有天的 ML 结果按新模型重算。
         </Typography.Paragraph>
         <Space wrap>
-          <Button type="primary" loading={training} onClick={train} disabled={!labeled.length}>
+          <Button type="primary" loading={training} onClick={train} disabled={!hasLabels}>
             {training ? "训练中（半分钟到几分钟）" : "用现在的兽医评级训练"}
           </Button>
           {st?.has_real && st.active !== "real" && (
@@ -254,6 +266,5 @@ export default function SkinAccuracy() {
           </div>
         )}
       </Card>
-    </div>
   );
 }
