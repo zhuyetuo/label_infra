@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Alert, Button, Checkbox, InputNumber, Select, Space, Spin, Table, Tag, Tooltip, Typography, theme } from "antd";
+import { Alert, Button, Checkbox, InputNumber, Select, Space, Spin, Table, Tag, Tooltip, TreeSelect, Typography, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { listLabels } from "@/api/labels";
 import { listProjects } from "@/api/projects";
-import { classCompare, type CompareFeature, type CompareResult } from "@/api/dataPool";
+import { classCompare, comparePreview, type CompareFeature, type ComparePreviewSide, type CompareResult } from "@/api/dataPool";
+import { fmtSecs } from "@/utils/fmtDuration";
 
 const COLOR_A = "#fa8c16";
 const COLOR_B = "#1677ff";
@@ -51,13 +52,33 @@ export default function ClassCompare() {
     () => [...new Set((labels ?? []).map((l) => l.display_name))].sort((x, y) => x.localeCompare(y)),
     [labels],
   );
+  // 类别按层级摆（抓挠 → 头颈耳 / 肩胸 / 躯干…），按名字合并各项目的同名标签；选上级就含全部细类
+  type TNode = { value: string; title: string; full: string; children?: TNode[] };
+  const tree = useMemo<TNode[]>(() => {
+    const byId = new Map((labels ?? []).map((l) => [l.id, l]));
+    const parentName = new Map<string, string | null>();
+    for (const l of labels ?? []) {
+      const p = l.parent_id != null ? byId.get(l.parent_id)?.display_name ?? null : null;
+      if (!parentName.has(l.display_name) || (p && !parentName.get(l.display_name))) parentName.set(l.display_name, p);
+    }
+    const kids = new Map<string | null, string[]>();
+    for (const [n, p] of parentName) kids.set(p, [...(kids.get(p) ?? []), n]);
+    const build = (p: string | null): TNode[] =>
+      (kids.get(p) ?? []).sort((x, y) => x.localeCompare(y)).map((n) => {
+        const ch = build(n);
+        const short = p && n.startsWith(p + "-") ? n.slice(p.length + 1) : n;
+        return { value: n, title: short, full: n, ...(ch.length ? { children: ch } : {}) };
+      });
+    return build(null);
+  }, [labels]);
   const pick = (want: string[]) => names.filter((n) => want.includes(n)).slice(0, 1);
   const [a, setA] = useState<string[] | null>(null);
   const [b, setB] = useState<string[] | null>(null);
   const valA = a ?? pick(["未佩戴"]);
   const valB = b ?? pick(["静止/休息", "睡觉", "静止"]);
   const [projectIds, setProjectIds] = useState<number[]>([]);
-  const [poolOnly, setPoolOnly] = useState(false);
+  // 默认只用数据池：池里是认可过、标得准的；全部已标注里混着没人看过的 AI 片段，比出来不可信
+  const [poolOnly, setPoolOnly] = useState(true);
   const [winS, setWinS] = useState(10);
   const [maxSeg, setMaxSeg] = useState(80);
   const [busy, setBusy] = useState(false);
@@ -75,8 +96,36 @@ export default function ClassCompare() {
     }
   };
 
-  const top = res?.features?.[0];
-  const opts = names.map((n) => ({ value: n, label: n }));
+  // 对比之前先看两类各有多少数据能用（不读 CSV，很快）
+  const { data: pv, isFetching: pvLoading } = useQuery({
+    queryKey: ["cmp-preview", valA, valB, projectIds, poolOnly, winS],
+    queryFn: () => comparePreview({ a: valA, b: valB, project_ids: projectIds.length ? projectIds : undefined, pool_only: poolOnly, win_s: winS }),
+    enabled: valA.length > 0 || valB.length > 0,
+  });
+  const pvLine = (side: "A" | "B", color: string, d?: ComparePreviewSide) => {
+    if (!d) return null;
+    if (!d.segments) {
+      return (
+        <div style={{ color: "#ff4d4f" }}>
+          <Tag color={color}>{side}</Tag>没有数据{poolOnly ? "（数据池里还没有这一类？取消「只用数据池」试试，或者先去项目页把认可的片段加入数据池）" : ""}
+        </div>
+      );
+    }
+    return (
+      <div>
+        <Tag color={color}>{side}</Tag>
+        {d.segments} 段 · {d.samples} 个样本 · 共 {fmtSecs(d.total_s)}
+        <Typography.Text type="secondary">
+          {" "}——≥{winS} 秒的 {d.long} 段{d.short ? `，比窗口短的 ${d.short} 段整段算` : ""}{d.too_short ? `，不到 1 秒的 ${d.too_short} 段不用` : ""}，约 {d.windows} 个窗口
+          {d.samples < 5 ? "；样本少，比出来的可能是设备差异" : ""}
+        </Typography.Text>
+      </div>
+    );
+  };
+  const noData = !!pv && (!pv.a.windows || !pv.b.windows);
+
+  // 结论按「跨设备可靠」的维度里最好的那个说
+  const top = res?.features?.find((f) => !f.device_sensitive) ?? res?.features?.[0];
 
   return (
     <div>
@@ -89,10 +138,14 @@ export default function ClassCompare() {
       />
       <Space wrap style={{ marginBottom: 12 }}>
         <Typography.Text><Tag color={COLOR_A}>A</Tag>
-          <Select mode="multiple" showSearch style={{ minWidth: 200 }} value={valA} onChange={setA} options={opts} placeholder="类别 A（含细类）" />
+          <TreeSelect multiple showSearch treeLine style={{ minWidth: 220 }} popupMatchSelectWidth={false} value={valA}
+            onChange={(v) => setA(v as string[])} treeData={tree} treeNodeFilterProp="full" treeNodeLabelProp="full"
+            placeholder="类别 A（选上级含细类）" />
         </Typography.Text>
         <Typography.Text>对比 <Tag color={COLOR_B}>B</Tag>
-          <Select mode="multiple" showSearch style={{ minWidth: 200 }} value={valB} onChange={setB} options={opts} placeholder="类别 B（含细类）" />
+          <TreeSelect multiple showSearch treeLine style={{ minWidth: 220 }} popupMatchSelectWidth={false} value={valB}
+            onChange={(v) => setB(v as string[])} treeData={tree} treeNodeFilterProp="full" treeNodeLabelProp="full"
+            placeholder="类别 B（选上级含细类）" />
         </Typography.Text>
         <Select mode="multiple" allowClear placeholder="项目（默认全部）" style={{ minWidth: 200 }} value={projectIds}
           onChange={setProjectIds} optionFilterProp="label" options={(projects ?? []).map((p) => ({ value: p.id, label: p.name }))} />
@@ -105,8 +158,16 @@ export default function ClassCompare() {
         <Tooltip title="每类最多抽这么多段（越多越准，也越慢：要读原始 CSV）">
           <InputNumber min={5} max={300} value={maxSeg} onChange={(v) => setMaxSeg(v ?? 80)} addonBefore="每类" addonAfter="段" style={{ width: 150 }} />
         </Tooltip>
-        <Button type="primary" loading={busy} disabled={!valA.length || !valB.length} onClick={run}>对比</Button>
+        <Button type="primary" loading={busy} disabled={!valA.length || !valB.length || noData} onClick={run}>对比</Button>
       </Space>
+      {/* 要用哪些数据：选完类别就出来，先确认有数据再比 */}
+      <Spin spinning={pvLoading} size="small">
+        <div style={{ fontSize: 12, lineHeight: 2, marginBottom: 12, minHeight: 24 }}>
+          <Typography.Text type="secondary">将使用{poolOnly ? "数据池里" : "全部已标注"}的片段：</Typography.Text>
+          {pvLine("A", COLOR_A, pv?.a)}
+          {pvLine("B", COLOR_B, pv?.b)}
+        </div>
+      </Spin>
 
       <Spin spinning={busy} tip="读原始数据、算特征…（要读几十个 CSV，可能要几十秒）">
         {res?.error && <Alert type="warning" showIcon message={res.error} style={{ marginBottom: 12 }} />}
@@ -117,6 +178,9 @@ export default function ClassCompare() {
               <Typography.Text><Tag color={COLOR_B}>B {res.b.names.join("、")}</Tag>{res.b.segments} 段 · {res.b.windows} 个窗口 · {res.b.samples} 个样本</Typography.Text>
               <Typography.Text type="secondary">窗口 {res.win_s} 秒</Typography.Text>
             </Space>
+            {(res.warnings ?? []).map((w) => (
+              <Alert key={w} type="warning" showIcon message={w} style={{ marginBottom: 8 }} />
+            ))}
             {top && (
               <Alert
                 style={{ marginBottom: 12 }}
@@ -148,6 +212,11 @@ export default function ClassCompare() {
                   render: (_, f) => (
                     <div>
                       <b>{f.name}</b>
+                      {f.device_sensitive && (
+                        <Tooltip title="这个量主要随设备标定 / 放置角度变：两类来自不同项圈时，比出来的差多半是换了项圈，不是类别差异">
+                          <Tag color="default" style={{ marginLeft: 6, fontSize: 11 }}>跨设备不可靠</Tag>
+                        </Tooltip>
+                      )}
                       <div style={{ fontSize: 11, color: "#888" }}>{f.hint}</div>
                     </div>
                   ),

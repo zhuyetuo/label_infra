@@ -105,7 +105,7 @@ class CompareIn(BaseModel):
     a: list[str]
     b: list[str]
     project_ids: list[int] | None = None
-    pool_only: bool = False
+    pool_only: bool = True
     win_s: float = 10.0
     max_segments: int = 80
 
@@ -121,3 +121,16 @@ async def post_compare(body: CompareIn, db: AsyncSession = Depends(get_db), user
     win_s = min(max(body.win_s, 1.0), 120.0)
     n = min(max(body.max_segments, 5), 300)
     return ok(await class_compare.compare(db, body.a, body.b, body.project_ids, body.pool_only, win_s, n))
+
+
+@router.post("/compare-preview")
+async def post_compare_preview(body: CompareIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """对比之前先看两类各有多少数据能用（不读 CSV，很快）"""
+    from app.services import class_compare
+
+    _require_curator(user)
+    win_s = min(max(body.win_s, 1.0), 120.0)
+    return ok({
+        "a": await class_compare.preview(db, body.a, body.project_ids, body.pool_only, win_s),
+        "b": await class_compare.preview(db, body.b, body.project_ids, body.pool_only, win_s),
+    })
