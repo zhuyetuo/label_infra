@@ -106,3 +106,18 @@ def test_字段不能叫children(ds):
     row = label_stats([ds])["rows"][0]
     assert "sub_labels" in row
     assert "children" not in row
+
+
+def test_比窗口短的片段数_大类和细类都有(ds, tmp_path):
+    """训练页「短促动作补齐」按这个数默认勾选——不按类别名猜（抓挠也常常很短）"""
+    p = tmp_path / TRAIN_DIR / ds / "merged_tmp.json"
+    tasks = json.loads(p.read_text(encoding="utf-8"))
+    tasks[0]["annotations"][0]["result"] += [
+        _seg(["抓挠", "抓挠-躯干"], "2026-09-23 11:00:00.000", "2026-09-23 11:00:01.200"),
+        _seg(["甩头/抖身"], "2026-09-23 11:01:00.000", "2026-09-23 11:01:01.500"),
+    ]
+    p.write_text(json.dumps(tasks), encoding="utf-8")
+    rows = {r["label"]: r for r in label_stats([ds])["rows"]}
+    assert rows["抓挠"]["n_short"] == 1 and rows["甩头/抖身"]["n_short"] == 1 and rows["舔"]["n_short"] == 0
+    kids = {k["label"]: k for k in rows["抓挠"]["sub_labels"]}
+    assert kids["抓挠-躯干"]["n_short"] == 1 and kids["抓挠-头颈耳"]["n_short"] == 0

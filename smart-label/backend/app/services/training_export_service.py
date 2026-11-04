@@ -66,6 +66,8 @@ from app.services.skin_link_service import _read_ai_json
 
 TRAIN_DIR = "data_train"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+# 训练窗口默认长度（imu_train configs/data.yaml 的 window_seconds）。比它短的片段训练时会被丢掉 / 吞掉
+SHORT_WINDOW_S = 2.0
 
 
 class TrainingExportError(Exception):
@@ -863,6 +865,10 @@ def label_stats(names: list[str]) -> dict:
     per_leaf_sec: dict[str, Counter] = {}
     # 细类的整条链（[舔, 舔-前爪, 舔-前左爪]）：训练时「太少的并进上一级」要知道上一级是谁
     leaf_chain: dict[tuple[str, str], list[str]] = {}
+    # 比训练窗口（默认 2 秒）短的片段有几段：这些不补齐的话训练时会被丢掉 / 被多数投票吞掉，
+    # 训练页「短促动作补齐」按这个数默认勾、给人看（不按类别名猜——抓挠也常常很短）
+    short_c: Counter = Counter()
+    short_leaf: Counter = Counter()
     missing: list[str] = []
     for name in names:
         if not _NAME_RE.match(name):
@@ -890,6 +896,9 @@ def label_stats(names: list[str]) -> dict:
                         sec = 0.0
                     c[labels[0]] += 1
                     s[labels[0]] += sec
+                    if 0 < sec < SHORT_WINDOW_S:
+                        short_c[labels[0]] += 1
+                        short_leaf[(labels[0], labels[-1])] += 1
                     lc[(labels[0], labels[-1])] += 1
                     ls[(labels[0], labels[-1])] += sec
                     leaf_chain.setdefault((labels[0], labels[-1]), list(labels))
@@ -923,6 +932,7 @@ def label_stats(names: list[str]) -> dict:
                 "is_root_only": leaf == root,
                 "chain": leaf_chain.get((root, leaf), [root, leaf]),
                 "n_segments": n,
+                "n_short": short_leaf[(root, leaf)],
                 "seconds": round(sec, 1),
                 "pct_in_parent": round(sec / base * 100, 1),
                 "by_dataset": {d: round(per_leaf_sec[d][(root, leaf)], 1)
@@ -935,6 +945,7 @@ def label_stats(names: list[str]) -> dict:
         {
             "label": k,
             "n_segments": total_c[k],
+            "n_short": short_c[k],
             "seconds": round(total_s[k], 1),
             "hours": round(total_s[k] / 3600, 3),
             "pct": round(total_s[k] / grand * 100, 2),

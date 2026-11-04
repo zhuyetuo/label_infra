@@ -171,6 +171,8 @@ export type LabelStatChild = {
   /** 整条链 [舔, 舔-前爪, 舔-前左爪]：「并进上一级」要知道上一级是谁（老后端没有） */
   chain?: string[];
   n_segments: number;
+  /** 比训练窗口（2 秒）短的片段数：不补齐会在训练时被丢掉 / 吞掉（老后端没有） */
+  n_short?: number;
   seconds: number;
   /** 占**本大类**的百分比，不是占全局：要回答的是"抓挠里头颈耳占多少" */
   pct_in_parent: number;
@@ -180,6 +182,8 @@ export type LabelStatChild = {
 export type LabelStatRow = {
   label: string;
   n_segments: number;
+  /** 比训练窗口（2 秒）短的片段数（老后端没有） */
+  n_short?: number;
   seconds: number;
   hours: number;
   pct: number;
