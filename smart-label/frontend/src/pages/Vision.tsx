@@ -74,9 +74,13 @@ function rectToBox(x0: number, y0: number, x1: number, y1: number, w: number, h:
   return [cx, cy, Math.min(bw, 1 - cx), Math.min(bh, 1 - cy)];
 }
 
-export default function Vision() {
+/**
+ * fixedAlbum：嵌在「牙齿识别 → 口腔实例分割」里时固定口腔相册、不显示口腔 / 皮肤切换；
+ * embedded：上面多了一排标签页，整体高度让出来
+ */
+export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAlbum; embedded?: boolean } = {}) {
   const qc = useQueryClient();
-  const [album, setAlbum] = useState<VisionAlbum>("oral");
+  const [album, setAlbum] = useState<VisionAlbum>(fixedAlbum ?? "oral");
   const [current, setCurrent] = useState<string | null>(null);
   const [items, setItems] = useState<Draft[]>([]);
   const [assetAttrs, setAssetAttrs] = useState<Record<string, number | string>>({});
@@ -794,7 +798,7 @@ export default function Vision() {
   if (error) return <Alert type="error" showIcon message="照片目录读不到" description={String(error)} />;
 
   return (
-    <div style={{ display: "flex", gap: 12, height: "calc(100vh - 120px)" }}>
+    <div style={{ display: "flex", gap: 12, height: embedded ? "calc(100vh - 170px)" : "calc(100vh - 120px)" }}>
       {/* 左：照片列表 */}
       <Card
         size="small"
@@ -802,13 +806,15 @@ export default function Vision() {
         styles={{ body: { overflow: "auto", flex: 1, padding: 8 } }}
         title={
           <Space direction="vertical" size={4} style={{ width: "100%" }}>
-            <Segmented
-              size="small"
-              block
-              value={album}
-              onChange={(v) => setAlbum(v as VisionAlbum)}
-              options={[{ label: "口腔", value: "oral" }, { label: "皮肤", value: "skin" }]}
-            />
+            {!fixedAlbum && (
+              <Segmented
+                size="small"
+                block
+                value={album}
+                onChange={(v) => setAlbum(v as VisionAlbum)}
+                options={[{ label: "口腔", value: "oral" }, { label: "皮肤", value: "skin" }]}
+              />
+            )}
             {/* 「未标」用的是 state==="todo"，跳过的不算——那是人看过之后判定
                 不要的，再列进未标里会一直挂在那儿，永远清不完 */}
             <Segmented

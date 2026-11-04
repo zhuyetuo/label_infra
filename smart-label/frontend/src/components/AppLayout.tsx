@@ -18,13 +18,13 @@ const ALL_ITEMS = [
   { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
   // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
-  { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin"], feature: "tooth" },
+  // 两个标签页：牙齿检测（要「牙齿识别」权限）+ 口腔实例分割（原「视觉标注」，标注员 / 审核员也能进）
+  { key: "/tooth", label: "牙齿识别", roles: ["super_admin", "admin", "annotator", "reviewer"], feature: "tooth" },
   // 非管理员（兽医 / 实习生）进来只看到「皮肤照片」评级那一块
   { key: "/skin", label: "皮肤评估", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/daily-stats", label: "日常统计", roles: ["super_admin", "admin"] },
   { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
   { key: "/workforce", label: "人力管理", roles: ["super_admin", "admin"] },
-  { key: "/vision", label: "视觉标注", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/training", label: "模型训练", roles: ["super_admin", "admin"] },
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
   { key: "/llm-providers", label: "模型服务", roles: ["super_admin", "admin"] },
