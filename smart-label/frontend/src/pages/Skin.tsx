@@ -58,7 +58,7 @@ function SkinPhotosOnly() {
         <Typography.Title level={4} style={{ margin: 0 }}>皮肤照片</Typography.Title>
         <SkinGradeHelp />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          看完一只狗的全部照片，在它标题栏右边点一档；点已选的那档撤销。各评各的，别人的评级显示在旁边
+          看完一只狗的全部照片，在它标题栏右边点一档；评错了点「撤销」。各评各的，互相看不到
         </Typography.Text>
       </Space>
       <PhotoGallery album="skin" rating hint="皮肤瘙痒问诊照片，来自素材库 NAS" />

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Checkbox, Collapse, Empty, Image, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Checkbox, Collapse, Empty, Image, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMaterialPhotoToken, listMaterialPhotos, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
-import SkinRatingBar from "@/components/SkinRatingBar";
+import SkinRatingBar, { SKIN_GRADES } from "@/components/SkinRatingBar";
 import { useAuthStore } from "@/stores/authStore";
 import { getSavedText, saveText } from "@/utils/persistedSize";
 
@@ -17,6 +17,9 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
 }) {
   const { data: raw, isLoading, error } = useQuery({ queryKey: ["material-photos", album], queryFn: () => listMaterialPhotos(album) });
   const userId = useAuthStore((s) => s.userInfo?.id);
+  const role = useAuthStore((s) => s.userInfo?.role);
+  // 管理员看得到所有人的评级（后端也只给管理员返回别人的），用来对一致性、看实习生评得准不准
+  const isAdmin = role === "admin" || role === "super_admin";
   const { data: ratings, refetch: refetchRatings } = useQuery({
     queryKey: ["photo-ratings", album], queryFn: () => listPhotoRatings(album), enabled: !!rating,
   });
@@ -29,6 +32,10 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
   );
   const isMine = (folder: string, dogName: string) => mineDone.has(`${folder}\u0000${dogName}`);
   const [onlyTodo, setOnlyTodo] = useState(false);
+  const [onlyDiff, setOnlyDiff] = useState(false);
+  // 几个人评的档不一样（看不清不算）
+  const isDiff = (folder: string, dogName: string) =>
+    new Set(ratingsOf(folder, dogName).map((r) => r.grade).filter((g) => g !== "unsure")).size > 1;
   // 来源（视频问诊 / 雷喏斯达 / 博朗旺…）和狗：几个地方很多天混在一起没法看，先按来源分开。
   // 从外面带了日期/狗进来（每日跟踪表里点「N 张」）时不显示这两个筛选，只看那一格
   const pinned = !!(filterDate || filterDog);
@@ -51,11 +58,33 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     const folders = base
       // 按解析出来的日期比：狗场那几棵树的目录名开头是树名，按前 10 个字符比永远对不上
       .filter((f) => !wantDate || f.date === wantDate)
-      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => (!wantDog || d.name === wantDog) && !(onlyTodo && isMine(f.folder, d.name))) }))
+      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => (!wantDog || d.name === wantDog) && !(onlyTodo && isMine(f.folder, d.name)) && !(onlyDiff && !isDiff(f.folder, d.name))) }))
       .filter((f) => f.dogs.length > 0);
     return { ...raw, folders };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, mineDone]);
+  }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, onlyDiff, mineDone, ratings]);
+  // 管理员：当前来源里每个评级人评了多少、各档几次、跟别人不一致几次
+  const raterStats = useMemo(() => {
+    if (!isAdmin || !rating) return null;
+    const groups = inSource.flatMap((f) => f.dogs.map((d) => ({ folder: f.folder, dog: d.name })));
+    const inGroup = new Set(groups.map((g) => `${g.folder}\u0000${g.dog}`));
+    const rs = (ratings ?? []).filter((r) => inGroup.has(`${r.folder}\u0000${r.dog_folder}`));
+    const by = new Map<number, { user_id: number; name: string; role: string; n: number; grades: Record<string, number>; diff: number }>();
+    for (const r of rs) {
+      const u = by.get(r.user_id) ?? { user_id: r.user_id, name: r.user_name, role: r.user_role, n: 0, grades: {}, diff: 0 };
+      u.n += 1;
+      u.grades[r.grade] = (u.grades[r.grade] ?? 0) + 1;
+      if (r.grade !== "unsure" && ratingsOf(r.folder, r.dog_folder).some((o) => o.user_id !== r.user_id && o.grade !== "unsure" && o.grade !== r.grade)) u.diff += 1;
+      by.set(r.user_id, u);
+    }
+    let multi = 0, diff = 0;
+    for (const g of groups) {
+      if (new Set(ratingsOf(g.folder, g.dog).map((r) => r.user_id)).size >= 2) multi += 1;
+      if (isDiff(g.folder, g.dog)) diff += 1;
+    }
+    return { total: groups.length, users: [...by.values()].sort((a, b) => b.n - a.n), multi, diff };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, rating, inSource, ratings]);
   // 每个来源：几次评估（日期×狗）、我评了几次、多少张
   const countOf = (src: string) => {
     let n = 0, done = 0, photos = 0;
@@ -153,7 +182,31 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
         {rating && (
           <Checkbox checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)}>只看我还没评的</Checkbox>
         )}
+        {rating && isAdmin && (
+          <Checkbox checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)}>只看评得不一样的</Checkbox>
+        )}
       </Space>
+      {raterStats && (
+        <div style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            评级情况（只有管理员看得到；兽医 / 实习生只看到自己的）：这里一共 {raterStats.total} 次评估，
+            {raterStats.multi} 次有两人以上评过，其中 <Typography.Text type={raterStats.diff ? "warning" : "secondary"}>{raterStats.diff} 次评得不一样</Typography.Text>
+          </Typography.Text>
+          {raterStats.users.length > 0 && (
+            <Table size="small" rowKey="user_id" pagination={false} style={{ marginTop: 6, maxWidth: 760 }} dataSource={raterStats.users}
+              columns={[
+                { title: "评级人", dataIndex: "name" },
+                { title: "已评", render: (_: unknown, u) => `${u.n} / ${raterStats.total}` },
+                ...SKIN_GRADES.map((g) => ({
+                  title: g.label, align: "center" as const,
+                  render: (_: unknown, u: { grades: Record<string, number> }) => u.grades[g.value] ?? 0,
+                })),
+                { title: <Tooltip title="同一只狗同一天，这个人评的档跟其他人至少一个不一样（看不清不算）">跟别人不一样</Tooltip>,
+                  render: (_: unknown, u) => (u.diff ? <Typography.Text type="warning">{u.diff}</Typography.Text> : 0) },
+              ]} />
+          )}
+        </div>
+      )}
     </>
   );
   if (!data?.folders.length) return <div>{filters}{problemAlert}<Empty description="还没有照片" /></div>;
@@ -224,6 +277,20 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
               {rating && (() => {
                 const done = f.dogs.filter((d) => ratingsOf(f.folder, d.name).some((r) => r.user_id === userId)).length;
                 return <Tag color={done === f.dogs.length ? "success" : "processing"}>我已评 {done}/{f.dogs.length}</Tag>;
+              })()}
+              {rating && isAdmin && (() => {
+                // 管理员：这一天每个人评了几只
+                const cnt = new Map<string, number>();
+                for (const r of ratings ?? []) {
+                  if (r.folder === f.folder && r.user_id !== userId && f.dogs.some((d) => d.name === r.dog_folder)) cnt.set(r.user_name, (cnt.get(r.user_name) ?? 0) + 1);
+                }
+                const diff = f.dogs.filter((d) => isDiff(f.folder, d.name)).length;
+                return (
+                  <>
+                    {[...cnt].map(([n, c]) => <Tag key={n} style={{ marginRight: 0 }}>{n} {c}/{f.dogs.length}</Tag>)}
+                    {diff > 0 && <Tag color="warning" style={{ marginRight: 0 }}>{diff} 只评得不一样</Tag>}
+                  </>
+                );
               })()}
             </Space>
           ),
