@@ -11,6 +11,7 @@ import {
 } from "@/api/skin";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta, type DogMetaValue } from "@/components/DogMetaFilter";
 import { RealRetrainCard } from "@/components/SkinAccuracy";
+import { MlExplainDrawer } from "@/components/SkinMlExplain";
 
 const tierColor = (t?: string | null) => (t?.endsWith("2") ? "red" : t?.endsWith("1") ? "orange" : t ? "green" : undefined);
 const pct = (x?: number | null) => (x == null ? "—" : `${Math.round(x * 100)}%`);
@@ -33,6 +34,8 @@ export function MlResults() {
   });
   const { data: st } = useQuery({ queryKey: ["skin-ml-status"], queryFn: mlModelStatus, retry: false });
   const [meta, setMeta] = useState<DogMetaValue>({});
+  const [explain, setExplain] = useState<{ imu: string; date: string; dog?: string } | null>(null);
+  const open = (r: TrackingRow) => setExplain({ imu: r.imu, date: r.date, dog: r.dog_name });
   const [dogs, setDogs] = useState<string[]>([]);
   const all = data?.rows ?? [];
   const metaRows = all.filter((r) => matchDogMeta(r, meta));
@@ -91,13 +94,13 @@ export function MlResults() {
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           { title: "狗", width: 170, render: (_: unknown, r: TrackingRow) => <div>{r.dog_name}<div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{dogMetaText(r)}</div></div> },
           { title: "抓挠", render: (_: unknown, r: TrackingRow) => {
-            const s = r.stats as { count?: number; total_duration_min?: number } | null;
-            return s?.count != null ? `${s.count} 次 / ${(s.total_duration_min ?? 0).toFixed(1)} 分` : "—";
+            const s = r.stats as { event_count?: number; total_duration_min?: number } | null;
+            return s?.event_count != null ? `${s.event_count} 次 / ${(s.total_duration_min ?? 0).toFixed(1)} 分` : "—";
           } },
           {
             title: <Tooltip title="模型 A 预测的 C 档（本质是 PM 抓挠规则的近似）">ML C</Tooltip>,
             render: (_: unknown, r: TrackingRow) => r.ml?.c_tier
-              ? <Tooltip title={probaText(r.ml.c_proba)}><Tag color={tierColor(r.ml.c_tier)}>{r.ml.c_tier}</Tag></Tooltip>
+              ? <Tooltip title={`${probaText(r.ml.c_proba)}（点开看为什么）`}><Tag color={tierColor(r.ml.c_tier)} style={{ cursor: "pointer" }} onClick={() => open(r)}>{r.ml.c_tier}</Tag></Tooltip>
               : <Tooltip title={r.ml?.reason}><Typography.Text type="secondary">—</Typography.Text></Tooltip>,
           },
           {
@@ -105,11 +108,15 @@ export function MlResults() {
             sorter: (a: TrackingRow, b: TrackingRow) => (a.ml?.s_tier ?? "").localeCompare(b.ml?.s_tier ?? ""),
             render: (_: unknown, r: TrackingRow) => r.ml?.s_tier
               ? (
-                <Tooltip title={`${probaText(r.ml.s_proba)}${r.ml.used_questionnaire ? "（用上了问卷）" : ""}`}>
-                  <Tag color={tierColor(r.ml.s_tier)}>{r.ml.s_tier}</Tag>{r.ml.used_questionnaire && <Typography.Text type="secondary" style={{ fontSize: 11 }}>问卷</Typography.Text>}
+                <Tooltip title={`${probaText(r.ml.s_proba)}${r.ml.used_questionnaire ? "（用上了问卷）" : ""}（点开看为什么）`}>
+                  <Tag color={tierColor(r.ml.s_tier)} style={{ cursor: "pointer" }} onClick={() => open(r)}>{r.ml.s_tier}</Tag>{r.ml.used_questionnaire && <Typography.Text type="secondary" style={{ fontSize: 11 }}>问卷</Typography.Text>}
                 </Tooltip>
               )
               : <Typography.Text type="secondary">—</Typography.Text>,
+          },
+          {
+            title: "", key: "why", render: (_: unknown, r: TrackingRow) =>
+              r.ml?.s_tier ? <Button size="small" type="link" onClick={() => open(r)}>为什么</Button> : null,
           },
           { title: "PM C", render: (_: unknown, r: TrackingRow) => r.c_tier ? <span>{r.c_value} <Tag color={tierColor(r.c_tier)}>{r.c_tier}</Tag></span> : "—" },
           { title: "PM S", render: (_: unknown, r: TrackingRow) => pmS(r) ? <Tag color={tierColor(pmS(r))}>{pmS(r)}</Tag> : "—" },
@@ -122,6 +129,7 @@ export function MlResults() {
           },
         ]}
       />
+      <MlExplainDrawer target={explain} cPrefer={cPrefer} onClose={() => setExplain(null)} />
     </div>
   );
 }

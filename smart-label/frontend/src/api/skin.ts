@@ -275,3 +275,23 @@ export const mlTrainReal = (c_prefer: "ai" | "human") =>
   request.post<never, { ok: boolean; message?: string; report?: MlTrainReport }>("/skin/ml/train-real", null, { params: { c_prefer }, timeout: 600_000 });
 export const mlActivate = (which: "synthetic" | "real") =>
   request.post<never, MlModelStatus & { warnings: string[] }>("/skin/ml/activate", { which }, { timeout: 300_000 });
+
+// ── ML 可解释性 ──
+export interface MlFeatureInfo {
+  feature: string; name: string; group: string; calc?: string | null; role?: string | null;
+  in_a: boolean; in_b: boolean; imp_a?: number | null; imp_b?: number | null;
+}
+export const mlFeatures = () =>
+  request.get<never, { features: MlFeatureInfo[]; breeds_seen: string[]; model_b: string }>("/skin/ml/features", { timeout: 600_000 });
+export interface MlFeatureValue {
+  feature: string; name: string; group: string; value: number | string | null; role?: string | null;
+  p10?: number; p50?: number; p90?: number; pct?: number | null; out_of_range?: boolean; delta?: number;
+}
+export interface MlExplain {
+  ok: boolean; message?: string; pet_id: string; date: string;
+  a: { tier: string; proba: Record<string, number>; top: MlFeatureValue[] };
+  b: { tier: string; proba: Record<string, number>; top: MlFeatureValue[]; source: string };
+  features: MlFeatureValue[]; notes: string[];
+}
+export const mlExplain = (p: { imu: string; date: string; c_prefer?: "ai" | "human" }) =>
+  request.get<never, MlExplain>("/skin/ml/explain", { params: p, timeout: 180_000 });
