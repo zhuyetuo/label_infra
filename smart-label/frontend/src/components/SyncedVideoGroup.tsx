@@ -424,7 +424,8 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // 位置 / 大小 / 开没开都记在 localStorage，下次打开任务还是那样
   // gap：画面浮出去之后，页面顶上留多高的空位（下面的波形 / 片段列表整体往下挪），
   // 浮窗和波形小窗可以放在这块空位上，不挡工作栏
-  type FloatCfg = { on: boolean; left: number; top: number; w: number; h: number; locked: boolean; gap: number };
+  // solo：浮窗里只看哪一路（按这一路的名字记，任务换了、那一路不在就回到全部）
+  type FloatCfg = { on: boolean; left: number; top: number; w: number; h: number; locked: boolean; gap: number; solo?: string | null };
   const [flt, setFltState] = useState<FloatCfg>(() => {
     const d: FloatCfg = { on: false, left: Math.max(0, window.innerWidth - 700), top: 80, w: 640, h: 400, locked: false, gap: 0 };
     try {
@@ -441,6 +442,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     }
   });
   const floating = !!fill && flt.on;
+  // 浮窗里只看一路：别的几路照样在后台同步播放（只是不显示），切回「全部」不用重新对时间
+  const soloIdx = floating && flt.solo ? videos.findIndex((v) => v.label === flt.solo) : -1;
+  const shown = (i: number) => soloIdx < 0 || i === soloIdx;
   const [fltHover, setFltHover] = useState(false);
   const saveFlt = (next: FloatCfg) => {
     try {
@@ -961,7 +965,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   // shrinkToFit（比如波形展开全部、外部把宽度收窄了）时只按宽度推算高度，
   // 让视频区跟着变矮，把空出来的高度让给别的区域；否则再跟可用高度取较小值兜底，
   // 保证不会超出容器——不会裁，最多某一侧留一点空隙。
-  const sumAspect = videos.reduce((sum, _v, i) => sum + (aspects[i] ?? 16 / 9), 0) || 1;
+  const sumAspect = videos.reduce((sum, _v, i) => sum + (shown(i) ? aspects[i] ?? 16 / 9 : 0), 0) || 1;
   const rowHeight =
     rowSize.w <= 0
       ? 0
@@ -1218,6 +1222,24 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
             opacity: fltHover ? 1 : 0, transition: "opacity .15s",
           }}
         >
+          {videos.length > 1 && (
+            <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 2 }}>
+              {[{ key: null as string | null, text: "全部" }, ...videos.map((v) => ({ key: v.label as string | null, text: v.label }))].map((o) => {
+                const on = (o.key ?? null) === (soloIdx >= 0 ? flt.solo : null);
+                return (
+                  <Tooltip key={o.text} title={o.key ? `只看 ${o.key}，放大铺满浮窗（别的几路后台照常同步）` : "几路并排看"}>
+                    <span
+                      onClick={() => setFlt({ solo: o.key })}
+                      style={{ cursor: "pointer", padding: "0 6px", borderRadius: 3, fontSize: 12, lineHeight: "20px",
+                        background: on ? "rgba(146,84,222,.9)" : "rgba(255,255,255,.12)", color: "#fff" }}
+                    >
+                      {o.text}
+                    </span>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          )}
           <span style={{ flex: 1, textShadow: "0 1px 2px #000" }}>{flt.locked ? "已锁定位置" : "拖这里移动 · 拖边角改大小 · 双击放回"}</span>
           <Tooltip title={flt.locked ? "解锁：可以拖动 / 改大小" : "锁住位置和大小，免得误拖"}>
             <Button size="small" type="text" style={{ color: "#fff" }} icon={flt.locked ? <LockOutlined /> : <UnlockOutlined />}
@@ -1260,7 +1282,9 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
             <div
               key={v.label}
               style={
-                fill
+                fill && !shown(i)
+                  ? { display: "none" }
+                  : fill
                   ? pixelSize
                     ? { width: pixelSize.width, height: pixelSize.height, flex: "0 0 auto", display: "flex", position: "relative" }
                     : { flex: "1 1 0", minWidth: 0, display: "flex", position: "relative" }
