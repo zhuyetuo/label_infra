@@ -256,3 +256,7 @@ export const getLowlightSeq = (
     /** 整段共用的那套拉伸：用到哪一段亮度、放大几倍、几帧、滑动平均几帧 */
     info?: { lo: number; hi: number; gain: number; n: number; smooth: number; width: number };
   }>(`/samples/${sampleId}/lowlight-seq`, { params, timeout: 250000 });
+
+/** 工作台标题上「换狗」：dog_id 传 null = 不指定（回到按设备号猜）；same_day = 同一天同一个设备号一起改 */
+export const pickSampleDog = (sampleId: number, dogId: number | null, sameDay = true) =>
+  request.patch<never, { updated: number; dog_label: string | null }>(`/samples/${sampleId}/dog-pick`, { dog_id: dogId, same_day: sameDay });

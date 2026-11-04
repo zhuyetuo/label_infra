@@ -43,7 +43,7 @@ from app.services.sample_delete_service import delete_samples
 from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progress, start_scan_background
 from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
-from app.services import shared_cam_service
+from app.services import dog_name_service, shared_cam_service, site_layout
 from app.services import vision_sam_client
 from app.services.dog_name_service import dog_names_by_id
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
@@ -294,6 +294,43 @@ async def set_dog_bulk(body: SampleDogBulk, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
     return ok({"updated": result.rowcount or 0})
+
+
+class SampleDogPick(BaseModel):
+    dog_id: int | None = None
+    # 同一天、同一个设备号（同一场地）的样本一起改：一个项圈一天戴在同一只狗身上，
+    # 一小时一份样本，挨个改 24 次白费功夫
+    same_day: bool = True
+
+
+@router.patch("/{sample_id}/dog-pick")
+async def pick_dog(sample_id: int, body: SampleDogPick, db: AsyncSession = Depends(get_db)):
+    """工作台标题上「换狗」：老数据当时这个 IMU 戴在哪只狗身上，要看画面才知道。
+    dog_id 传 null = 不指定，回到按设备号猜。返回改了几份 + 新的狗名标签"""
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "样本不存在")
+    dog = None
+    if body.dog_id is not None:
+        dog = await db.get(Dog, body.dog_id)
+        if dog is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "狗不存在")
+    ids = [sample.id]
+    if body.same_day and sample.session_date is not None:
+        imu = dog_name_service.imu_of(sample.sample_code)
+        site = site_layout.site_of(sample.sample_code, sample.video_cam1_path, sample.imu_csv_path)
+        rows = (await db.execute(
+            select(Sample.id, Sample.sample_code, Sample.video_cam1_path, Sample.imu_csv_path)
+            .where(Sample.session_date == sample.session_date)
+        )).all()
+        ids = [i for i, code, cam1, csv in rows
+               if dog_name_service.imu_of(code) == imu and site_layout.site_of(code, cam1, csv) == site] or ids
+    await db.execute(update(Sample).where(Sample.id.in_(ids)).values(dog_id=body.dog_id))
+    await db.commit()
+    label = dog_name_service.dog_label_of(
+        sample.sample_code, (dog.name or "").strip() if dog else None,
+        await dog_name_service.imu_dog_map(), await dog_name_service.site_imu_dog_map(), sample.video_cam1_path)
+    return ok({"updated": len(ids), "dog_label": label})
 
 
 @router.post("/batch-delete")
