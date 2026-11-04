@@ -108,6 +108,8 @@ class CompareIn(BaseModel):
     pool_only: bool = True
     win_s: float = 10.0
     max_segments: int = 80
+    # 3 = 只用加速度计（默认，板子按这个设计）；6 = 加上陀螺仪
+    axes: int = 3
 
 
 @router.post("/compare")
@@ -120,7 +122,8 @@ async def post_compare(body: CompareIn, db: AsyncSession = Depends(get_db), user
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "两边都要选类别")
     win_s = min(max(body.win_s, 1.0), 120.0)
     n = min(max(body.max_segments, 5), 300)
-    return ok(await class_compare.compare(db, body.a, body.b, body.project_ids, body.pool_only, win_s, n))
+    axes = 6 if body.axes == 6 else 3
+    return ok(await class_compare.compare(db, body.a, body.b, body.project_ids, body.pool_only, win_s, n, axes=axes))
 
 
 @router.post("/compare-preview")

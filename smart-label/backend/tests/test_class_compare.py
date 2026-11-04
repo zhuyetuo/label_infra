@@ -60,3 +60,7 @@ def test_compare_endpoint(db, run, monkeypatch):
     assert pv["a"]["short"] >= 3 and pv["b"]["long"] == 1 and pv["b"]["windows"] == 2
     pv = run(pool_api.post_compare_preview(pool_api.CompareIn(a=["抓挠"], b=["活动"]), db, w.rev))["data"]
     assert pv["a"]["segments"] == 0              # 默认只用数据池：池里还没东西
+    # 默认 3 轴：没有陀螺维度；6 轴才有
+    keys3 = {f["key"] for f in run(pool_api.post_compare(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=1.0, pool_only=False), db, w.rev))["data"]["features"]}
+    keys6 = {f["key"] for f in run(pool_api.post_compare(pool_api.CompareIn(a=["抓挠"], b=["活动"], win_s=1.0, pool_only=False, axes=6), db, w.rev))["data"]["features"]}
+    assert not any(k.startswith("gyro") for k in keys3) and "gyro_zero" in keys6

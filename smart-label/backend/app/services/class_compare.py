@@ -144,7 +144,7 @@ async def _pick_segments(db: AsyncSession, names: list[str], project_ids: list[i
     return rows
 
 
-def _features_for(rows: list[tuple], win_ms: int, max_windows: int) -> tuple[list[dict], int, list[str]]:
+def _features_for(rows: list[tuple], win_ms: int, max_windows: int, axes: int = 3) -> tuple[list[dict], int, list[str]]:
     """按 CSV 分组，每个文件只读一次，片段切成不重叠的窗口算特征。返回 (窗口特征, 用上的片段数, 读不了的文件)"""
     by_csv: dict[str, list[tuple]] = defaultdict(list)
     for r in rows:
@@ -164,7 +164,8 @@ def _features_for(rows: list[tuple], win_ms: int, max_windows: int) -> tuple[lis
         dt = np.median(np.diff(t[: min(len(t), 5000)]))
         hz = 1000.0 / dt if dt > 0 else 25.0
         acc_all = df[ACC].to_numpy(np.float64)
-        gyr_all = df[GYR].to_numpy(np.float64) if all(c in df.columns for c in GYR) else None
+        # 3 轴：只看加速度计（板子按只开加速度计设计），陀螺相关维度不算
+        gyr_all = df[GYR].to_numpy(np.float64) if axes == 6 and all(c in df.columns for c in GYR) else None
         for _iid, s_ms, e_ms, sid, _rel in segs:
             lo, hi = np.searchsorted(t, s_ms), np.searchsorted(t, e_ms)
             n = int(win_ms / 1000 * hz)
@@ -191,20 +192,20 @@ def _features_for(rows: list[tuple], win_ms: int, max_windows: int) -> tuple[lis
 
 async def compare(db: AsyncSession, names_a: list[str], names_b: list[str], project_ids: list[int] | None = None,
                   pool_only: bool = False, win_s: float = 10.0, max_segments: int = 80,
-                  max_windows: int = 3000, bins: int = 30) -> dict:
+                  max_windows: int = 3000, bins: int = 30, axes: int = 3) -> dict:
     import asyncio
 
     win_ms = int(win_s * 1000)
     seg_a = await _pick_segments(db, names_a, project_ids, pool_only, max_segments, MIN_SEG_MS)
     seg_b = await _pick_segments(db, names_b, project_ids, pool_only, max_segments, MIN_SEG_MS)
     (fa, used_a, bad_a), (fb, used_b, bad_b) = await asyncio.gather(
-        asyncio.to_thread(_features_for, seg_a, win_ms, max_windows),
-        asyncio.to_thread(_features_for, seg_b, win_ms, max_windows),
+        asyncio.to_thread(_features_for, seg_a, win_ms, max_windows, axes),
+        asyncio.to_thread(_features_for, seg_b, win_ms, max_windows, axes),
     )
     res = {
         "a": {"names": names_a, "segments": used_a, "windows": len(fa), "samples": len({f["_sample"] for f in fa})},
         "b": {"names": names_b, "segments": used_b, "windows": len(fb), "samples": len({f["_sample"] for f in fb})},
-        "win_s": win_s, "unreadable": (bad_a + bad_b)[:10], "features": [], "warnings": [],
+        "win_s": win_s, "axes": axes, "unreadable": (bad_a + bad_b)[:10], "features": [], "warnings": [],
     }
     # 样本（= 设备 / 录制）太少时，比出来的差多半是设备之间的差：项圈标定、噪声底都不一样
     for side, d in (("A", res["a"]), ("B", res["b"])):
