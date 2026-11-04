@@ -12,7 +12,7 @@ import {
 } from "@/api/tooth";
 
 // 牙齿识别：素材库 NAS 上 口腔验证/{日期}/{狗}/ 的口腔照片，按目录浏览缩略图，
-// 一键跑 YOLO（imu_train/label_service 的 tooth_health 模型），每张图角标显示检出
+// 一键跑 YOLO（imu_train/vision_service 上的 tooth_health 模型），每张图角标显示检出
 // 类别/置信度，点开看带框图。照片只读，检测结果落库。
 
 type Filter = "all" | "detected" | "undetected" | "abnormal";
@@ -81,7 +81,7 @@ export default function Tooth() {
       return;
     }
     if (status && !status.available) {
-      message.error(`AI 服务没有牙齿模型：${status.error ?? "未配置权重"}`);
+      message.error(`视觉服务没有牙齿模型：${status.error ?? "未配置权重"}`);
       return;
     }
     setRunning({ done: 0, total: paths.length });
@@ -199,7 +199,7 @@ export default function Tooth() {
           ]}
         />
         {status && !status.available && (
-          <Tag color="red">AI 服务没有牙齿模型：{status.error ?? "未配置 TOOTH_WEIGHTS"}</Tag>
+          <Tag color="red">视觉服务没有牙齿模型：{status.error ?? "权重放到 models/vision/tooth/best.pt"}</Tag>
         )}
       </Space>
       <Space style={{ marginBottom: 8 }}>

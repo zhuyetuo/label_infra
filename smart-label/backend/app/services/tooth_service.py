@@ -395,19 +395,23 @@ def verify_photo_token(rel_path: str, token: str, album: str = "oral") -> bool:
 # ── 调 label_service 检测 ─────────────────────────────────────────────
 
 async def detect_remote(rel_path: str, conf: float | None, with_image: bool, top_k: int = 1) -> dict:
-    """label_service 的 MATERIAL_ROOT 跟这边 material_root 是同一目录，它要的 path 是
-    相对 MATERIAL_ROOT 的，所以前面拼上 oral_dir。"""
-    url = f"{settings.algo_service_url.rstrip('/')}/api/v1/tooth/detect"
-    payload = {"path": f"{settings.oral_dir}/{rel_path}", "conf": conf, "with_image": with_image, "top_k": top_k}
+    """牙齿检测在视觉服务上跑（跟狗检测、SAM 一起上 GPU；原来在 label_service）。它要的 path
+    是相对素材库根的——用 material_rel：老照片补上口腔相册目录，狗场那几棵混合树的路径本来
+    就带树名、原样传。原来这里一律在前面拼 oral_dir，狗场的照片就成了
+    「口腔验证/博朗旺-狗场合作/...」，报「文件不存在」。"""
+    if not settings.vision_service_url:
+        raise ToothError("没配置视觉服务地址（VISION_SERVICE_URL），牙齿检测现在跑在视觉服务上")
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/tooth/detect"
+    payload = {"path": material_rel(rel_path, "oral"), "conf": conf, "with_image": with_image, "top_k": top_k}
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)
     except httpx.RequestError as e:
-        raise ToothError(f"无法连接 AI 服务 ({url}): {e}") from e
+        raise ToothError(f"无法连接视觉服务 ({url}): {e}") from e
     if resp.status_code == 503:
-        raise ToothError("AI 服务没有牙齿模型权重（label_service 的 TOOTH_WEIGHTS），先训练或配置权重")
+        raise ToothError(f"视觉服务没有牙齿模型：{resp.text[:300]}（权重放到 imu_train/models/vision/tooth/best.pt）")
     if resp.status_code != 200:
-        raise ToothError(f"AI 服务返回 {resp.status_code}: {resp.text[:300]}")
+        raise ToothError(f"视觉服务返回 {resp.status_code}: {resp.text[:300]}")
     return resp.json()
 
 
