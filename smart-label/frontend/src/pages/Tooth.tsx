@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Checkbox, Collapse, Empty, Image, Modal, Progress, Radio, Slider, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Collapse, Empty, Image, Modal, Progress, Radio, Slider, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { useSearchParams } from "react-router-dom";
+import Vision from "@/pages/Vision";
+import { hasFeature, useAuthStore } from "@/stores/authStore";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   detectToothPhotos,
@@ -19,7 +22,32 @@ type Filter = "all" | "detected" | "undetected" | "abnormal";
 
 const confColor = (c: number) => (c >= 0.8 ? "green" : c >= 0.6 ? "orange" : "red");
 
+/**
+ * 牙齿识别：两个标签页
+ *   · 牙齿检测：YOLO 一键检测口腔照片正常 / 异常（要「牙齿识别」权限，管理员默认有）
+ *   · 口腔实例分割：原来的「视觉标注」，在口腔照片上框 / 点出每颗牙、牙龈的掩码（标注员 / 审核员也能进）
+ */
 export default function Tooth() {
+  const userInfo = useAuthStore((st) => st.userInfo);
+  const canDetect = hasFeature(userInfo, "tooth");
+  const [params, setParams] = useSearchParams();
+  const tab = !canDetect ? "seg" : params.get("tab") === "seg" ? "seg" : "detect";
+  const items = [
+    ...(canDetect ? [{ key: "detect", label: "牙齿检测", children: <ToothDetect /> }] : []),
+    { key: "seg", label: "口腔实例分割", children: <Vision fixedAlbum="oral" embedded /> },
+  ];
+  return (
+    <Tabs
+      activeKey={tab}
+      onChange={(k) => setParams(k === "seg" ? { tab: "seg" } : {}, { replace: true })}
+      items={items}
+      destroyInactiveTabPane
+      tabBarStyle={{ marginBottom: 8 }}
+    />
+  );
+}
+
+function ToothDetect() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({ queryKey: ["tooth-photos"], queryFn: listToothPhotos });
   const { data: status } = useQuery({ queryKey: ["tooth-status"], queryFn: getToothStatus });
