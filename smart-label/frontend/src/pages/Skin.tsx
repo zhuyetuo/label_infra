@@ -350,6 +350,7 @@ function ChartsTab() {
       const last = sorted[sorted.length - 1];
       return {
         dog,
+        meta: dogMetaText(rs[0]),
         days: rs.length,
         avgC: cs.length ? cs.reduce((a, b) => a + b, 0) / cs.length : null,
         maxC: cs.length ? Math.max(...cs) : null,
@@ -399,33 +400,58 @@ function ChartsTab() {
       ) : null}
 
       {summary.length > 0 && (
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-          {summary.map((sm) => (
-            <Descriptions
-              key={sm.dog}
-              size="small"
-              bordered
-              column={2}
-              style={{ minWidth: 340, flex: "1 1 340px" }}
-              title={<span style={{ fontSize: 14 }}>{sm.dog}</span>}
-            >
-              <Descriptions.Item label="有数据天数">{sm.days}</Descriptions.Item>
-              <Descriptions.Item label="需要问答">{sm.needQ} 天</Descriptions.Item>
-              <Descriptions.Item label="平均 C">{fmt(sm.avgC, 1)}</Descriptions.Item>
-              <Descriptions.Item label="最高 C">{sm.maxC ?? "—"}</Descriptions.Item>
-              <Descriptions.Item label="C2 天数">
-                {sm.c2Days ? <Tag color="red">{sm.c2Days} 天</Tag> : "0"}
-              </Descriptions.Item>
-              <Descriptions.Item label="最近一天">
-                {sm.last ? (
-                  <span>
-                    {sm.last.date} {sm.last.c_value ?? "—"} <Tag color={tierColor(sm.last.c_tier)}>{sm.last.c_tier}</Tag>
+        // 一只狗一行，一张表：几只狗放在一起才好比，点表头排序
+        <Table
+          size="small"
+          rowKey="dog"
+          pagination={false}
+          style={{ marginBottom: 16 }}
+          scroll={{ x: "max-content" }}
+          dataSource={summary}
+          columns={[
+            {
+              title: "狗", dataIndex: "dog", fixed: "left" as const,
+              sorter: (a: typeof summary[number], b: typeof summary[number]) => a.dog.localeCompare(b.dog, "zh"),
+              render: (_: unknown, sm: typeof summary[number]) => (
+                <Tooltip title="点一下只看这只狗的曲线；再点回到全部">
+                  <div style={{ cursor: "pointer" }} onClick={() => setFilter({ dogs: f.dogs.length === 1 && f.dogs[0] === sm.dog ? [] : [sm.dog] })}>
+                    <b>{sm.dog}</b>
+                    {sm.meta && <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{sm.meta}</div>}
+                  </div>
+                </Tooltip>
+              ),
+            },
+            { title: "有数据天数", dataIndex: "days", align: "right" as const, sorter: (a: typeof summary[number], b: typeof summary[number]) => a.days - b.days },
+            {
+              title: "平均 C", dataIndex: "avgC", align: "right" as const,
+              sorter: (a: typeof summary[number], b: typeof summary[number]) => (a.avgC ?? -1) - (b.avgC ?? -1),
+              render: (v: number | null) => fmt(v, 1),
+            },
+            {
+              title: "最高 C", dataIndex: "maxC", align: "right" as const,
+              sorter: (a: typeof summary[number], b: typeof summary[number]) => (a.maxC ?? -1) - (b.maxC ?? -1),
+              render: (v: number | null) => v ?? "—",
+            },
+            {
+              title: "C2 天数", dataIndex: "c2Days", align: "right" as const, defaultSortOrder: "descend" as const,
+              sorter: (a: typeof summary[number], b: typeof summary[number]) => a.c2Days - b.c2Days || (a.avgC ?? 0) - (b.avgC ?? 0),
+              render: (v: number, sm: typeof summary[number]) => (v ? <Tag color="red">{v} 天 / {sm.days}</Tag> : 0),
+            },
+            {
+              title: "需要问答", dataIndex: "needQ", align: "right" as const,
+              sorter: (a: typeof summary[number], b: typeof summary[number]) => a.needQ - b.needQ,
+              render: (v: number) => `${v} 天`,
+            },
+            {
+              title: "最近一天", render: (_: unknown, sm: typeof summary[number]) =>
+                sm.last ? (
+                  <span style={{ whiteSpace: "nowrap" }}>
+                    {sm.last.date} · C {sm.last.c_value ?? "—"} <Tag color={tierColor(sm.last.c_tier)}>{sm.last.c_tier ?? "—"}</Tag>
                   </span>
-                ) : "—"}
-              </Descriptions.Item>
-            </Descriptions>
-          ))}
-        </div>
+                ) : "—",
+            },
+          ]}
+        />
       )}
 
       {rows.length > 0 &&
