@@ -173,6 +173,12 @@ export interface TrackingRow {
   n_baseline_days: number | null;
   /** NAS 上实际的狗目录名，弹窗按它筛图（跟 PM 狗名可能不一样） */
   photo_dog: string | null;
+  /** 对上的照片日期目录（照片评级按 日期目录 + 狗目录 记） */
+  photo_folder?: string | null;
+  /** 兽医 / 实习生看这天照片给的评级 */
+  photo_ratings?: { user_name: string; user_role: string; grade: "S0" | "S1" | "S2" | "unsure"; note: string | null }[];
+  /** 几个人的评级合成一个（看不清不算，不一致取最重的） */
+  photo_grade?: "S0" | "S1" | "S2" | null;
   /** 这天这只狗底下的任务，点进去复看标注用 */
   tasks_detail: {
     task_id: number;

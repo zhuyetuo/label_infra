@@ -71,7 +71,16 @@ def test_two_devices_merge_into_one_row(db, run, monkeypatch):
         return {"total": 5, "tier": "S0"}
 
     monkeypatch.setattr(trk, "_algo_post", fake_s)
-    monkeypatch.setattr(trk, "_photo_index", lambda: [])
+    # 那天 bibi 有一份照片，两个人评了级
+    from app.models.skin_photo_rating import SkinPhotoRating
+
+    monkeypatch.setattr(trk, "_photo_index", lambda: [("2026-11-01", "bibi", 12, "2026-11-01-ok")])
+    db.add(SkinPhotoRating(album="skin", folder="2026-11-01-ok", dog_folder="bibi", user_id=u.id, grade="S1"))
+    run(db.commit())
     out = run(trk.daily_tracking(db, date(2026, 11, 1), date(2026, 11, 1)))
     assert [(r["imu"], r["dog_name"]) for r in out["rows"]] == [("IMU1+IMU2", "bibi")]
-    assert {d["imu"] for d in out["rows"][0]["devices"]} == {"IMU1", "IMU2"}
+    row = out["rows"][0]
+    assert {d["imu"] for d in row["devices"]} == {"IMU1", "IMU2"}
+    assert row["photo_count"] == 12 and row["photo_folder"] == "2026-11-01-ok"
+    assert row["photo_grade"] == "S1" and row["photo_ratings"][0]["grade"] == "S1"
+    assert trk._consensus([{"grade": "S0"}, {"grade": "S2"}, {"grade": "unsure"}]) == "S2"

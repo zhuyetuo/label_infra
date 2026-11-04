@@ -706,6 +706,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const pickWidth = useResizableColumns("skin-pick-widths");
 
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
+  const trackQc = useQueryClient();
   // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
   // 标完回来这份是打开弹窗那一刻的快照，改了什么都看不见，非刷新页面不可
   const [checkKey, setCheckKey] = useState<{ date: string; dog_name: string } | null>(null);
@@ -1104,6 +1105,44 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               ),
           },
           {
+            title: (
+              <Tooltip title="兽医 / 实习生看这天照片评的级（「皮肤评级」页，或者点这里直接评）。几个人不一致取最重的；跟 S 档不一样标黄，提醒回头看看是算法还是照片判断有偏差">
+                照片评级
+              </Tooltip>
+            ),
+            key: "photo_grade",
+            width: 130,
+            sorter: (a: TrackingRow, b: TrackingRow) => (a.photo_grade ?? "").localeCompare(b.photo_grade ?? ""),
+            render: (_: unknown, r: TrackingRow) => {
+              if (!r.photo_count) return <Typography.Text type="secondary">—</Typography.Text>;
+              const rs = r.photo_ratings ?? [];
+              if (!rs.length) {
+                return <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setPhotoFor(r)}>去评级</Button>;
+              }
+              const color = { S0: "green", S1: "gold", S2: "red" } as const;
+              const sTier = (r.s_with_q ?? r.s_no_q)?.s_tier ?? null;
+              const differ = !!(r.photo_grade && sTier && r.photo_grade !== sTier);
+              return (
+                <Tooltip
+                  title={
+                    <div style={{ fontSize: 12 }}>
+                      {rs.map((x, i) => (
+                        <div key={i}>{x.user_name}：{x.grade === "unsure" ? "看不清" : x.grade}{x.note ? `（${x.note}）` : ""}</div>
+                      ))}
+                      {differ && <div style={{ marginTop: 4 }}>照片评 {r.photo_grade}，算法 S 档 {sTier}：不一致</div>}
+                    </div>
+                  }
+                >
+                  <Space size={2} style={{ cursor: "pointer" }} onClick={() => setPhotoFor(r)}>
+                    {r.photo_grade ? <Tag color={color[r.photo_grade]} style={{ marginRight: 0 }}>{r.photo_grade}</Tag> : <Tag>看不清</Tag>}
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>{rs.length}人</Typography.Text>
+                    {differ && <Tag color="warning" style={{ marginRight: 0 }}>≠{sTier}</Tag>}
+                  </Space>
+                </Tooltip>
+              );
+            },
+          },
+          {
             title: "操作",
             render: (_: unknown, r: TrackingRow) => {
               // 只有「需要问答」或者已经填过的才给入口
@@ -1462,14 +1501,16 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       <Modal
         title={`${photoFor?.date ?? ""} ${photoFor?.dog_name ?? ""} 的皮肤照片（${photoFor?.photo_count ?? 0} 张）`}
         open={photoFor != null}
-        onCancel={() => setPhotoFor(null)}
+        // 在弹窗里评过级，关掉时把跟踪表刷一下，「照片评级」那一列跟着变
+        onCancel={() => { setPhotoFor(null); trackQc.invalidateQueries({ queryKey: ["skin-tracking"] }); }}
         footer={null}
-        width={820}
+        width={1100}
       >
         {photoFor && (
           <PhotoGallery
             album="skin"
-            hint="点图放大，可左右翻"
+            rating
+            hint="点图放大，可左右翻；看完在狗名那一栏右边点一档评级"
             filterDate={photoFor.date}
             filterDog={photoFor.photo_dog ?? photoFor.dog_name}
           />
