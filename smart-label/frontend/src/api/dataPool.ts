@@ -104,6 +104,7 @@ export interface CompareResult {
   a: { names: string[]; segments: number; windows: number; samples: number };
   b: { names: string[]; segments: number; windows: number; samples: number };
   win_s: number;
+  axes?: number;
   unreadable: string[];
   features: CompareFeature[];
   error?: string;
@@ -120,4 +121,6 @@ export const comparePreview = (body: { a: string[]; b: string[]; project_ids?: n
   request.post<never, { a: ComparePreviewSide; b: ComparePreviewSide }>("/data-pool/compare-preview", body);
 export const classCompare = (body: {
   a: string[]; b: string[]; project_ids?: number[]; pool_only?: boolean; win_s?: number; max_segments?: number;
+  /** 3 = 只用加速度计（默认）；6 = 加上陀螺仪 */
+  axes?: 3 | 6;
 }) => request.post<never, CompareResult>("/data-pool/compare", body, { timeout: 300_000 });

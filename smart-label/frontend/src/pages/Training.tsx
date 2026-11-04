@@ -244,7 +244,8 @@ export default function Training() {
   const [modelType, setModelType] = useState("rf");
   const [sourceHz, setSourceHz] = useState<number>(50);
   // 用几轴。6=加速度+陀螺仪（默认），3=只用加速度——**端侧只有加速度计时用 3**
-  const [axes, setAxes] = useState<number>(6);
+  // 默认 3 轴：板子按只开加速度计设计，陀螺仪费电，只按策略短时开（每天合计 ≤2 小时，不然到不了 45 天续航）
+  const [axes, setAxes] = useState<number>(3);
   // 方向无关：输入只用跟佩戴方向无关的量 + 训练集随机旋转增强。用户怎么戴都不限制，默认开
   const [orientFree, setOrientFree] = useState(true);
   // 端侧尺寸：限深限棵数，模型才塞得进板子（给模型留的 flash 约 128KB）
@@ -1861,8 +1862,8 @@ export default function Training() {
                 value={axes}
                 onChange={(e) => setAxes(e.target.value)}
                 options={[
+                  { value: 3, label: "3 轴（只用加速度，默认）" },
                   { value: 6, label: "6 轴（加速度+陀螺仪）" },
-                  { value: 3, label: "3 轴（只用加速度）" },
                 ]}
                 optionType="button"
               />

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Button, Checkbox, InputNumber, Select, Space, Spin, Table, Tag, Tooltip, TreeSelect, Typography, theme } from "antd";
+import { Alert, Button, Checkbox, InputNumber, Radio, Select, Space, Spin, Table, Tag, Tooltip, TreeSelect, Typography, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { listLabels } from "@/api/labels";
 import { listProjects } from "@/api/projects";
@@ -80,6 +80,8 @@ export default function ClassCompare() {
   // 默认只用数据池：池里是认可过、标得准的；全部已标注里混着没人看过的 AI 片段，比出来不可信
   const [poolOnly, setPoolOnly] = useState(true);
   const [winS, setWinS] = useState(10);
+  // 默认 3 轴：板子按只开加速度计设计；6 轴（加陀螺仪）可选——陀螺费电，只能按策略短时开
+  const [axes, setAxes] = useState<3 | 6>(3);
   const [maxSeg, setMaxSeg] = useState(80);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<CompareResult | null>(null);
@@ -89,7 +91,7 @@ export default function ClassCompare() {
     try {
       setRes(await classCompare({
         a: valA, b: valB, project_ids: projectIds.length ? projectIds : undefined, pool_only: poolOnly,
-        win_s: winS, max_segments: maxSeg,
+        win_s: winS, max_segments: maxSeg, axes,
       }));
     } finally {
       setBusy(false);
@@ -152,7 +154,11 @@ export default function ClassCompare() {
         <Tooltip title="只用数据池里认可过的片段（标得准的）">
           <Checkbox checked={poolOnly} onChange={(e) => setPoolOnly(e.target.checked)}>只用数据池</Checkbox>
         </Tooltip>
-        <Tooltip title="窗口越长，呼吸 / 心跳这类微振动越稳；片段比窗口短的不参与">
+        <Tooltip title="3 轴 = 只看加速度计（板子按这个设计，默认）；6 轴 = 加上陀螺仪那几个维度。陀螺仪费电，每天合计开不能超过约 2 小时，否则到不了 45 天续航——靠它才分得开的话，只能按策略短时开">
+          <Radio.Group size="small" value={axes} onChange={(e) => setAxes(e.target.value)} optionType="button"
+            options={[{ value: 3, label: "3 轴" }, { value: 6, label: "6 轴" }]} />
+        </Tooltip>
+        <Tooltip title="窗口越长，呼吸 / 心跳这类微振动越稳；比窗口短但 ≥1 秒的片段整段算一个窗口">
           <InputNumber min={1} max={120} value={winS} onChange={(v) => setWinS(v ?? 10)} addonBefore="窗口" addonAfter="秒" style={{ width: 150 }} />
         </Tooltip>
         <Tooltip title="每类最多抽这么多段（越多越准，也越慢：要读原始 CSV）">
@@ -176,7 +182,7 @@ export default function ClassCompare() {
             <Space size={24} wrap style={{ marginBottom: 8 }}>
               <Typography.Text><Tag color={COLOR_A}>A {res.a.names.join("、")}</Tag>{res.a.segments} 段 · {res.a.windows} 个窗口 · {res.a.samples} 个样本</Typography.Text>
               <Typography.Text><Tag color={COLOR_B}>B {res.b.names.join("、")}</Tag>{res.b.segments} 段 · {res.b.windows} 个窗口 · {res.b.samples} 个样本</Typography.Text>
-              <Typography.Text type="secondary">窗口 {res.win_s} 秒</Typography.Text>
+              <Typography.Text type="secondary">窗口 {res.win_s} 秒 · {res.axes === 6 ? "6 轴（含陀螺仪）" : "3 轴（只加速度）"}</Typography.Text>
             </Space>
             {(res.warnings ?? []).map((w) => (
               <Alert key={w} type="warning" showIcon message={w} style={{ marginBottom: 8 }} />
