@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, InputNumber, Select, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import request from "@/utils/request";
+import { listModelVersions, type ModelVersion } from "@/api/training";
 import { BEHAV_NAMES, type PcSegment } from "@/utils/imuProtocols";
 
 /**
@@ -16,7 +17,58 @@ interface ServerResult {
   classes: string[]; window_s: number; stride_s: number; hz_model: number; mode: string; n_windows: number;
   windows: ServerWindow[]; model_path: string;
 }
-interface ModelInfo { tag: string; name: string; is_default?: boolean; hz?: number | null; classes?: string[] | null }
+interface ModelInfo {
+  tag: string; name: string; is_default?: boolean; hz?: number | null; classes?: string[] | null; model_path?: string;
+  train?: { job_id: number; axes?: number; hz?: number; macro_f1?: number | null; model_type?: string; dataset?: string; classes?: string[] | null };
+}
+
+/** 下拉里一行要让人一眼分得清：训练记录号、几轴、采样率、F1。光写目录名的话全是「rf」 */
+interface ModelChoice {
+  tag: string; label: string; detail: string; axes: number | null; hz: number | null; f1: number | null;
+  vid: number | null; group: "best" | "acc3" | "acc6" | "other"; isDefault: boolean;
+}
+
+const parseJson = (s: string | null | undefined): Record<string, unknown> => {
+  try { return s ? JSON.parse(s) : {}; } catch { return {}; }
+};
+
+/** 板子只有加速度、跑 31.25Hz：3 轴 + 同采样率的才是公平的比法，里面 F1 最高的推荐 */
+function buildChoices(models: ModelInfo[], versions: ModelVersion[], devHz: number): ModelChoice[] {
+  const byJob = new Map(versions.map((v) => [v.algo_job_id, v]));
+  const out: ModelChoice[] = models.map((m) => {
+    const t = m.train;
+    const v = t ? byJob.get(t.job_id) : undefined;
+    const spec = parseJson(v?.dataset_spec);
+    const met = parseJson(v?.metrics);
+    const axes = t ? Number(t.axes ?? spec.axes ?? 6) : null;
+    const hz = t ? Number(t.hz ?? spec.hz ?? 16) : (m.hz ?? null);
+    const f1 = typeof t?.macro_f1 === "number" ? t.macro_f1 : typeof met.macro_f1 === "number" ? (met.macro_f1 as number) : null;
+    const mt = t?.model_type ?? v?.model_type ?? "";
+    const head = m.is_default ? "线上默认模型" : t ? `训练记录 #${v?.id ?? `?（算法 ${t.job_id}，平台上已删）`}` : m.tag;
+    const bits = [head, mt, axes ? `${axes}轴` : "", hz ? `${hz}Hz` : "", f1 != null ? `F1 ${f1.toFixed(3)}` : ""].filter(Boolean);
+    const sameHz = hz != null && Math.abs(hz - devHz) < 0.01;
+    return {
+      tag: m.tag, label: bits.join(" · "), axes, hz, f1, vid: v?.id ?? null, isDefault: !!m.is_default,
+      group: axes === 3 ? "acc3" : axes === 6 ? "acc6" : "other",
+      detail: `${t?.dataset ? `数据集 ${t.dataset}` : ""}${(t?.classes ?? m.classes) ? `　类别 ${(t?.classes ?? m.classes)!.join("/")}` : ""}${sameHz || hz == null ? "" : `　⚠ 训练用 ${hz}Hz，设备是 ${devHz}Hz（会重采样，但不如同采样率训的准）`}`,
+    };
+  });
+  const fair = out.filter((c) => c.axes === 3 && c.hz != null && Math.abs(c.hz - devHz) < 0.01);
+  const best = [...fair].sort((a, b) => (b.f1 ?? -1) - (a.f1 ?? -1))[0];
+  if (best) best.group = "best";
+  const rank = (c: ModelChoice) => ({ best: 0, acc3: 1, other: 2, acc6: 3 })[c.group];
+  return out.sort((a, b) => rank(a) - rank(b)
+    || Number(b.hz != null && Math.abs(b.hz - devHz) < 0.01) - Number(a.hz != null && Math.abs(a.hz - devHz) < 0.01)
+    || (b.f1 ?? -1) - (a.f1 ?? -1));
+}
+
+const GROUP_NAME: Record<ModelChoice["group"], string> = {
+  best: "★ 推荐（3 轴、跟设备同采样率、F1 最高）",
+  acc3: "3 轴（只用加速度，跟板子一样）",
+  other: "其它",
+  acc6: "6 轴（要陀螺仪，板子没有，按 0 喂，结果会偏，不建议）",
+};
+const MODEL_KEY = "smart-label:device-debug-model";
 
 // 板子是 4 类；服务端模型类别可能更细，比对时按名字归一下（甩动类并进活动——板子的后处理也是这么做的）
 const TO_BOARD: Record<string, string> = { "甩身体": "活动", "甩头/抖身": "活动", "甩动": "活动", "行走": "活动", "奔跑": "活动" };
@@ -37,7 +89,19 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
     queryFn: () => request.get<never, ModelInfo[]>("/device-debug/models"),
     staleTime: 60_000,
   });
-  const [model, setModel] = useState<string | undefined>(undefined);
+  const { data: versions } = useQuery({ queryKey: ["model-versions"], queryFn: listModelVersions, staleTime: 60_000 });
+  const choices = useMemo(() => buildChoices(models ?? [], versions ?? [], hz), [models, versions, hz]);
+  // 选过的记住；没选过（或选的那版已经没了）就用推荐的那个
+  const [picked, setPickedState] = useState<string | undefined>(() => {
+    try { return localStorage.getItem(MODEL_KEY) || undefined; } catch { return undefined; }
+  });
+  const setModel = (v: string | undefined) => {
+    setPickedState(v);
+    try { if (v) localStorage.setItem(MODEL_KEY, v); else localStorage.removeItem(MODEL_KEY); } catch { /* ignore */ }
+  };
+  const recommended = choices.find((c) => c.group === "best");
+  const model = picked && choices.some((c) => c.tag === picked) ? picked : recommended?.tag;
+  const cur = choices.find((c) => c.tag === model) ?? choices.find((c) => c.isDefault);
   const [mode, setMode] = useState<"raw" | "viterbi">("raw");
   const [secs, setSecs] = useState(60);
   const [auto, setAuto] = useState(false);
@@ -124,13 +188,26 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
   );
 
   const agree = view?.pairs.length ? view.pairs.filter((p) => p.same).length / view.pairs.length : null;
-  const modelName = (models ?? []).find((m) => m.tag === model) ?? (models ?? []).find((m) => m.is_default);
   return (
     <Card size="small" title="服务端预测（同一段原始采样送去跑模型，跟板子比）" style={{ marginTop: 12 }}
       extra={
         <Space wrap size={6}>
-          <Select size="small" style={{ width: 220 }} placeholder="默认模型" allowClear value={model} onChange={setModel}
-            options={(models ?? []).map((m) => ({ value: m.tag, label: `${m.name}${m.is_default ? "（默认）" : ""}${m.hz ? ` · ${m.hz}Hz` : ""}` }))} />
+          <Select size="small" style={{ width: 340 }} popupMatchSelectWidth={false} placeholder="线上默认模型" allowClear
+            value={model} onChange={setModel} showSearch optionFilterProp="label"
+            options={(["best", "acc3", "other", "acc6"] as const)
+              .map((g) => ({ label: GROUP_NAME[g], options: choices.filter((c) => c.group === g).map((c) => ({
+                value: c.tag, label: c.label, title: c.detail,
+              })) }))
+              .filter((g) => g.options.length)}
+            optionRender={(o) => {
+              const c = choices.find((x) => x.tag === o.value);
+              return (
+                <div style={{ lineHeight: 1.35, padding: "2px 0" }}>
+                  <div>{c?.label}{c?.group === "best" && <Tag color="gold" style={{ marginLeft: 6 }}>推荐</Tag>}</div>
+                  {c?.detail && <div style={{ fontSize: 11, color: token.colorTextTertiary }}>{c.detail}</div>}
+                </div>
+              );
+            }} />
           <Select size="small" style={{ width: 130 }} value={mode} onChange={setMode}
             options={[{ value: "raw", label: "逐窗口原始" }, { value: "viterbi", label: "稳定版（平滑）" }]} />
           <span style={{ fontSize: 12 }}>最近</span>
@@ -145,7 +222,9 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
       {err && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={err} />}
       {!res && !err && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          要原始采样（0x08）。板子只有加速度：选 3 轴（只用加速度）训的模型比才公平，6 轴模型陀螺仪按 0 喂，结果会偏。
+          要原始采样（0x08）。{recommended
+            ? <>默认用推荐的「{recommended.label}」：3 轴（板子只有加速度）、跟设备同是 {hz}Hz 训的里面 F1 最高的，比出来才公平。</>
+            : <>还没有 3 轴、{hz}Hz 训的模型：去「模型训练」用 3 轴 + {hz}Hz 训一版再来比。6 轴模型陀螺仪按 0 喂，结果会偏。</>}
         </Typography.Text>
       )}
       {view && (
@@ -155,7 +234,7 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
               suffix={<span style={{ fontSize: 12 }}>{view.pairs.length} 条</span>} />
             <Statistic title="服务端窗口" value={view.n} suffix={<span style={{ fontSize: 12 }}>{res!.window_s}s 窗 / {res!.stride_s}s 步 · {res!.hz_model}Hz</span>} />
             <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-              模型 {modelName?.name ?? res!.model_path.split("/").slice(-2).join("/")}<br />
+              模型 {cur?.label ?? res!.model_path.split("/").slice(-2).join("/")}<br />
               服务端各类：{Object.entries(view.cnt).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round((v / view.n) * 100)}%`).join(" · ")}
             </div>
           </Space>
