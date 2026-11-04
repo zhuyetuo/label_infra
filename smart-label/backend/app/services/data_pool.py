@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
@@ -61,6 +61,21 @@ class PoolFilter:
 
 _DUR = AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms
 _HZ = func.round(func.coalesce(Sample.sample_hz, Sample.imu_sample_rate_hz, 0))
+# 名义采样率：设备实际报出来的是 51 / 53 / 57 / 61 / 66Hz 这种（蓝牙抖动），按精确值筛
+# 「50Hz」几乎什么都对不上。归到最近的那一档：16 / 25 / 31.25（记成 31）/ 50
+_NOMINAL_EDGES = ((20.5, 16), (28, 25), (40, 31))
+
+
+def nominal_hz(hz: float) -> int:
+    if hz <= 0:
+        return 0          # 不知道采样率的，单独一档，不混进 16Hz
+    for edge, v in _NOMINAL_EDGES:
+        if hz < edge:
+            return v
+    return 50
+
+
+_HZ_NOMINAL = case((_HZ <= 0, 0), *[(_HZ < edge, v) for edge, v in _NOMINAL_EDGES], else_=50)
 
 
 async def _query(db: AsyncSession, f: PoolFilter):
@@ -84,7 +99,7 @@ async def _query(db: AsyncSession, f: PoolFilter):
     if f.date_to is not None:
         q = q.where(Sample.session_date <= f.date_to)
     if f.sample_hz:
-        q = q.where(_HZ.in_([round(float(h)) for h in f.sample_hz]))
+        q = q.where(_HZ_NOMINAL.in_([nominal_hz(float(h)) for h in f.sample_hz]))
     if f.min_sec:
         q = q.where(_DUR >= int(f.min_sec * 1000))
     if f.label_names:
@@ -124,7 +139,8 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
     # 层级树：每一层都算上它底下所有细类（抓挠 41 段 = 自己标的 + 头颈耳 32 + 躯干 9）。
     # 按名字合（各项目各一套标签、id 不同，名字相同就是一类）
     tree: dict[str, list] = {}   # 名字 → [段数, 秒, 上级名字]
-    by = {k: defaultdict(lambda: [0, 0.0]) for k in ("label", "root", "project", "dog", "hz")}
+    # 项目 / 狗按 (id, 名字) 记：筛选下拉要拿 id；日期按样本的采集日（筛选下拉只列池里有的）
+    by = {k: defaultdict(lambda: [0, 0.0]) for k in ("label", "root", "project", "dog", "hz", "date")}
     n = n_manual = 0
     sec_total = 0.0
     for it, task, smp in rows:
@@ -141,14 +157,19 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
             node[1] += sec
             parent = nm
         for k, key in (("label", lab.display_name if lab else f"#{it.label_id}"), ("root", root_name(it.label_id)),
-                       ("project", projects.get(task.project_id, f"#{task.project_id}")),
-                       ("dog", dogs.get(smp.dog_id, "未关联") if smp.dog_id else "未关联"), ("hz", f"{hz}Hz")):
+                       ("project", (task.project_id, projects.get(task.project_id, f"#{task.project_id}"))),
+                       ("dog", (smp.dog_id, dogs.get(smp.dog_id, "未关联")) if smp.dog_id else (None, "未关联")),
+                       ("hz", f"{nominal_hz(hz)}Hz"),
+                       ("date", smp.session_date.isoformat() if smp.session_date else "未知日期")):
             by[k][key][0] += 1
             by[k][key][1] += sec
 
     def fmt(d):
-        return sorted(({"name": k, "n": v[0], "hours": round(v[1] / 3600, 3)} for k, v in d.items()),
-                      key=lambda x: -x["n"])
+        def one(k, v):
+            if isinstance(k, tuple):
+                return {"id": k[0], "name": k[1], "n": v[0], "hours": round(v[1] / 3600, 3)}
+            return {"name": k, "n": v[0], "hours": round(v[1] / 3600, 3)}
+        return sorted((one(k, v) for k, v in d.items()), key=lambda x: -x["n"])
 
     return {"n": n, "hours": round(sec_total / 3600, 3), "n_manual": n_manual, "n_approved": n - n_manual,
             **{f"by_{k}": fmt(v) for k, v in by.items()},

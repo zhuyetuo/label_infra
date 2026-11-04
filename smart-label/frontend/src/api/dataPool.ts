@@ -2,6 +2,8 @@ import request from "@/utils/request";
 
 /** 数据池：人认可的高质量片段库。审核通过的自动在池里，另外能整批手动加入 / 移出 */
 export interface PoolBucket {
+  /** 项目 / 狗的 id（筛选用；狗「未关联」是 null） */
+  id?: number | null;
   name: string;
   n: number;
   hours: number;
@@ -17,6 +19,8 @@ export interface PoolSummary {
   by_project: PoolBucket[];
   by_dog: PoolBucket[];
   by_hz: PoolBucket[];
+  /** 按采集日（YYYY-MM-DD） */
+  by_date?: PoolBucket[];
   /** 类别层级：每个节点含它底下全部细类的段数 / 时长；parent = 上一级的名字（根是 null） */
   tree?: (PoolBucket & { parent: string | null })[];
 }

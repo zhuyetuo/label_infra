@@ -31,6 +31,10 @@ def test_审核通过自动进池_手动加入移出(db, run):
     tree = {x["name"]: x for x in s["tree"]}
     assert tree["抓挠"]["parent"] is None and tree["抓挠"]["n"] == 1
     assert tree["抓挠-头颈耳"]["parent"] == "抓挠" and tree["抓挠-头颈耳"]["n"] == 1
+    # 筛选下拉只列池里有的：项目带 id、日期按采集日
+    assert s["by_project"] == [{"id": w.p.id, "name": w.p.name, "n": 1, "hours": s["by_project"][0]["hours"]}]
+    assert s["by_dog"][0]["id"] is None and s["by_dog"][0]["name"] == "未关联"
+    assert len(s["by_date"]) == 1
 
     # 标注员不能动池子；整批加入要给条件
     with pytest.raises(HTTPException):
@@ -118,3 +122,7 @@ def test_按任务整份加入_列表(db, run):
     # 移出选中的
     run(pool_api.post_remove(pool_api.PoolRemoveIn(item_ids=[w.items[1].id]), db, w.admin))
     assert run(data_pool.list_items(db, data_pool.PoolFilter()))["total"] == 4
+
+
+def test_采样率按名义档位归_51到66Hz都算50Hz():
+    assert [data_pool.nominal_hz(h) for h in (0, 15.6, 16, 25, 31.25, 51, 57, 66)] == [0, 16, 16, 25, 31, 50, 50, 50]
