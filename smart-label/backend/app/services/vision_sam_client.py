@@ -8,6 +8,8 @@
 跟 algo_client 的区别：那个是 IMU 推理，必须通；这个通不通都不影响标注员干活。
 """
 
+import time
+
 import httpx
 
 from app.core.config import settings
@@ -204,7 +206,22 @@ async def llm_test(llm: dict) -> dict:
 _EMBED_BUILD_TIMEOUT = 1800.0
 
 
+_embed_status_cache: tuple[float, dict] | None = None
+
+
 async def embed_status() -> dict:
+    """10 秒缓存：项目页给每个项目各轮询一次索引进度，每次都会带上这个，
+    十几个项目就是每秒好几个请求打到视觉服务"""
+    global _embed_status_cache
+    now = time.monotonic()
+    if _embed_status_cache and now - _embed_status_cache[0] < 10:
+        return _embed_status_cache[1]
+    r = await _embed_status()
+    _embed_status_cache = (now, r)
+    return r
+
+
+async def _embed_status() -> dict:
     if not enabled():
         return {"available": False, "error": _off_reason()}
     url = f"{settings.vision_service_url.rstrip('/')}/api/v1/embed/status"

@@ -39,4 +39,7 @@ def setup_logging(process: str) -> None:
     if process == "api":
         # 访问日志单独一个文件，不跟业务日志混；uvicorn 自己往终端打，这里只追加文件
         logging.getLogger("uvicorn.access").addHandler(_file_handler("access.log"))
+    # httpx 每发一个请求打一条 INFO（"HTTP Request: GET …/embed/status 200 OK"），项目页轮询
+    # 索引进度、监控页探服务都会刷屏，真正要看的日志被淹掉。出错时调用方自己会记
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     root._smart_label_configured = True  # type: ignore[attr-defined]

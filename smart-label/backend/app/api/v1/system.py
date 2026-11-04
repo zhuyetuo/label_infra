@@ -83,6 +83,25 @@ async def _probe(url: str) -> dict:
         return {"url": url, "ok": False, "ms": None, "error": f"{type(e).__name__}: {e}"[:200]}
 
 
+async def _gpu() -> dict:
+    """GPU 在视觉服务那台机器上（后端容器里没卡），问它的 /api/v1/gpu：
+    gpus = nvidia-smi 每张卡的利用率 / 显存 / 温度；models = 视觉服务里每个模型常驻占了多少显存"""
+    url = settings.vision_service_url
+    if not url:
+        return {"error": "没配置视觉服务"}
+    try:
+        async with httpx.AsyncClient(timeout=3) as c:
+            r = await c.get(url.rstrip("/") + "/api/v1/gpu")
+        if r.status_code != 200:
+            return {"error": f"视觉服务返回 {r.status_code}"}
+        d = r.json()
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"[:200]}
+    return {"gpus": d.get("gpus") or [], "models": d.get("models") or {},
+            "torch_reserved_mib": d.get("torch_reserved_mib"), "cached_idle_mib": d.get("cached_idle_mib"),
+            "why": d.get("why")}
+
+
 @router.get("/status")
 async def get_status(db: AsyncSession = Depends(get_db)):
     # CPU 占用：隔 0.3 秒采两次 /proc/stat
@@ -147,6 +166,7 @@ async def get_status(db: AsyncSession = Depends(get_db)):
             _probe(settings.vision_service_url),
         ))
     services = _svc_cache[1]
+    gpu = await _gpu()
     return ok({
         "cpu": {"percent": cpu_pct, "count": os.cpu_count(), "load": [float(x) for x in load] if load else None},
         "mem": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),
@@ -155,6 +175,7 @@ async def get_status(db: AsyncSession = Depends(get_db)):
         "uptime_sec": float(up[0]) if up else None,
         "api_rss": rss,
         "db": dbinfo,
+        "gpu": gpu,
         "services": [{"name": "algo_service（训练 / 推理）", **services[0]},
                      {"name": "vision_service（SAM）", **services[1]}],
     })

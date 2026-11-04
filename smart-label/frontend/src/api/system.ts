@@ -14,6 +14,15 @@ export interface SysStatus {
     error?: string;
   };
   services: { name: string; url: string; ok: boolean | null; ms: number | null; error: string | null }[];
+  /** GPU 在视觉服务那台机器上：nvidia-smi 每张卡 + 视觉服务里每个模型常驻显存 */
+  gpu?: {
+    error?: string;
+    why?: string | null;
+    gpus?: { index: number; name: string; util_pct: number | null; mem_used_mib: number | null; mem_total_mib: number | null; temp_c: number | null; power_w: number | null }[];
+    models?: Record<string, { mib: number | null; device?: string }>;
+    torch_reserved_mib?: number | null;
+    cached_idle_mib?: number | null;
+  };
 }
 
 export const sysStatus = () => request.get<never, SysStatus>("/system/status");
