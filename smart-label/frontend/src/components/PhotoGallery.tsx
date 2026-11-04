@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Collapse, Empty, Image, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Checkbox, Collapse, Empty, Image, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMaterialPhotoToken, listMaterialPhotos, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
 import SkinRatingBar from "@/components/SkinRatingBar";
@@ -22,6 +22,13 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
   });
   const ratingsOf = (folder: string, dogName: string) =>
     (ratings ?? []).filter((r) => r.folder === folder && r.dog_folder === dogName);
+  // 我评过的 (日期目录, 狗)：一只狗一天的那十几张照片算「一次评估」，进度按次数算比按张数直观
+  const mineDone = useMemo(
+    () => new Set((ratings ?? []).filter((r) => r.user_id === userId).map((r) => `${r.folder}\u0000${r.dog_folder}`)),
+    [ratings, userId]
+  );
+  const isMine = (folder: string, dogName: string) => mineDone.has(`${folder}\u0000${dogName}`);
+  const [onlyTodo, setOnlyTodo] = useState(false);
   // 来源（视频问诊 / 雷喏斯达 / 博朗旺…）和狗：几个地方很多天混在一起没法看，先按来源分开。
   // 从外面带了日期/狗进来（每日跟踪表里点「N 张」）时不显示这两个筛选，只看那一格
   const pinned = !!(filterDate || filterDog);
@@ -44,10 +51,27 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     const folders = base
       // 按解析出来的日期比：狗场那几棵树的目录名开头是树名，按前 10 个字符比永远对不上
       .filter((f) => !wantDate || f.date === wantDate)
-      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => !wantDog || d.name === wantDog) }))
+      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => (!wantDog || d.name === wantDog) && !(onlyTodo && isMine(f.folder, d.name))) }))
       .filter((f) => f.dogs.length > 0);
     return { ...raw, folders };
-  }, [raw, inSource, filterDate, filterDog, dog, pinned]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, mineDone]);
+  // 每个来源：几次评估（日期×狗）、我评了几次、多少张
+  const countOf = (src: string) => {
+    let n = 0, done = 0, photos = 0;
+    for (const f of raw?.folders ?? []) {
+      if (src !== "all" && f.source !== src) continue;
+      for (const d of f.dogs) {
+        n += 1; photos += d.photos.length;
+        if (isMine(f.folder, d.name)) done += 1;
+      }
+    }
+    return { n, done, photos };
+  };
+  const tabLabel = (name: string, src: string) => {
+    const c = countOf(src);
+    return rating ? `${name} 我已评 ${c.done}/${c.n} 次` : `${name} ${c.n} 次 · ${c.photos} 张`;
+  };
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
 
@@ -111,8 +135,8 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
         activeKey={curSource}
         onChange={setSource}
         items={[
-          { key: "all", label: `全部 ${sources.reduce((n, s) => n + s.photos, 0)}` },
-          ...sources.map((s) => ({ key: s.source, label: `${s.source} ${s.photos}` })),
+          { key: "all", label: tabLabel("全部", "all") },
+          ...sources.map((s) => ({ key: s.source, label: tabLabel(s.source, s.source) })),
         ]}
       />
       <Space style={{ marginBottom: 12 }}>
@@ -126,6 +150,9 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
           onChange={setDog}
           options={dogNames.map((n) => ({ value: n, label: n }))}
         />
+        {rating && (
+          <Checkbox checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)}>只看我还没评的</Checkbox>
+        )}
       </Space>
     </>
   );
@@ -154,7 +181,10 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
       {filters}
       {problemAlert}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；共 {allPhotos.length} 张。点图放大，工具栏左右按钮或键盘方向键翻上一张/下一张。
+        {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；{(() => {
+          const n = data.folders.reduce((k, f) => k + f.dogs.length, 0);
+          return <>共 <b>{n}</b> 次评估（一只狗一天算一次，每次约 {n ? Math.round(allPhotos.length / n) : 0} 张），{allPhotos.length} 张。</>;
+        })()}点图放大，工具栏左右按钮或键盘方向键翻上一张/下一张。
       </Typography.Paragraph>
       <Image.PreviewGroup
         items={allPhotos.map((p) => ({ src: urls[p.rel_path] ?? "", alt: `${p.folder} / ${p.dog} / ${p.filename}` }))}
