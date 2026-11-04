@@ -45,5 +45,8 @@ class SkinDailyStat(Base):
     ai_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # 一只狗两个项圈合成一行时（imu 写成 IMU1+IMU2），每个设备戴了多久、哪几段
     devices: Mapped[str | None] = mapped_column(Text, nullable=True, comment='JSON [{imu, worn_s, spans}]')
+    # ML 版（模型 A 预测 C 档、模型 B 预测 S 档）的结果，「重新拉取」时跟 C 值一起算好：
+    # {c_tier, c_proba, s_tier, s_proba, used_questionnaire, model_b} 或 {reason}
+    ml: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON：ML 版预测")
 
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

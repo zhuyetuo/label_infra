@@ -24,7 +24,15 @@ FEATURES: dict[str, tuple[str, str]] = {
     "dogs_view": ("狗档案·查看", "看狗档案列表、照片、体重颈围记录"),
     "dogs_edit": ("狗档案·编辑", "新建和修改狗档案、上传照片、记体重颈围（含查看；删除狗档案仍只给管理员）"),
     "tooth": ("牙齿识别", "看口腔照片、跑牙齿检测"),
+    # 不放行任何接口，只是个身份标记：皮肤「准确率」对照、真实标签重训模型 B 时，
+    # 只拿勾了这一项的人的照片评级当标准答案；其他人（实习生）的拿来跟兽医比
+    "skin_vet": ("兽医（皮肤评级以他为准）", "皮肤照片评级当标准答案用：准确率对照、训练模型都以兽医的评级为准，实习生的评级拿来跟兽医比"),
 }
+
+
+def is_vet(user_permissions: str | None) -> bool:
+    """看账号自己勾没勾「兽医」——不走 granted()，管理员默认什么都有，但不默认是兽医"""
+    return "skin_vet" in parse(user_permissions)
 
 # 勾了前者就等于有后者
 IMPLIES: dict[str, set[str]] = {"dogs_edit": {"dogs_view"}}

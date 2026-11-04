@@ -164,6 +164,9 @@ export interface STotalOut {
 }
 export interface TrackingRow {
   date: string;
+  /** ML 版：模型 A 的 C 档、模型 B 的 S 档（重新拉取时算好存的）；不出预测时只有 reason */
+  ml?: { c_tier?: string | null; c_proba?: Record<string, number>; s_tier?: string | null; s_proba?: Record<string, number>;
+    used_questionnaire?: boolean; model_b?: string | null; reason?: string } | null;
   /** 场地全称 / 几号单间（影棚没分房间）/ 狗档案上的品种、体型 */
   site_name?: string | null; room?: string | null; breed?: string | null; size?: string | null;
   /** 一只狗两个项圈合成一行时是「IMU1+IMU2」 */
@@ -180,7 +183,9 @@ export interface TrackingRow {
   /** 对上的照片日期目录（照片评级按 日期目录 + 狗目录 记） */
   photo_folder?: string | null;
   /** 兽医 / 实习生看这天照片给的评级 */
-  photo_ratings?: { user_name: string; user_role: string; grade: "S0" | "S1" | "S2" | "unsure"; note: string | null }[];
+  photo_ratings?: { user_id?: number; user_name: string; user_role: string; grade: "S0" | "S1" | "S2" | "unsure"; note: string | null; is_vet?: boolean }[];
+  /** 只看兽医（账号管理里勾了「兽医」）的评级合出来的档 */
+  photo_grade_vet?: string | null;
   /** 几个人的评级合成一个（看不清不算，不一致取最重的） */
   photo_grade?: "S0" | "S1" | "S2" | null;
   /** 这天这只狗底下的任务，点进去复看标注用 */
@@ -227,3 +232,17 @@ export interface TrackingResult { rows: TrackingRow[]; warnings: string[]; trigg
 
 export const skinDailyTracking = (p: { date_from: string; date_to: string; c_prefer?: "human" | "ai" }) =>
   request.get<never, TrackingResult>("/skin/daily-tracking", { params: p, timeout: 300_000 });
+
+
+// ── ML 版：用兽医评级重训模型 B ──
+export interface MlScore { n: number; acc: number | null; confusion: Record<string, Record<string, number>> }
+export interface MlTrainReport {
+  n_days: number; n_dogs: number; label_counts: Record<string, number>; folds: number; synthetic_weight: number;
+  real: MlScore; synthetic: MlScore; pm: MlScore; trained_at: string;
+}
+export interface MlModelStatus { active: "synthetic" | "real"; has_real: boolean; real_report: MlTrainReport | null; min_real: number }
+export const mlModelStatus = () => request.get<never, MlModelStatus>("/skin/ml/model-status");
+export const mlTrainReal = (c_prefer: "ai" | "human") =>
+  request.post<never, { ok: boolean; message?: string; report?: MlTrainReport }>("/skin/ml/train-real", null, { params: { c_prefer }, timeout: 600_000 });
+export const mlActivate = (which: "synthetic" | "real") =>
+  request.post<never, MlModelStatus & { warnings: string[] }>("/skin/ml/activate", { which }, { timeout: 300_000 });

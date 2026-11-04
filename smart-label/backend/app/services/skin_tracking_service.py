@@ -32,6 +32,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.ai_candidate import AiCandidate, CandidateStatus
@@ -206,13 +207,14 @@ async def daily_tracking(
     photo_index = await asyncio.to_thread(_photo_index)
     # 照片评级：按 (日期目录, 狗目录) 分好
     ratings_by_pair: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for r, dn, un, role in (await db.execute(
-        select(SkinPhotoRating, User.display_name, User.username, User.role)
+    for r, dn, un, role, pm in (await db.execute(
+        select(SkinPhotoRating, User.display_name, User.username, User.role, User.permissions)
         .join(User, User.id == SkinPhotoRating.user_id)
         .where(SkinPhotoRating.album == "skin")
     )).all():
         ratings_by_pair[(r.folder, r.dog_folder)].append({
-            "user_name": dn or un, "user_role": getattr(role, "value", str(role)), "grade": r.grade, "note": r.note,
+            "user_id": r.user_id, "user_name": dn or un, "user_role": getattr(role, "value", str(role)),
+            "grade": r.grade, "note": r.note, "is_vet": perms.is_vet(pm),
         })
     # 狗档案是这几套叫法（PM 的「比熊-BB」、NAS 目录的「bibi」、设备号 IMU1）
     # 唯一能对上的地方。一只狗配两个 IMU 轮换充电，两个都要挂上同一套别名，
@@ -388,6 +390,8 @@ async def daily_tracking(
             # 算 C 用的那几个输入 + 各项得分，跟踪表 tooltip 要拿来讲"怎么来的"
             "c_inputs": _loads(s.c_inputs),
             "c_detail": _loads(s.c_detail),
+            # ML 版预测（模型 A 的 C 档、模型 B 的 S 档），跟这份 C 值同一个来源的事件算的
+            "ml": _loads(s.ml),
         }
         if s.devices and not merged[key]["devices"]:
             merged[key]["devices"] = _loads(s.devices)
@@ -452,6 +456,7 @@ async def daily_tracking(
             "c_source": p_source,
             "c_value": c_value,
             "c_tier": c_tier,
+            "ml": (primary or {}).get("ml"),
             "delta_c": (
                 round(m["human"]["c_value"] - m["ai"]["c_value"], 1)
                 if m["human"] and m["ai"] and m["human"]["c_value"] is not None and m["ai"]["c_value"] is not None
@@ -470,6 +475,8 @@ async def daily_tracking(
             "photo_folder": photo_pairs[0][0] if photo_pairs else None,
             "photo_ratings": p_ratings,
             "photo_grade": _consensus(p_ratings),
+            # 只看兽医的评级（准确率对照、重训模型 B 都以它为准）
+            "photo_grade_vet": _consensus([x for x in p_ratings if x["is_vet"]]),
             "s_no_q": None,
             "s_with_q": None,
         }

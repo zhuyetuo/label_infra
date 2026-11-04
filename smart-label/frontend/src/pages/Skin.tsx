@@ -7,6 +7,7 @@ import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
 import PhotoGallery from "@/components/PhotoGallery";
+import SkinAccuracy from "@/components/SkinAccuracy";
 import { SkinGradeHelp } from "@/components/SkinRatingBar";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
@@ -99,7 +100,7 @@ function SkinFull() {
   const [mlTab, setMlTab] = useState("ml");
   const tab = version === "pm" ? pmTab : mlTab;
   // 各 tab 之间跳转（比如 ML 对比 → 填写问答）时顺带切到对应版本
-  const AUTO_TABS = new Set(["tracking", "charts", "link", "weekly", "history", "photos"]);
+  const AUTO_TABS = new Set(["tracking", "charts", "accuracy", "link", "weekly", "history", "photos"]);
   const setTab = (key: string) => {
     if (ML_TABS.has(key)) { setVersion("ml"); setMlTab(key); return; }
     setVersion("pm");
@@ -177,6 +178,7 @@ function SkinFull() {
             <TrackingTab opts={opts} onGotoQ={(d, dog) => { setFillDate(d); setDogName(dog); setQModal(true); }} />
           ) },
           { key: "charts", label: "趋势图表", children: <ChartsTab /> },
+          { key: "accuracy", label: "准确率（对照兽医）", children: <SkinAccuracy /> },
           { key: "link", label: "项目联动（AI vs 人工）", children: (
             <LinkTab opts={opts} onApply={(c, meta) => {
               setCIn(c); setCSource(meta.source); setCCompare({ ai: meta.ai, human: meta.human });
@@ -1135,6 +1137,38 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               ),
           },
           {
+            title: (
+              <Tooltip title="ML 版：模型 A 预测 C 档、模型 B 预测 S 档（有问卷的天会用上问卷）。跟 PM 规则是两套独立的方法，放一起对照；准不准看「准确率」标签页（拿兽医照片评级当标准）。「重新拉取」时一起算">
+                ML（C / S）
+              </Tooltip>
+            ),
+            key: "ml",
+            width: 120,
+            render: (_: unknown, r: TrackingRow) => {
+              const m = r.ml;
+              if (!m) return <Typography.Text type="secondary">—</Typography.Text>;
+              if (!m.s_tier) return <Tooltip title={m.reason}><Typography.Text type="secondary">不出</Typography.Text></Tooltip>;
+              const pct = (p?: Record<string, number>) =>
+                p ? Object.entries(p).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(" · ") : "";
+              const pmS = (r.s_with_q ?? r.s_no_q)?.s_tier;
+              return (
+                <Tooltip title={
+                  <div style={{ fontSize: 12 }}>
+                    <div>模型 A（C 档）：{pct(m.c_proba)}</div>
+                    <div>模型 B（S 档）：{pct(m.s_proba)}{m.used_questionnaire ? "（用上了问卷）" : "（没问卷）"}</div>
+                    <div style={{ opacity: 0.7 }}>模型 B 用的是{m.model_b === "real" ? "兽医评级训练的版本" : "合成数据训练的版本"}</div>
+                  </div>
+                }>
+                  <span style={{ whiteSpace: "nowrap" }}>
+                    <Tag color={tierColor(m.c_tier)} style={{ marginRight: 2 }}>{m.c_tier}</Tag>
+                    <Tag color={tierColor(m.s_tier)} style={{ marginRight: 0 }}>{m.s_tier}</Tag>
+                    {pmS && pmS !== m.s_tier && <Typography.Text type="warning" style={{ fontSize: 11, marginLeft: 2 }}>≠PM</Typography.Text>}
+                  </span>
+                </Tooltip>
+              );
+            },
+          },
+          {
             title: "复看标注",
             width: 100,
             // 这天的抓挠是好几个小时段任务加起来的，点开挑一个进标注工作台，
@@ -2056,6 +2090,9 @@ function MlTab(p: { opts: SkinOptions; answers: Answers; dogName: string | null;
 
   return (
     <div>
+      <Alert type="info" showIcon style={{ marginBottom: 12, maxWidth: 1000 }}
+        message="ML 版的日常用法已经搬到「PM 版 → 每日跟踪（自动）」里"
+        description="每日跟踪表的「ML（C / S）」列：每只狗每天都有，跟 PM 的 C / S、照片评级放一行；「准确率（对照兽医）」标签页：PM 规则和 ML 各跟兽医对上多少，还能用兽医评级重训模型 B。这一页是老的逐天调试工具，直接扫 NAS 上的 AI 结果目录。" />
       <Space.Compact style={{ width: "100%", maxWidth: 800 }}>
         <Input value={roots} onChange={(e) => setRoots(e.target.value)} />
         <Button type="primary" loading={busy === "scan"} onClick={async () => { setBusy("scan"); try { const r = await skinMlScan(roots); setRows(r.rows); setStatus(r.message); if (r.rows.length) setDateLabel(r.date_labels![r.date_labels!.length - 1]); } finally { setBusy(null); } }}>扫描</Button>
