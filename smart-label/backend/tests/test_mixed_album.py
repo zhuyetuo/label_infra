@@ -381,3 +381,39 @@ def test_同一只狗的照片按编号顺序排(material):
             names = [p["filename"] for p in f["dogs"][0]["photos"]]
             got = [int(n.rsplit("(", 1)[1].split(")")[0]) for n in names]
             assert got == want, names
+
+
+def test_牙齿检测送去视觉服务的路径_狗场照片不再多拼一层口腔目录(material, monkeypatch, run):
+    """2026-11 现场：博朗旺的口腔照片点「检测」报「文件不存在：口腔验证/博朗旺-狗场合作/...」——
+    detect_remote 一律在前面拼了 oral_dir。改成走 material_rel，并且发到视觉服务。"""
+    from app.services import tooth_service as svc
+
+    sent = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"detections": []}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json):
+            sent["url"], sent["path"] = url, json["path"]
+            return Resp()
+
+    monkeypatch.setattr(svc.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(settings, "vision_service_url", "http://vision:8385")
+    mixed = next(x["rel_path"] for x in _all("oral") if x["rel_path"].startswith(TREE))
+    run(svc.detect_remote(mixed, None, False))
+    assert sent["path"] == mixed and sent["url"] == "http://vision:8385/api/v1/tooth/detect"
+    run(svc.detect_remote("2026-09-01-ok/巴利/a.jpg", None, False))
+    assert sent["path"] == "口腔验证/2026-09-01-ok/巴利/a.jpg"

@@ -108,13 +108,15 @@ async def detect(body: DetectIn, db: AsyncSession = Depends(get_db), user: User 
 
 @router.get("/status")
 async def tooth_status():
-    """AI 服务那边牙齿模型在不在"""
+    """视觉服务那边牙齿模型在不在（牙齿检测从 label_service 挪到视觉服务了）"""
     import httpx
     from app.core.config import settings
-    url = f"{settings.algo_service_url.rstrip('/')}/api/v1/tooth/status"
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/tooth/status"
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(url)
+        if resp.status_code == 404:
+            return ok({"available": False, "error": "视觉服务还是旧版本，没有牙齿检测：更新 imu_train 后重启视觉服务"})
         return ok(resp.json())
     except Exception as e:  # noqa: BLE001
-        return ok({"available": False, "error": f"无法连接 AI 服务: {e}"})
+        return ok({"available": False, "error": f"无法连接视觉服务: {e}"})
