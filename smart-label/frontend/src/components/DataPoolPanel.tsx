@@ -67,8 +67,32 @@ export default function DataPoolPanel({
     filters.project_ids || filters.dog_ids || filters.date_from || filters.date_to || filters.label_names
   );
 
+  // 每个下拉只列「在别的条件下池里还有」的：按项目下拉就去掉项目这一条再统计一次，
+  // 狗 / 日期 / 采样率同理（不去掉自己那条的话，选了一个别的选项就全没了）
+  const facet = (drop: Partial<PoolFilter>) => ({ ...filters, ...drop });
+  const { data: sumNoProject } = useQuery({ queryKey: ["data-pool", "summary", facet({ project_ids: undefined })], queryFn: () => poolSummary(facet({ project_ids: undefined })) });
+  const { data: sumNoDog } = useQuery({ queryKey: ["data-pool", "summary", facet({ dog_ids: undefined })], queryFn: () => poolSummary(facet({ dog_ids: undefined })) });
+  const { data: sumNoDate } = useQuery({ queryKey: ["data-pool", "summary", facet({ date_from: null, date_to: null })], queryFn: () => poolSummary(facet({ date_from: null, date_to: null })) });
+  const { data: sumNoHz } = useQuery({ queryKey: ["data-pool", "summary", facet({ sample_hz: undefined })], queryFn: () => poolSummary(facet({ sample_hz: undefined })) });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
+  const projectOptions = useMemo(() => {
+    const have = new Map((sumNoProject?.by_project ?? []).filter((b) => b.id != null).map((b) => [b.id as number, b]));
+    const keep = projectIds.filter((id) => !have.has(id)).map((id) => ({ value: id, label: `${projects?.find((p) => p.id === id)?.name ?? `#${id}`}（0 段）` }));
+    return [...[...have.values()].map((b) => ({ value: b.id as number, label: `${b.name}（${b.n} 段）` })), ...keep];
+  }, [sumNoProject, projectIds, projects]);
+  const dogOptions = useMemo(() => {
+    const have = new Map((sumNoDog?.by_dog ?? []).filter((b) => b.id != null).map((b) => [b.id as number, b]));
+    const code = (id: number) => dogs?.find((d) => d.id === id)?.dog_code;
+    const keep = dogIds.filter((id) => !have.has(id)).map((id) => ({ value: id, label: `${code(id) ?? `#${id}`}（0 段）` }));
+    return [...[...have.values()].map((b) => ({ value: b.id as number, label: `${code(b.id as number) ?? ""} ${b.name}（${b.n} 段）`.trim() })), ...keep];
+  }, [sumNoDog, dogIds, dogs]);
+  const datesWithData = useMemo(() => new Set((sumNoDate?.by_date ?? []).map((b) => b.name)), [sumNoDate]);
+  const hzOptions = useMemo(() => {
+    const have = (sumNoHz?.by_hz ?? []).map((b) => ({ hz: parseInt(b.name, 10), n: b.n })).filter((x) => Number.isFinite(x.hz));
+    const all = [...have, ...hzs.filter((h) => !have.some((x) => x.hz === h)).map((h) => ({ hz: h, n: 0 }))].sort((a, b) => b.hz - a.hz);
+    return all.map((x) => ({ value: x.hz, label: `${x.hz}Hz（${x.n}）` }));
+  }, [sumNoHz, hzs]);
   const { data: sum, isFetching: loadingSum } = useQuery({
     queryKey: ["data-pool", "summary", filters],
     queryFn: () => poolSummary(filters),
@@ -222,7 +246,7 @@ export default function DataPoolPanel({
           value={projectIds}
           onChange={setProjectIds}
           optionFilterProp="label"
-          options={(projects ?? []).map((p) => ({ value: p.id, label: p.name }))}
+          options={projectOptions}
         />
         <Select
           mode="multiple"
@@ -232,11 +256,13 @@ export default function DataPoolPanel({
           value={dogIds}
           onChange={setDogIds}
           optionFilterProp="label"
-          options={(dogs ?? []).map((d) => ({ value: d.id, label: d.name ? `${d.dog_code} ${d.name}` : d.dog_code }))}
+          options={dogOptions}
         />
         <DatePicker.RangePicker
           value={range as [Dayjs, Dayjs] | null}
           onChange={(v) => setRange(v as [Dayjs | null, Dayjs | null] | null)}
+          // 池里没有片段的日子灰掉（还没统计出来时不灰）
+          disabledDate={(d) => datesWithData.size > 0 && !datesWithData.has(d.format("YYYY-MM-DD"))}
           presets={[
             { label: "最近 30 天", value: [dayjs().subtract(30, "day"), dayjs()] },
             { label: "最近 90 天", value: [dayjs().subtract(90, "day"), dayjs()] },
@@ -245,10 +271,7 @@ export default function DataPoolPanel({
         <Checkbox.Group
           value={hzs}
           onChange={(v) => setHzs(v as number[])}
-          options={[
-            { value: 50, label: "50Hz" },
-            { value: 16, label: "16Hz" },
-          ]}
+          options={hzOptions}
         />
         <Tooltip title="只要不短于这么多秒的片段。长片段往往更干净">
           <InputNumber min={0} step={5} value={minSec} onChange={(v) => setMinSec(v ?? null)} placeholder="片段" addonAfter="秒以上" style={{ width: 140 }} />

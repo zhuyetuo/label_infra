@@ -345,8 +345,10 @@ async def export_dataset(
     rows = (await db.execute(q)).all()
     if sample_hz:
         # 按样本的原始采样率挑（训 31.25 Hz 只能用 50 Hz 采的；老的 16 Hz 数据升不上去）
-        want_hz = {round(float(h)) for h in sample_hz}
-        rows = [(t, smp) for t, smp in rows if round(float(smp.sample_hz or smp.imu_sample_rate_hz or 0)) in want_hz]
+        # 按名义档位比（设备实际报 51 / 57 / 66Hz，选「50Hz」要都算上），见 data_pool.nominal_hz
+        from app.services.data_pool import nominal_hz
+        want_hz = {nominal_hz(float(h)) for h in sample_hz}
+        rows = [(t, smp) for t, smp in rows if nominal_hz(float(smp.sample_hz or smp.imu_sample_rate_hz or 0)) in want_hz]
     if not rows:
         raise TrainingExportError(
             "这个范围里没有任务" if only_reviewed else "这个范围里没有审核通过的任务"
