@@ -276,7 +276,7 @@ export default function DailyStats() {
           <Select
             mode="multiple"
             allowClear
-            style={{ minWidth: 220 }}
+            style={{ width: 220 }}
             placeholder="全部狗"
             value={imus}
             onChange={setImus}

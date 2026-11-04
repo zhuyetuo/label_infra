@@ -539,7 +539,7 @@ export default function SegmentPanel({
           allowClear
           size="small"
           placeholder="全部类别"
-          style={{ minWidth: 160 }}
+          style={{ width: 200 }}
           maxTagCount="responsive"
           value={filterLabels}
           onChange={setFilterLabels}

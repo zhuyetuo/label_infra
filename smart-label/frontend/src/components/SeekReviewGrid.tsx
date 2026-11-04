@@ -200,7 +200,7 @@ export default function SeekReviewGrid({ projectId, found, labelNames = [], onWr
                 allowClear
                 maxTagCount="responsive"
                 placeholder="只看类别"
-                style={{ minWidth: 160, maxWidth: 320 }}
+                style={{ width: 240 }}
                 value={labelFilter}
                 onChange={setLabelFilter}
                 options={labelCounts.map(([name, n]) => ({ value: name, label: `${name}（${n}）` }))}

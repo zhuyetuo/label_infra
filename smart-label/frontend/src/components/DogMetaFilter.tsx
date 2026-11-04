@@ -56,13 +56,13 @@ export default function DogMetaFilter({ rows, value, onChange }: {
   const common = { mode: "multiple" as const, allowClear: true, showSearch: true, maxTagCount: "responsive" as const };
   return (
     <>
-      <Select {...common} placeholder="全部场地" style={{ minWidth: 140 }} value={value.sites ?? []}
+      <Select {...common} placeholder="全部场地" style={{ width: 150 }} value={value.sites ?? []}
         onChange={(v) => onChange({ sites: v })} options={sites.map((s) => ({ value: s, label: s }))} />
       {rooms.length > 0 && (
-        <Select {...common} placeholder="全部房间" style={{ minWidth: 140 }} value={value.rooms ?? []}
+        <Select {...common} placeholder="全部房间" style={{ width: 150 }} value={value.rooms ?? []}
           onChange={(v) => onChange({ rooms: v })} options={rooms.map((s) => ({ value: s, label: s }))} />
       )}
-      <Select {...common} placeholder="全部品种" style={{ minWidth: 140 }} value={value.breeds ?? []}
+      <Select {...common} placeholder="全部品种" style={{ width: 150 }} value={value.breeds ?? []}
         onChange={(v) => onChange({ breeds: v })} options={breeds.map((s) => ({ value: s, label: s }))} />
     </>
   );

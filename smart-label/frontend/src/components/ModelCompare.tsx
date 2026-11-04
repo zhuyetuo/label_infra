@@ -199,7 +199,7 @@ export default function ModelCompare() {
       <Space wrap style={{ marginBottom: 12 }}>
         <Select
           mode="multiple"
-          style={{ minWidth: 240 }}
+          style={{ width: 240 }}
           value={runModes}
           onChange={setRunModes}
           placeholder="选要跑的版本"
@@ -251,7 +251,7 @@ export default function ModelCompare() {
       <Space wrap style={{ marginBottom: 12 }}>
         <Select
           mode="multiple"
-          style={{ minWidth: 420 }}
+          style={{ width: 420 }}
           placeholder={runs && !runs.length ? "这批样本还没跑过任何版本，先点上面「跑这几个版本」" : "选要对比的版本（第一个当基准）"}
           value={picked}
           onChange={setPicked}
