@@ -36,6 +36,7 @@ import {
   type ModelVersion, type TrainDataset,
   type DatasetStats,
   type TrainReview,
+  type TrainDiag,
 } from "@/api/training";
 
 /**
@@ -2279,6 +2280,7 @@ export default function Training() {
         title={`数据 · 回放 · 训练记录 #${reviewFor?.id ?? ""}${reviewFor?.model_version ? `（${reviewFor.model_version}）` : ""}`}
         stats={(reviewFor && (metricsOf(reviewFor)?.dataset as DatasetStats | undefined)) || null}
         review={(reviewFor && (metricsOf(reviewFor)?.review as TrainReview | undefined)) || null}
+        diag={(reviewFor && (metricsOf(reviewFor) as TrainDiag | undefined)) || null}
         modelDone={reviewFor?.status === "done"}
         onClose={() => setReviewFor(null)}
         onRefresh={() => void qc.invalidateQueries({ queryKey: ["model-versions"] })}
