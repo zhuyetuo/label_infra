@@ -17,6 +17,9 @@ interface ServerSeg { start_ms: number | null; end_ms: number | null; label?: st
 interface ServerResult {
   classes: string[]; window_s: number; stride_s: number; hz_model: number; mode: string; n_windows: number;
   windows: ServerWindow[]; segments?: Record<string, ServerSeg[]>; model_path: string;
+  /** 端侧才有：同一批窗口 C 特征 / Python 特征 / sklearn / C 森林 交叉比，查端侧跟服务端为什么不一样 */
+  diagnose?: { n: number; error?: string; edge_vs_sk?: number; skC_vs_edge?: number; skC_vs_sk?: number; verdict?: string;
+    top?: { idx: number; name: string; c: number; py: number; z: number }[] };
 }
 interface EdgeModel { tag: string; kind?: string; hz?: number; classes?: string[]; train?: { job_id: number } | null }
 interface Span { a: number; b: number; label: string; conf: number }
@@ -226,7 +229,7 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
     const opt = { timeout: 120_000, silent: true } as const;
     const [a, b] = await Promise.allSettled([
       request.post<never, ServerResult>("/device-debug/infer", { ...body, mode: post ? "viterbi" : "raw", model }, opt),
-      edgeTag ? request.post<never, ServerResult>("/device-debug/edge-infer", { ...body, mode: post ? "board" : "raw", model: edgeTag }, opt)
+      edgeTag ? request.post<never, ServerResult>("/device-debug/edge-infer", { ...body, mode: post ? "board" : "raw", model: edgeTag, diagnose: true }, opt)
         : Promise.resolve(null),
     ]);
     if (a.status === "fulfilled") setRes(a.value); else { setErr(msg(a.reason)); if (!auto) message.error(`服务端预测失败：${msg(a.reason)}`); }
@@ -389,6 +392,32 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
               </Tooltip>
             </div>
           </Space>
+          {edgeRes?.diagnose && (() => {
+            const d = edgeRes.diagnose!;
+            if (d.error) return <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>端侧诊断：{d.error}</Typography.Text>;
+            const bad = (d.edge_vs_sk ?? 1) < 0.95;
+            return (
+              <Alert type={bad ? "warning" : "success"} showIcon style={{ marginBottom: 8 }}
+                message={<span>端侧诊断（同一批 {d.n} 个窗口）：<b>{d.verdict}</b></span>}
+                description={bad ? (
+                  <div style={{ fontSize: 12 }}>
+                    <div style={{ marginBottom: 4 }}>
+                      端侧 C vs 服务端 sklearn 一致 {pct(d.edge_vs_sk)} · 用 <b>C 算的特征</b>喂 sklearn 后跟端侧一致 {pct(d.skC_vs_edge)}、跟服务端一致 {pct(d.skC_vs_sk)}
+                      <Tooltip title="同一批窗口：特征换成 C 算的、森林还用 sklearn 的。如果结果跟着端侧走，说明差在特征；如果还跟服务端一样，说明差在森林导成 C 那一步">
+                        <span> ⓘ</span>
+                      </Tooltip>
+                    </div>
+                    <Table size="small" pagination={false} rowKey="idx" dataSource={d.top?.slice(0, 6) ?? []}
+                      columns={[
+                        { title: "差得最多的特征", dataIndex: "name" },
+                        { title: "C 算的（均值）", dataIndex: "c" },
+                        { title: "Python 算的（均值）", dataIndex: "py" },
+                        { title: "差了几倍离散度", dataIndex: "z" },
+                      ]} />
+                  </div>
+                ) : undefined} />
+            );
+          })()}
           <Row name="板子 · 当前行为(0x07)" spans={view.boardSpans} t0={view.t0} t1={view.t1} />
           {view.segSpans.length > 0 ? <Row name="板子 · 片段(0x09)" spans={view.segSpans} t0={view.t0} t1={view.t1} /> : (
             <div style={{ display: "flex", gap: 8, marginBottom: 6, fontSize: 12, color: token.colorTextTertiary }}>
