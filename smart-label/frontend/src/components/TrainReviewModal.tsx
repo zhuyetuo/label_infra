@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Modal, Progress, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Modal, Progress, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import { rerunTrainReview, trainReview, trainReviewStatus, type DatasetStats, type ReviewProgress, type ReviewRow, type TrainDiag, type TrainReview } from "@/api/training";
 import { errMsg } from "@/utils/request";
+import { advise } from "@/utils/trainAdvice";
 import { fmtSecs } from "@/utils/fmtDuration";
 
 /**
@@ -25,6 +26,24 @@ const HINT_TIP: Record<string, string> = {
   模型偏向另一类: "模型偏向另一类但不是很确定。多看几条同类的再判断",
   难区分: "人标的那一类和模型判的那一类概率差不多：这一段本来就模棱两可，看「诊断」里这两类分不分得开",
 };
+// 类别颜色：常用几类固定（跟标注里的习惯一致），其余按名字取一个固定的颜色
+const CLASS_COLOR: Record<string, string> = {
+  未佩戴: "#8c8c8c", "静止/休息": "#4c72b0", 睡觉: "#4c72b0", 睡眠: "#4c72b0", 活动: "#55a868",
+  抓挠: "#c44e52", "甩头/抖身": "#dd8452", 甩身体: "#dd8452", 舔: "#8172b2", 进食: "#937860", 饮水: "#64b5cd",
+};
+const PALETTE = ["#da8bc3", "#8c613c", "#ccb974", "#64b5cd", "#8172b2", "#937860", "#2a9d8f", "#e76f51"];
+export const classColor = (name: string | null | undefined) => {
+  if (!name) return "#999";
+  if (CLASS_COLOR[name]) return CLASS_COLOR[name];
+  const root = Object.keys(CLASS_COLOR).find((k) => name.startsWith(`${k}-`));
+  if (root) return CLASS_COLOR[root];
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+};
+const ClassTag = ({ name }: { name: string | null | undefined }) =>
+  name ? <Tag color={classColor(name)} style={{ marginRight: 0 }}>{name}</Tag> : <span style={{ color: "#999" }}>没标</span>;
+
 const KIND_TIP: Record<string, string> = {
   漏识别: "人标了事件类（抓挠/甩身体），模型没认出来。最值钱的一类：点开看画面，真是抓挠就是模型弱，不是就是标错",
   误识别: "模型说是事件类，人标的不是。多半是标注边界没对齐，或者人标漏了",
@@ -49,12 +68,20 @@ export default function TrainReviewModal({
   const [full, setFull] = useState<TrainReview | null>(review);
   const [kind, setKind] = useState<string>("全部");
   const [hint, setHint] = useState<string>("全部");
+  // 只看某个类别：人标是它 / 模型判成它 / 任一；点混淆矩阵的格子 = 人标 A 且判成 B
+  const [cls, setCls] = useState<string | null>(null);
+  const [clsSide, setClsSide] = useState<"any" | "human" | "pred">("any");
+  const [cell, setCell] = useState<{ human: string; pred: string } | null>(null);
+  const [tab, setTab] = useState<string>(review ? "review" : "stats");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setFull(review);
     setKind("全部");
     setHint("全部");
+    setCls(null);
+    setCell(null);
+    setTab(review ? "review" : "stats");
     if (versionId != null && review) {
       setLoading(true);
       trainReview(versionId).then(setFull).catch(() => undefined).finally(() => setLoading(false));
@@ -109,7 +136,19 @@ export default function TrainReviewModal({
     <Alert type="error" showIcon style={{ padding: "2px 8px" }} message={`上次回放失败：${prog.error ?? ""}`} />
   ) : null;
 
-  const rows = useMemo(() => (full?.rows ?? []).filter((r) => (kind === "全部" || r.kind === kind) && (hint === "全部" || r.hint === hint)), [full, kind, hint]);
+  const rows = useMemo(() => (full?.rows ?? []).filter((r) => {
+    if (kind !== "全部" && r.kind !== kind) return false;
+    if (hint !== "全部" && r.hint !== hint) return false;
+    if (cell && (r.human !== cell.human || r.pred !== cell.pred)) return false;
+    if (cls) {
+      const hit = clsSide === "human" ? r.human === cls : clsSide === "pred" ? r.pred === cls : r.human === cls || r.pred === cls;
+      if (!hit) return false;
+    }
+    return true;
+  }), [full, kind, hint, cls, clsSide, cell]);
+  const allClasses = useMemo(() => [...new Set((full?.rows ?? []).flatMap((r) => [r.human, r.pred]).filter(Boolean) as string[])], [full]);
+  /** 从「诊断」的建议跳过来：直接筛好「人标 A → 判成 B」 */
+  const showPair = (human: string, pred: string) => { setKind("全部"); setHint("全部"); setCls(null); setCell({ human, pred }); setTab("review"); };
   const kinds = Object.keys(KIND_COLOR);
 
   const statsTab = stats ? (
@@ -185,14 +224,22 @@ export default function TrainReviewModal({
         title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>混淆矩阵（按段）：行 = 人标的，列 = 模型说的。对角线是认对的</Typography.Text>}
         dataSource={full.confusion.classes.map((c, i) => ({ cls: c, row: full.confusion.matrix[i], i }))}
         columns={[
-          { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <b>{c}</b> },
+          { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <ClassTag name={c} /> },
           ...full.confusion.classes.map((c, j) => ({
-            title: c, width: 80, align: "center" as const,
-            render: (_: unknown, r: { row: number[]; i: number }) => {
+            title: <ClassTag name={c} />, width: 80, align: "center" as const,
+            render: (_: unknown, r: { row: number[]; i: number; cls: string }) => {
               const v = r.row[j];
               const total = r.row.reduce((a, b) => a + b, 0) || 1;
               const diag = r.i === j;
-              return <span style={{ color: diag ? "#52c41a" : v ? "#f5222d" : "#999", fontWeight: diag ? 600 : 400 }}>{v}{v && !diag ? <small> ({pct(v / total)})</small> : ""}</span>;
+              const on = cell?.human === r.cls && cell?.pred === c;
+              const txt = <span style={{ color: diag ? "#52c41a" : v ? "#f5222d" : "#999", fontWeight: diag || on ? 600 : 400 }}>{v}{v && !diag ? <small> ({pct(v / total)})</small> : ""}</span>;
+              // 点一格错的 = 下面只列「人标这一行、判成这一列」的错例
+              return v && !diag ? (
+                <Tooltip title={`只看人标「${r.cls}」、模型判成「${c}」的 ${v} 段`}>
+                  <a onClick={() => setCell(on ? null : { human: r.cls, pred: c })}
+                    style={{ display: "inline-block", padding: "0 4px", borderRadius: 4, outline: on ? "2px solid #f5222d" : undefined }}>{txt}</a>
+                </Tooltip>
+              ) : txt;
             },
           })),
           { title: "召回", width: 70, render: (_, r: { cls: string }) => pct(full.per_class[r.cls]?.recall) },
@@ -207,6 +254,20 @@ export default function TrainReviewModal({
         )}
         {loading && <Typography.Text type="secondary" style={{ fontSize: 12 }}>在拉全量…</Typography.Text>}
       </Space>
+      <Space wrap>
+        <span style={{ fontSize: 12 }}>只看类别</span>
+        <Select size="small" allowClear placeholder="全部类别" style={{ width: 160 }} value={cls ?? undefined}
+          onChange={(v) => setCls(v ?? null)}
+          options={allClasses.map((c) => ({ value: c, label: <ClassTag name={c} /> }))} />
+        <Segmented size="small" value={clsSide} onChange={(v) => setClsSide(v as "any" | "human" | "pred")}
+          options={[{ value: "any", label: "人标或判成" }, { value: "human", label: "人标是它" }, { value: "pred", label: "判成它" }]} />
+        {cell && (
+          <Tag closable onClose={() => setCell(null)} color="red">
+            人标 {cell.human} → 判成 {cell.pred}
+          </Tag>
+        )}
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>共 {rows.length} 条（点上面混淆矩阵里红色的格子 = 只看那一格）</Typography.Text>
+      </Space>
       <Table
         size="small" rowKey={(r) => `${r.task_id}-${r.start_ms}-${r.kind}`} dataSource={rows} scroll={{ y: 360 }}
         pagination={{ pageSize: 50, showSizeChanger: false, size: "small" }}
@@ -216,12 +277,12 @@ export default function TrainReviewModal({
           { title: "任务", width: 150, render: (_, r: ReviewRow) => <span>#{r.task_id} <span style={{ color: "#888", fontSize: 12 }}>{r.sample_code ?? ""}</span></span> },
           { title: "采集日", dataIndex: "day", width: 100 },
           { title: "时间", width: 130, render: (_, r: ReviewRow) => `${(r.start_ms / 1000).toFixed(1)}s – ${(r.end_ms / 1000).toFixed(1)}s（${r.seconds}s）` },
-          { title: "人标", dataIndex: "human", width: 80, render: (h: string | null) => h ?? <span style={{ color: "#999" }}>没标</span> },
+          { title: "人标", dataIndex: "human", width: 100, render: (h: string | null) => <ClassTag name={h} /> },
           {
-            title: "模型说", width: 170,
+            title: "模型说", width: 190,
             render: (_, r: ReviewRow) => (
               <Tooltip title={`${r.n_windows} 个窗口投票：${Object.entries(r.votes).map(([k, v]) => `${k} ${v}`).join("，")}${r.p_human != null ? `；人标那一类的平均概率 ${r.p_human.toFixed(2)}` : ""}`}>
-                <b>{r.pred}</b> <span style={{ color: "#888", fontSize: 12 }}>概率 {r.conf.toFixed(2)} · {r.n_windows} 窗</span>
+                <span><ClassTag name={r.pred} /> <span style={{ color: "#888", fontSize: 12 }}>概率 {r.conf.toFixed(2)} · {r.n_windows} 窗</span></span>
               </Tooltip>
             ),
           },
@@ -250,8 +311,28 @@ export default function TrainReviewModal({
   );
 
   const sepColor = (auc: number | null) => (auc == null ? "default" : auc >= 0.9 ? "green" : auc >= 0.75 ? "gold" : "red");
+  const advice = advise(diag, full, stats?.window_s ?? null);
   const diagTab = diag?.confusion || diag?.separability ? (
     <Space direction="vertical" style={{ width: "100%" }} size={10}>
+      {advice.length > 0 && (
+        <div>
+          <Typography.Title level={5} style={{ margin: "0 0 6px" }}>下一步建议</Typography.Title>
+          <Space direction="vertical" style={{ width: "100%" }} size={6}>
+            {advice.map((a, k) => (
+              <Alert key={k} type={a.level} showIcon message={<b>{a.title}</b>}
+                description={<div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  {a.detail.map((t, i) => <div key={i}>· {t}</div>)}
+                  {a.pair && full && (
+                    <Button size="small" type="link" style={{ padding: 0 }} onClick={() => showPair(a.pair!.human, a.pair!.pred)}>
+                      去看这些错例（回放里人标{a.pair.human} → 判成{a.pair.pred}）
+                    </Button>
+                  )}
+                </div>} />
+            ))}
+          </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>按混淆矩阵、两两可分性、回放套规则算出来的，只是建议</Typography.Text>
+        </div>
+      )}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         训练时在验证集上算的（按窗口，验证集按片段划分）。先看混淆矩阵：一类 recall 低、另一类 precision 低，多半是前者被认成了后者。
         再看「分不分得开」：只拿这两类单独训一个二分类，如果连它都分不开，一直补数据作用有限，要考虑合并 / 改类别定义、加特征、换模型或采样率。
@@ -261,9 +342,9 @@ export default function TrainReviewModal({
           title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>混淆矩阵（按窗口）：行 = 人标的，列 = 模型判的</Typography.Text>}
           dataSource={diag.confusion.labels.map((c, i) => ({ cls: c, row: diag.confusion!.matrix[i], i }))}
           columns={[
-            { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <b>{c}</b> },
+            { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <ClassTag name={c} /> },
             ...diag.confusion.labels.map((c, j) => ({
-              title: c, width: 90, align: "center" as const,
+              title: <ClassTag name={c} />, width: 90, align: "center" as const,
               render: (_: unknown, r: { row: number[]; i: number }) => {
                 const v = r.row[j], total = r.row.reduce((a, b) => a + b, 0) || 1, d = r.i === j;
                 return <span style={{ color: d ? "#52c41a" : v ? "#f5222d" : "#999", fontWeight: d ? 600 : 400 }}>{v}<small> ({pct(v / total)})</small></span>;
@@ -290,7 +371,8 @@ export default function TrainReviewModal({
   return (
     <Modal title={title} open={versionId != null} onCancel={onClose} footer={null} width={980} destroyOnClose>
       <Tabs
-        defaultActiveKey={review ? "review" : "stats"}
+        activeKey={tab}
+        onChange={setTab}
         items={[
           { key: "stats", label: "训练集", children: statsTab },
           { key: "review", label: `回放错例${full ? ` (${full.n_wrong})` : ""}`, children: reviewTab },
