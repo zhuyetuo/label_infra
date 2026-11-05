@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, InputNumber, Select, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import request from "@/utils/request";
+import request, { errMsg } from "@/utils/request";
 import { listModelVersions, type ModelVersion } from "@/api/training";
 import { BEHAV_NAMES, type PcSegment } from "@/utils/imuProtocols";
 
@@ -199,10 +199,11 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
       t_ms: pts.map((s) => Math.round(s.dev!)), acc: pts.map((s) => [s.ax, s.ay, s.az]),
       gyro: hasGyro ? pts.map((s) => [s.gx ?? 0, s.gy ?? 0, s.gz ?? 0]) : null, hz,
     };
-    const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const msg = errMsg;
+    const opt = { timeout: 120_000, silent: true } as const;
     const [a, b] = await Promise.allSettled([
-      request.post<never, ServerResult>("/device-debug/infer", { ...body, mode: post ? "viterbi" : "raw", model }, { timeout: 120_000 }),
-      edgeTag ? request.post<never, ServerResult>("/device-debug/edge-infer", { ...body, mode: post ? "board" : "raw", model: edgeTag }, { timeout: 120_000 })
+      request.post<never, ServerResult>("/device-debug/infer", { ...body, mode: post ? "viterbi" : "raw", model }, opt),
+      edgeTag ? request.post<never, ServerResult>("/device-debug/edge-infer", { ...body, mode: post ? "board" : "raw", model: edgeTag }, opt)
         : Promise.resolve(null),
     ]);
     if (a.status === "fulfilled") setRes(a.value); else { setErr(msg(a.reason)); if (!auto) message.error(`服务端预测失败：${msg(a.reason)}`); }

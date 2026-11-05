@@ -73,9 +73,16 @@ request.interceptors.response.use(
         /* 不是 JSON，就用默认的 */
       }
     }
-    message.error(msg);
+    // silent：调用方自己在页面上显示错误（比如定时自动跑的），不要每次都在顶上弹一个
+    if (!(error.config as { silent?: boolean } | undefined)?.silent) message.error(msg);
     return Promise.reject(error);
   }
 );
+
+/** 从请求报错里取后端给的那句话（没有就用 axios 的「Request failed with status code 502」） */
+export function errMsg(e: unknown): string {
+  const ax = e as AxiosError<ApiEnvelope>;
+  return ax?.response?.data?.msg || (e instanceof Error ? e.message : String(e));
+}
 
 export default request;
