@@ -16,7 +16,7 @@ import {
   Radio,
   Tooltip,
   Typography,
-  message, Select, Input, InputNumber, Checkbox, Table
+  message, Select, Input, InputNumber, Checkbox, Table, theme as antdTheme
 } from "antd";
 import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
@@ -199,6 +199,8 @@ export default function AnnotationWorkspace({
   confirmScratchText,
   segReview,
 }: Props) {
+  // 主题色（明亮 / 暗黑跟着变）。叫 tk 是因为这个文件里 token 已经是媒体 token 的变量名
+  const { token: tk } = antdTheme.useToken();
   const taskId = task?.id ?? null;
   const sampleId = task?.sample_id ?? null;
   // 夜视增强：看哪一段、哪一路。夜里那几路黑得看不出狗在干嘛时用。
@@ -957,8 +959,8 @@ export default function AnnotationWorkspace({
           position: "fixed",
           left: Math.min(segMenu.x, window.innerWidth - 240),
           top: Math.min(segMenu.y, window.innerHeight - 380),
-          zIndex: 1200, width: 230, background: "#fff", borderRadius: 8, padding: 8,
-          boxShadow: "0 6px 16px rgba(0,0,0,.18)", border: "1px solid #eee", fontSize: 12,
+          zIndex: 1200, width: 230, background: tk.colorBgElevated, borderRadius: 8, padding: 8,
+          boxShadow: "0 6px 16px rgba(0,0,0,.18)", border: `1px solid ${tk.colorBorderSecondary}`, fontSize: 12,
         }}
       >
         <div style={{ marginBottom: 6, color: "#666" }}>
@@ -2280,7 +2282,7 @@ export default function AnnotationWorkspace({
           </div>
         )}
       </div>
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: "1px solid #f0f0f0", paddingLeft: 12 }}>
+      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: "1px solid var(--sl-border)", paddingLeft: 12 }}>
         {similarPeek && taskId != null ? (
           <SimilarHitsGrid
             taskId={taskId}
@@ -2618,7 +2620,7 @@ export default function AnnotationWorkspace({
         )}
 
         {!readOnly && (
-          <div style={{ margin: "12px 0", padding: 8, background: "#fafafa", borderRadius: 4 }}>
+          <div style={{ margin: "12px 0", padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
             <Space wrap size={6} style={{ marginBottom: 8 }}>
               {labelRows.map((row, r) => (
                 <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -2653,7 +2655,7 @@ export default function AnnotationWorkspace({
                         style={{
                           borderColor: c,
                           color: selected ? "#fff" : c,
-                          background: selected ? c : "#fff",
+                          background: selected ? c : tk.colorBgContainer,
                           fontWeight: selected || onPath ? 600 : 400,
                           boxShadow: onPath ? `inset 0 0 0 1px ${c}` : undefined,
                         }}

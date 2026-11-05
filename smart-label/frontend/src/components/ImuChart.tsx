@@ -1,4 +1,4 @@
-import { Tooltip } from "antd";
+import { Tooltip, theme } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
@@ -165,6 +165,9 @@ export default function ImuChart({
   onSplitSegment,
   onSegmentMenu,
 }: Props) {
+  // 坐标轴文字 / 网格跟着明亮 / 暗黑走（uPlot 默认是黑字，暗黑底上看不见）
+  const { token } = theme.useToken();
+  const axisStroke = token.colorTextSecondary, gridStroke = token.colorBorderSecondary;
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -335,8 +338,8 @@ export default function ImuChart({
             // 不画轴的那几条把 size 也归零，不然位置空着、白占高度
             timeAxisOnlyLast && !isLast
               ? { show: false, size: 0 }
-              : { show: true, values: axisTimeValues, size: X_AXIS_PX },
-            {},
+              : { show: true, values: axisTimeValues, size: X_AXIS_PX, stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: gridStroke } },
+            { stroke: axisStroke, grid: { stroke: gridStroke }, ticks: { stroke: gridStroke } },
           ],
           series: [
             { value: (_u, v) => (v == null ? "" : formatTimestamp(v)) },
@@ -405,7 +408,7 @@ export default function ImuChart({
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus, timeAxisOnlyLast]);
+  }, [sampleId, rowHeight, bus, timeAxisOnlyLast, axisStroke, gridStroke]);
 
   return (
     <div>

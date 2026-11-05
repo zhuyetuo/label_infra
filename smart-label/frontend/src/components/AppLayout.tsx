@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Badge, Layout, Menu, Space, Tag, Typography } from "antd";
+import { Badge, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
+import { useThemeStore } from "@/stores/themeStore";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { getMe } from "@/api/auth";
@@ -34,6 +35,20 @@ const ALL_ITEMS = [
   { key: "/system", label: "系统监控", roles: ["super_admin", "admin"] },
 ] as { key: string; label: string; roles: string[]; feature?: string }[];
 
+/** 右上角：明亮 / 暗黑 切换，记在本机 */
+function ThemeSwitch() {
+  const mode = useThemeStore((s) => s.mode);
+  const setMode = useThemeStore((s) => s.setMode);
+  const dark = mode === "dark";
+  return (
+    <Tooltip title={dark ? "切换到明亮模式" : "切换到暗黑模式"}>
+      <a style={{ color: "#fff", fontSize: 16, padding: "0 4px" }} onClick={() => setMode(dark ? "light" : "dark")}>
+        {dark ? "☀" : "🌙"}
+      </a>
+    </Tooltip>
+  );
+}
+
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -66,6 +81,7 @@ export default function AppLayout() {
           smart-label
         </Typography.Text>
         <Space>
+          <ThemeSwitch />
           {userInfo && <RoleTag role={userInfo.role} />}
           <Typography.Text style={{ color: "#fff" }}>{userInfo?.display_name}</Typography.Text>
           <a

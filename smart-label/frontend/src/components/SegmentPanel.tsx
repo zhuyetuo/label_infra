@@ -783,7 +783,7 @@ export default function SegmentPanel({
       {controlsPortalTarget ? createPortal(toolbar, controlsPortalTarget) : <div style={{ marginBottom: 8 }}>{toolbar}</div>}
 
       {showStats && (
-        <div style={{ marginBottom: 8, padding: 8, background: "#fafafa", borderRadius: 4 }}>
+        <div style={{ marginBottom: 8, padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
           <div style={{ fontSize: 12, marginBottom: 6 }}>
             覆盖：{fmtDur(cov.covered)}
             {durationMs != null && durationMs > 0 && (

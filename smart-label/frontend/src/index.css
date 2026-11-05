@@ -9,3 +9,17 @@ body,
   height: 100%;
   overflow: hidden;
 }
+
+/* 明亮 / 暗黑两套里，代码里手写的浅灰底、浅灰边框用这几个变量（antd 组件自己跟主题走，不用管） */
+:root {
+  --sl-fill: #fafafa;
+  --sl-fill2: #f0f0f0;
+  --sl-border: #f0f0f0;
+  --sl-page: #f0f2f5;
+}
+:root[data-theme="dark"] {
+  --sl-fill: #1f1f1f;
+  --sl-fill2: #262626;
+  --sl-border: #303030;
+  --sl-page: #000;
+}
