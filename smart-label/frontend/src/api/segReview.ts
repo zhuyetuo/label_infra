@@ -70,6 +70,10 @@ export const segEdit = (id: number, body: { start_time_ms: number; end_time_ms: 
   request.put<never, { id: number; start_time_ms: number; end_time_ms: number; label_id: number; seg_status: SegStatus }>(
     `/segments/${id}`, body);
 
+/** 打标记（只看模式也能打，不动类别起止、不改审核状态）。marks 空数组 = 清掉 */
+export const segMarks = (id: number, marks: string[], note?: string | null) =>
+  request.put<never, { id: number; marks: string | null; mark_note: string | null }>(`/segments/${id}/marks`, { marks, note: note ?? null });
+
 /** 删掉一条片段（重复的 / 不要的）。审核员 / 管理员不用认领；从候选来的，候选一起标成排除 */
 export const segDelete = (id: number) => request.delete<never, { id: number; deleted: boolean }>(`/segments/${id}`);
 

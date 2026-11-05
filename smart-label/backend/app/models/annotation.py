@@ -93,6 +93,14 @@ class AnnotationLabelItem(Base):
     uncertain_reason: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment="待定原因：no_view / ambiguous / needs_split"
     )
+    # 标记：看的时候发现、但暂时没空处理的问题，回头能按标记找回来。可以打好几个，逗号分开的代码：
+    #   compound   一段里混了好几个类别，要拆
+    #   boundary   在两个类别的边界上，拿不准
+    #   av_mismatch 画面跟 IMU 对不上（可能戴错了 / 还没戴上 / 时间没对齐）
+    #   other      其它（具体写在 mark_note 里）
+    # 跟「待定」不是一回事：待定是「拿不准，不进训练集」，标记只是记号，不影响导出
+    marks: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="标记，逗号分开：compound / boundary / av_mismatch / other")
+    mark_note: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="标记的备注")
     # 这条是从哪个「疑似抓挠」候选确认上来的。留着是为了能退回去：人当时可能
     # 走神点错了，回头发现不对，删掉之后那条候选也该回到「待确认」重新判断，
     # 而不是永远消失

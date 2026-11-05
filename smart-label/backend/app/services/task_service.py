@@ -236,6 +236,18 @@ async def release_all_in_project(db: AsyncSession, project_id: int, user: User) 
 _BOUNDARY_EDITS_MAX = 30
 
 
+
+MARK_CODES = ("compound", "boundary", "av_mismatch", "other")
+
+
+def clean_marks(v: str | None) -> str | None:
+    """标记代码去重、只留认得的、按固定顺序存；空的存 None"""
+    if not v:
+        return None
+    got = {x.strip() for x in v.split(",")}
+    out = [c for c in MARK_CODES if c in got]
+    return ",".join(out) or None
+
 def _append_boundary_edit(raw: str | None, old: tuple[int, int], new: tuple[int, int], user: User) -> str:
     """起止改了一次，往这条的调整记录里追加一笔（JSON 文本）。只留最近 30 笔，
     第一笔另外留着——它的 from 就是最初的起止，删了就不知道原来是多少了。"""
@@ -447,6 +459,11 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 origin.uncertain = incoming.uncertain
                 # 取消待定就把原因一起清掉，别留个孤零零的原因在库里
                 origin.uncertain_reason = incoming.uncertain_reason if incoming.uncertain else None
+            # 标记只是记号：改了不算「动过这条」（不清确认、不算 touched）
+            if getattr(incoming, "marks", None) is not None:
+                origin.marks = clean_marks(incoming.marks)
+            if getattr(incoming, "mark_note", None) is not None:
+                origin.mark_note = incoming.mark_note.strip()[:300] or None
             if touched:
                 origin.touched_at = datetime.now()
                 origin.touched_by = user.id
@@ -464,6 +481,8 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
                 ai_confirmed=bool(incoming.ai_confirmed) and incoming.source_type == LabelItemSource.ai_generated,
                 uncertain=bool(incoming.uncertain),
                 uncertain_reason=incoming.uncertain_reason if incoming.uncertain else None,
+                marks=clean_marks(getattr(incoming, "marks", None)),
+                mark_note=(getattr(incoming, "mark_note", None) or "").strip()[:300] or None,
                 # 前端「AI 预标注」填进来的新条目：这一刻的样子就是 AI 的原始判断
                 **({"ai_label_id": incoming.label_id, "ai_start_ms": incoming.start_time_ms,
                     "ai_end_ms": incoming.end_time_ms}

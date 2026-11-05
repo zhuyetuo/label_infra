@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import LabelTreeSelect from "@/components/LabelTreeSelect";
-import { Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Checkbox, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, trackOf } from "@/utils/labelTree";
@@ -15,6 +15,11 @@ import { OVERLAP_KIND_NAME, computeOverlaps, type OverlapHit } from "@/utils/ove
 
 type SourceFilter =
   | "all"
+  | "mark"
+  | "mark_compound"
+  | "mark_boundary"
+  | "mark_av_mismatch"
+  | "mark_other"
   | "ai"
   | "ai_pending"
   | "ai_confirmed"
@@ -45,6 +50,11 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "from_cand", label: "来自疑似片段" },
   { value: "human", label: "人工" },
   { value: "uncertain", label: "待定（全部）" },
+  { value: "mark", label: "有标记（全部）" },
+  { value: "mark_compound", label: "标记 · 复合类别" },
+  { value: "mark_boundary", label: "标记 · 边界拿不准" },
+  { value: "mark_av_mismatch", label: "标记 · 画面跟 IMU 对不上" },
+  { value: "mark_other", label: "标记 · 其它" },
   { value: "uncertain_no_view", label: "待定·没画面" },
   { value: "uncertain_ambiguous", label: "待定·看不清" },
   { value: "uncertain_needs_split", label: "待定·要细切" },
@@ -121,6 +131,41 @@ function coverage(items: LabelItem[], durationMs: number | null) {
   return { covered, gaps };
 }
 
+/**
+ * 标记：看的时候发现、但暂时没空处理的问题，过很久回来也能按标记找回来。可以打好几个。
+ * 跟「待定」不是一回事——待定是「拿不准，不进训练集」，标记只是记号，不影响导出。
+ */
+export const MARK_KINDS = [
+  { value: "compound", short: "复合", label: "复合类别：一段里混了好几个类别，要拆", color: "purple" },
+  { value: "boundary", short: "边界", label: "边界拿不准：在两个类别之间，很纠结", color: "gold" },
+  { value: "av_mismatch", short: "画面≠IMU", label: "画面跟 IMU 对不上：可能戴错了 / 还没戴上 / 时间没对齐", color: "red" },
+  { value: "other", short: "其它", label: "其它（写在备注里）", color: "default" },
+] as const;
+export const marksOf = (i: { marks?: string | null }) => (i.marks ? i.marks.split(",").filter(Boolean) : []);
+
+/**
+ * 改类别的记录（按项目记在本机）：最近 30 次「从什么改成什么」。
+ * 猜这一条最可能改成什么：同一个原类别被改过的，取改得最多的那个；没有就取最近常改成的那个
+ */
+const RELABEL_KEY = (pk: number | string | null | undefined) => `smart-label:relabel-history:${pk ?? "-"}`;
+function relabelHistory(pk: number | string | null | undefined): { from: number; to: number }[] {
+  try { const v = JSON.parse(localStorage.getItem(RELABEL_KEY(pk)) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function rememberRelabel(pk: number | string | null | undefined, from: number, to: number) {
+  if (from === to) return;
+  try { localStorage.setItem(RELABEL_KEY(pk), JSON.stringify([...relabelHistory(pk), { from, to }].slice(-30))); } catch { /* ignore */ }
+}
+export function guessRelabel(hist: { from: number; to: number }[], from: number): number | null {
+  const pick = (xs: { from: number; to: number }[]) => {
+    const n = new Map<number, number>();
+    xs.forEach((x, k) => n.set(x.to, (n.get(x.to) ?? 0) + 1 + k / 1000));   // 一样多时越近的越靠前
+    let best: number | null = null, bn = 0;
+    for (const [to, c] of n) if (to !== from && c > bn) { best = to; bn = c; }
+    return best;
+  };
+  return pick(hist.filter((h) => h.from === from)) ?? pick(hist.slice(-10));
+}
+
 interface Props {
   items: LabelItem[];
   labels: LabelDefinition[];
@@ -139,7 +184,7 @@ interface Props {
   onUpdate: (
     ids: number[],
     patch: Partial<
-      Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed" | "uncertain" | "uncertain_reason">
+      Pick<LabelItem, "label_id" | "start_time_ms" | "end_time_ms" | "ai_confirmed" | "uncertain" | "uncertain_reason" | "marks" | "mark_note">
     >
   ) => void;
   onDelete: (id: number) => void;
@@ -169,6 +214,10 @@ interface Props {
   reviewNoteClearOnly?: boolean;
   /** 片段级「通过」（审核员 / 管理员）。ok = false 是撤销通过。给了才显示按钮 */
   onSegApprove?: (item: LabelItem, ok: boolean) => void;
+  /** 只看模式下改类别（直接落库）。不给就只能在编辑模式改 */
+  onRelabelRemote?: (item: LabelItem, labelId: number) => void | Promise<void>;
+  /** 只看模式下打标记（直接落库）。编辑模式走 onUpdate 跟着草稿存 */
+  onMarksRemote?: (item: LabelItem, marks: string[], note: string | null) => void | Promise<void>;
   /** 打开时先只看被标有问题的（标注员拿到被退回的任务） */
   initialFlaggedOnly?: boolean;
   /**
@@ -196,6 +245,8 @@ export default function SegmentPanel({
   onUpdate,
   onDelete,
   canDeleteReadOnly,
+  onRelabelRemote,
+  onMarksRemote,
   onDedupe,
   onSplit,
   onLowlight,
@@ -402,8 +453,10 @@ export default function SegmentPanel({
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
         if (filterSource === "uncertain_needs_split" && i.uncertain_reason !== "needs_split") return false;
+        if (filterSource === "mark" && !i.marks) return false;
+        if (filterSource.startsWith("mark_") && !marksOf(i).includes(filterSource.slice(5))) return false;
         // 「待定」是单独一类，别混进别的来源的筛选结果里
-        if (!filterSource.startsWith("uncertain") && filterSource !== "all" && filterSource !== "flagged" && i.uncertain) return false;
+        if (!filterSource.startsWith("uncertain") && !filterSource.startsWith("mark") && filterSource !== "all" && filterSource !== "flagged" && i.uncertain) return false;
         if (filterSource.startsWith("seg_") && i.uncertain) return false;
         if (minConf != null && (i.ai_confidence == null || i.ai_confidence * 100 < minConf)) return false;
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
@@ -506,6 +559,28 @@ export default function SegmentPanel({
     rememberLabel(projectKey, id);
     setRecent(recentLabels(projectKey));
   };
+  const [relabelHist, setRelabelHist] = useState(() => relabelHistory(projectKey));
+  useEffect(() => setRelabelHist(relabelHistory(projectKey)), [projectKey]);
+  const canRelabel = !readOnly || !!onRelabelRemote;
+  /** 改一条的类别：编辑模式改草稿，只看模式直接落库；都记一笔「从什么改成什么」，下次好猜 */
+  const relabel = (i: LabelItem, to: number) => {
+    if (to === i.label_id) return;
+    rememberRelabel(projectKey, i.label_id, to);
+    setRelabelHist(relabelHistory(projectKey));
+    noteLabel(to);
+    if (readOnly) void onRelabelRemote?.(i, to);
+    else update([i.id], { label_id: to });
+  };
+  const canMark = !readOnly || !!onMarksRemote;
+  const setMarks = (i: LabelItem, marks: string[], note: string | null) => {
+    if (readOnly) void onMarksRemote?.(i, marks, note);
+    else update([i.id], { marks: marks.join(","), mark_note: note ?? "" });
+  };
+  // 标记的弹窗：哪一条、勾了哪些、备注
+  const [markFor, setMarkFor] = useState<LabelItem | null>(null);
+  const [markSel, setMarkSel] = useState<string[]>([]);
+  const [markNote, setMarkNote] = useState("");
+  const openMarks = (i: LabelItem) => { setMarkFor(i); setMarkSel(marksOf(i)); setMarkNote(i.mark_note ?? ""); };
   // 换任务就重读一次，并把上一个任务的勾选清掉（片段 id 不一样，留着是错的）
   useEffect(() => {
     setRecent(recentLabels(projectKey));
@@ -904,10 +979,18 @@ export default function SegmentPanel({
                     value={i.label_id}
                     style={{ width: 180 }}
                     recent={recent}
-                    onChange={(v) => { noteLabel(v); update([i.id], { label_id: v }); }}
+                    onChange={(v) => relabel(i, v)}
                     title="改类别"
                   />
                 )}
+                {marksOf(i).map((m) => {
+                  const k = MARK_KINDS.find((x) => x.value === m);
+                  return k ? (
+                    <Tooltip key={m} title={<>{k.label}{i.mark_note ? <><br />备注：{i.mark_note}</> : null}</>}>
+                      <Tag color={k.color} style={{ marginLeft: 4, cursor: canMark ? "pointer" : undefined }} onClick={() => canMark && openMarks(i)}>🚩{k.short}</Tag>
+                    </Tooltip>
+                  ) : null;
+                })}
               </>
             ),
           },
@@ -1054,7 +1137,8 @@ export default function SegmentPanel({
           },
           {
             title: "操作",
-            width: 300,
+            // 多了「改成 X」「改类别」「标记」三个，原来 300 放不下，后面的删除被挤出去
+            width: 460,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
               return (
@@ -1063,6 +1147,39 @@ export default function SegmentPanel({
                     跳转
                   </Button>
                   {loopButton(i.start_time_ms, i.end_time_ms)}
+                  {/* 改类别：猜一个最可能的（同一个原类别以前改成什么最多 / 最近常改成什么），点一下直接改，
+                      不用再确认；猜得不对就点右边的下拉选别的 */}
+                  {canRelabel && (() => {
+                    const g = guessRelabel(relabelHist, i.label_id);
+                    const ok = g != null && labels.some((l) => l.id === g);
+                    return (
+                      <Space.Compact size="small">
+                        {ok && (
+                          <Tooltip title={`照你最近的习惯猜的：点一下直接改成「${nameOf(g!)}」`}>
+                            <Button size="small" type="link" style={{ color: colorOf(g!), paddingRight: 2 }} onClick={() => relabel(i, g!)}>
+                              改成{nameOf(g!)}
+                            </Button>
+                          </Tooltip>
+                        )}
+                        <Popover trigger="click" placement="bottomRight" destroyTooltipOnHide
+                          title="改成哪个类别" content={
+                            <LabelTreeSelect labels={labels} value={i.label_id} style={{ width: 240 }} recent={recent}
+                              onChange={(v) => relabel(i, v)} title="改类别" />
+                          }>
+                          <Button size="small" type="link" style={{ paddingLeft: ok ? 2 : undefined }}>
+                            {ok ? <DownOutlined style={{ fontSize: 10 }} /> : <>改类别 <DownOutlined style={{ fontSize: 10 }} /></>}
+                          </Button>
+                        </Popover>
+                      </Space.Compact>
+                    );
+                  })()}
+                  {canMark && (i.id > 0 || !readOnly) ? (
+                    <Tooltip title="打标记：复合类别 / 边界拿不准 / 画面跟 IMU 对不上 / 其它，可以打好几个。只是记号，不影响导出，回头按「有标记」筛出来">
+                      <Button size="small" type="link" style={{ color: i.marks ? "#d4380d" : undefined }} onClick={() => openMarks(i)}>
+                        🚩{i.marks ? marksOf(i).length : "标记"}
+                      </Button>
+                    </Tooltip>
+                  ) : null}
                   {/* 片段级「通过」：一条条认可，有问题的点右边「有问题」一条条退回。
                       已经标了有问题的先「清除问题」再通过 */}
                   {onSegApprove && i.id > 0 && !i.review_note && (i.seg_status === "approved" ? (
@@ -1224,6 +1341,28 @@ export default function SegmentPanel({
 
       )}
 
+      <Modal
+        open={markFor != null}
+        title={markFor ? `标记这一段（${formatMs(markFor.start_time_ms)} ${nameOf(markFor.label_id)}）` : ""}
+        okText="保存"
+        onCancel={() => setMarkFor(null)}
+        onOk={() => { if (markFor) setMarks(markFor, markSel, markNote.trim() || null); setMarkFor(null); }}
+        footer={(_, { OkBtn, CancelBtn }) => (
+          <>
+            {markFor?.marks && (
+              <Button style={{ float: "left" }} onClick={() => { if (markFor) setMarks(markFor, [], null); setMarkFor(null); }}>清掉标记</Button>
+            )}
+            <CancelBtn /><OkBtn />
+          </>
+        )}
+      >
+        <Checkbox.Group value={markSel} onChange={(v) => setMarkSel(v as string[])} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {MARK_KINDS.map((k) => <Checkbox key={k.value} value={k.value}><Tag color={k.color}>{k.short}</Tag>{k.label}</Checkbox>)}
+        </Checkbox.Group>
+        <Input.TextArea style={{ marginTop: 12 }} rows={2} maxLength={300} showCount value={markNote} onChange={(e) => setMarkNote(e.target.value)}
+          placeholder="备注（可选）：比如「前半段在走、后半段在甩」「画面里狗在睡，IMU 一直在动」" />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>只是记号，不影响导出训练集；要排除出训练集用「待定」</Typography.Text>
+      </Modal>
       <Modal
         title="调整起止时间"
         open={editing != null}

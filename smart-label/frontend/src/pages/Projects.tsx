@@ -1620,6 +1620,11 @@ export default function Projects() {
                     render: (s: TaskStatus, task: Task) => (
                       <Space size={4}>
                         <TaskStatusTag status={s} />
+                        {!!task.mark_count && (
+                          <Tooltip title={`${task.mark_count} 段打了标记（复合类别 / 边界拿不准 / 画面跟 IMU 对不上…），打开后在片段列表按「有标记」筛`}>
+                            <Tag color="volcano">🚩{task.mark_count}</Tag>
+                          </Tooltip>
+                        )}
                         {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
                         {s === "PENDING_ASSIGN" && task.has_draft && (
                           <Tag color="gold">有草稿 {task.draft_item_count ?? ""}段</Tag>

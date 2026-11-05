@@ -319,18 +319,24 @@ async def list_tasks(
     # 同时带上当前轮已经存了多少段：标注中的任务光看状态分不出"只是认领了进去
     # 看了一眼"和"已经标了一堆"，列表里要靠这个数区分
     draft_counts: dict[int, int] = {}
+    mark_counts: dict[int, int] = {}
     # lite 时下面几段统计都跳过（task_ids 置空）
     task_ids = [] if lite else [t.id for t in tasks]
     if task_ids:
         rows = await db.execute(
-            select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id))
+            select(AnnotationRecord.task_id, func.count(AnnotationLabelItem.id),
+                   # 打了标记的段数（复合类别 / 边界拿不准 / 画面跟 IMU 对不上…）：列表上标个 🚩N，回头好找
+                   func.sum(case((AnnotationLabelItem.marks.is_not(None), 1), else_=0)))
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id)
         )
-        draft_counts = {task_id: int(n) for task_id, n in rows.all()}
+        for task_id, n, nm in rows.all():
+            draft_counts[task_id] = int(n)
+            if nm:
+                mark_counts[task_id] = int(nm)
 
     _lap("draft")
     # 每个任务当前轮各类别有几段、其中多少是 AI 给的还没人确认的——列表里直接
@@ -542,6 +548,7 @@ async def list_tasks(
                 **TaskOut.model_validate(t).model_dump(),
                 "has_draft": draft_counts.get(t.id, 0) > 0,
                 "draft_item_count": draft_counts.get(t.id, 0),
+                "mark_count": mark_counts.get(t.id, 0),
                 "label_counts": label_counts.get(t.id, {}),
                 "overlap_count": overlap_counts.get(t.id, 0),
                 "overlap_by_label": overlap_by_label.get(t.id, {}),

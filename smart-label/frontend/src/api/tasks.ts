@@ -84,6 +84,8 @@ export const saveDraft = async (
     ai_confirmed?: boolean;
     uncertain?: boolean;
     uncertain_reason?: string | null;
+    marks?: string;
+    mark_note?: string;
   }[]
 ) => {
   const r = await request.put<never, { kept_others?: number } | null>(`/tasks/${id}/draft`, {

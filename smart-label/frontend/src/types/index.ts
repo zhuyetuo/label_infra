@@ -76,6 +76,8 @@ export interface Task {
   has_draft?: boolean;
   /** 当前轮草稿里已有多少段，0 = 认领了还没动手 */
   draft_item_count?: number;
+  /** 打了标记的段数（当前轮） */
+  mark_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
   label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number }>;
   /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
@@ -121,6 +123,9 @@ export interface LabelItem {
   uncertain: boolean;
   /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
   uncertain_reason: string | null;
+  /** 标记（逗号分开）：compound 复合类别 / boundary 边界拿不准 / av_mismatch 画面跟 IMU 对不上 / other 其它。只是记号，不影响导出 */
+  marks?: string | null;
+  mark_note?: string | null;
   /** 从哪条「疑似片段」候选确认上来的；有值才能「退回候选」重新判断 */
   from_candidate_id: number | null;
   created_by: number | null;
