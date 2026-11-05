@@ -130,6 +130,29 @@ const norm = (l: string) => TO_BOARD[l] ?? l;
 const COLORS: Record<string, string> = { "睡觉": "#4c72b0", "未佩戴": "#8c8c8c", "活动": "#55a868", "抓挠": "#c44e52" };
 const colorOf = (l: string) => COLORS[l] ?? "#dd8452";
 
+/**
+ * 一条时间轴。**必须定义在组件外面**：写在组件里的话每次渲染都是一个新的组件类型，
+ * React 会把整行卸掉重建——页面每秒刷一次采样率，鼠标停在色块上的提示框一秒就没了
+ */
+function Row({ name, spans, t0, t1 }: { name: string; spans: Span[]; t0: number; t1: number }) {
+const { token } = theme.useToken();
+return (
+  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+    <div style={{ width: 140, fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}>{name}</div>
+    <div style={{ position: "relative", flex: 1, height: 22, background: token.colorFillQuaternary, borderRadius: 4, overflow: "hidden" }}>
+      {spans.map((s, i) => {
+        const l = ((Math.max(s.a, t0) - t0) / (t1 - t0)) * 100, w = ((Math.min(s.b, t1) - Math.max(s.a, t0)) / (t1 - t0)) * 100;
+        return w > 0 ? (
+          <Tooltip key={i} title={`${s.label} ${s.conf <= 1 ? Math.round(s.conf * 100) : s.conf}% · ${new Date(s.a).toLocaleTimeString()}–${new Date(s.b).toLocaleTimeString()}`}>
+            <div style={{ position: "absolute", left: `${l}%`, width: `${w}%`, top: 2, bottom: 2, background: colorOf(norm(s.label)), opacity: 0.85, borderRight: `1px solid ${token.colorBgContainer}` }} />
+          </Tooltip>
+        ) : null;
+      })}
+    </div>
+  </div>
+);
+}
+
 export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz, connected }: {
   getSamples: () => DevSample[];
   boardEvents: BoardEvent[];
@@ -227,7 +250,19 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
     const t0 = Math.min(...[srv, edg].filter((x) => x.length).map((x) => x[0].a));
     const t1 = Math.max(...[srv, edg].filter((x) => x.length).map((x) => x[x.length - 1].b));
     const ev = [...boardEvents].sort((x, y) => x.ts - y.ts);
-    const boardRaw = ev.map((e, i) => ({ a: e.ts, b: ev[i + 1]?.ts ?? e.ts + 5000, label: BEHAV_NAMES[e.cls] ?? `?${e.cls}`, conf: e.conf }));
+    // 0x07 是「当前行为」的定时快照（一两秒一条），不是片段。连着一样的并成一块画，
+    // 不然一条一个格子，看着像固定间隔的窗口；置信度取这一块里的平均
+    const boardRaw: Span[] = [];
+    ev.forEach((e, i) => {
+      const label = BEHAV_NAMES[e.cls] ?? `?${e.cls}`, b = ev[i + 1]?.ts ?? e.ts + 5000;
+      const last = boardRaw[boardRaw.length - 1];
+      if (last && last.label === label && Math.abs(last.b - e.ts) < 10_000) {
+        const n = (last as Span & { n?: number }).n ?? 1;
+        last.conf = (last.conf * n + e.conf) / (n + 1);
+        (last as Span & { n?: number }).n = n + 1;
+        last.b = b;
+      } else boardRaw.push({ a: e.ts, b, label, conf: e.conf });
+    });
     const evIn = ev.filter((e) => e.ts >= t0 && e.ts <= t1);
     const agreeAt = (spans: Span[], lag: number) => {
       let n = 0, same = 0;
@@ -280,21 +315,6 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
       sAgree: rate(pairs.map((p) => p.sOk)), eAgree: rate(pairs.map((p) => p.eOk)), se, cnt, n: res?.windows.length ?? 0 };
   }, [res, edgeRes, boardEvents, segs, post, align]);
 
-  const Row = ({ name, spans, t0, t1 }: { name: string; spans: { a: number; b: number; label: string; conf: number }[]; t0: number; t1: number }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-      <div style={{ width: 140, fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}>{name}</div>
-      <div style={{ position: "relative", flex: 1, height: 22, background: token.colorFillQuaternary, borderRadius: 4, overflow: "hidden" }}>
-        {spans.map((s, i) => {
-          const l = ((Math.max(s.a, t0) - t0) / (t1 - t0)) * 100, w = ((Math.min(s.b, t1) - Math.max(s.a, t0)) / (t1 - t0)) * 100;
-          return w > 0 ? (
-            <Tooltip key={i} title={`${s.label} ${s.conf <= 1 ? Math.round(s.conf * 100) : s.conf}% · ${new Date(s.a).toLocaleTimeString()}–${new Date(s.b).toLocaleTimeString()}`}>
-              <div style={{ position: "absolute", left: `${l}%`, width: `${w}%`, top: 2, bottom: 2, background: colorOf(norm(s.label)), opacity: 0.85, borderRight: `1px solid ${token.colorBgContainer}` }} />
-            </Tooltip>
-          ) : null;
-        })}
-      </div>
-    </div>
-  );
 
   const pct = (v: number | null | undefined) => (v == null ? "-" : `${Math.round(v * 100)}%`);
   return (
@@ -369,8 +389,13 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
               </Tooltip>
             </div>
           </Space>
-          <Row name="板子 · 当前行为" spans={view.boardSpans} t0={view.t0} t1={view.t1} />
-          {view.segSpans.length > 0 && <Row name="板子 · 片段" spans={view.segSpans} t0={view.t0} t1={view.t1} />}
+          <Row name="板子 · 当前行为(0x07)" spans={view.boardSpans} t0={view.t0} t1={view.t1} />
+          {view.segSpans.length > 0 ? <Row name="板子 · 片段(0x09)" spans={view.segSpans} t0={view.t0} t1={view.t1} /> : (
+            <div style={{ display: "flex", gap: 8, marginBottom: 6, fontSize: 12, color: token.colorTextTertiary }}>
+              <div style={{ width: 140, flexShrink: 0 }}>板子 · 片段(0x09)</div>
+              <div>这段时间里还没有 0x09：板子一个片段<b>结束了</b>才发，正在进行的那段要等它结束（看下面「行为片段」表）</div>
+            </div>
+          )}
           {edgeRes && <Row name={`端侧(服务器) · ${post ? "板上后处理" : "逐窗口"}`} spans={view.edgS} t0={view.t0} t1={view.t1} />}
           {res && <Row name={`服务端 · ${post ? "稳定版" : "逐窗口"}`} spans={view.srvS} t0={view.t0} t1={view.t1} />}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: token.colorTextTertiary, marginLeft: 148 }}>

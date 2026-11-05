@@ -3,8 +3,8 @@ import { currentName, descendantIds } from "@/utils/labelTree";
 import { buildLabelTotals, fmtSecShort, focusDur, loadSummaryFlat, saveSummaryFlat } from "@/utils/labelSummary";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { Button, Checkbox, Empty, Input, InputNumber, Popconfirm, Progress, Radio, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { claimAllTasks, claimTask, deleteTask, editAgain, listTasks, listTasksByIds, listTasksLite, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { claimAllTasks, claimTask, deleteTask, editAgain, getTasksProgress, listTasks, listTasksByIds, listTasksLite, releaseAllTasks, releaseTask, reopenTask } from "@/api/tasks";
 import { listProjects } from "@/api/projects";
 import { listSamples } from "@/api/samples";
 import { listLabels } from "@/api/labels";
@@ -35,8 +35,20 @@ export default function Tasks() {
   });
   // 跟项目页一样两步拉：轻量的先出列表，带片段统计的后到再替换
   const { data: liteTasks, isLoading } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
-  const { data: fullTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
-  const tasks = fullTasks ?? liteTasks;
+  // 带片段统计的完整列表**只拉展开了的项目**（跟项目页一样）。以前一次拉全部，1.1 万个任务十几秒、常超时
+  const [expandedKeys, setExpandedKeys] = useState<number[] | null>(null);   // null = 还没动过，用默认展开
+  const expanded = expandedKeys ?? (projects?.length === 1 ? [projects[0].id] : []);
+  const fullQs = useQueries({
+    queries: expanded.map((pid) => ({ queryKey: ["tasks", "project", pid], queryFn: () => listTasks(pid), staleTime: 30_000 })),
+  });
+  const fullKey = expanded.map((pid, i) => `${pid}:${fullQs[i]?.dataUpdatedAt ?? 0}`).join(",");
+  const tasks = useMemo(() => {
+    const full = new Map<number, Task[]>();
+    expanded.forEach((pid, i) => { const d = fullQs[i]?.data; if (d) full.set(pid, d); });
+    if (!liteTasks && !full.size) return undefined;
+    return [...(liteTasks ?? []).filter((t) => !full.has(t.project_id)), ...[...full.values()].flat()];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liteTasks, fullKey]);
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   // /users 只对管理员开放，其他角色拿不到就退回显示ID
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
@@ -69,6 +81,8 @@ export default function Tasks() {
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
+    qc.invalidateQueries({ queryKey: ["tasks-lite"] });
+    qc.invalidateQueries({ queryKey: ["tasks-progress"] });
     qc.invalidateQueries({ queryKey: ["projects"] });
   };
 
@@ -112,8 +126,11 @@ export default function Tasks() {
     try {
       const fresh = await listTasksByIds(ids);
       const byId = new Map(fresh.map((t) => [t.id, t]));
-      qc.setQueryData<Task[]>(["tasks"], (old) =>
-        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old);
+      const patch = (old: Task[] | undefined) =>
+        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old;
+      qc.setQueriesData<Task[]>({ queryKey: ["tasks", "project"] }, patch);
+      qc.setQueryData<Task[]>(["tasks-lite"], patch);
+      qc.invalidateQueries({ queryKey: ["tasks-progress"] });
     } catch {
       refresh();
     }
@@ -186,16 +203,13 @@ export default function Tasks() {
   const [sumFlat, setSumFlatState] = useState(loadSummaryFlat);
   const setSumFlat = (v: boolean) => { setSumFlatState(v); saveSummaryFlat(v); };
   // 项目完成情况：片段总数 / 还没人确认的 AI 片段、疑似总数 / 没判的。按列表里的任务汇总
+  // 服务端按项目汇总好的（没展开的项目也要显示这个数，不能靠完整任务列表加）
+  const { data: progress } = useQuery({
+    queryKey: ["tasks-progress", onlyMine], queryFn: () => getTasksProgress(onlyMine), staleTime: 30_000,
+  });
   const progressOf = (projectId: number) => {
-    let segs = 0, segPending = 0, cands = 0, candPending = 0;
-    for (const t of tasksOf(projectId)) {
-      for (const c of Object.values(t.label_counts ?? {})) {
-        segs += c.n;
-        segPending += c.ai_pending;
-      }
-      cands += t.cand_count ?? 0;
-      candPending += t.cand_pending ?? 0;
-    }
+    const g = progress?.[String(projectId)];
+    const segs = g?.segs ?? 0, segPending = g?.seg_pending ?? 0, cands = g?.cands ?? 0, candPending = g?.cand_pending ?? 0;
     return { segs, segPending, cands, candPending, left: segPending + candPending };
   };
   const [taskFilters, setTaskFilters] = useState<Record<number, TaskFilter>>({});
@@ -696,7 +710,8 @@ export default function Tasks() {
         expandable={{
           expandedRowRender: renderTaskTable,
           // 只有一个项目时默认展开，省一次点击
-          defaultExpandedRowKeys: visibleProjects.length === 1 ? [visibleProjects[0].id] : [],
+          expandedRowKeys: expandedKeys ?? (visibleProjects.length === 1 ? [visibleProjects[0].id] : []),
+          onExpandedRowsChange: (keys) => setExpandedKeys(keys.map(Number)),
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
           // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
