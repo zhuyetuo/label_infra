@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import LabelTreeSelect from "@/components/LabelTreeSelect";
 import { Button, Checkbox, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { BarChartOutlined, CheckOutlined, DownOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CheckOutlined, DownOutlined, QuestionCircleOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, trackOf } from "@/utils/labelTree";
 import { REASON_LABEL, candTitle } from "@/utils/candReason";
@@ -275,11 +275,9 @@ export default function SegmentPanel({
           停止播放
         </Button>
       ) : (
-        <Tooltip title="只循环播放这一段，反复看起止对不对">
-          <Button size="small" type="link" icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
-            循环播放
-          </Button>
-        </Tooltip>
+        <Button size="small" type="link" icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
+          循环播放
+        </Button>
       )
     ) : null;
   const saved = useMemo<{ labels?: number[]; source?: SourceFilter } | null>(() => {
@@ -1136,7 +1134,22 @@ export default function SegmentPanel({
             },
           },
           {
-            title: "操作",
+            // 行里这些按钮天天点，悬停就弹说明太烦：说明都收进表头的问号
+            title: (
+              <span>操作 <Tooltip overlayStyle={{ maxWidth: 460 }} title={
+                <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  <div><b>循环播放</b>：只循环播放这一段，反复看起止对不对</div>
+                  <div><b>改成 X</b>：照你最近的习惯猜的（同一个原类别以前改成什么最多），点一下直接改；不对就点 ▾ 选别的</div>
+                  <div><b>🚩标记</b>：复合类别 / 边界拿不准 / 画面跟 IMU 对不上 / 其它，可以打好几个。只是记号，不影响导出，回头按「有标记」筛</div>
+                  <div><b>通过</b>：起止、类别都没问题，片段审核通过（导出可以只要通过的）；AI 片段的「通过」= 确认 AI 预测正确</div>
+                  <div><b>有问题</b>：标出这条哪里不对，退回时标注员只改这几条</div>
+                  <div><b>待定</b>：拿不准，留着但不进训练集</div>
+                  <div><b>✂ 拆开</b>：播放线压在这段上就从播放线拆，否则对半拆；也可以在波形上 Alt+点，或 Alt+S</div>
+                  <div><b>夜视</b>：太黑看不清时，原样 / 拉伸 / 多帧堆栈三张并排</div>
+                </div>}>
+                <QuestionCircleOutlined style={{ color: "#999", cursor: "help" }} />
+              </Tooltip></span>
+            ),
             // 多了「改成 X」「改类别」「标记」三个，原来 300 放不下，后面的删除被挤出去
             width: 460,
             render: (_, i: LabelItem) => {
@@ -1155,11 +1168,11 @@ export default function SegmentPanel({
                     return (
                       <Space.Compact size="small">
                         {ok && (
-                          <Tooltip title={`照你最近的习惯猜的：点一下直接改成「${nameOf(g!)}」`}>
+                          <>
                             <Button size="small" type="link" style={{ color: colorOf(g!), paddingRight: 2 }} onClick={() => relabel(i, g!)}>
                               改成{nameOf(g!)}
                             </Button>
-                          </Tooltip>
+                          </>
                         )}
                         <Popover trigger="click" placement="bottomRight" destroyTooltipOnHide
                           title="改成哪个类别" content={
@@ -1174,35 +1187,35 @@ export default function SegmentPanel({
                     );
                   })()}
                   {canMark && (i.id > 0 || !readOnly) ? (
-                    <Tooltip title="打标记：复合类别 / 边界拿不准 / 画面跟 IMU 对不上 / 其它，可以打好几个。只是记号，不影响导出，回头按「有标记」筛出来">
+                    <>
                       <Button size="small" type="link" style={{ color: i.marks ? "#d4380d" : undefined }} onClick={() => openMarks(i)}>
                         🚩{i.marks ? marksOf(i).length : "标记"}
                       </Button>
-                    </Tooltip>
+                    </>
                   ) : null}
                   {/* 片段级「通过」：一条条认可，有问题的点右边「有问题」一条条退回。
                       已经标了有问题的先「清除问题」再通过 */}
                   {onSegApprove && i.id > 0 && !i.review_note && (i.seg_status === "approved" ? (
-                    <Tooltip title="撤销通过，回到还没审">
+                    <>
                       <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onSegApprove(i, false)}>
                         撤销通过
                       </Button>
-                    </Tooltip>
+                    </>
                   ) : (
-                    <Tooltip title="这条起止、类别都没问题：片段审核通过（导出训练集可以只要通过的）">
+                    <>
                       <Button size="small" type="link" style={{ color: "#52c41a" }} onClick={() => onSegApprove(i, true)}>
                         通过
                       </Button>
-                    </Tooltip>
+                    </>
                   ))}
                   {/* 审核：看到哪条不对就标哪条，退回时标注员只需要改这几条。
                       还没存进库的新片段（id 为负）标不了——先存草稿 */}
                   {onReviewNote && i.id > 0 && (i.review_note ? (
-                    <Tooltip title={reviewNoteClearOnly ? "改好了，或者看过确认没问题" : "清掉这条的问题标记"}>
+                    <>
                       <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onReviewNote(i, null)}>
                         {reviewNoteClearOnly ? "已改好" : "清除问题"}
                       </Button>
-                    </Tooltip>
+                    </>
                   ) : !reviewNoteClearOnly && (
                     <Dropdown
                       menu={{
@@ -1221,7 +1234,7 @@ export default function SegmentPanel({
                   {/* 夜里那几路黑得看不出狗在干嘛。按这一段的中点取一刻，
                       三张并排（原样 / 拉伸 / 多帧堆栈）让人自己判断 */}
                   {onLowlight && (
-                    <Tooltip title="这一刻太黑看不清时用：原样、只拉伸、多帧堆栈三张并排。堆栈那张是不编造的上限——它要是也看不出东西，说明这一路夜间根本没拍到">
+                    <>
                       <Button
                         size="small"
                         type="link"
@@ -1229,14 +1242,14 @@ export default function SegmentPanel({
                       >
                         夜视
                       </Button>
-                    </Tooltip>
+                    </>
                   )}
                   {!readOnly && st === "pending" && (
-                    <Tooltip title="AI 预测正确，确认通过">
+                    <>
                       <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => update([i.id], { ai_confirmed: true })}>
                         通过
                       </Button>
-                    </Tooltip>
+                    </>
                   )}
                   {!readOnly && st === "confirmed" && (
                     <Button size="small" type="link" style={{ color: "#999" }} onClick={() => update([i.id], { ai_confirmed: false })}>
@@ -1284,11 +1297,11 @@ export default function SegmentPanel({
                     </Popconfirm>
                   )}
                   {!readOnly && onSplit && (
-                    <Tooltip title="拆成两段：视频播放线压在这段上就从播放线处拆，否则从中间对半拆。也可以在波形上按住 Alt 点要拆的位置，或者停好视频按 Alt+S">
+                    <>
                       <Button size="small" type="link" onClick={() => onSplit(i.id)}>
                         ✂ 拆开
                       </Button>
-                    </Tooltip>
+                    </>
                   )}
                   {/* 直接删是个坑：片段没了，生它的那条候选还留在「已确认」里。
                       「找相似 / 一句话找画面」再碰到同一段时间，会以为早写过了而跳过，
