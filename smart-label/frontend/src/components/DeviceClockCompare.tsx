@@ -23,6 +23,7 @@ interface Stat {
   slope: number | null;                      // ms / s（= 千分之几）
   realHz: number | null; devHz: number | null; fitS: number;
   ivMed: number | null; lossPct: number | null;
+  slopeErr: number | null;                   // 斜率的误差（ms/s），按残差估
 }
 
 const fmtOff = (ms: number) => {
@@ -33,12 +34,13 @@ const fmtOff = (ms: number) => {
   return `${sign} ${(a / 3_600_000).toFixed(2)} 小时`;
 };
 
-export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }: {
+export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc, style }: {
   getSamples: () => ClockSample[];
   /** 新的一次连接（或设备时间跳了）就换一个号，从头算 */
   epoch: number;
   expectHz: number;
   isPc: boolean;
+  style?: React.CSSProperties;
 }) {
   const { token } = theme.useToken();
   const acc = useRef({
@@ -100,6 +102,17 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
         }
         if (sl.length) { sl.sort((a, b) => a - b); slope = sl[Math.floor(sl.length / 2)]; }
       }
+      // 斜率有多准：残差（蓝牙延迟的抖动）越大、时间越短，越不准。σ 用 MAD 估（不怕那几个大坑），
+      // 均匀采样时斜率标准误 ≈ σ·√12 /(√n·T)
+      let slopeErr: number | null = null;
+      if (slope != null && fit.length >= 10) {
+        const med = (xs: number[]) => { const z = [...xs].sort((a, b) => a - b); return z[Math.floor(z.length / 2)]; };
+        const icpt = med(fit.map((p) => p.off - slope! * p.t));
+        const res = fit.map((p) => p.off - slope! * p.t - icpt);
+        const sigma = 1.4826 * med(res.map(Math.abs));
+        const T = fit[fit.length - 1].t - fit[0].t;
+        slopeErr = T > 0 ? (sigma * Math.sqrt(12)) / (Math.sqrt(fit.length) * T) : null;
+      }
       // 采样周期 = 间隔中位数；按它应该有多少个 vs 实际收到多少个
       let ivMed: number | null = null, total = 0;
       for (const v of A.ivHist.values()) total += v;
@@ -114,7 +127,7 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
         realHz: A.n > 10 && realS > 0 ? (A.n - 1) / realS : null,
         devHz: A.n > 10 && devS > 0 ? (A.n - 1) / devS : null,
         fitS: fit.length ? fit[fit.length - 1].t - fit[0].t : 0,
-        ivMed, lossPct: expectN ? Math.max(0, (1 - A.n / expectN) * 100) : null,
+        slopeErr, ivMed, lossPct: expectN ? Math.max(0, (1 - A.n / expectN) * 100) : null,
       });
     }, 2000);
     return () => clearInterval(t);
@@ -122,6 +135,10 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
 
   if (!st) return null;
   const driftPct = st.slope != null ? st.slope / 10 : null;      // ms/s → %
+  const errPct = st.slopeErr != null ? st.slopeErr / 10 : null;
+  // 至少 60 秒、而且偏差比误差大好几倍才下结论。20 秒的时候蓝牙一两个坑就能拟出 ±0.5%（2026-11 实测）
+  const MIN_FIT_S = 60;
+  const sure = driftPct != null && errPct != null && Math.abs(driftPct) >= Math.max(0.5, 3 * errPct);
 
   // 图：偏差随时间，纵轴减掉第一个点，只看变化
   const W = 600, H = 120, P = 4;
@@ -133,10 +150,10 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
   const Y = (v: number) => H - P - ((v - yMin) / (yMax - yMin || 1)) * (H - 2 * P);
   const line = st.pts.map((p, i) => `${X(p.t).toFixed(1)},${Y(ys[i]).toFixed(1)}`).join(" ");
 
-  let verdict: React.ReactNode = <>再连一会儿（去掉前 {SKIP_S} 秒后要 20 秒以上）才能算出板子时钟快慢</>;
-  if (driftPct != null && st.fitS >= 20) {
-    if (Math.abs(driftPct) < 0.5) {
-      verdict = <>板上时间跟真实时间<b>同步走</b>（差 {driftPct.toFixed(2)}%），时间戳可信：
+  let verdict: React.ReactNode = <>再连一会儿：去掉前 {SKIP_S} 秒后要 {MIN_FIT_S} 秒以上才下结论（现在 {st.fitS.toFixed(0)} 秒，还差 {Math.max(0, MIN_FIT_S - st.fitS).toFixed(0)} 秒）</>;
+  if (driftPct != null && st.fitS >= MIN_FIT_S) {
+    if (!sure) {
+      verdict = <>板上时间跟真实时间<b>同步走</b>（差 {driftPct.toFixed(2)}%，测量误差 ±{errPct?.toFixed(2) ?? "-"}%），时间戳可信：
         传感器真实的采样周期是 {st.ivMed ?? "-"} ms（{st.ivMed ? (1000 / st.ivMed).toFixed(2) : "-"} Hz）
         {st.ivMed && Math.abs(1000 / st.ivMed / expectHz - 1) > 0.02 ? <>，<b>跟 {expectHz} Hz 对不上是传感器本身的输出速率</b>（ODR 配置 / 传感器内部振荡器），不是蓝牙、也不是时间戳</> : null}。
         {st.lossPct != null && st.lossPct >= 1 ? <>另外<b>丢了约 {st.lossPct.toFixed(1)}% 的样本</b>（时间戳上有缝）：多半是蓝牙发送队列满了丢的，板子本地存的 CSV 应该没有这个问题。</> : null}</>;
@@ -148,11 +165,12 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
   }
 
   return (
-    <Card size="small" title="板上时间 vs 电脑时间" style={{ marginTop: 12 }}>
+    <Card size="small" title="板上时间 vs 电脑时间" style={{ marginTop: 12, ...style }}>
       <Space size={24} wrap>
         <Statistic title="板子比电脑" value={st.nowOff != null ? fmtOff(st.nowOff) : "-"} valueStyle={{ fontSize: 20 }} />
         <Statistic title="板子时钟快慢" value={driftPct == null ? "-" : `${driftPct >= 0 ? "+" : ""}${driftPct.toFixed(2)}%`}
-          valueStyle={{ fontSize: 20, color: driftPct != null && Math.abs(driftPct) >= 0.5 ? token.colorError : undefined }} />
+          suffix={errPct != null ? <span style={{ fontSize: 12 }}>±{errPct.toFixed(2)}%</span> : undefined}
+          valueStyle={{ fontSize: 20, color: sure && st.fitS >= MIN_FIT_S ? token.colorError : undefined }} />
       </Space>
       <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 4 }}>
         去掉前 {SKIP_S} 秒（{st.fitS.toFixed(0)} 秒）：真实时间里每秒 {st.realHz?.toFixed(2) ?? "-"} 个 · 按板子时间戳 {st.devHz?.toFixed(2) ?? "-"} Hz

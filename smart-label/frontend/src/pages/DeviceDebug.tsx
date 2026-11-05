@@ -461,9 +461,11 @@ export default function DeviceDebug() {
       )}
 
 
+      {/* 两行，每行左右等高（卡片撑满）：卡片是收到数据才出现的，高度一直在变，
+          手工挑哪个放哪边迟早又空一块 */}
       <Row gutter={12}>
-        <Col xs={24} xl={16}>
-          <Card size="small" title={`波形（最近 ${PLOT_S} 秒）`}
+        <Col xs={24} xl={16} style={{ display: "flex", flexDirection: "column" }}>
+          <Card size="small" title={`波形（最近 ${PLOT_S} 秒）`} style={{ flex: 1 }}
             extra={kind === "wit" && <Checkbox checked={showGyro} onChange={(e) => setShowGyro(e.target.checked)}>看角速度</Checkbox>}>
             <div ref={plotEl} style={{ width: "100%" }} />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -474,11 +476,9 @@ export default function DeviceDebug() {
                 message="连上了但收不到原始采样（0x08）：正式固件（协议 v2.0）不发，要用 PB_RAW_STREAM=1 编的调试固件。当前行为和行为片段照常能看" />
             )}
           </Card>
-          {/* 放左边：右边一列已经很长，放右边的话左边波形下面空一大块 */}
-          <DeviceClockCompare getSamples={getSamplesStable} epoch={sessEpoch} expectHz={expectHz} isPc={kind === "pc"} />
         </Col>
-        <Col xs={24} xl={8}>
-          <Card size="small" title="采样率 / 间隔（最近 5 秒）"
+        <Col xs={24} xl={8} style={{ display: "flex", flexDirection: "column" }}>
+          <Card size="small" title="采样率 / 间隔（最近 5 秒）" style={{ flex: 1 }}
             extra={<Space size={4}><span style={{ fontSize: 12 }}>期望</span>
               <InputNumber size="small" min={1} max={500} step={0.25} value={expectHz} onChange={(v) => v && setExpectHz(v)} style={{ width: 80 }} />
               <span style={{ fontSize: 12 }}>Hz</span></Space>}>
@@ -501,6 +501,24 @@ export default function DeviceDebug() {
               </>
             )}
           </Card>
+          {kind === "pc" && (
+            <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
+              {behav ? (
+                <Space>
+                  <Tag color="purple" style={{ fontSize: 16, padding: "4px 12px" }}>{BEHAV_NAMES[behav.cls] ?? `?${behav.cls}`}</Tag>
+                  <span>{behav.conf}%</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{new Date(behav.at).toLocaleTimeString()}</Typography.Text>
+                </Space>
+              ) : <Typography.Text type="secondary">还没收到（约 5 秒一条）</Typography.Text>}
+            </Card>
+          )}
+        </Col>
+      </Row>
+      <Row gutter={12}>
+        <Col xs={24} xl={16} style={{ display: "flex", flexDirection: "column" }}>
+          <DeviceClockCompare getSamples={getSamplesStable} epoch={sessEpoch} expectHz={expectHz} isPc={kind === "pc"} style={{ flex: 1 }} />
+        </Col>
+        <Col xs={24} xl={8} style={{ display: "flex", flexDirection: "column" }}>
           {sessView && sessView.n > 10 && (() => {
             const realS = (sessView.hostN - sessView.host0) / 1000;
             const devS = sessView.dev0 != null && sessView.devN != null ? (sessView.devN - sessView.dev0) / 1000 : null;
@@ -508,7 +526,7 @@ export default function DeviceDebug() {
             const devHz = devS && devS > 0 ? (sessView.n - 1) / devS : NaN;
             const drift = devS != null && realS > 0 ? (devS / realS - 1) * 100 : NaN;
             return (
-              <Card size="small" title="整次连接（真实时间 vs 设备时间）" style={{ marginTop: 12 }}>
+              <Card size="small" title="整次连接（真实时间 vs 设备时间）" style={{ marginTop: 12, flex: 1 }}>
                 <Space size={24} wrap>
                   <Statistic title="真实时间里每秒收到" value={Number.isFinite(realHz) ? realHz.toFixed(2) : "-"} suffix="个" />
                   <Statistic title="按设备时间戳" value={Number.isFinite(devHz) ? devHz.toFixed(2) : "-"} suffix="Hz" />
@@ -521,17 +539,6 @@ export default function DeviceDebug() {
               </Card>
             );
           })()}
-          {kind === "pc" && (
-            <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
-              {behav ? (
-                <Space>
-                  <Tag color="purple" style={{ fontSize: 16, padding: "4px 12px" }}>{BEHAV_NAMES[behav.cls] ?? `?${behav.cls}`}</Tag>
-                  <span>{behav.conf}%</span>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{new Date(behav.at).toLocaleTimeString()}</Typography.Text>
-                </Space>
-              ) : <Typography.Text type="secondary">还没收到（约 5 秒一条）</Typography.Text>}
-            </Card>
-          )}
         </Col>
       </Row>
 
