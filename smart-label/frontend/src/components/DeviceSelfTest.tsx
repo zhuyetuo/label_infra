@@ -19,30 +19,27 @@ const STATUS: Record<StStatus, { color: string; text: string }> = {
 
 const OPEN_KEY = "smart-label:device-selftest-open";
 
-const readme = (r: StReport, base: string) => `设备自检结果（${r.meta.device || "-"}，${new Date(r.meta.startedAt).toLocaleString()}，${(r.meta.durationS / 60).toFixed(1)} 分钟）
+const readme = (r: StReport, base: string) => {
+  const wit = r.meta.kind === "wit";
+  return `设备自检结果：${r.meta.device || "-"}，${new Date(r.meta.startedAt).toLocaleString()}，${(r.meta.durationS / 60).toFixed(1)} 分钟
 
 文件
-  report.html            报告：结果表 + 图 + 口径 + 给固件的建议。浏览器直接打开
-  raw.csv                原始数据：dev_ts_ms（板子时间戳）, host_ts_ms（电脑收到的 Unix 毫秒）, acc_x/y/z（g）
-  behavior.csv           0x07 当前行为的板子时间戳（统计上报频率用）
-  result.json            结果（各项数值 + 判定），脚本 compare 用
-  petcollar_selftest.py  自检脚本：跟平台同一套算法、同一套判定
+  report.html            报告，浏览器打开
+  raw.csv                原始数据${wit ? "（时间用接收端的，含角速度）" : ""}
+${wit ? "" : "  behavior.csv           0x07 当前行为的时间戳\n"}  result.json            结果
+  petcollar_selftest.py  自检脚本
 
-复现这份结果（只要 Python 3，不用装别的）：
+脚本用法（只要 Python 3；自己测再 pip install bleak）
+  # 复现这次的结果
   python petcollar_selftest.py analyze raw.csv
+  # 自己测（${wit ? "WitMotion" : "项圈要 PB_RAW_STREAM=1 的调试固件"}；--static = 设备静置平放）
+  python petcollar_selftest.py run${wit ? " --device wit" : ""} --minutes 5 --static --tag 名字
+  # 多次 / 多人的结果并排比（给 result.json 或文件夹）
+  python petcollar_selftest.py compare ${base}/ selftest_xxx/
 
-自己测一次（电脑蓝牙直连项圈，要 PB_RAW_STREAM=1 的调试固件；pip install bleak）：
-  python petcollar_selftest.py run --minutes 5 --static --tag 我这边_桌面
-  测底噪要把项圈静置平放；测时钟漂移建议 --minutes 10 以上
-
-多次 / 多人的结果并排比：
-  python petcollar_selftest.py compare ${base}/result.json selftest_xxx/
-
-口径
-  - 采样率 / 帧间隔 / 板子时钟 / 底噪全部按板子时间戳算，蓝牙晚到、成批到不影响
-  - 丢帧 = 板子时间戳上的缝，分不清蓝牙丢的还是板子没发；「电脑这边也卡了」只是线索
-  - 要分清：0x08 加样本序号；定期报内部计数（FIFO 读出 / 溢出 / 交给蓝牙 / 发送队列丢掉）
+脚本和网页是同一套算法、判定和文字：同一份 raw.csv 算出来一模一样。对不上就是数据不同，不是算法不同。
 `;
+};
 
 const save = (name: string, blob: Blob) => {
   const url = URL.createObjectURL(blob);
@@ -124,15 +121,15 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
         <Space size={8} wrap>
           <Select size="small" value={minutes} onChange={setMinutes} disabled={running} style={{ width: 110 }}
             options={[1, 3, 5, 10, 30].map((m) => ({ value: m, label: `测 ${m} 分钟` }))} />
-          <Tooltip title="测底噪 / 三轴稳定性要把项圈静置平放在桌上；戴在狗身上测的话这几项不下结论">
-            <Checkbox checked={still} onChange={(e) => setStill(e.target.checked)} disabled={running}>项圈静置</Checkbox>
+          <Tooltip title="测底噪 / 三轴稳定性要把设备静置平放在桌上；戴在狗身上测的话这几项不下结论">
+            <Checkbox checked={still} onChange={(e) => setStill(e.target.checked)} disabled={running}>设备静置</Checkbox>
           </Tooltip>
           {running
             ? <Button size="small" danger onClick={finish}>提前结束并出报告</Button>
             : <Button size="small" type="primary" disabled={!connected || !hasRaw} onClick={() => { setOpen(true); start(); }}>开始自检</Button>}
         </Space>
       }>
-      {!hasRaw && connected && (
+      {!hasRaw && connected && kind === "pc" && (
         <Alert type="info" showIcon style={{ marginBottom: 8 }} message="要原始采样（0x08）：用 PB_RAW_STREAM=1 编的调试固件才能自检" />
       )}
       {running && (
@@ -140,14 +137,16 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
           <Progress percent={Math.min(100, Math.round((elapsed / (minutes * 60)) * 100))} size="small"
             format={() => `${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, "0")} / ${minutes}:00`} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            已收 {sink.current?.length ?? 0} 个样本{still ? " · 测试期间别碰项圈" : ""} · 掉线会自动重连接着测（中间的缝会算进丢帧）
+            已收 {sink.current?.length ?? 0} 个样本{still ? " · 测试期间别碰设备" : ""} · 掉线会自动重连接着测（中间的缝会算进丢帧）
           </Typography.Text>
         </div>
       )}
       {!running && !report && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          采样率、帧间隔、丢帧、底噪 3~5 分钟够了；<b>板子时钟漂移</b>要测准建议 10 分钟以上（误差跟时长成反比）。
-          全部按板子时间戳算，蓝牙晚到 / 成批到不影响；丢帧分不清是蓝牙丢的还是板子没发，报告里有给固件的建议。
+          {kind === "wit"
+            ? <>WitMotion 不带时间戳，时间用接收端的：测采样率、稳定性、三轴 + 角速度的底噪和零偏（帧间隔 / 丢帧 / 设备时钟测不了）。3~5 分钟够了。</>
+            : <>采样率、帧间隔、丢帧、底噪 3~5 分钟够了；<b>板子时钟漂移</b>要测准建议 10 分钟以上（误差跟时长成反比）。
+              全部按板子时间戳算，蓝牙晚到 / 成批到不影响；丢帧分不清是蓝牙丢的还是板子没发，报告里有给固件的建议。</>}
         </Typography.Text>
       )}
       {report && charts && (
@@ -163,7 +162,7 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
                 { name: `${base}/report.html`, data: reportHtml(report) },
                 { name: `${base}/raw.csv`, data: samplesCsv(data.current?.samples ?? [], performance.timeOrigin) },
                 { name: `${base}/result.json`, data: JSON.stringify(report, null, 1) },
-                { name: `${base}/behavior.csv`, data: ["dev_ts_ms", ...(data.current?.behav ?? []).map(String)].join("\n") },
+                ...(kind === "wit" ? [] : [{ name: `${base}/behavior.csv`, data: ["dev_ts_ms", ...(data.current?.behav ?? []).map(String)].join("\n") }]),
                 { name: `${base}/petcollar_selftest.py`, data: selfTestPy },
                 { name: `${base}/README.txt`, data: readme(report, base) },
               ]))}>下载压缩包（报告 + 原始数据 + 自检脚本）</Button>

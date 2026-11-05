@@ -154,7 +154,8 @@ export default function DeviceDebug() {
   const onWitNotify = (e: Event) => {
     const dv = (e.target as unknown as BtChar).value!;
     for (const s of witStream.current.feed(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength))) {
-      push({ host: performance.now(), dev: s.chipMs, ax: s.acc[0], ay: s.acc[1], az: s.acc[2], gx: s.gyro[0], gy: s.gyro[1], gz: s.gyro[2] });
+      // WitMotion 自己的时间不准，不用：时间一律用接收端的（dev 留空，采样率 / 自检都按接收端时间算）
+      push({ host: performance.now(), dev: null, ax: s.acc[0], ay: s.acc[1], az: s.acc[2], gx: s.gyro[0], gy: s.gyro[1], gz: s.gyro[2] });
     }
   };
 
@@ -550,8 +551,12 @@ export default function DeviceDebug() {
 
       <DeviceSelfTest sink={selfSink} behavSink={selfBehavSink} connected={status === "connected"} kind={kind}
         device={devName} expectHz={expectHz} hasRaw={count > 0 && !noRawHint} />
-      {kind === "pc" && (
+      {kind === "pc" ? (
         <DeviceServerCompare getSamples={() => samples.current} boardEvents={boardEvents} segs={segs} hz={expectHz} connected={status === "connected"} />
+      ) : (
+        // WitMotion：没有板子的识别结果，只比服务端 / 端侧；时间用接收端的，带角速度（6 轴模型能用上）
+        <DeviceServerCompare board={false} axes={6} boardEvents={[]} segs={[]} hz={expectHz} connected={status === "connected"}
+          getSamples={() => samples.current.map((x) => ({ ...x, dev: x.dev ?? performance.timeOrigin + x.host }))} />
       )}
       {kind === "pc" && (
         <Card size="small" title={`行为片段（0x09）· ${segs.length} 条`} style={{ marginTop: 12 }}

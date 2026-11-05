@@ -11,20 +11,26 @@
  *   - 底噪：要项圈**静置**。短时噪声用一阶差分估（去掉慢漂移），稳定性看每 10 秒均值怎么走。
  */
 
-export interface StSample { host: number; dev: number | null; ax: number; ay: number; az: number }
+export interface StSample { host: number; dev: number | null; ax: number; ay: number; az: number; gx?: number; gy?: number; gz?: number }
 export type StStatus = "ok" | "warn" | "fail" | "info";
 export interface StItem { group: string; name: string; value: string; status: StStatus; note?: string }
 
+export interface StAxis { name: string; mean: number; std: number; short: number; p2p: number; blockRange: number; slopePerMin: number }
+
 export interface StReport {
-  meta: { device: string; kind: string; startedAt: number; durationS: number; expectHz: number; staticClaimed: boolean; n: number; droppedHead: number };
+  meta: { device: string; kind: string; startedAt: number; durationS: number; expectHz: number; staticClaimed: boolean; n: number; droppedHead: number;
+    /** device = 按设备时间戳算；host = 设备没带时间戳（比如 WitMotion 的 0x60 包），只能按电脑收到的时间算 */
+    timeBase: "device" | "host" };
   rate: { periodMs: number; sensorHz: number; byDevHz: number; byHostHz: number; blocks: { t: number; hz: number; sensorHz: number }[] };
   iv: { mean: number; std: number; jitterStd: number; min: number; max: number; p1: number; p5: number; p50: number; p95: number; p99: number;
     within10: number; dup: number; alternating: number; hist: { ms: number; n: number }[] };
   gaps: { n: number; lost: number; lossPct: number; maxMs: number; perMin: number; withHostStall: number; sizes: Record<string, number>;
     list: { t: number; ms: number; missing: number; hostGapMs: number }[] };
   clock: { offStartMs: number; offEndMs: number; ppm: number | null; ppmErr: number | null; jitterMs: number | null; fitS: number; pts: { t: number; off: number }[] };
-  noise: { isStatic: boolean; axes: { name: string; mean: number; std: number; short: number; p2p: number; blockRange: number; slopePerMin: number }[];
-    magMean: number; magStd: number; blocks: { t: number; ax: number; ay: number; az: number }[] };
+  noise: { isStatic: boolean; axes: StAxis[];
+    /** 角速度（°/s），只有六轴设备（WitMotion）有 */
+    gyro: StAxis[];
+    magMean: number; magStd: number; blocks: { t: number; ax: number; ay: number; az: number; gx?: number; gy?: number; gz?: number }[] };
   behav: { n: number; perMin: number };
   items: StItem[];
 }
@@ -63,19 +69,24 @@ function robustSlope(pts: { t: number; off: number }[]): { slope: number | null;
 }
 
 export function analyzeSelfTest(raw: StSample[], opt: { expectHz: number; device: string; kind: string; startedAt: number; staticClaimed: boolean; behavTs?: number[]; timeOrigin: number }): StReport {
+  // 设备没带时间戳（一半以上的样本没有）：只能拿电脑收到的时间当时间轴。帧间隔、丢帧、时钟这些
+  // 靠设备时间戳的项测不了（蓝牙成批送，电脑收到的间隔不代表采样），judge 里单独写明
+  const hostMode = raw.length > 0 && raw.filter((x) => x.dev != null).length < raw.length * 0.5;
+  const src = hostMode ? raw.map((x) => ({ ...x, dev: opt.timeOrigin + x.host })) : raw;
   // 板子时间中途跳了（测试中间校时）：只用最后一次跳之后的那段
   let start = 0;
-  for (let i = 1; i < raw.length; i++) {
-    const a = raw[i - 1].dev, b = raw[i].dev;
+  for (let i = 1; i < src.length; i++) {
+    const a = src[i - 1].dev, b = src[i].dev;
     if (a != null && b != null && (b - a > 10_000 || b - a < -1000)) start = i;
   }
-  const s = raw.slice(start).filter((x) => x.dev != null) as (StSample & { dev: number })[];
+  const s = src.slice(start).filter((x) => x.dev != null) as (StSample & { dev: number })[];
   const n = s.length;
   const iv = s.slice(1).map((x, i) => x.dev - s[i].dev);
   const pos = iv.filter((x) => x > 0);
-  const P = q(pos, 0.5) || 1000 / opt.expectHz;
   const spanDev = n > 1 ? (s[n - 1].dev - s[0].dev) / 1000 : 0;
   const spanHost = n > 1 ? (s[n - 1].host - s[0].host) / 1000 : 0;
+  // 周期：设备时间戳的间隔中位数。按电脑时间时中位数没意义（成批到，一半是 0），用个数 / 时长
+  const P = hostMode ? (spanHost > 0 && n > 1 ? (1000 * spanHost) / (n - 1) : 1000 / opt.expectHz) : q(pos, 0.5) || 1000 / opt.expectHz;
 
   // ── 采样率：每 10 秒一块（按板子时间）
   // hz = 这 10 秒实际到手几个（含丢帧）；sensorHz = 这 10 秒帧间隔中位数换算的（传感器节奏，不受丢帧影响）
@@ -92,7 +103,7 @@ export function analyzeSelfTest(raw: StSample[], opt: { expectHz: number; device
     const last = Math.floor((s[n - 1].dev - t0) / 10_000);
     for (let k = 0; k < last; k++) {   // 最后一块不完整，不要
       const m = q(ivs.get(k) ?? [], 0.5);
-      blocks.push({ t: k * 10, hz: (cnt.get(k) ?? 0) / 10, sensorHz: Number.isFinite(m) && m > 0 ? 1000 / m : NaN });
+      blocks.push({ t: k * 10, hz: (cnt.get(k) ?? 0) / 10, sensorHz: !hostMode && Number.isFinite(m) && m > 0 ? 1000 / m : NaN });
     }
   }
 
@@ -111,7 +122,7 @@ export function analyzeSelfTest(raw: StSample[], opt: { expectHz: number; device
   const gapList: StReport["gaps"]["list"] = [];
   const sizes: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4+": 0 };
   let lost = 0, withStall = 0;
-  for (let i = 0; i < iv.length; i++) {
+  for (let i = 0; i < (hostMode ? 0 : iv.length); i++) {
     if (iv[i] > P * 1.5) {
       const missing = Math.max(1, Math.round(iv[i] / P) - 1);
       const hostGap = s[i + 1].host - s[i].host;
@@ -124,7 +135,7 @@ export function analyzeSelfTest(raw: StSample[], opt: { expectHz: number; device
 
   // ── 板子时钟
   const bucket = new Map<number, number>();
-  for (const x of s) {
+  for (const x of hostMode ? [] : s) {
     const off = x.dev - (opt.timeOrigin + x.host);
     const k = Math.floor((x.host - s[0].host) / 2000);
     const prev = bucket.get(k);
@@ -139,46 +150,54 @@ export function analyzeSelfTest(raw: StSample[], opt: { expectHz: number; device
   // ── 底噪 / 稳定性
   const ax = s.map((x) => x.ax), ay = s.map((x) => x.ay), az = s.map((x) => x.az);
   const mag = s.map((x) => Math.hypot(x.ax, x.ay, x.az));
-  const nb: { t: number; ax: number; ay: number; az: number }[] = [];
+  // 有角速度（六轴设备）：一半以上的样本带 gx
+  const hasGyro = n > 0 && s.filter((x) => x.gx != null).length >= n * 0.5;
+  const nb: StReport["noise"]["blocks"] = [];
   if (n > 1) {
     const t0 = s[0].dev;
-    const acc = new Map<number, { x: number; y: number; z: number; c: number }>();
+    const acc = new Map<number, number[]>();
     for (const x of s) {
       const k = Math.floor((x.dev - t0) / 10_000);
-      const a = acc.get(k) ?? { x: 0, y: 0, z: 0, c: 0 };
-      a.x += x.ax; a.y += x.ay; a.z += x.az; a.c++;
+      const a = acc.get(k) ?? [0, 0, 0, 0, 0, 0, 0];
+      a[0] += x.ax; a[1] += x.ay; a[2] += x.az; a[3] += x.gx ?? 0; a[4] += x.gy ?? 0; a[5] += x.gz ?? 0; a[6]++;
       acc.set(k, a);
     }
-    for (const [k, a] of [...acc.entries()].sort((p, r) => p[0] - r[0])) if (a.c >= 10) nb.push({ t: k * 10, ax: a.x / a.c, ay: a.y / a.c, az: a.z / a.c });
+    for (const [k, a] of [...acc.entries()].sort((p, r) => p[0] - r[0])) {
+      if (a[6] >= 10) nb.push({ t: k * 10, ax: a[0] / a[6], ay: a[1] / a[6], az: a[2] / a[6],
+        ...(hasGyro ? { gx: a[3] / a[6], gy: a[4] / a[6], gz: a[5] / a[6] } : {}) });
+    }
   }
-  const axis = (name: "X" | "Y" | "Z", v: number[], key: "ax" | "ay" | "az") => {
+  // scale：加速度 g → mg（×1000）；角速度本来就是 °/s（×1）
+  const axis = (name: string, v: number[], key: "ax" | "ay" | "az" | "gx" | "gy" | "gz", scale: number): StAxis => {
     const d = v.slice(1).map((x, i) => x - v[i]);
-    const bm = nb.map((b) => b[key]);
+    const bm = nb.map((b) => b[key] ?? 0);
     return {
-      name, mean: mean(v), std: std(v) * 1000, short: (std(d) / Math.SQRT2) * 1000,
-      p2p: v.length ? (Math.max(...v) - Math.min(...v)) * 1000 : NaN,
-      blockRange: bm.length ? (Math.max(...bm) - Math.min(...bm)) * 1000 : NaN,
-      slopePerMin: bm.length >= 3 ? linSlope(nb.map((b) => b.t / 60), bm) * 1000 : NaN,
+      name, mean: mean(v), std: std(v) * scale, short: (std(d) / Math.SQRT2) * scale,
+      p2p: v.length ? (Math.max(...v) - Math.min(...v)) * scale : NaN,
+      blockRange: bm.length ? (Math.max(...bm) - Math.min(...bm)) * scale : NaN,
+      slopePerMin: bm.length >= 3 ? linSlope(nb.map((b) => b.t / 60), bm) * scale : NaN,
     };
   };
-  const axes = [axis("X", ax, "ax"), axis("Y", ay, "ay"), axis("Z", az, "az")];
+  const axes = [axis("X", ax, "ax", 1000), axis("Y", ay, "ay", 1000), axis("Z", az, "az", 1000)];
+  const gyro = hasGyro ? [axis("X", s.map((x) => x.gx ?? 0), "gx", 1), axis("Y", s.map((x) => x.gy ?? 0), "gy", 1), axis("Z", s.map((x) => x.gz ?? 0), "gz", 1)] : [];
   // 短时噪声大于 30 mg 基本是动了：底噪那几行不下结论
   const isStatic = axes.every((a) => a.short < 30) && std(mag) * 1000 < 50;
 
   const bt = (opt.behavTs ?? []).filter((t) => n > 1 && t >= s[0].dev && t <= s[n - 1].dev);
 
   const rep: StReport = {
-    meta: { device: opt.device, kind: opt.kind, startedAt: opt.startedAt, durationS: spanHost, expectHz: opt.expectHz, staticClaimed: opt.staticClaimed, n, droppedHead: start },
+    meta: { device: opt.device, kind: opt.kind, startedAt: opt.startedAt, durationS: spanHost, expectHz: opt.expectHz, staticClaimed: opt.staticClaimed, n, droppedHead: start,
+      timeBase: hostMode ? "host" : "device" },
     rate: { periodMs: P, sensorHz: 1000 / P, byDevHz: spanDev > 0 ? (n - 1) / spanDev : NaN, byHostHz: spanHost > 0 ? (n - 1) / spanHost : NaN, blocks },
     iv: { mean: mean(iv), std: std(iv), jitterStd: std(normal), min: Math.min(...iv), max: Math.max(...iv), p1: q(iv, 0.01), p5: q(iv, 0.05), p50: q(iv, 0.5), p95: q(iv, 0.95), p99: q(iv, 0.99),
       // 不含丢帧的缝：缝在「丢帧」里单独算，这里只看正常的那些间隔准不准
       within10: normal.length ? (normal.filter((x) => Math.abs(x - P) <= P * 0.1).length / normal.length) * 100 : NaN,
-      dup: iv.filter((x) => x <= 0).length, alternating: alt, hist },
+      dup: iv.filter((x) => x <= 0).length, alternating: alt, hist: hostMode ? [] : hist },
     gaps: { n: gapList.length, lost, lossPct: n + lost > 0 ? (lost / (n + lost)) * 100 : 0, maxMs: gapList.length ? Math.max(...gapList.map((g) => g.ms)) : 0,
       perMin: spanDev > 0 ? gapList.length / (spanDev / 60) : 0, withHostStall: withStall, sizes, list: gapList.slice(0, 500) },
     clock: { offStartMs: cpts[0]?.off ?? NaN, offEndMs: cpts[cpts.length - 1]?.off ?? NaN, ppm: rs.slope != null ? rs.slope * 1000 : null,
       ppmErr: rs.err != null ? rs.err * 1000 : null, jitterMs: rs.jitter, fitS, pts: cpts },
-    noise: { isStatic, axes, magMean: mean(mag), magStd: std(mag) * 1000, blocks: nb },
+    noise: { isStatic, axes, gyro, magMean: mean(mag), magStd: std(mag) * 1000, blocks: nb },
     behav: { n: bt.length, perMin: spanDev > 0 ? bt.length / (spanDev / 60) : 0 },
     items: [],
   };
@@ -191,7 +210,23 @@ const f = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinit
 function judge(r: StReport): StItem[] {
   const it: StItem[] = [];
   const E = r.meta.expectHz;
+  if (r.meta.n < 3) return [{ group: "数据", name: "样本数", value: `${r.meta.n} 个`, status: "fail", note: "没收到数据：设备连上了吗、在发采样吗" }];
   const dev = (r.rate.sensorHz / E - 1) * 100;
+  if (r.meta.timeBase === "host") {
+    it.push({ group: "采样率", name: "采样率（电脑收到的个数 / 时长）", value: `${f(r.rate.byHostHz)} Hz（标称 ${E} Hz，${dev >= 0 ? "+" : ""}${f(dev, 1)}%）`,
+      status: Math.abs(dev) <= 2 ? "ok" : Math.abs(dev) <= 5 ? "warn" : "fail",
+      note: "按接收端收到的个数算：丢帧也算在里面，偏低可能是丢了" });
+    const got = r.rate.blocks.map((b) => b.hz);
+    if (got.length >= 3) {
+      const rng = Math.max(...got) - Math.min(...got);
+      it.push({ group: "采样率", name: "采样率稳定性（每 10 秒收到几个）", value: `${f(Math.min(...got), 1)} ~ ${f(Math.max(...got), 1)} 个/秒，波动 ${f(rng, 1)}`,
+        status: rng <= E * 0.04 ? "ok" : rng <= E * 0.1 ? "warn" : "fail", note: "按电脑收到算：蓝牙卡顿那几秒也会少" });
+    }
+    it.push({ group: "帧间隔 / 丢帧 / 时钟", name: "测不了", value: "设备没带时间戳", status: "info",
+      note: "设备不带时间戳（WitMotion 本身的时间不准，一律用接收端时间）。蓝牙成批送，收到的间隔不代表采样间隔，所以帧间隔、丢帧、设备时钟这几项没法测" });
+    noiseItems(r, it);
+    return it;
+  }
   it.push({ group: "采样率", name: "传感器采样率（按帧间隔中位数）", value: `${f(r.rate.sensorHz)} Hz（周期 ${f(r.rate.periodMs, 1)} ms，标称 ${E} Hz，${dev >= 0 ? "+" : ""}${f(dev, 1)}%）`,
     status: Math.abs(dev) <= 2 ? "ok" : Math.abs(dev) <= 5 ? "warn" : "fail",
     note: Math.abs(dev) > 2 ? "跟标称对不上。时间戳可信时（见下面「板子时钟」），就是传感器实际的输出速率：查 ODR 配置 / 传感器内部振荡器" : undefined });
@@ -230,9 +265,15 @@ function judge(r: StReport): StItem[] {
   it.push({ group: "板子时钟", name: "板子比电脑", value: `开始 ${f(c.offStartMs, 0)} ms → 结束 ${f(c.offEndMs, 0)} ms`, status: Math.abs(c.offEndMs) > 5000 ? "warn" : "info",
     note: Math.abs(c.offEndMs) > 5000 ? "差好几秒：多半没校时" : undefined });
   if (c.jitterMs != null) it.push({ group: "板子时钟", name: "时间戳抖动（扣掉趋势后）", value: `${f(c.jitterMs, 1)} ms`, status: "info", note: "含蓝牙延迟的抖动，只当参考" });
+  noiseItems(r, it);
+  if (r.behav.n) it.push({ group: "行为上报", name: "0x07 当前行为", value: `${r.behav.n} 条，每分钟 ${f(r.behav.perMin, 1)} 条`, status: "info" });
+  return it;
+}
+
+function noiseItems(r: StReport, it: StItem[]) {
   const nz = r.noise;
   if (!nz.isStatic) {
-    it.push({ group: "三轴", name: "底噪 / 稳定性", value: "测试期间项圈动了", status: "info", note: "底噪要静置平放测：短时噪声超过 30 mg，这几项不下结论" });
+    it.push({ group: "三轴", name: "底噪 / 稳定性", value: "测试期间设备动了", status: "info", note: "底噪要静置平放测：短时噪声超过 30 mg，这几项不下结论" });
   } else {
     for (const a of nz.axes) {
       it.push({ group: "三轴", name: `${a.name} 轴底噪（短时）`, value: `${f(a.short, 2)} mg rms（总 std ${f(a.std, 2)} mg，峰峰 ${f(a.p2p, 1)} mg）`,
@@ -248,8 +289,18 @@ function judge(r: StReport): StItem[] {
       status: Math.abs(md) <= 30 ? "ok" : Math.abs(md) <= 80 ? "warn" : "fail",
       note: Math.abs(md) > 30 ? "偏离 1 g：量程 / 比例因子 / 零偏没校准" : undefined });
   }
-  if (r.behav.n) it.push({ group: "行为上报", name: "0x07 当前行为", value: `${r.behav.n} 条，每分钟 ${f(r.behav.perMin, 1)} 条`, status: "info" });
-  return it;
+  if (nz.isStatic && nz.gyro.length) {
+    for (const a of nz.gyro) {
+      it.push({ group: "角速度", name: `${a.name} 轴零偏 / 底噪`, value: `零偏 ${f(a.mean, 3)} °/s · 短时噪声 ${f(a.short, 3)} °/s rms · 峰峰 ${f(a.p2p, 2)} °/s`,
+        status: Math.abs(a.mean) <= 0.5 && a.short <= 0.2 ? "ok" : Math.abs(a.mean) <= 2 && a.short <= 0.5 ? "warn" : "fail",
+        note: Math.abs(a.mean) > 0.5 ? "静止时角速度不为 0：陀螺零偏，要校准" : undefined });
+    }
+    for (const a of nz.gyro) {
+      if (!Number.isFinite(a.blockRange)) continue;
+      it.push({ group: "角速度", name: `${a.name} 轴稳定性（每 10 秒均值）`, value: `漂了 ${f(a.blockRange, 3)} °/s · ${f(a.slopePerMin, 3)} °/s/分钟`,
+        status: a.blockRange <= 0.1 ? "ok" : a.blockRange <= 0.5 ? "warn" : "fail" });
+    }
+  }
 }
 
 // ── 图（SVG 字符串：页面和导出的报告用同一份）──────────────────────────────
@@ -311,9 +362,11 @@ export function reportCharts(r: StReport) {
 // ── 导出 ─────────────────────────────────────────────────────────────────
 
 export function samplesCsv(raw: StSample[], timeOrigin: number): string {
-  const head = "dev_ts_ms,host_ts_ms,acc_x_g,acc_y_g,acc_z_g";
+  const gyro = raw.some((x) => x.gx != null);
+  const head = "dev_ts_ms,host_ts_ms,acc_x_g,acc_y_g,acc_z_g" + (gyro ? ",gyro_x_dps,gyro_y_dps,gyro_z_dps" : "");
   // 电脑时间留到 0.001 ms：取整到 ms 的话，脚本重算的时钟抖动会跟页面差一点
-  return [head, ...raw.map((x) => `${x.dev ?? ""},${(timeOrigin + x.host).toFixed(3)},${x.ax.toFixed(6)},${x.ay.toFixed(6)},${x.az.toFixed(6)}`)].join("\n");
+  return [head, ...raw.map((x) => `${x.dev ?? ""},${(timeOrigin + x.host).toFixed(3)},${x.ax.toFixed(6)},${x.ay.toFixed(6)},${x.az.toFixed(6)}`
+    + (gyro ? `,${(x.gx ?? 0).toFixed(4)},${(x.gy ?? 0).toFixed(4)},${(x.gz ?? 0).toFixed(4)}` : ""))].join("\n");
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -339,22 +392,24 @@ code{background:#f3f3f3;padding:1px 4px;border-radius:3px}</style></head><body>
 <div class="meta">设备 <b>${esc(r.meta.device || "-")}</b>（${esc(r.meta.kind)}）· 开始 ${started.toLocaleString()} · 时长 ${(r.meta.durationS / 60).toFixed(1)} 分钟 · ${r.meta.n} 个样本 · 标称 ${r.meta.expectHz} Hz · ${r.meta.staticClaimed ? "测试时静置" : "测试时未声明静置"}</div>
 <div class="sum">结论：${bad ? `<b style="color:#c62828">${bad} 项不通过</b>` : "<b style=\"color:#2e7d32\">没有不通过的项</b>"}${warn ? `，${warn} 项需要注意` : ""}</div>
 <h2>结果</h2><table><tr><th>项目</th><th>结果</th><th style="width:60px">判定</th></tr>${rows}</table>
-<h2>采样率（每 10 秒，按板子时间）</h2>${ch.rate}
-<h2>帧间隔分布</h2>${ch.hist}<div class="note">纵轴开方显示；红色 = 离周期 ${r.rate.periodMs.toFixed(1)} ms 超过一半的（丢帧的缝 / 异常）</div>
-<h2>板子时钟（板上时间 − 电脑时间，从 0 起）</h2>${ch.clock}<div class="note">每 2 秒取最早到的样本；线平 = 板子时钟准，斜率 = 快慢</div>
+<h2>采样率（每 10 秒，按${r.meta.timeBase === "host" ? "接收端" : "板子"}时间）</h2>${ch.rate}
+${ch.hist ? `<h2>帧间隔分布</h2>${ch.hist}<div class="note">纵轴开方显示；红色 = 离周期 ${r.rate.periodMs.toFixed(1)} ms 超过一半的（丢帧的缝 / 异常）</div>` : ""}
+${ch.clock ? `<h2>板子时钟（板上时间 − 电脑时间，从 0 起）</h2>${ch.clock}<div class="note">每 2 秒取最早到的样本；线平 = 板子时钟准，斜率 = 快慢</div>` : ""}
 ${r.noise.blocks.length ? `<h2>三轴每 10 秒均值的变化（相对第一块）</h2>${ch.axes}` : ""}
 ${r.gaps.list.length ? `<h2>丢帧的缝（前 50 处）</h2><table><tr><th>第几秒</th><th>间隔 ms</th><th>缺几个</th><th>电脑这边间隔 ms</th></tr>${gapsRows}</table>` : ""}
 <h2>测法与口径</h2><ul style="font-size:13px">
-<li>数据来自 0x08 原始采样镜像（PB_RAW_STREAM=1 固件），经蓝牙收到电脑。采样率、帧间隔、时钟、底噪都按<b>板子时间戳</b>算，蓝牙延迟、成批到不影响。</li>
-<li>丢帧 = 板子时间戳上的缝（间隔 &gt; 1.5 个周期）。<b>分不清蓝牙丢的还是板子没发</b>：「电脑这边也卡了」只是线索。</li>
-<li>板子时钟以电脑时间为准（一般有 NTP 校时）。</li>
+${r.meta.timeBase === "host"
+    ? "<li>设备不带时间戳（WitMotion），时间一律用<b>接收端</b>的：采样率按收到的个数 / 时长算；帧间隔、丢帧、设备时钟测不了。</li>"
+    : "<li>数据来自 0x08 原始采样镜像（PB_RAW_STREAM=1 固件），经蓝牙收到电脑。采样率、帧间隔、时钟、底噪都按<b>板子时间戳</b>算，蓝牙延迟、成批到不影响。</li>"}
+${r.meta.timeBase === "host" ? "" : `<li>丢帧 = 板子时间戳上的缝（间隔 &gt; 1.5 个周期）。<b>分不清蓝牙丢的还是板子没发</b>：「电脑这边也卡了」只是线索。</li>
+<li>板子时钟以电脑时间为准（一般有 NTP 校时）。</li>`}
 <li>底噪 = 一阶差分估的短时噪声（去掉慢漂移）；稳定性 = 每 10 秒均值的变化。要静置平放测。</li>
 </ul>
-<h2>给固件的建议（分清丢帧在哪一端）</h2><ul style="font-size:13px">
+${r.meta.timeBase === "host" ? "" : `<h2>给固件的建议（分清丢帧在哪一端）</h2><ul style="font-size:13px">
 <li>0x08 每个样本加一个<b>递增序号</b>（uint16 就够）：序号连续而时间戳有缝 = 时间戳问题；序号跳了 = 样本没到电脑。</li>
 <li>定期（比如每 10 秒）报一帧<b>内部计数</b>：从 IMU FIFO 读出的样本数、FIFO 溢出次数、交给蓝牙的 0x08 帧数、发送队列满丢掉的帧数。跟电脑收到的个数一对，就知道丢在哪一端。</li>
 <li>报一下 IMU 的 ODR 寄存器值和实际用的时钟源，方便核对采样率偏差。</li>
-</ul>
-<div class="note">原始数据另存为 CSV：dev_ts_ms（板子时间戳）, host_ts_ms（电脑收到的时间）, acc_x/y/z（g）。</div>
+</ul>`}
+<div class="note">原始数据 raw.csv：dev_ts_ms（设备时间戳，没有就空）, host_ts_ms（接收端时间）, acc_x/y/z（g）${r.noise.gyro.length ? ", gyro_x/y/z（°/s）" : ""}。</div>
 </body></html>`;
 }

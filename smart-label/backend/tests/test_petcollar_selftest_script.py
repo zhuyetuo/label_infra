@@ -58,7 +58,7 @@ def test_动了就不下底噪结论_读写csv一圈不变(tmp_path):
     m = _load()
     rows, _ = _synthetic(noise_g=0.2)
     r = m.analyze(rows, 31.25)
-    assert not r["noise"]["isStatic"] and _item(r, "底噪")["value"] == "测试期间项圈动了"
+    assert not r["noise"]["isStatic"] and _item(r, "底噪")["value"] == "测试期间设备动了"
     p = tmp_path / "raw.csv"
     p.write_text("dev_ts_ms,host_ts_ms,acc_x_g,acc_y_g,acc_z_g\n" + "\n".join(
         f"{d},{int(h)},{x:.6f},{y:.6f},{z:.6f}" for d, h, x, y, z in rows), encoding="utf-8")
@@ -66,3 +66,37 @@ def test_动了就不下底噪结论_读写csv一圈不变(tmp_path):
     assert len(back) == len(rows)
     m.write_outputs(m.analyze(back, 31.25), str(tmp_path / "out"))
     assert (tmp_path / "out" / "result.json").exists() and (tmp_path / "out" / "report.md").exists()
+
+
+def test_没时间戳的设备按接收端时间算_含角速度():
+    """WitMotion：设备时间不准不用，dev 全空。采样率按个数 / 时长；帧间隔 / 丢帧 / 时钟写明测不了；角速度零偏 / 底噪"""
+    m = _load()
+    rnd = random.Random(3)
+    t0 = 1_793_000_000_000
+    rows = []
+    for i in range(150 * 50):
+        host = t0 + (i // 3) * 60 + 15        # 三个一批到
+        rows.append((None, host, rnd.gauss(0, 0.003), rnd.gauss(0, 0.003), 1 + rnd.gauss(0, 0.003),
+                     0.3 + rnd.gauss(0, 0.06), rnd.gauss(0, 0.06), rnd.gauss(0, 0.06)))
+    r = m.analyze(rows, 50.0, kind="wit")
+    assert r["meta"]["timeBase"] == "host"
+    assert math.isclose(r["rate"]["byHostHz"], 50, rel_tol=0.02)
+    assert _item(r, "测不了")["status"] == "info"
+    assert not any(i["group"] in ("帧间隔", "丢帧", "板子时钟") for i in r["items"])
+    gx = next(a for a in r["noise"]["gyro"] if a["name"] == "X")
+    assert math.isclose(gx["mean"], 0.3, abs_tol=0.01) and math.isclose(gx["short"], 0.06, rel_tol=0.15)
+
+
+def test_witmotion_拆包():
+    m = _load()
+
+    def i16(v):
+        return int(round(v)).to_bytes(2, "little", signed=True)
+
+    pk = bytes([0x55, 0x61]) + i16(1 / 16 * 32768 - 1) + i16(0) + i16(-0.5 / 16 * 32768) + i16(100 / 2000 * 32768) + i16(0) + i16(0) + bytes(14)
+    buf = bytearray()
+    assert m.wit_feed(buf, pk[:10]) == []              # 不够一包：留着
+    out = m.wit_feed(buf, pk[10:] + pk[:5])
+    assert len(out) == 1 and len(buf) == 5
+    ax, ay, az, gx, gy, gz = out[0]
+    assert math.isclose(ax, 1, abs_tol=1e-3) and math.isclose(az, -0.5, abs_tol=1e-3) and math.isclose(gx, 100, abs_tol=0.1)
