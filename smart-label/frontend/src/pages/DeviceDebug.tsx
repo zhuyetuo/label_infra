@@ -4,6 +4,7 @@ import {
 } from "antd";
 import uPlot from "uplot";
 import DeviceServerCompare, { type BoardEvent } from "@/components/DeviceServerCompare";
+import DeviceClockCompare from "@/components/DeviceClockCompare";
 import "uplot/dist/uPlot.min.css";
 import {
   BEHAV_NAMES, CMD, DP, PC, WIT, WitStream, assessRate, buildAckFrame, buildTimeFrame, parseDps, parseFrame, parseSegments,
@@ -57,6 +58,8 @@ export default function DeviceDebug() {
   const [noRawHint, setNoRawHint] = useState(false);
 
   const samples = useRef<Sample[]>([]);
+  // 给子组件定时去取：引用固定，子组件的定时器不用每次渲染重建
+  const getSamplesStable = useRef(() => samples.current).current;
   const rec = useRef<Sample[] | null>(null);
   const total = useRef(0);
   const server = useRef<BtServer | null>(null);
@@ -156,7 +159,8 @@ export default function DeviceDebug() {
   // 整次连接：真实时间里收了多少个、设备时间走了多久——分清「传感器真的慢」还是「设备时间戳算得不对」
   const sess = useRef<{ n: number; host0: number; hostN: number; dev0: number | null; devN: number | null }>({ n: 0, host0: 0, hostN: 0, dev0: null, devN: null });
   const [sessView, setSessView] = useState<typeof sess.current | null>(null);
-  const resetSess = () => { sess.current = { n: 0, host0: 0, hostN: 0, dev0: null, devN: null }; };
+  const [sessEpoch, setSessEpoch] = useState(0);
+  const resetSess = () => { sess.current = { n: 0, host0: 0, hostN: 0, dev0: null, devN: null }; setSessEpoch((e) => e + 1); };
 
   // 回调每次渲染都是新函数；监听挂的是这两个固定的转发函数，同一个特征只挂一次——
   // 重连时浏览器可能给回同一个特征对象，再挂一次每个样本就收两遍（全是 0 ms 间隔）
@@ -507,6 +511,7 @@ export default function DeviceDebug() {
               </Card>
             );
           })()}
+          <DeviceClockCompare getSamples={getSamplesStable} epoch={sessEpoch} expectHz={expectHz} isPc={kind === "pc"} />
           {kind === "pc" && (
             <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
               {behav ? (
