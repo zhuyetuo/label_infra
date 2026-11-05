@@ -61,3 +61,23 @@ def test_手动指定每类留多少秒():
     _c, secs, *_ = _tally(t)
     assert secs["活动"] == 60                                    # 没给的不动
     assert abs(secs["静止/休息"] + secs["睡眠"] - 900) < 1e-6
+
+
+def test_长片段切块轮流抽_摊到每一段():
+    """未佩戴 / 静止这种一段几十分钟：上限 1 小时不能只留一两整段，要从每一段里都拿一点"""
+    tasks = []
+    for tid in range(19):                                   # 19 段，每段 35 分钟
+        tasks.append({"id": tid, "annotations": [{"result": [_seg(["未佩戴"], 0, 35 * 60)]}]})
+    t2 = copy.deepcopy(tasks)
+    rep, warn = _reduce(tasks, [], 1.0, {"未佩戴": 3600})
+    _reduce(t2, [], 1.0, {"未佩戴": 3600})
+    assert warn == [] and rep[0]["after_sec"] == 3600
+    assert rep[0]["from_segs"] == 19                        # 19 段每段都有份
+    per = [sum(_s["value"]["end_ms"] - _s["value"]["start_ms"] for _s in t["annotations"][0]["result"]) / 1000 for t in tasks]
+    assert all(120 <= x <= 240 for x in per), per           # 每段约 3 分钟（1 小时 / 19）
+    for t in tasks:                                         # 小块都在原段里面、起止字符串跟毫秒对得上
+        for sg in t["annotations"][0]["result"]:
+            v = sg["value"]
+            assert 0 <= v["start_ms"] < v["end_ms"] <= 35 * 60 * 1000
+            assert v["start"].startswith("2026-10-01 00:") and v["end"] > v["start"]
+    assert tasks == t2                                      # 可复现

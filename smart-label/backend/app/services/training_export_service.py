@@ -42,6 +42,7 @@ import os
 import re
 import shutil
 import threading
+import copy
 import zlib
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
@@ -194,6 +195,10 @@ def _tally(ls_tasks: list[dict]) -> tuple[Counter, Counter, int, float, list[dic
     return counter, secs, n_seg, total, build(())
 
 
+# 减量时把长片段切成多长一块再抽（见 _reduce）
+_REDUCE_CHUNK_MS = 60_000
+
+
 def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float,
             targets: dict[str, float] | None = None) -> tuple[list[dict], list[str]]:
     """把指定的几个大头类别（活动、静止/休息…）按段抽掉一部分，原地改 ls_tasks。
@@ -201,10 +206,10 @@ def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float,
     降到多少是**自适应**的：不超过「其余（没选的）大类里最大那个」的 factor 倍。
     数据量变了目标跟着变，不用人每次去算该留几小时。
 
-    抽哪些段：按 (任务, 起点) 的哈希排个固定的乱序，依次留到够数为止——
-    **同一批数据每次导出抽到的是同一些段**（可复现），又是摊在所有狗、所有天上的，
-    不会只留了前几天。最后一段超出的部分截掉。被抽掉的段整段不导出，那段时间
-    不参与训练（不会变成负样本：导出格式只取标注过的区间）。
+    抽哪些：长片段先切成 1 分钟一块，再轮流从每个片段里各拿一块（第一轮每段一块，不够再第二轮），
+    顺序按哈希固定——**同一批数据每次导出抽到的一样**（可复现），而且摊在所有片段（所有狗、
+    设备、天）上，不会只留一两整段。没抽中的部分不导出，那段时间不参与训练（不会变成负样本：
+    导出格式只取标注过的区间）。
 
     targets：{类别: 留多少秒}，界面上拖滑块定的。给了就按它，不再按倍数算。"""
     targets = {k: max(0.0, float(v)) for k, v in (targets or {}).items() if k}
@@ -231,12 +236,13 @@ def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float,
         else:
             warnings.append("按倍数减量没做：选中的类别把所有大类都包了，找不到参照的类别")
     drop: set[int] = set()
+    replace: dict[int, list[dict]] = {}      # 段 id → 抽中的那几小块（新段）
     report: list[dict] = []
     for name in want:
         target = targets[name] if name in targets else auto_target
         if target is None:
             continue
-        mine = [(ti, s, c) for ti, s, c in segs if name in c and id(s) not in drop]
+        mine = [(ti, s, c) for ti, s, c in segs if name in c and id(s) not in drop and id(s) not in replace]
         before = sum(_seg_sec(s["value"]) for _ti, s, _c in mine)
         if not mine:
             warnings.append(f"减量：这批数据里没有「{name}」")
@@ -245,35 +251,81 @@ def _reduce(ls_tasks: list[dict], reduce_labels: list[str], factor: float,
             report.append({"label": name, "before_sec": round(before, 1), "after_sec": round(before, 1),
                            "before_n": len(mine), "after_n": len(mine), "target_sec": round(target, 1)})
             continue
-        order = sorted(mine, key=lambda x: zlib.crc32(
-            f"{ls_tasks[x[0]]['id']}:{x[1]['value'].get('start_ms')}:{name}".encode()))
+        # 长片段先切成 1 分钟一块，再「轮流」从每个片段里各拿一块：第一轮每段拿一块，不够再第二轮……
+        # 以前是整段整段地留：未佩戴 / 静止这种一段就几十分钟，上限 1 小时只能留下一两整段，
+        # 也就是一两只狗、一两个设备——多样性没了，模型学到的是那两段的特点。
+        # 顺序都是按哈希定的固定乱序：同一批数据每次导出抽到的一样（可复现）
+        pieces: list[tuple[int, int, int, int, int]] = []   # (第几轮, 哈希, 段 id, 起 ms, 止 ms)
+        seg_by_id: dict[int, tuple[int, dict]] = {}
+        for ti, sg, _c in mine:
+            v = sg["value"]
+            a_ms, b_ms = int(v["start_ms"]), int(v["end_ms"])
+            seg_by_id[id(sg)] = (ti, sg)
+            span = b_ms - a_ms
+            k_n = max(1, round(span / _REDUCE_CHUNK_MS)) if span > _REDUCE_CHUNK_MS * 1.5 else 1
+            step = span / k_n
+            key = f"{ls_tasks[ti]['id']}:{a_ms}:{name}"
+            ps = [(a_ms + round(k * step), a_ms + round((k + 1) * step)) for k in range(k_n)]
+            # 段内也打乱：不总是从开头拿（刚戴上 / 刚趴下那几分钟不代表整段）
+            ps.sort(key=lambda p: zlib.crc32(f"{key}:{p[0]}".encode()))
+            for rank, (pa, pb) in enumerate(ps):
+                pieces.append((rank, zlib.crc32(f"{key}:{pa}:o".encode()), id(sg), pa, pb))
+        pieces.sort(key=lambda x: (x[0], x[1]))
+        keep: dict[int, list[tuple[int, int]]] = {}
         kept = 0.0
-        n_kept = 0
-        for _ti, s, _c in order:
-            v = s["value"]
-            sec = _seg_sec(v)
+        for _rank, _h, sid, pa, pb in pieces:
             if kept >= target:
-                drop.add(id(s))
-                continue
+                break
+            sec = (pb - pa) / 1000
             if kept + sec > target:
                 rest = target - kept
-                if rest < 5:          # 截出来不到 5 秒的碎段不要
-                    drop.add(id(s))
-                    kept = target
-                    continue
-                end_ms = int(v["start_ms"]) + int(rest * 1000)
-                start_dt = datetime.strptime(v["start"], "%Y-%m-%d %H:%M:%S.%f")
-                v["end"] = _fmt(start_dt + timedelta(milliseconds=end_ms - int(v["start_ms"])))
-                v["end_ms"] = end_ms
+                if rest < 5:          # 截出来不到 5 秒的碎块不要
+                    break
+                pb = pa + int(rest * 1000)
                 sec = rest
+            keep.setdefault(sid, []).append((pa, pb))
             kept += sec
-            n_kept += 1
+        n_out = 0
+        for sid, (ti, sg) in seg_by_id.items():
+            spans = sorted(keep.get(sid, []))
+            merged: list[list[int]] = []
+            for pa, pb in spans:          # 挨着的小块并回一段
+                if merged and pa <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], pb)
+                else:
+                    merged.append([pa, pb])
+            v = sg["value"]
+            a_ms, b_ms = int(v["start_ms"]), int(v["end_ms"])
+            if not merged:
+                drop.add(sid)
+            elif len(merged) == 1 and merged[0] == [a_ms, b_ms]:
+                n_out += 1
+            else:
+                start_dt = datetime.strptime(v["start"], "%Y-%m-%d %H:%M:%S.%f")
+                outs = []
+                for k, (pa, pb) in enumerate(merged):
+                    ns = copy.deepcopy(sg)
+                    nv = ns["value"]
+                    nv["start_ms"], nv["end_ms"] = pa, pb
+                    nv["start"] = _fmt(start_dt + timedelta(milliseconds=pa - a_ms))
+                    nv["end"] = _fmt(start_dt + timedelta(milliseconds=pb - a_ms))
+                    if "id" in ns:
+                        ns["id"] = f"{ns['id']}_{k}"
+                    outs.append(ns)
+                replace[sid] = outs
+                n_out += len(outs)
         report.append({"label": name, "before_sec": round(before, 1), "after_sec": round(kept, 1),
-                       "before_n": len(mine), "after_n": n_kept, "target_sec": round(target, 1)})
-    if drop:
+                       "before_n": len(mine), "after_n": n_out, "from_segs": len(keep),
+                       "target_sec": round(target, 1)})
+    if drop or replace:
         for t in ls_tasks:
             ann = t["annotations"][0]
-            ann["result"] = [s for s in ann["result"] if id(s) not in drop]
+            out = []
+            for sg in ann["result"]:
+                if id(sg) in drop:
+                    continue
+                out.extend(replace.get(id(sg), [sg]))
+            ann["result"] = out
     return report, warnings
 
 

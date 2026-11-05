@@ -159,7 +159,11 @@ export default function DataPoolPanel({
     return build(null);
   }, [sumAll]);
 
-  // 「用这批训练」
+  // 「用这批训练」。名字默认按年月日时分秒自动起（pool_20261105_143012），想改再改
+  const autoDsName = () => {
+    const d = new Date(), z = (x: number) => String(x).padStart(2, "0");
+    return `pool_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+  };
   const [trainOpen, setTrainOpen] = useState(false);
   const [dsName, setDsName] = useState("");
   const [capH, setCapH] = useState<number | null>(null);
@@ -277,7 +281,7 @@ export default function DataPoolPanel({
         <Col><Statistic title="时长" value={fmtSecs((sum?.hours ?? 0) * 3600)} loading={loadingSum} /></Col>
         <Col flex="auto" />
         <Col>
-          <Button type="primary" disabled={!sum?.n} onClick={() => setTrainOpen(true)}>
+          <Button type="primary" disabled={!sum?.n} onClick={() => { setDsName(autoDsName()); setTrainOpen(true); }}>
             用这批训练
           </Button>
         </Col>
@@ -442,17 +446,19 @@ export default function DataPoolPanel({
             当前筛选：{sum?.n ?? 0} 段 / {fmtSecs((sum?.hours ?? 0) * 3600)}；类别：{pickLabels.length ? pickLabels.join("、") : "全部"}
             {minSec ? `；片段 ≥ ${minSec} 秒` : ""}
           </Typography.Text>
-          <Input placeholder="数据集名字，如 pool_1102" value={dsName} onChange={(e) => setDsName(e.target.value)} />
+          <Input addonBefore="数据集名字" placeholder="pool_20261105_143012" value={dsName} onChange={(e) => setDsName(e.target.value)}
+            suffix={<Typography.Link style={{ fontSize: 12 }} onClick={() => setDsName(autoDsName())}>按现在时间</Typography.Link>} />
           <span>
             每个大类最多 <InputNumber min={0} step={0.5} value={capH} onChange={(v) => setCapH(v)} placeholder="不限" /> 小时
             <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-              超出的按段随机抽到这个量
+              超出的：长片段切成 1 分钟一块，轮流从每个片段里各抽一块，抽到这个量（摊到所有狗 / 设备上，不是只留一两整段）
             </Typography.Text>
           </span>
           {preview && (
             <Alert
               type="success"
-              message={`预览：${preview.n_segments} 段 / ${preview.total_hours} h`}
+              message={`预览：${preview.n_segments} 段 / ${preview.total_hours} h`
+                + (preview.reduce?.result?.length ? `；减量：${preview.reduce.result.map((r) => `${r.label} ${(r.before_sec / 3600).toFixed(1)}h→${(r.after_sec / 3600).toFixed(1)}h（来自 ${r.from_segs ?? r.after_n} 段）`).join("，")}` : "")}
               description={
                 <Space size={4} wrap>
                   {Object.entries(preview.labels ?? {}).map(([k, v]) => (
