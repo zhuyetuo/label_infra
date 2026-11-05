@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -22,12 +20,6 @@ router = APIRouter(prefix="/device-debug", tags=["device-debug"],
 async def models():
     """AI 服务挂着哪些模型（给「服务端预测」选模型用）"""
     return ok(await algo_client.models())
-
-
-@router.get("/time")
-async def server_time():
-    """服务器现在几点（Unix 毫秒）。设备调试页拿它跟电脑时间、板上时间比"""
-    return ok({"server_ms": time.time() * 1000})
 
 
 class InferIn(BaseModel):
