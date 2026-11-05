@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, Progress, Select, Space, Table, Tag, Tooltip, Typography, theme } from "antd";
+import { RightOutlined } from "@ant-design/icons";
 import { analyzeSelfTest, reportCharts, reportHtml, samplesCsv, type StReport, type StSample, type StStatus } from "@/utils/selfTest";
+import { makeZip } from "@/utils/zip";
+// 给嵌入式自己跑的脚本：同一套算法，能复现、能自己测、能把多次结果并排比（后端有测试钉住它）
+import selfTestPy from "@/assets/petcollar_selftest.py?raw";
 
 /**
  * 设备调试页「一键自检」：连续采一段（1~30 分钟），出一份报告：
@@ -13,8 +17,35 @@ const STATUS: Record<StStatus, { color: string; text: string }> = {
   ok: { color: "success", text: "通过" }, warn: { color: "warning", text: "注意" }, fail: { color: "error", text: "不通过" }, info: { color: "default", text: "参考" },
 };
 
-const save = (name: string, text: string, type: string) => {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+const OPEN_KEY = "smart-label:device-selftest-open";
+
+const readme = (r: StReport, base: string) => `设备自检结果（${r.meta.device || "-"}，${new Date(r.meta.startedAt).toLocaleString()}，${(r.meta.durationS / 60).toFixed(1)} 分钟）
+
+文件
+  report.html            报告：结果表 + 图 + 口径 + 给固件的建议。浏览器直接打开
+  raw.csv                原始数据：dev_ts_ms（板子时间戳）, host_ts_ms（电脑收到的 Unix 毫秒）, acc_x/y/z（g）
+  behavior.csv           0x07 当前行为的板子时间戳（统计上报频率用）
+  result.json            结果（各项数值 + 判定），脚本 compare 用
+  petcollar_selftest.py  自检脚本：跟平台同一套算法、同一套判定
+
+复现这份结果（只要 Python 3，不用装别的）：
+  python petcollar_selftest.py analyze raw.csv
+
+自己测一次（电脑蓝牙直连项圈，要 PB_RAW_STREAM=1 的调试固件；pip install bleak）：
+  python petcollar_selftest.py run --minutes 5 --static --tag 我这边_桌面
+  测底噪要把项圈静置平放；测时钟漂移建议 --minutes 10 以上
+
+多次 / 多人的结果并排比：
+  python petcollar_selftest.py compare ${base}/result.json selftest_xxx/
+
+口径
+  - 采样率 / 帧间隔 / 板子时钟 / 底噪全部按板子时间戳算，蓝牙晚到、成批到不影响
+  - 丢帧 = 板子时间戳上的缝，分不清蓝牙丢的还是板子没发；「电脑这边也卡了」只是线索
+  - 要分清：0x08 加样本序号；定期报内部计数（FIFO 读出 / 溢出 / 交给蓝牙 / 发送队列丢掉）
+`;
+
+const save = (name: string, blob: Blob) => {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
@@ -40,6 +71,9 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
   const [now, setNow] = useState(Date.now());
   const [report, setReport] = useState<StReport | null>(null);
   const data = useRef<{ samples: StSample[]; behav: number[] } | null>(null);
+  // 收起来不占地方；记住上次的
+  const [open, setOpenState] = useState(() => { try { return localStorage.getItem(OPEN_KEY) !== "0"; } catch { return true; } });
+  const setOpen = (v: boolean) => { setOpenState(v); try { localStorage.setItem(OPEN_KEY, v ? "1" : "0"); } catch { /* ignore */ } };
 
   const start = () => {
     sink.current = [];
@@ -79,8 +113,13 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
   const warns = report?.items.filter((i) => i.status === "warn").length ?? 0;
 
   return (
-    <Card size="small" style={{ marginTop: 12 }}
-      title={<span>一键自检 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>采样率 · 帧间隔 · 丢帧 · 板子时钟 · 三轴底噪</Typography.Text></span>}
+    <Card size="small" style={{ marginTop: 12 }} styles={{ body: open ? undefined : { display: "none" } }}
+      title={<span style={{ cursor: "pointer" }} onClick={() => setOpen(!open)}>
+        <RightOutlined style={{ fontSize: 11, marginRight: 6, transition: "transform .2s", transform: open ? "rotate(90deg)" : undefined }} />
+        一键自检 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+          {running ? `测试中 ${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, "0")} / ${minutes}:00`
+            : report ? `上次：${fails ? `${fails} 项不通过` : "没有不通过"}${warns ? `，${warns} 项注意` : ""}` : "采样率 · 帧间隔 · 丢帧 · 板子时钟 · 三轴底噪"}
+        </Typography.Text></span>}
       extra={
         <Space size={8} wrap>
           <Select size="small" value={minutes} onChange={setMinutes} disabled={running} style={{ width: 110 }}
@@ -90,7 +129,7 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
           </Tooltip>
           {running
             ? <Button size="small" danger onClick={finish}>提前结束并出报告</Button>
-            : <Button size="small" type="primary" disabled={!connected || !hasRaw} onClick={start}>开始自检</Button>}
+            : <Button size="small" type="primary" disabled={!connected || !hasRaw} onClick={() => { setOpen(true); start(); }}>开始自检</Button>}
         </Space>
       }>
       {!hasRaw && connected && (
@@ -119,9 +158,16 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {report.meta.n} 个样本 · {(report.meta.durationS / 60).toFixed(1)} 分钟{report.meta.droppedHead ? ` · 中途板子时间跳过（校时），只用了之后的 ${report.meta.n} 个` : ""}
             </Typography.Text>
-            <Button size="small" onClick={() => save(`${base}.html`, reportHtml(report), "text/html;charset=utf-8")}>下载报告（HTML）</Button>
-            <Button size="small" onClick={() => data.current && save(`${base}_raw.csv`, samplesCsv(data.current.samples, performance.timeOrigin), "text/csv;charset=utf-8")}>下载原始数据（CSV）</Button>
-            <Button size="small" onClick={() => save(`${base}.json`, JSON.stringify(report, null, 1), "application/json")}>下载结果（JSON）</Button>
+            <Tooltip title="报告（HTML）+ 原始数据（CSV）+ 结果（JSON）+ 自检脚本 + 说明，一个压缩包发给嵌入式：他能用脚本复现、自己再测、把多次结果并排比">
+              <Button size="small" type="primary" onClick={() => save(`${base}.zip`, makeZip([
+                { name: `${base}/report.html`, data: reportHtml(report) },
+                { name: `${base}/raw.csv`, data: samplesCsv(data.current?.samples ?? [], performance.timeOrigin) },
+                { name: `${base}/result.json`, data: JSON.stringify(report, null, 1) },
+                { name: `${base}/behavior.csv`, data: ["dev_ts_ms", ...(data.current?.behav ?? []).map(String)].join("\n") },
+                { name: `${base}/petcollar_selftest.py`, data: selfTestPy },
+                { name: `${base}/README.txt`, data: readme(report, base) },
+              ]))}>下载压缩包（报告 + 原始数据 + 自检脚本）</Button>
+            </Tooltip>
           </Space>
           <Table size="small" pagination={false} rowKey={(r) => `${r.group}-${r.name}`} dataSource={report.items}
             columns={[

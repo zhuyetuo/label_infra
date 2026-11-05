@@ -312,7 +312,8 @@ export function reportCharts(r: StReport) {
 
 export function samplesCsv(raw: StSample[], timeOrigin: number): string {
   const head = "dev_ts_ms,host_ts_ms,acc_x_g,acc_y_g,acc_z_g";
-  return [head, ...raw.map((x) => `${x.dev ?? ""},${Math.round(timeOrigin + x.host)},${x.ax.toFixed(6)},${x.ay.toFixed(6)},${x.az.toFixed(6)}`)].join("\n");
+  // 电脑时间留到 0.001 ms：取整到 ms 的话，脚本重算的时钟抖动会跟页面差一点
+  return [head, ...raw.map((x) => `${x.dev ?? ""},${(timeOrigin + x.host).toFixed(3)},${x.ax.toFixed(6)},${x.ay.toFixed(6)},${x.az.toFixed(6)}`)].join("\n");
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
