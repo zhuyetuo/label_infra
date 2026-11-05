@@ -1018,6 +1018,15 @@ export default function AnnotationWorkspace({
         .sort((a, b) => a.start_time_ms - b.start_time_ms)
       : [];
   const panelIds = new Set(panelItems.map((x) => x.id));
+  // 浮窗里「这段时间里 N 段」的逐段列表：段多了会把浮窗撑得很高、挡住后面的片段表。
+  // 默认收起只留一行，展开了也限高、自己滚；记住上次的
+  const [piecesOpen, setPiecesOpenState] = useState(() => {
+    try { return localStorage.getItem("smart-label:wave-pieces-open") === "1"; } catch { return false; }
+  });
+  const setPiecesOpen = (v: boolean) => {
+    setPiecesOpenState(v);
+    try { localStorage.setItem("smart-label:wave-pieces-open", v ? "1" : "0"); } catch { /* ignore */ }
+  };
   const splitPanel = (
     <div style={{ width: "100%", borderTop: "1px dashed #ddd", paddingTop: 4, marginTop: 2 }}>
       <Space size={6} wrap style={{ marginBottom: 4 }}>
@@ -1025,12 +1034,13 @@ export default function AnnotationWorkspace({
           <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
         </Tooltip>
         {panelItems.length > 1 && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {segReview ? `拆成了 ${panelItems.length} 段` : `这段时间里 ${panelItems.length} 段`}，逐段改类别 / 调起止：
-          </Typography.Text>
+          <Typography.Link style={{ fontSize: 12 }} onClick={() => setPiecesOpen(!piecesOpen)}>
+            {segReview ? `拆成了 ${panelItems.length} 段` : `这段时间里 ${panelItems.length} 段`}
+            {piecesOpen ? "，逐段改类别 / 调起止 ▴ 收起" : " ▸ 展开逐段改类别 / 调起止"}
+          </Typography.Link>
         )}
       </Space>
-      {panelItems.length > 1 && panelItems.map((it, k) => {
+      {panelItems.length > 1 && piecesOpen && <div style={{ maxHeight: 156, overflowY: "auto" }}>{panelItems.map((it, k) => {
         const cur = loopInfo?.itemId === it.id;
         return (
           <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "1px 0",
@@ -1067,7 +1077,7 @@ export default function AnnotationWorkspace({
             )}
           </div>
         );
-      })}
+      })}</div>}
     </div>
   );
   const waveReviewBar = (it: LabelItem) => (
