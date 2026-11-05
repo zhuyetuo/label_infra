@@ -90,7 +90,7 @@ const parseJson = (s: string | null | undefined): Record<string, unknown> => {
 };
 
 /** 板子只有加速度、跑 31.25Hz：3 轴 + 同采样率的才是公平的比法，里面 F1 最高的推荐 */
-function buildChoices(models: ModelInfo[], versions: ModelVersion[], devHz: number): ModelChoice[] {
+function buildChoices(models: ModelInfo[], versions: ModelVersion[], devHz: number, devAxes: 3 | 6 = 3): ModelChoice[] {
   const byJob = new Map(versions.map((v) => [v.algo_job_id, v]));
   const out: ModelChoice[] = models.map((m) => {
     const t = m.train;
@@ -110,21 +110,22 @@ function buildChoices(models: ModelInfo[], versions: ModelVersion[], devHz: numb
       detail: `${t?.dataset ? `数据集 ${t.dataset}` : ""}${(t?.classes ?? m.classes) ? `　类别 ${(t?.classes ?? m.classes)!.join("/")}` : ""}${sameHz || hz == null ? "" : `　⚠ 训练用 ${hz}Hz，设备是 ${devHz}Hz（会重采样，但不如同采样率训的准）`}`,
     };
   });
-  const fair = out.filter((c) => c.axes === 3 && c.hz != null && Math.abs(c.hz - devHz) < 0.01);
+  // 公平的比法：轴数跟设备一样（项圈只有加速度 → 3 轴；WitMotion 六轴 → 6 轴）、采样率一样
+  const fair = out.filter((c) => c.axes === devAxes && c.hz != null && Math.abs(c.hz - devHz) < 0.01);
   const best = [...fair].sort((a, b) => (b.f1 ?? -1) - (a.f1 ?? -1))[0];
   if (best) best.group = "best";
-  const rank = (c: ModelChoice) => ({ best: 0, acc3: 1, other: 2, acc6: 3 })[c.group];
+  const rank = (c: ModelChoice) => (devAxes === 6 ? { best: 0, acc6: 1, other: 2, acc3: 3 } : { best: 0, acc3: 1, other: 2, acc6: 3 })[c.group];
   return out.sort((a, b) => rank(a) - rank(b)
     || Number(b.hz != null && Math.abs(b.hz - devHz) < 0.01) - Number(a.hz != null && Math.abs(a.hz - devHz) < 0.01)
     || (b.f1 ?? -1) - (a.f1 ?? -1));
 }
 
-const GROUP_NAME: Record<ModelChoice["group"], string> = {
-  best: "★ 推荐（3 轴、跟设备同采样率、F1 最高）",
-  acc3: "3 轴（只用加速度，跟板子一样）",
+const groupName = (g: ModelChoice["group"], devAxes: 3 | 6): string => ({
+  best: `★ 推荐（${devAxes} 轴、跟设备同采样率、F1 最高）`,
+  acc3: devAxes === 3 ? "3 轴（只用加速度，跟板子一样）" : "3 轴（只用加速度，不用陀螺仪）",
   other: "其它",
-  acc6: "6 轴（要陀螺仪，板子没有，按 0 喂，结果会偏，不建议）",
-};
+  acc6: devAxes === 3 ? "6 轴（要陀螺仪，板子没有，按 0 喂，结果会偏，不建议）" : "6 轴（加速度 + 陀螺仪，跟设备一样）",
+})[g];
 const MODEL_KEY = "smart-label:device-debug-model";
 
 // 板子是 4 类；服务端模型类别可能更细，比对时按名字归一下（甩动类并进活动——板子的后处理也是这么做的）
@@ -156,12 +157,16 @@ return (
 );
 }
 
-export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz, connected }: {
+export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz, connected, board = true, axes = 3 }: {
   getSamples: () => DevSample[];
   boardEvents: BoardEvent[];
   segs: PcSegment[];
   hz: number;
   connected: boolean;
+  /** 设备自己会报识别结果（自制项圈的 0x07 / 0x09）。WitMotion 没有：只比服务端和端侧 */
+  board?: boolean;
+  /** 设备有几轴：项圈 3（只有加速度），WitMotion 6。推荐模型按它挑 */
+  axes?: 3 | 6;
 }) {
   const { token } = theme.useToken();
   const { data: models } = useQuery({
@@ -170,14 +175,14 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
     staleTime: 60_000,
   });
   const { data: versions } = useQuery({ queryKey: ["model-versions"], queryFn: listModelVersions, staleTime: 60_000 });
-  const choices = useMemo(() => buildChoices(models ?? [], versions ?? [], hz), [models, versions, hz]);
+  const choices = useMemo(() => buildChoices(models ?? [], versions ?? [], hz, axes), [models, versions, hz, axes]);
   // 选过的记住；没选过（或选的那版已经没了）就用推荐的那个
   const [picked, setPickedState] = useState<string | undefined>(() => {
-    try { return localStorage.getItem(MODEL_KEY) || undefined; } catch { return undefined; }
+    try { return localStorage.getItem(`${MODEL_KEY}:${axes}`) || undefined; } catch { return undefined; }
   });
   const setModel = (v: string | undefined) => {
     setPickedState(v);
-    try { if (v) localStorage.setItem(MODEL_KEY, v); else localStorage.removeItem(MODEL_KEY); } catch { /* ignore */ }
+    try { if (v) localStorage.setItem(`${MODEL_KEY}:${axes}`, v); else localStorage.removeItem(`${MODEL_KEY}:${axes}`); } catch { /* ignore */ }
   };
   const recommended = choices.find((c) => c.group === "best");
   const model = picked && choices.some((c) => c.tag === picked) ? picked : recommended?.tag;
@@ -213,7 +218,8 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
     if (all.length < hz * 3) { setErr("最近收到的原始采样不够（至少 3 秒）"); return; }
     const end = all[all.length - 1].dev!;
     const raw = all.filter((s) => s.dev! >= end - secs * 1000);
-    const { pts, filled, periodMs } = fillGaps(raw);
+    // 补缝只对带设备时间戳的（项圈）有意义；WitMotion 的时间是接收端的、成批到，补的话会凭空插出样本
+    const { pts, filled, periodMs } = board ? fillGaps(raw) : { pts: raw, filled: 0, periodMs: raw.length > 1 ? (raw[raw.length - 1].dev! - raw[0].dev!) / (raw.length - 1) : 0 };
     setFillInfo({ filled, n: pts.length, periodMs });
     busyRef.current = true;
     setBusy(true);
@@ -321,13 +327,13 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
 
   const pct = (v: number | null | undefined) => (v == null ? "-" : `${Math.round(v * 100)}%`);
   return (
-    <Card size="small" title="服务端预测 · 三方对比" style={{ marginTop: 12 }}
+    <Card size="small" title={board ? "服务端预测 · 三方对比" : "服务端预测（服务端模型 / 端侧）"} style={{ marginTop: 12 }}
       extra={
         <Space wrap size={6}>
           <Select size="small" style={{ width: 340 }} popupMatchSelectWidth={false} placeholder="线上默认模型" allowClear
             value={model} onChange={setModel} showSearch optionFilterProp="label"
             options={(["best", "acc3", "other", "acc6"] as const)
-              .map((g) => ({ label: GROUP_NAME[g], options: choices.filter((c) => c.group === g).map((c) => ({
+              .map((g) => ({ label: groupName(g, axes), options: choices.filter((c) => c.group === g).map((c) => ({
                 value: c.tag, label: c.label, title: c.detail,
               })) }))
               .filter((g) => g.options.length)}
@@ -358,9 +364,9 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
       {err && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={err} />}
       {!res && !err && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          要原始采样（0x08）。{recommended
-            ? <>默认用推荐的「{recommended.label}」：3 轴（板子只有加速度）、跟设备同是 {hz}Hz 训的里面 F1 最高的，比出来才公平。</>
-            : <>还没有 3 轴、{hz}Hz 训的模型：去「模型训练」用 3 轴 + {hz}Hz 训一版再来比。6 轴模型陀螺仪按 0 喂，结果会偏。</>}
+          {board ? "要原始采样（0x08）。" : "WitMotion 自己不识别行为：这里只比服务端模型和端侧。"}{recommended
+            ? <>默认用推荐的「{recommended.label}」：{axes} 轴、跟设备同是 {hz}Hz 训的里面 F1 最高的{board ? "，比出来才公平" : ""}。</>
+            : <>还没有 {axes} 轴、{hz}Hz 训的模型：去「模型训练」用 {axes} 轴 + {hz}Hz 训一版。{axes === 3 ? "6 轴模型陀螺仪按 0 喂，结果会偏。" : ""}</>}
         </Typography.Text>
       )}
       {edgeErr && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={`端侧：${edgeErr}`} />}
@@ -369,7 +375,7 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
           {edge.enabled ? "端侧服务上没有模型：训练记录里点「导出到端侧」。" : "没配端侧服务（EDGE_SERVICE_URL），只比服务端和板子。"}
         </Typography.Text>
       )}
-      {edgeModels.length > 0 && !edgeMatch && cur?.jobId != null && (
+      {edgeModels.length > 0 && !edgeMatch && edgeTag && cur?.jobId != null && (
         <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
           这一版（{cur.label}）还没导出到端侧，端侧那行用的是别的模型，差异里混着模型本身的不同。
         </Typography.Text>
@@ -377,19 +383,23 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
       {view && (
         <>
           <Space size={24} wrap style={{ marginBottom: 8 }} align="start">
-            <Statistic title="服务端 vs 板子" value={pct(view.sAgree)} suffix={<span style={{ fontSize: 12 }}>{view.pairs.length} 条 0x07</span>} />
-            {edgeRes && <Statistic title="端侧(服务器) vs 板子" value={pct(view.eAgree)} />}
+            {board && <Statistic title="服务端 vs 板子" value={pct(view.sAgree)} suffix={<span style={{ fontSize: 12 }}>{view.pairs.length} 条 0x07</span>} />}
+            {board && edgeRes && <Statistic title="端侧(服务器) vs 板子" value={pct(view.eAgree)} />}
             {edgeRes && res && <Statistic title="服务端 vs 端侧(服务器)" value={pct(view.se)} suffix={<span style={{ fontSize: 12 }}>量化 / 移植差异</span>} />}
             <div style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
               服务端模型 {cur?.label ?? res?.model_path.split("/").slice(-2).join("/") ?? "-"}{res ? ` · ${res.window_s}s 窗 / ${res.stride_s}s 步` : ""}<br />
               {edgeRes && <>端侧 {edgeTag}<br /></>}
-              {fillInfo && <>送了 {fillInfo.n} 个样本（采样周期 {fillInfo.periodMs.toFixed(0)} ms），其中 {fillInfo.filled} 个是蓝牙丢的、按前后补上的<br /></>}
-              <Checkbox checked={align} onChange={(e) => setAlign(e.target.checked)} style={{ fontSize: 12 }}>
-                扣掉板子的上报延迟
-              </Checkbox>
-              <Tooltip title="板子报的「当前行为」是窗口采完 + 后处理确认之后才发的，天然比数据晚几秒。在 0~15 秒里找让两边最一致的延迟，把服务端那几行往后挪这么多再比。不勾就是原始时刻直接比">
-                <span>估计板子晚 <b>{(view.lag / 1000).toFixed(1)} 秒</b> ⓘ</span>
-              </Tooltip>
+              {fillInfo && (board
+                ? <>送了 {fillInfo.n} 个样本（采样周期 {fillInfo.periodMs.toFixed(0)} ms），其中 {fillInfo.filled} 个是蓝牙丢的、按前后补上的<br /></>
+                : <>送了 {fillInfo.n} 个样本（含角速度），时间用接收端的<br /></>)}
+              {board && <>
+                <Checkbox checked={align} onChange={(e) => setAlign(e.target.checked)} style={{ fontSize: 12 }}>
+                  扣掉板子的上报延迟
+                </Checkbox>
+                <Tooltip title="板子报的「当前行为」是窗口采完 + 后处理确认之后才发的，天然比数据晚几秒。在 0~15 秒里找让两边最一致的延迟，把服务端那几行往后挪这么多再比。不勾就是原始时刻直接比">
+                  <span>估计板子晚 <b>{(view.lag / 1000).toFixed(1)} 秒</b> ⓘ</span>
+                </Tooltip>
+              </>}
             </div>
           </Space>
           {edgeRes?.diagnose && (() => {
@@ -418,8 +428,8 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
                 ) : undefined} />
             );
           })()}
-          <Row name="板子 · 当前行为(0x07)" spans={view.boardSpans} t0={view.t0} t1={view.t1} />
-          {view.segSpans.length > 0 ? <Row name="板子 · 片段(0x09)" spans={view.segSpans} t0={view.t0} t1={view.t1} /> : (
+          {board && <Row name="板子 · 当前行为(0x07)" spans={view.boardSpans} t0={view.t0} t1={view.t1} />}
+          {!board ? null : view.segSpans.length > 0 ? <Row name="板子 · 片段(0x09)" spans={view.segSpans} t0={view.t0} t1={view.t1} /> : (
             <div style={{ display: "flex", gap: 8, marginBottom: 6, fontSize: 12, color: token.colorTextTertiary }}>
               <div style={{ width: 140, flexShrink: 0 }}>板子 · 片段(0x09)</div>
               <div>这段时间里还没有 0x09：板子一个片段<b>结束了</b>才发，正在进行的那段要等它结束（看下面「行为片段」表）</div>
@@ -434,7 +444,7 @@ export default function DeviceServerCompare({ getSamples, boardEvents, segs, hz,
             {Object.entries(COLORS).map(([k, c]) => <span key={k} style={{ fontSize: 12 }}><span style={{ display: "inline-block", width: 10, height: 10, background: c, borderRadius: 2, marginRight: 4 }} />{k}</span>)}
             <span style={{ fontSize: 12 }}><span style={{ display: "inline-block", width: 10, height: 10, background: "#dd8452", borderRadius: 2, marginRight: 4 }} />其它</span>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              甩动类算作活动 · 想比得公平选「后处理」：板子报的是后处理过的结果，逐窗口原始会更碎
+              {board ? "甩动类算作活动 · 想比得公平选「后处理」：板子报的是后处理过的结果，逐窗口原始会更碎" : "甩动类算作活动"}
             </Typography.Text>
           </Space>
           {view.pairs.some((p) => p.sOk === false || p.eOk === false) && (

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HICC_PetCollar 设备自检（跟平台「设备调试 → 一键自检」同一套算法、同一套判定）
+设备自检：自制项圈 HICC_PetCollar / WitMotion（跟平台「设备调试 → 一键自检」同一套算法、同一套判定）
 ==========================================================================
 
 三种用法：
@@ -9,6 +9,7 @@ HICC_PetCollar 设备自检（跟平台「设备调试 → 一键自检」同一
   1. 自己测（电脑蓝牙直连项圈，要 PB_RAW_STREAM=1 的调试固件）：
        python petcollar_selftest.py run --minutes 5 --static
        python petcollar_selftest.py run --minutes 10 --address EA:CB:30:12:30:25 --tag 固件v1.3_桌面
+       python petcollar_selftest.py run --device wit --minutes 5 --static     # WitMotion（时间用接收端的）
      结果在 selftest_<时间>/ 下：raw.csv、behavior.csv、result.json、report.md
 
   2. 复现别人的结果（拿平台下载的压缩包里的 raw.csv 重算一遍）：
@@ -149,21 +150,29 @@ def fin(x):
 # ── 分析 ──────────────────────────────────────────────────────────────────
 
 def analyze(raw, expect_hz=31.25, device="", kind="pc", started_at=None, static_claimed=True, behav_ts=None):
-    """raw: [(dev_ts_ms, host_ts_ms, ax, ay, az), ...]，host_ts_ms 是电脑收到时的 Unix 毫秒"""
+    """raw: [(dev_ts_ms, host_ts_ms, ax, ay, az[, gx, gy, gz]), ...]，host_ts_ms 是接收端收到时的 Unix 毫秒。
+    dev_ts_ms 为 None（设备不带时间戳，比如 WitMotion）的占一半以上：时间一律用接收端的"""
+    raw = [tuple(r) + (None,) * (8 - len(r)) for r in raw]
+    host_mode = bool(raw) and sum(1 for r in raw if r[0] is not None) < len(raw) * 0.5
+    src = [(r[1],) + r[1:] for r in raw] if host_mode else raw
     start = 0
-    for i in range(1, len(raw)):
-        a, b = raw[i - 1][0], raw[i][0]
+    for i in range(1, len(src)):
+        a, b = src[i - 1][0], src[i][0]
         if a is not None and b is not None and (b - a > 10_000 or b - a < -1000):
             start = i
-    s = [r for r in raw[start:] if r[0] is not None]
+    s = [r for r in src[start:] if r[0] is not None]
     n = len(s)
     dev = [r[0] for r in s]
     host = [r[1] for r in s]
     iv = [dev[i + 1] - dev[i] for i in range(n - 1)]
     pos = [x for x in iv if x > 0]
-    P = q(pos, 0.5) if pos else 1000 / expect_hz
     span_dev = (dev[-1] - dev[0]) / 1000 if n > 1 else 0
     span_host = (host[-1] - host[0]) / 1000 if n > 1 else 0
+    # 周期：设备时间戳间隔的中位数。按接收端时间时中位数没意义（成批到，一半是 0），用个数 / 时长
+    if host_mode:
+        P = 1000 * span_host / (n - 1) if span_host > 0 and n > 1 else 1000 / expect_hz
+    else:
+        P = q(pos, 0.5) if pos else 1000 / expect_hz
 
     # 采样率：每 10 秒（按板子时间）。hz = 到手几个；sensor_hz = 帧间隔中位数换算的传感器节奏
     blocks = []
@@ -177,7 +186,7 @@ def analyze(raw, expect_hz=31.25, device="", kind="pc", started_at=None, static_
         last = math.floor((dev[-1] - dev[0]) / 10_000)
         for k in range(last):
             m = q(ivs.get(k, []), 0.5)
-            blocks.append({"t": k * 10, "hz": cnt.get(k, 0) / 10, "sensorHz": 1000 / m if fin(m) and m > 0 else float("nan")})
+            blocks.append({"t": k * 10, "hz": cnt.get(k, 0) / 10, "sensorHz": 1000 / m if not host_mode and fin(m) and m > 0 else float("nan")})
 
     normal = [x for x in iv if 0 < x <= P * 1.5]
     alt = 0
@@ -191,7 +200,7 @@ def analyze(raw, expect_hz=31.25, device="", kind="pc", started_at=None, static_
         hist[k] = hist.get(k, 0) + 1
 
     gaps, sizes, lost, stall = [], {"1": 0, "2": 0, "3": 0, "4+": 0}, 0, 0
-    for i, x in enumerate(iv):
+    for i, x in enumerate([] if host_mode else iv):
         if x > P * 1.5:
             missing = max(1, jround(x / P) - 1)
             hg = host[i + 1] - host[i]
@@ -202,7 +211,7 @@ def analyze(raw, expect_hz=31.25, device="", kind="pc", started_at=None, static_
             gaps.append({"t": (dev[i] - dev[0]) / 1000, "ms": x, "missing": missing, "hostGapMs": hg})
 
     bucket = {}
-    for d, h in zip(dev, host):
+    for d, h in ([] if host_mode else zip(dev, host)):
         off = d - h
         k = math.floor((h - host[0]) / 2000)
         if k not in bucket or off > bucket[k]:
@@ -217,49 +226,56 @@ def analyze(raw, expect_hz=31.25, device="", kind="pc", started_at=None, static_
     ay = [r[3] for r in s]
     az = [r[4] for r in s]
     mag = [math.sqrt(r[2] ** 2 + r[3] ** 2 + r[4] ** 2) for r in s]
+    has_gyro = n > 0 and sum(1 for r in s if r[5] is not None) >= n * 0.5
     nb = []
     if n > 1:
         acc = {}
         for r in s:
             k = math.floor((r[0] - dev[0]) / 10_000)
-            a = acc.setdefault(k, [0.0, 0.0, 0.0, 0])
-            a[0] += r[2]
-            a[1] += r[3]
-            a[2] += r[4]
-            a[3] += 1
+            a = acc.setdefault(k, [0.0] * 7)
+            for j in range(3):
+                a[j] += r[2 + j]
+                a[3 + j] += r[5 + j] or 0
+            a[6] += 1
         for k in sorted(acc):
             a = acc[k]
-            if a[3] >= 10:
-                nb.append({"t": k * 10, "ax": a[0] / a[3], "ay": a[1] / a[3], "az": a[2] / a[3]})
+            if a[6] >= 10:
+                b = {"t": k * 10, "ax": a[0] / a[6], "ay": a[1] / a[6], "az": a[2] / a[6]}
+                if has_gyro:
+                    b.update({"gx": a[3] / a[6], "gy": a[4] / a[6], "gz": a[5] / a[6]})
+                nb.append(b)
 
-    def axis(name, v, key):
+    def axis(name, v, key, scale):
+        # scale：加速度 g → mg（×1000）；角速度本来就是 °/s（×1）
         d = [v[i + 1] - v[i] for i in range(len(v) - 1)]
-        bm = [b[key] for b in nb]
-        return {"name": name, "mean": mean(v), "std": std(v) * 1000, "short": std(d) / math.sqrt(2) * 1000,
-                "p2p": (max(v) - min(v)) * 1000 if v else float("nan"),
-                "blockRange": (max(bm) - min(bm)) * 1000 if bm else float("nan"),
-                "slopePerMin": lin_slope([b["t"] / 60 for b in nb], bm) * 1000 if len(bm) >= 3 else float("nan")}
+        bm = [b.get(key, 0) for b in nb]
+        return {"name": name, "mean": mean(v), "std": std(v) * scale, "short": std(d) / math.sqrt(2) * scale,
+                "p2p": (max(v) - min(v)) * scale if v else float("nan"),
+                "blockRange": (max(bm) - min(bm)) * scale if bm else float("nan"),
+                "slopePerMin": lin_slope([b["t"] / 60 for b in nb], bm) * scale if len(bm) >= 3 else float("nan")}
 
-    axes = [axis("X", ax, "ax"), axis("Y", ay, "ay"), axis("Z", az, "az")]
+    axes = [axis("X", ax, "ax", 1000), axis("Y", ay, "ay", 1000), axis("Z", az, "az", 1000)]
+    gyro = [axis(nm, [r[5 + j] or 0 for r in s], k, 1) for j, (nm, k) in enumerate((("X", "gx"), ("Y", "gy"), ("Z", "gz")))] if has_gyro else []
     is_static = all(a["short"] < 30 for a in axes) and std(mag) * 1000 < 50
     bt = [t for t in (behav_ts or []) if n > 1 and dev[0] <= t <= dev[-1]]
 
     rep = {
         "meta": {"device": device, "kind": kind, "startedAt": started_at or (host[0] if host else 0), "durationS": span_host,
-                 "expectHz": expect_hz, "staticClaimed": static_claimed, "n": n, "droppedHead": start},
+                 "expectHz": expect_hz, "staticClaimed": static_claimed, "n": n, "droppedHead": start,
+                 "timeBase": "host" if host_mode else "device"},
         "rate": {"periodMs": P, "sensorHz": 1000 / P, "byDevHz": (n - 1) / span_dev if span_dev > 0 else float("nan"),
                  "byHostHz": (n - 1) / span_host if span_host > 0 else float("nan"), "blocks": blocks},
         "iv": {"mean": mean(iv), "std": std(iv), "jitterStd": std(normal), "min": min(iv) if iv else float("nan"),
                "max": max(iv) if iv else float("nan"), "p1": q(iv, .01), "p5": q(iv, .05), "p50": q(iv, .5), "p95": q(iv, .95), "p99": q(iv, .99),
                "within10": sum(1 for x in normal if abs(x - P) <= P * 0.1) / len(normal) * 100 if normal else float("nan"),
-               "dup": sum(1 for x in iv if x <= 0), "alternating": alt, "hist": [{"ms": k, "n": hist[k]} for k in sorted(hist)]},
+               "dup": sum(1 for x in iv if x <= 0), "alternating": alt, "hist": [] if host_mode else [{"ms": k, "n": hist[k]} for k in sorted(hist)]},
         "gaps": {"n": len(gaps), "lost": lost, "lossPct": lost / (n + lost) * 100 if n + lost > 0 else 0,
                  "maxMs": max((g["ms"] for g in gaps), default=0), "perMin": len(gaps) / (span_dev / 60) if span_dev > 0 else 0,
                  "withHostStall": stall, "sizes": sizes, "list": gaps[:500]},
         "clock": {"offStartMs": cpts[0][1] if cpts else float("nan"), "offEndMs": cpts[-1][1] if cpts else float("nan"),
                   "ppm": slope * 1000 if slope is not None else None, "ppmErr": err * 1000 if err is not None else None,
                   "jitterMs": jit, "fitS": fit_s, "pts": [{"t": t, "off": o} for t, o in cpts]},
-        "noise": {"isStatic": is_static, "axes": axes, "magMean": mean(mag), "magStd": std(mag) * 1000, "blocks": nb},
+        "noise": {"isStatic": is_static, "axes": axes, "gyro": gyro, "magMean": mean(mag), "magStd": std(mag) * 1000, "blocks": nb},
         "behav": {"n": len(bt), "perMin": len(bt) / (span_dev / 60) if span_dev > 0 else 0},
         "items": [],
     }
@@ -279,7 +295,21 @@ def judge(r):
 
     E = r["meta"]["expectHz"]
     rate, ivr, gp, c, nz = r["rate"], r["iv"], r["gaps"], r["clock"], r["noise"]
+    if r["meta"]["n"] < 3:
+        return [{"group": "数据", "name": "样本数", "value": f"{r['meta']['n']} 个", "status": "fail", "note": "没收到数据：设备连上了吗、在发采样吗"}]
     dev = (rate["sensorHz"] / E - 1) * 100
+    if r["meta"]["timeBase"] == "host":
+        add("采样率", "采样率（电脑收到的个数 / 时长）", f"{f(rate['byHostHz'])} Hz（标称 {E:g} Hz，{'+' if dev >= 0 else ''}{f(dev, 1)}%）",
+            "ok" if abs(dev) <= 2 else "warn" if abs(dev) <= 5 else "fail", "按接收端收到的个数算：丢帧也算在里面，偏低可能是丢了")
+        got = [b["hz"] for b in rate["blocks"]]
+        if len(got) >= 3:
+            rng = max(got) - min(got)
+            add("采样率", "采样率稳定性（每 10 秒收到几个）", f"{f(min(got), 1)} ~ {f(max(got), 1)} 个/秒，波动 {f(rng, 1)}",
+                "ok" if rng <= E * 0.04 else "warn" if rng <= E * 0.1 else "fail", "按电脑收到算：蓝牙卡顿那几秒也会少")
+        add("帧间隔 / 丢帧 / 时钟", "测不了", "设备没带时间戳", "info",
+            "设备不带时间戳（WitMotion 本身的时间不准，一律用接收端时间）。蓝牙成批送，收到的间隔不代表采样间隔，所以帧间隔、丢帧、设备时钟这几项没法测")
+        noise_items(r, add)
+        return it
     add("采样率", "传感器采样率（按帧间隔中位数）", f"{f(rate['sensorHz'])} Hz（周期 {f(rate['periodMs'], 1)} ms，标称 {E:g} Hz，{'+' if dev >= 0 else ''}{f(dev, 1)}%）",
         "ok" if abs(dev) <= 2 else "warn" if abs(dev) <= 5 else "fail",
         "跟标称对不上。时间戳可信时（见下面「板子时钟」），就是传感器实际的输出速率：查 ODR 配置 / 传感器内部振荡器" if abs(dev) > 2 else None)
@@ -320,8 +350,16 @@ def judge(r):
         "warn" if fin(c["offEndMs"]) and abs(c["offEndMs"]) > 5000 else "info", "差好几秒：多半没校时" if fin(c["offEndMs"]) and abs(c["offEndMs"]) > 5000 else None)
     if c["jitterMs"] is not None:
         add("板子时钟", "时间戳抖动（扣掉趋势后）", f"{f(c['jitterMs'], 1)} ms", "info", "含蓝牙延迟的抖动，只当参考")
+    noise_items(r, add)
+    if r["behav"]["n"]:
+        add("行为上报", "0x07 当前行为", f"{r['behav']['n']} 条，每分钟 {f(r['behav']['perMin'], 1)} 条", "info")
+    return it
+
+
+def noise_items(r, add):
+    nz = r["noise"]
     if not nz["isStatic"]:
-        add("三轴", "底噪 / 稳定性", "测试期间项圈动了", "info", "底噪要静置平放测：短时噪声超过 30 mg，这几项不下结论")
+        add("三轴", "底噪 / 稳定性", "测试期间设备动了", "info", "底噪要静置平放测：短时噪声超过 30 mg，这几项不下结论")
     else:
         for a in nz["axes"]:
             add("三轴", f"{a['name']} 轴底噪（短时）", f"{f(a['short'], 2)} mg rms（总 std {f(a['std'], 2)} mg，峰峰 {f(a['p2p'], 1)} mg）",
@@ -334,9 +372,16 @@ def judge(r):
         md = (nz["magMean"] - 1) * 1000
         add("三轴", "合加速度（静置应为 1 g）", f"{f(nz['magMean'], 4)} g（{'+' if md >= 0 else ''}{f(md, 1)} mg）",
             "ok" if abs(md) <= 30 else "warn" if abs(md) <= 80 else "fail", "偏离 1 g：量程 / 比例因子 / 零偏没校准" if abs(md) > 30 else None)
-    if r["behav"]["n"]:
-        add("行为上报", "0x07 当前行为", f"{r['behav']['n']} 条，每分钟 {f(r['behav']['perMin'], 1)} 条", "info")
-    return it
+    if nz["isStatic"] and nz.get("gyro"):
+        for a in nz["gyro"]:
+            add("角速度", f"{a['name']} 轴零偏 / 底噪", f"零偏 {f(a['mean'], 3)} °/s · 短时噪声 {f(a['short'], 3)} °/s rms · 峰峰 {f(a['p2p'], 2)} °/s",
+                "ok" if abs(a["mean"]) <= 0.5 and a["short"] <= 0.2 else "warn" if abs(a["mean"]) <= 2 and a["short"] <= 0.5 else "fail",
+                "静止时角速度不为 0：陀螺零偏，要校准" if abs(a["mean"]) > 0.5 else None)
+        for a in nz["gyro"]:
+            if not fin(a["blockRange"]):
+                continue
+            add("角速度", f"{a['name']} 轴稳定性（每 10 秒均值）", f"漂了 {f(a['blockRange'], 3)} °/s · {f(a['slopePerMin'], 3)} °/s/分钟",
+                "ok" if a["blockRange"] <= 0.1 else "warn" if a["blockRange"] <= 0.5 else "fail")
 
 
 # ── 输出 ──────────────────────────────────────────────────────────────────
@@ -424,11 +469,13 @@ def read_raw(path):
     with open(path, encoding="utf-8-sig") as fp:
         for row in csv.DictReader(fp):
             d = row.get("dev_ts_ms") or row.get("t_dev_ms")
-            if not d:
+            if not d and not row.get("host_ts_ms"):
                 continue
-            rows.append((int(float(d)), float(row.get("host_ts_ms") or row.get("t_host_ms") or 0),
+            g = [row.get(k) for k in ("gyro_x_dps", "gyro_y_dps", "gyro_z_dps")]
+            rows.append((int(float(d)) if d else None, float(row.get("host_ts_ms") or row.get("t_host_ms") or 0),
                          float(row.get("acc_x_g") or row.get("ax_g")), float(row.get("acc_y_g") or row.get("ay_g")),
-                         float(row.get("acc_z_g") or row.get("az_g"))))
+                         float(row.get("acc_z_g") or row.get("az_g")),
+                         *([float(x) for x in g] if all(g) else [None, None, None])))
     return rows
 
 
@@ -504,25 +551,105 @@ async def collect(address, seconds):
     return dev.address, rows, behav
 
 
+WIT_NOTIFY = ["0000ffe4-0000-1000-8000-00805f9a34fb", "0000ffe1-0000-1000-8000-00805f9a34fb", "0000ffe5-0000-1000-8000-00805f9a34fb"]
+
+
+def wit_feed(buf: bytearray, data: bytes):
+    """WitMotion：按包头切 0x55 0x61（28 字节）/ 0x55 0x60（14 字节），不够一包的留到下次（跟平台 WitStream 一样）。
+    返回 [(ax, ay, az, gx, gy, gz)]，加速度 g、角速度 °/s"""
+    buf.extend(data)
+    out, i = [], 0
+    while i + 1 < len(buf):
+        if buf[i] != 0x55:
+            i += 1
+            continue
+        ln = 28 if buf[i + 1] == 0x61 else 14 if buf[i + 1] == 0x60 else 0
+        if not ln:
+            i += 1
+            continue
+        if i + ln > len(buf):
+            break
+        pk = bytes(buf[i:i + ln])
+        v = [int.from_bytes(pk[o:o + 2], "little", signed=True) / 32768 for o in range(2, 14, 2)]
+        out.append((v[0] * 16, v[1] * 16, v[2] * 16, v[3] * 2000, v[4] * 2000, v[5] * 2000))
+        i += ln
+    del buf[:i]
+    return out
+
+
+async def collect_wit(address, seconds):
+    """WitMotion：设备时间不准，**不用**，时间一律用接收端的（平台也是这样）"""
+    from bleak import BleakClient, BleakScanner
+
+    dev = None
+    for i in range(3):
+        print(f"扫描 {address or 'WT*'}（{i + 1}/3）…")
+        found = await BleakScanner.discover(timeout=8.0, return_adv=True)
+        cand = [(d, adv) for d, adv in found.values()
+                if (address and d.address.upper() == address.upper()) or (not address and (adv.local_name or d.name or "").startswith("WT"))]
+        if cand:
+            dev = max(cand, key=lambda t: t[1].rssi)[0]
+            break
+    if dev is None:
+        raise SystemExit("没找到 WitMotion：确认上电；信号弱时用 --address 指定 MAC")
+    rows, buf = [], bytearray()
+    client = BleakClient(dev, timeout=30.0)
+
+    def on_notify(_c, data):
+        now = time.time() * 1000
+        for ax, ay, az, gx, gy, gz in wit_feed(buf, bytes(data)):
+            rows.append((None, now, ax, ay, az, gx, gy, gz))
+
+    await client.connect()
+    ok = 0
+    for u in WIT_NOTIFY:
+        try:
+            await client.start_notify(u, on_notify)
+            ok += 1
+        except Exception:  # noqa: BLE001
+            pass
+    if not ok:
+        raise SystemExit("WitMotion 上没找到能订阅的特征（ffe4 / ffe1 / ffe5）")
+    print(f"已连接 {dev.address}（{dev.name}），采 {seconds / 60:.1f} 分钟（Ctrl+C 提前结束）")
+    t0 = time.monotonic()
+    try:
+        while client.is_connected and time.monotonic() - t0 < seconds:
+            await asyncio.sleep(1)
+            el = time.monotonic() - t0
+            print(f"\r  {int(el // 60)}:{int(el % 60):02d} / {int(seconds // 60)}:{int(seconds % 60):02d}  已收 {len(rows)} 个", end="", flush=True)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        print()
+        try:
+            await client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+    return f"{dev.name or 'WitMotion'} {dev.address}", rows, []
+
+
 def cmd_run(a):
     started = time.time() * 1000
+    wit = a.device == "wit"
     try:
-        addr, rows, behav = asyncio.run(collect(a.address, a.minutes * 60))
+        addr, rows, behav = asyncio.run(collect_wit(a.address, a.minutes * 60) if wit else collect(a.address, a.minutes * 60))
     except KeyboardInterrupt:
         return 1
     if not rows:
-        print("一个 0x08 样本都没收到：正式固件不发原始采样，要 PB_RAW_STREAM=1 的调试固件")
+        print("一个样本都没收到" + ("" if wit else "：正式固件不发原始采样，要 PB_RAW_STREAM=1 的调试固件"))
         return 2
     out = a.out or f"selftest_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "raw.csv"), "w", newline="", encoding="utf-8") as fp:
         w = csv.writer(fp)
-        w.writerow(["dev_ts_ms", "host_ts_ms", "acc_x_g", "acc_y_g", "acc_z_g"])
+        w.writerow(["dev_ts_ms", "host_ts_ms", "acc_x_g", "acc_y_g", "acc_z_g"] + (["gyro_x_dps", "gyro_y_dps", "gyro_z_dps"] if wit else []))
         for r in rows:
-            w.writerow([r[0] if r[0] is not None else "", f"{r[1]:.3f}", f"{r[2]:.6f}", f"{r[3]:.6f}", f"{r[4]:.6f}"])
+            w.writerow([r[0] if r[0] is not None else "", f"{r[1]:.3f}", f"{r[2]:.6f}", f"{r[3]:.6f}", f"{r[4]:.6f}"]
+                       + ([f"{r[5]:.4f}", f"{r[6]:.4f}", f"{r[7]:.4f}"] if wit else []))
     with open(os.path.join(out, "behavior.csv"), "w", encoding="utf-8") as fp:
         fp.write("\n".join(["dev_ts_ms", *map(str, behav)]))
-    r = analyze(rows, a.expect_hz, f"{DEVICE_NAME} {addr}", "pc", started, a.static, behav)
+    hz = a.expect_hz or (50.0 if wit else 31.25)
+    r = analyze(rows, hz, addr if wit else f"{DEVICE_NAME} {addr}", "wit" if wit else "pc", started, a.static, behav)
     r["meta"]["tag"] = a.tag
     r["meta"]["source"] = "petcollar_selftest.py run"
     write_outputs(r, out)
@@ -544,7 +671,7 @@ def cmd_analyze(a):
                 meta = (json.load(fp) or {}).get("meta") or {}
         except Exception:  # noqa: BLE001
             meta = {}
-    hz = a.expect_hz or meta.get("expectHz") or 31.25
+    hz = a.expect_hz or meta.get("expectHz") or (50.0 if meta.get("kind") == "wit" else 31.25)
     static = a.static if a.static is not None else meta.get("staticClaimed", True)
     behav = []
     bpath = os.path.join(os.path.dirname(os.path.abspath(a.csv)), "behavior.csv")
@@ -586,10 +713,11 @@ def cmd_compare(a):
 def main():
     ap = argparse.ArgumentParser(description="HICC_PetCollar 设备自检：采样率 / 帧间隔 / 丢帧 / 板子时钟 / 三轴底噪")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("run", help="蓝牙直连项圈采一段，出报告")
+    p = sub.add_parser("run", help="蓝牙直连设备采一段，出报告")
+    p.add_argument("--device", choices=["pc", "wit"], default="pc", help="pc = 自制项圈（默认），wit = WitMotion")
     p.add_argument("--minutes", type=float, default=5)
     p.add_argument("--address", help="按 MAC 连（信号弱时比按名字稳）")
-    p.add_argument("--expect-hz", type=float, default=31.25)
+    p.add_argument("--expect-hz", type=float, default=None, help="标称采样率，默认项圈 31.25、WitMotion 50")
     p.add_argument("--static", action="store_true", help="项圈静置平放（测底噪必须）")
     p.add_argument("--tag", help="给这次测试起个名字（compare 时当列名），比如 固件v1.3_桌面")
     p.add_argument("-o", "--out", help="输出目录，默认 selftest_<时间>")
