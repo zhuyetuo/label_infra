@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
+  Segmented,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -15,7 +16,8 @@ import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
-import { sampleDisplayName } from "@/utils/sampleName";
+import { parseSampleTime, sampleDisplayName } from "@/utils/sampleName";
+import { imuOf } from "@/utils/imuOf";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
 import { TaskStatusTag } from "@/utils/taskStatus";
@@ -48,6 +50,33 @@ const SOURCE_LABEL: Record<CSource, string> = { ai: "来源：标注平台 AI �
 
 // 兽医 / 实习生（非管理员）只看「皮肤照片」评 S0 / S1 / S2：同一个页面，只是只显示这一块
 // （C / S、问答这些接口只给管理员）。不再单独一个「皮肤评级」菜单
+// 夜间：19:00 ~ 次日 06:59（影棚 / 狗场关灯那段，画面黑，夜视也只能看个大概）。改这里就行
+const NIGHT_FROM_H = 19, NIGHT_TO_H = 7;
+const isNightHour = (h: number) => h >= NIGHT_FROM_H || h < NIGHT_TO_H;
+const startHourOf = (code: string) => { const m = /_(\d{8})_(\d{2})\d{4}/.exec(code); return m ? Number(m[2]) : null; };
+
+/**
+ * 这个任务（一小时）里，它那个 IMU 戴在狗身上几分钟。一只狗两个项圈轮换（另一个在充电座上也在记录），
+ * 跟踪表那一行的 devices 里有每个项圈戴着的时段（按分钟比两个项圈的动静判出来的）。
+ * 没有 devices（这天只有一个项圈）返回 null：不知道，不显示
+ */
+function wornMinutes(code: string, durationSec: number | null | undefined,
+  devices: { imu: string; spans: [string, string][] }[] | null | undefined): number | null {
+  if (!devices?.length) return null;
+  const t = parseSampleTime(code, durationSec);
+  if (!t || !durationSec) return null;
+  const imu = imuOf(code).toLowerCase();
+  const dev = devices.find((d) => d.imu.toLowerCase() === imu);
+  if (!dev) return 0;
+  const a = new Date(`${t.date}T${t.start}`).getTime(), b = a + durationSec * 1000;
+  let ms = 0;
+  for (const [s0, s1] of dev.spans) {
+    const x = new Date(s0.replace(" ", "T")).getTime(), y = new Date(s1.replace(" ", "T")).getTime();
+    ms += Math.max(0, Math.min(b, y) - Math.max(a, x));
+  }
+  return Math.round(ms / 60000);
+}
+
 export default function Skin() {
   const role = useAuthStore((s) => s.userInfo?.role);
   if (role !== "admin" && role !== "super_admin") return <SkinPhotosOnly />;
@@ -764,6 +793,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const reviewDone = (t: TrackingRow["tasks_detail"][number]) =>
     (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) && t.cand_pending === 0;
   const [onlyTodo, setOnlyTodo] = useState(false);
+  // 挑一段：只看戴在狗身上的那几小时（另一个项圈在充电座上的那几小时不用看）、只看白天 / 夜间。记在本机
+  const [onlyWorn, setOnlyWornState] = useState(() => { try { return localStorage.getItem("smart-label:skin-pick-worn") !== "0"; } catch { return true; } });
+  const setOnlyWorn = (v: boolean) => { setOnlyWornState(v); try { localStorage.setItem("smart-label:skin-pick-worn", v ? "1" : "0"); } catch { /* ignore */ } };
+  const [dayPart, setDayPartState] = useState<"all" | "day" | "night">(() => {
+    try { return (localStorage.getItem("smart-label:skin-pick-daypart") as "all" | "day" | "night") || "all"; } catch { return "all"; }
+  });
+  const setDayPart = (v: "all" | "day" | "night") => { setDayPartState(v); try { localStorage.setItem("smart-label:skin-pick-daypart", v); } catch { /* ignore */ } };
   // 列宽也让人自己拖：写死的宽度总有几列挤成两行、另几列空着半格，
   // 而且不同的人关心的列不一样，没有一套宽度能同时合适
   const trackWidth = useResizableColumns("skin-tracking-widths");
@@ -1378,6 +1414,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             <Checkbox checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)}>
               只看还要审的
             </Checkbox>
+            {!!checkFor?.devices?.length && (
+              <Tooltip title="一只狗两个项圈轮换，另一个在充电座上也在记录。那几小时的「抓挠」不是这只狗的，不用看">
+                <Checkbox checked={onlyWorn} onChange={(e) => setOnlyWorn(e.target.checked)}>只看戴在狗身上的</Checkbox>
+              </Tooltip>
+            )}
+            <Segmented size="small" value={dayPart} onChange={(v) => setDayPart(v as "all" | "day" | "night")}
+              options={[{ value: "all", label: "全天" }, { value: "day", label: "☀ 白天" }, { value: "night", label: "🌙 夜间" }]} />
             {pickWidth.hasCustom && (
               <Button size="small" type="link" onClick={pickWidth.reset}>
                 恢复列宽
@@ -1388,7 +1431,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         <Table<TrackingRow["tasks_detail"][number]>
           size="small"
           rowKey="task_id"
-          dataSource={(checkFor?.tasks_detail ?? []).filter((t) => !onlyTodo || !reviewDone(t))}
+          dataSource={(checkFor?.tasks_detail ?? []).filter((t) => {
+            if (onlyTodo && reviewDone(t)) return false;
+            if (onlyWorn && wornMinutes(t.sample_code, t.video_duration_sec, checkFor?.devices) === 0) return false;
+            const h = startHourOf(t.sample_code);
+            if (dayPart !== "all" && h != null && isNightHour(h) !== (dayPart === "night")) return false;
+            return true;
+          })}
           pagination={false}
           // 拖出来的列宽要生效，表格得是固定布局——scroll.x 一给 antd 就切过去了
           scroll={{ y: "60vh", x: "max-content" }}
@@ -1412,9 +1461,37 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               // 「09:00:14 ~ 10:00:00」不能折成三行，宽度给够并且不许换行
               render: (_: unknown, t) => (
                 <span style={{ whiteSpace: "nowrap" }}>
+                  {(() => { const h = startHourOf(t.sample_code); return h == null ? null : (
+                    <Tooltip title={isNightHour(h) ? `夜间（${NIGHT_FROM_H}:00 ~ 次日 ${NIGHT_TO_H}:00）：画面黑，看不清时用夜视` : "白天"}>
+                      <span style={{ marginRight: 4 }}>{isNightHour(h) ? "🌙" : "☀"}</span>
+                    </Tooltip>); })()}
                   {sampleDisplayName(t.sample_code, t.video_duration_sec, null)}
                 </span>
               ),
+            },
+            {
+              title: "佩戴",
+              key: "worn",
+              width: 120,
+              sorter: (a, b) => (wornMinutes(a.sample_code, a.video_duration_sec, checkFor?.devices) ?? -1)
+                - (wornMinutes(b.sample_code, b.video_duration_sec, checkFor?.devices) ?? -1),
+              render: (_: unknown, t) => {
+                const imu = imuOf(t.sample_code).toUpperCase();
+                const w = wornMinutes(t.sample_code, t.video_duration_sec, checkFor?.devices);
+                const full = Math.round((t.video_duration_sec ?? 3600) / 60);
+                return (
+                  <Space size={4}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>{imu}</Typography.Text>
+                    {w == null ? null : w === 0 ? (
+                      <Tooltip title="这一小时这个项圈不在狗身上（在充电座上 / 没戴）：这里的抓挠不是这只狗的"><Tag style={{ marginRight: 0 }}>充电座上</Tag></Tooltip>
+                    ) : w >= full - 5 ? (
+                      <Tag color="green" style={{ marginRight: 0 }}>戴着</Tag>
+                    ) : (
+                      <Tooltip title={`这一小时里这个项圈戴着 ${w} 分钟，中间换了项圈`}><Tag color="gold" style={{ marginRight: 0 }}>戴 {w} 分</Tag></Tooltip>
+                    )}
+                  </Space>
+                );
+              },
             },
             {
               // 放在最前面：进来第一眼要看的就是"哪些还没弄完"
