@@ -66,8 +66,10 @@ export interface PoolItem {
   end_time_ms: number;
   /** manual = 手动加入；approved = 片段审核通过进来的 */
   via: "manual" | "approved";
+  /** 进池时间（手动加入的时间 / 审核通过的时间），"YYYY-MM-DD HH:mm" */
+  entered_at?: string | null;
 }
-export type PoolSort = "long" | "short" | "new" | "time";
+export type PoolSort = "long" | "short" | "new" | "time" | "recent";
 
 export const poolItems = (f: PoolFilter, sort: PoolSort, page: number, pageSize: number) =>
   request.get<never, { total: number; items: PoolItem[] }>("/data-pool/items", {

@@ -126,3 +126,24 @@ def test_按任务整份加入_列表(db, run):
 
 def test_采样率按名义档位归_51到66Hz都算50Hz():
     assert [data_pool.nominal_hz(h) for h in (0, 15.6, 16, 25, 31.25, 51, 57, 66)] == [0, 16, 16, 25, 31, 50, 50, 50]
+
+
+def test_刚进池的先(db, run):
+    """「刚进池的先」：审核通过的按通过时间、手动加入的按加入时间，最近的排最前；列表带进池时间"""
+    from datetime import datetime, timedelta
+
+    w = _world(db, run)
+    run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    run(seg_api.decide(w.items[1].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    # 把第一条的通过时间拨早一天：它是「老」进池的
+    w.items[0].seg_reviewed_at = datetime.now() - timedelta(days=1)
+    run(db.commit())
+    # 手动整批加入（人加的那几条里还没进池的：items[2] 和「活动」那条）
+    run(pool_api.post_add(pool_api.PoolAddIn(project_ids=[w.p.id], source="reviewed"), db, w.rev))
+    r = run(data_pool.list_items(db, data_pool.PoolFilter(), sort="recent"))
+    ids = [x["id"] for x in r["items"]]
+    assert ids[-1] == w.items[0].id                       # 一天前通过的排最后
+    assert w.items[2].id in ids[:3] and w.items[1].id in ids[:3]
+    assert all(x["entered_at"] for x in r["items"])
+    manual = next(x for x in r["items"] if x["id"] == w.items[2].id)
+    assert manual["via"] == "manual"

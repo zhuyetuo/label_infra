@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,18 @@ def in_pool_cond():
     it = AnnotationLabelItem
     ps, ss = func.coalesce(it.pool_state, ""), func.coalesce(it.seg_status, "")
     return or_(ps == "in", and_(ss == "approved", ps != "out"))
+
+
+def pool_entered_at():
+    """进池时间（SQL）：手动加入的取 pool_at，审核通过的取 seg_reviewed_at；都没有退到最后改动时间"""
+    it = AnnotationLabelItem
+    return case((it.pool_state == "in", func.coalesce(it.pool_at, it.touched_at)),
+                else_=func.coalesce(it.seg_reviewed_at, it.touched_at))
+
+
+def _entered(x) -> str | None:
+    t = (x.pool_at or x.touched_at) if x.pool_state == "in" else (x.seg_reviewed_at or x.touched_at)
+    return t.isoformat(sep=" ", timespec="minutes") if t else None
 
 
 @dataclass
@@ -199,8 +211,10 @@ async def add(db: AsyncSession, source: str, f: PoolFilter) -> int:
         q = q.where(or_(it.ai_confirmed.is_(True), it.is_modified.is_(True), it.source_type == LabelItemSource.human_added))
     # 逐条改 ORM 对象，不用批量 UPDATE：批量的不更新会话里已经载入的对象，紧接着的统计会读到旧值
     items = [row[0] for row in (await db.execute(q)).all()]
+    now = datetime.now()
     for x in items:
         x.pool_state = "in"
+        x.pool_at = now
     if items:
         await db.commit()
     return len(items)
@@ -235,7 +249,8 @@ async def remove(db: AsyncSession, f: PoolFilter, item_ids: list[int] | None = N
 
 
 async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: int = 1, page_size: int = 50) -> dict:
-    """池里一条一条的片段。sort：long = 最长的先 / short / new = 最近日期先 / time = 按任务、时间"""
+    """池里一条一条的片段。sort：long = 最长的先 / short / new = 最近日期先 / time = 按任务、时间 /
+    recent = 刚进池的先（手动加入的按加入时间，审核通过的按通过时间；都没有的老数据按最后改动时间，排最后）"""
     it = AnnotationLabelItem
     q = (await _query(db, f)).where(in_pool_cond())
     total = (await db.execute(select(func.count()).select_from(q.with_only_columns(it.id).subquery()))).scalar_one()
@@ -243,6 +258,7 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         "long": (_DUR.desc(), it.id),
         "short": (_DUR.asc(), it.id),
         "new": (Sample.session_date.desc(), Task.id.desc(), it.start_time_ms),
+        "recent": (pool_entered_at().is_(None), pool_entered_at().desc(), it.id.desc()),
     }.get(sort, (Task.id, it.start_time_ms))
     page_size = max(1, min(page_size, 500))
     rows = (await db.execute(q.order_by(*order).offset((max(1, page) - 1) * page_size).limit(page_size))).all()
@@ -266,4 +282,6 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         "end_time_ms": x.end_time_ms,
         # manual = 手动加入的；approved = 片段审核通过进来的
         "via": "manual" if x.pool_state == "in" else "approved",
+        # 什么时候进的池（手动加入的时间 / 审核通过的时间）
+        "entered_at": _entered(x),
     } for x, t, smp in rows]}

@@ -106,7 +106,11 @@ export default function DataPoolPanel({
     queryFn: () => poolSummary(noLabel),
   });
 
-  const [sort, setSort] = useState<PoolSort>("long");
+  // 选过的排序记住（比如一直看「刚进池的先」，回来不用再选）
+  const [sort, setSortState] = useState<PoolSort>(() => {
+    try { return (localStorage.getItem("smart-label:pool-sort") as PoolSort) || "long"; } catch { return "long"; }
+  });
+  const setSort = (v: PoolSort) => { setSortState(v); try { localStorage.setItem("smart-label:pool-sort", v); } catch { /* ignore */ } };
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   useEffect(() => setPage(1), [filters, sort]);
@@ -311,8 +315,10 @@ export default function DataPoolPanel({
         <Select<PoolSort>
           value={sort}
           onChange={setSort}
-          style={{ width: 140 }}
+          style={{ width: 150 }}
           options={[
+            // 刚审核通过 / 刚加进来的排最前：刚标完想回头核对一眼用
+            { value: "recent", label: "刚进池的先" },
             { value: "long", label: "最长的先" },
             { value: "short", label: "最短的先" },
             { value: "new", label: "日期最近的先" },
@@ -387,6 +393,12 @@ export default function DataPoolPanel({
             dataIndex: "via",
             width: 80,
             render: (v: string) => (v === "manual" ? <Tag color="blue">手动</Tag> : <Tag color="green">审核</Tag>),
+          },
+          {
+            title: "进池时间",
+            dataIndex: "entered_at",
+            width: 130,
+            render: (v: string | null | undefined) => v ? v.slice(5) : "-",
           },
           {
             title: "操作",
