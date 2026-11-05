@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Dropdown, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Slider, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Dropdown, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Segmented, Select, Slider, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -93,11 +93,19 @@ type TrainOpts = {
   edgeFilters?: string;
   skipSyn?: boolean;
   balance?: string;
+  /** 窗口 / 步长（秒），null = 按采样率自动；标签方式；模型超参 */
+  windowS?: number | null;
+  strideS?: number | null;
+  labelMode?: "majority" | "center";
+  modelParams?: ModelParams;
   extraDs?: string[];
   extraHz?: Record<string, number>;
   remapEdits?: Record<string, string>;
 };
 const TRAIN_OPTS_KEY = "train-submit-opts";
+type ModelParams = { n_estimators?: number | null; max_depth?: number | null; min_samples_leaf?: number | null; max_features?: string | null };
+/** 不填时算法侧按采样率挑的默认窗口 / 步长（跟 label_service/jobs.window_args 一致：整数点数，非整数时取 2 的幂） */
+const autoWin = (hz: number, sec: number) => (Number.isInteger(sec * hz) ? sec : 2 ** Math.round(Math.log2(sec * hz)) / hz);
 
 /** 归并习惯：某个类别上次训练时算作了什么（舔-大腿内侧 → 舔）。跨数据集记——
  *  新导的数据集里同名的类别直接按上次的来，不用每份都从头选一遍。"" = 上次选了不参与 */
@@ -266,6 +274,11 @@ export default function Training() {
   const [skipSyn, setSkipSyn] = useState(false);
   // 类别均衡：none / min / cap:N。默认不动——砍数据会丢多样性，先看训练集统计和回放再决定
   const [balance, setBalance] = useState<string>("none");
+  // 窗口 / 步长（秒，null = 按采样率自动）、窗口怎么打标签、模型超参
+  const [windowS, setWindowS] = useState<number | null>(null);
+  const [strideS, setStrideS] = useState<number | null>(null);
+  const [labelMode, setLabelMode] = useState<"majority" | "center">("majority");
+  const [modelParams, setModelParams] = useState<ModelParams>({});
   const [reviewFor, setReviewFor] = useState<ModelVersion | null>(null);
   const [tag, setTag] = useState("");
   // 默认就是最高质量那一档：片段审核里一条条点了「通过」的。训练集的质量决定模型的上限，
@@ -625,6 +638,10 @@ export default function Training() {
       setShortLabels(base.shortLabels ?? null);
       if (typeof base.skipSyn === "boolean") setSkipSyn(base.skipSyn);
       setBalance(base.balance || "none");
+      setWindowS(base.windowS ?? null);
+      setStrideS(base.strideS ?? null);
+      setLabelMode(base.labelMode ?? "majority");
+      setModelParams(base.modelParams ?? {});
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
       setEdgeTrees(base.edgeTrees ?? null);
       setEdgeDepth(base.edgeDepth ?? null);
@@ -674,6 +691,10 @@ export default function Training() {
           edge_filters: edgeSize && modelType === "cnn" ? parseFilters(edgeFilters) : null,
           skip_syn: skipSyn,
           balance: balance === "none" ? null : balance,
+          window_s: windowS,
+          stride_s: strideS,
+          label_mode: labelMode === "center" ? "center" : null,
+          model_params: modelType !== "cnn" && Object.values(modelParams).some((v) => v != null && v !== "") ? modelParams : null,
           clean: true,
         },
         model_type: modelType,
@@ -683,6 +704,7 @@ export default function Training() {
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
         modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
+        windowS, strideS, labelMode, modelParams,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -734,6 +756,10 @@ export default function Training() {
     setEdgeFilters(Array.isArray(sp.edge_filters) ? (sp.edge_filters as number[]).join(",") : "");
     setSkipSyn(!!sp.skip_syn);
     setBalance(typeof sp.balance === "string" && sp.balance ? sp.balance : "none");
+    setWindowS(num(sp.window_s));
+    setStrideS(num(sp.stride_s));
+    setLabelMode(sp.label_mode === "center" ? "center" : "majority");
+    setModelParams((sp.model_params as ModelParams | undefined) ?? {});
     const alive = new Set((datasets ?? []).map((x) => x.name));
     const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null }[] | undefined) ?? [])
       .filter((e) => alive.has(e.date) && e.date !== ds.name);
@@ -1830,8 +1856,12 @@ export default function Training() {
         onOk={doTrain}
         okText="开始训练"
         confirmLoading={submitting}
+        // 宽一点、分两栏：左边参数，右边一起训练 + 类别归并，一眼看完不用上下翻
+        width={1240}
+        style={{ top: 24 }}
       >
         {trainFor && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.15fr)", gap: 24, alignItems: "start" }}>
           <Space direction="vertical" style={{ width: "100%" }}>
             <Typography.Text type="secondary">
               {trainFor.n_tasks} 个任务 / {trainFor.n_segments} 段 / {trainFor.total_hours} 小时
@@ -1991,6 +2021,55 @@ export default function Training() {
               )}
             </Space>
 
+            {/* ── 数据处理 / 模型参数 ─────────────────────────────── */}
+            <Divider style={{ margin: "4px 0" }} orientation="left" plain>数据处理 / 模型参数（不填用默认）</Divider>
+            <Space wrap size={[12, 6]}>
+              <Tooltip title={`一个窗口多长。短促动作（抓挠一两秒）窗口太长会被别的动作冲淡；状态类（睡觉 / 未佩戴）窗口长一点更稳。不填按采样率自动：${autoWin(hz, 2)} 秒（${Math.round(autoWin(hz, 2) * hz)} 点）`}>
+                <span style={{ borderBottom: "1px dashed #666" }}>时间窗口</span>
+              </Tooltip>
+              <InputNumber size="small" min={0.5} max={20} step={0.256} value={windowS} onChange={(v) => setWindowS(v ?? null)}
+                placeholder={`自动 ${autoWin(hz, 2)}`} addonAfter="秒" style={{ width: 150 }} />
+              <Tooltip title={`窗口每次往前挪多少。越小窗口越多（训练慢、相邻窗口很像），一般取窗口的一半。不填按采样率自动：${autoWin(hz, 1)} 秒`}>
+                <span style={{ borderBottom: "1px dashed #666" }}>滑动步长</span>
+              </Tooltip>
+              <InputNumber size="small" min={0.1} max={20} step={0.128} value={strideS} onChange={(v) => setStrideS(v ?? null)}
+                placeholder={`自动 ${autoWin(hz, 1)}`} addonAfter="秒" style={{ width: 150 }} />
+              {(windowS != null || strideS != null) && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  = {Math.round((windowS ?? autoWin(hz, 2)) * hz)} 点 / 步 {Math.round((strideS ?? autoWin(hz, 1)) * hz)} 点
+                  {windowS != null && <Button size="small" type="link" onClick={() => { setWindowS(null); setStrideS(null); }}>恢复自动</Button>}
+                </Typography.Text>
+              )}
+            </Space>
+            <Space wrap size={[12, 6]}>
+              <Tooltip title="一个窗口里混了两种动作时，这个窗口算哪一类。多数投票 = 占时间多的那类（默认）；窗口中心 = 窗口正中那一刻的标签，短促动作在窗口边上时不会被吞掉，但标签噪声大一点">
+                <span style={{ borderBottom: "1px dashed #666" }}>窗口标签</span>
+              </Tooltip>
+              <Segmented size="small" value={labelMode} onChange={(v) => setLabelMode(v as "majority" | "center")}
+                options={[{ value: "majority", label: "多数投票（默认）" }, { value: "center", label: "窗口中心" }]} />
+            </Space>
+            {modelType !== "cnn" && (
+              <Space wrap size={[12, 6]}>
+                <Tooltip title="树模型的超参。不填用默认（随机森林 200 棵、不限深、叶子最少 1 个样本）。勾了「端侧尺寸」时棵数 / 深度以上面端侧那两格为准，这里只改叶子和特征。验证集远低于训练集（过拟合）时把「叶子最少样本」调大（5~20）">
+                  <span style={{ borderBottom: "1px dashed #666" }}>模型参数</span>
+                </Tooltip>
+                {!edgeSize && (
+                  <>
+                    <InputNumber size="small" min={10} max={2000} step={50} value={modelParams.n_estimators ?? null}
+                      onChange={(v) => setModelParams({ ...modelParams, n_estimators: v ?? null })} placeholder="默认" addonBefore="棵数" style={{ width: 150 }} />
+                    <InputNumber size="small" min={2} max={100} value={modelParams.max_depth ?? null}
+                      onChange={(v) => setModelParams({ ...modelParams, max_depth: v ?? null })} placeholder="不限" addonBefore="最大深度" style={{ width: 170 }} />
+                  </>
+                )}
+                <InputNumber size="small" min={1} max={500} value={modelParams.min_samples_leaf ?? null}
+                  onChange={(v) => setModelParams({ ...modelParams, min_samples_leaf: v ?? null })} placeholder="1" addonBefore="叶子最少样本" style={{ width: 180 }} />
+                <Select size="small" style={{ width: 200 }} allowClear placeholder="每次分裂看的特征：默认 sqrt"
+                  value={modelParams.max_features ?? undefined} onChange={(v) => setModelParams({ ...modelParams, max_features: v ?? null })}
+                  options={[{ value: "sqrt", label: "特征：sqrt（默认）" }, { value: "log2", label: "特征：log2（更随机）" }, { value: "0.5", label: "特征：一半" }]} />
+              </Space>
+            )}
+          </Space>
+          <Space direction="vertical" style={{ width: "100%" }}>
             {/* ── 一起训练的其它数据集 ──────────────────────────────
                 单独一份常常训不了：按片段取只收人确认过的片段，而没人会去
                 确认「活动」「睡觉」，整份只有正样本，分类器没有可对比的负类 */}
@@ -2231,6 +2310,7 @@ export default function Training() {
               训练在 AI 服务那台机器上跑，几十分钟到几小时不等，可以关掉页面。回来在「训练记录」里看结果。
             </Typography.Text>
           </Space>
+          </div>
         )}
       </Modal>
 

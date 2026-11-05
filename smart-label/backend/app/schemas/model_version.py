@@ -58,6 +58,13 @@ class DatasetSpecIn(BaseModel):
     # 可以是小数：31.25 / 15.625 是 QMI8658 的原生档位（它没有 16 / 25 / 50）
     hz: float | None = None
     clean: bool = False
+    # 窗口 / 步长（秒）。不填按采样率自动挑（31.25 Hz → 2.048 / 1.024 s）。以前没列在这里，界面传了也被丢掉
+    window_s: float | None = None
+    stride_s: float | None = None
+    # 窗口怎么打标签：majority（多数投票，默认）/ center（窗口中心那一刻）
+    label_mode: str | None = None
+    # 模型超参覆盖：n_estimators / max_depth / min_samples_leaf / max_features，不填用默认
+    model_params: dict | None = None
 
 
 class TrainSubmitIn(BaseModel):
