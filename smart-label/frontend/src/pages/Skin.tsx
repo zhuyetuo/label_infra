@@ -1402,6 +1402,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               key: "range",
               // 「09:00:00 ~ 09:59:59」实测 150 出头，220 是拍脑袋定的
               width: 175,
+              // 按一天里的时刻排（0 点 → 24 点），同一时刻再按样本编号（不同 IMU 那几路挨在一起）。
+              // 排序跟着 pickSort 记在本机，下次打开还是这个顺序
+              sorter: (a, b) => {
+                const ta = sampleDisplayName(a.sample_code, a.video_duration_sec, null);
+                const tb = sampleDisplayName(b.sample_code, b.video_duration_sec, null);
+                return ta.localeCompare(tb) || a.sample_code.localeCompare(b.sample_code);
+              },
               // 「09:00:14 ~ 10:00:00」不能折成三行，宽度给够并且不许换行
               render: (_: unknown, t) => (
                 <span style={{ whiteSpace: "nowrap" }}>
