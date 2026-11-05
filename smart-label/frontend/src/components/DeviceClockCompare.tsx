@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Card, Space, Statistic, Tooltip, Typography, theme } from "antd";
-import request from "@/utils/request";
+import { Card, Space, Statistic, Typography, theme } from "antd";
 
 /**
- * 设备调试页「板上时间 vs 电脑时间 vs 服务器时间」。
+ * 设备调试页「板上时间 vs 电脑时间」。
  *
  * 每个样本带着板子打的时间戳（板上时间），浏览器收到时记一下电脑时间。
  * 两者之差 = 时钟偏差 + 蓝牙延迟；蓝牙只会让它「晚到」，所以每 2 秒取差值最大的那个
@@ -23,6 +22,7 @@ interface Stat {
   nowOff: number | null;
   slope: number | null;                      // ms / s（= 千分之几）
   realHz: number | null; devHz: number | null; fitS: number;
+  ivMed: number | null; lossPct: number | null;
 }
 
 const fmtOff = (ms: number) => {
@@ -42,43 +42,29 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
 }) {
   const { token } = theme.useToken();
   const acc = useRef({
-    buckets: new Map<number, number>(), lastHost: -1, host0: null as number | null,
-    n: 0, h0: 0, h1: 0, d0: 0, d1: 0,
+    buckets: new Map<number, number>(), lastHost: -1, last: null as ClockSample | null, host0: null as number | null,
+    n: 0, h0: 0, h1: 0, d0: 0, d1: 0, prevDev: null as number | null, ivHist: new Map<number, number>(),
   });
   const [st, setSt] = useState<Stat | null>(null);
-  const [srv, setSrv] = useState<{ off: number; rtt: number } | null>(null);   // 服务器时间 − 电脑时间
 
   useEffect(() => {
-    acc.current = { buckets: new Map(), lastHost: -1, host0: null, n: 0, h0: 0, h1: 0, d0: 0, d1: 0 };
+    acc.current = { buckets: new Map(), lastHost: -1, last: null, host0: null, n: 0, h0: 0, h1: 0, d0: 0, d1: 0, prevDev: null, ivHist: new Map() };
     setSt(null);
   }, [epoch]);
-
-  // 服务器时间：取往返最短的那次（往返越短，「对方是在中点那一刻读的表」越准）
-  useEffect(() => {
-    let best: { off: number; rtt: number; at: number } | null = null;
-    const once = async () => {
-      try {
-        const a = performance.now();
-        const r = await request.get<never, { server_ms: number }>("/device-debug/time");
-        const b = performance.now();
-        const off = r.server_ms - (performance.timeOrigin + (a + b) / 2);
-        // 太旧的不要：电脑时钟可能被系统校时改过
-        if (!best || b - a < best.rtt || performance.now() - best.at > 300_000) best = { off, rtt: b - a, at: performance.now() };
-        setSrv({ off: best.off, rtt: best.rtt });
-      } catch { /* 服务器老版本没这个接口：这一行不显示 */ }
-    };
-    once();
-    const t = setInterval(once, 30_000);
-    return () => clearInterval(t);
-  }, []);
 
   useEffect(() => {
     const t = setInterval(() => {
       const A = acc.current;
       const ss = getSamples();
-      for (const s of ss) {
-        if (s.host <= A.lastHost || s.dev == null) continue;
-        A.lastHost = s.host;
+      // 从上次处理到的那个样本之后接着处理。**不能按 host 时间判断新旧**：蓝牙一批到的
+      // 几个样本 performance.now() 可能一模一样，按「比上次晚」判断会把同一批的后几个全扔了
+      let from = A.last ? ss.lastIndexOf(A.last) + 1 : 0;
+      if (A.last && from === 0) from = ss.findIndex((x) => x.host > A.lastHost);   // 上次那个已经被裁掉了
+      if (from < 0) from = ss.length;
+      for (let i = from; i < ss.length; i++) {
+        const s = ss[i];
+        A.last = s; A.lastHost = s.host;
+        if (s.dev == null) continue;
         if (A.host0 == null) A.host0 = s.host;
         const off = s.dev - (performance.timeOrigin + s.host);
         const k = Math.floor((s.host - A.host0) / BUCKET_MS);
@@ -87,6 +73,9 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
         if (s.host - A.host0 >= SKIP_S * 1000) {
           if (!A.n) { A.h0 = s.host; A.d0 = s.dev; }
           A.n++; A.h1 = s.host; A.d1 = s.dev;
+          // 间隔直方图（整 ms）：取中位数当「采样周期」，跟实际个数比就知道丢了多少
+          if (A.prevDev != null) { const iv = Math.round(s.dev - A.prevDev); if (iv > 0 && iv < 1000) A.ivHist.set(iv, (A.ivHist.get(iv) ?? 0) + 1); }
+          A.prevDev = s.dev;
         }
       }
       if (A.buckets.size > 3600) {           // 最多留 2 小时
@@ -98,18 +87,34 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
       if (!keys.length) return;
       const pts = keys.map((k) => ({ t: (k * BUCKET_MS) / 1000, off: A.buckets.get(k)! }));
       const fit = pts.filter((p) => p.t >= SKIP_S);
+      // 斜率用 Theil–Sen（两两斜率的中位数）：中间有一段蓝牙卡住、样本晚到十几秒的话，
+      // 那几个点会把最小二乘的线拽歪（2026-11 实测：线是平的，最小二乘却报 +0.68%）
       let slope: number | null = null;
       if (fit.length >= 10) {
-        const mt = fit.reduce((s, p) => s + p.t, 0) / fit.length, mo = fit.reduce((s, p) => s + p.off, 0) / fit.length;
-        const sxx = fit.reduce((s, p) => s + (p.t - mt) ** 2, 0);
-        slope = sxx > 0 ? fit.reduce((s, p) => s + (p.t - mt) * (p.off - mo), 0) / sxx : null;
+        const step = Math.max(1, Math.floor(fit.length / 150));
+        const sub = fit.filter((_, i) => i % step === 0);
+        const sl: number[] = [];
+        for (let i = 0; i < sub.length; i++) for (let j = i + 1; j < sub.length; j++) {
+          const dt = sub[j].t - sub[i].t;
+          if (dt >= 10) sl.push((sub[j].off - sub[i].off) / dt);
+        }
+        if (sl.length) { sl.sort((a, b) => a - b); slope = sl[Math.floor(sl.length / 2)]; }
       }
+      // 采样周期 = 间隔中位数；按它应该有多少个 vs 实际收到多少个
+      let ivMed: number | null = null, total = 0;
+      for (const v of A.ivHist.values()) total += v;
+      if (total > 20) {
+        let c = 0;
+        for (const k of [...A.ivHist.keys()].sort((a, b) => a - b)) { c += A.ivHist.get(k)!; if (c >= total / 2) { ivMed = k; break; } }
+      }
+      const expectN = ivMed && A.n > 10 ? (A.d1 - A.d0) / ivMed + 1 : null;
       const realS = (A.h1 - A.h0) / 1000, devS = (A.d1 - A.d0) / 1000;
       setSt({
         pts, nowOff: pts[pts.length - 1].off, slope,
         realHz: A.n > 10 && realS > 0 ? (A.n - 1) / realS : null,
         devHz: A.n > 10 && devS > 0 ? (A.n - 1) / devS : null,
         fitS: fit.length ? fit[fit.length - 1].t - fit[0].t : 0,
+        ivMed, lossPct: expectN ? Math.max(0, (1 - A.n / expectN) * 100) : null,
       });
     }, 2000);
     return () => clearInterval(t);
@@ -117,7 +122,6 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
 
   if (!st) return null;
   const driftPct = st.slope != null ? st.slope / 10 : null;      // ms/s → %
-  const boardSrv = st.nowOff != null && srv ? st.nowOff - srv.off : null;
 
   // 图：偏差随时间，纵轴减掉第一个点，只看变化
   const W = 600, H = 120, P = 4;
@@ -133,7 +137,9 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
   if (driftPct != null && st.fitS >= 20) {
     if (Math.abs(driftPct) < 0.5) {
       verdict = <>板上时间跟真实时间<b>同步走</b>（差 {driftPct.toFixed(2)}%），时间戳可信：
-        按时间戳算的 {st.devHz?.toFixed(2) ?? "-"} Hz 就是传感器真实的速率{st.devHz && Math.abs(st.devHz / expectHz - 1) > 0.02 ? <>，<b>跟 {expectHz} Hz 对不上是传感器本身的问题</b>（ODR 配置 / 内部振荡器）</> : null}。</>;
+        传感器真实的采样周期是 {st.ivMed ?? "-"} ms（{st.ivMed ? (1000 / st.ivMed).toFixed(2) : "-"} Hz）
+        {st.ivMed && Math.abs(1000 / st.ivMed / expectHz - 1) > 0.02 ? <>，<b>跟 {expectHz} Hz 对不上是传感器本身的输出速率</b>（ODR 配置 / 传感器内部振荡器），不是蓝牙、也不是时间戳</> : null}。
+        {st.lossPct != null && st.lossPct >= 1 ? <>另外<b>丢了约 {st.lossPct.toFixed(1)}% 的样本</b>（时间戳上有缝）：多半是蓝牙发送队列满了丢的，板子本地存的 CSV 应该没有这个问题。</> : null}</>;
     } else {
       verdict = <>板子时间戳比真实时间<b>走{driftPct > 0 ? "快" : "慢"} {Math.abs(driftPct).toFixed(1)}%</b>（每分钟{driftPct > 0 ? "快" : "慢"} {Math.abs(driftPct * 0.6).toFixed(1)} 秒）：
         <b>是时间戳的问题，不是采样的问题</b>。真实采样率按真实时间数：{st.realHz?.toFixed(2) ?? "-"} 个/秒。
@@ -142,18 +148,16 @@ export default function DeviceClockCompare({ getSamples, epoch, expectHz, isPc }
   }
 
   return (
-    <Card size="small" title="板上时间 vs 电脑时间 vs 服务器时间" style={{ marginTop: 12 }}>
+    <Card size="small" title="板上时间 vs 电脑时间" style={{ marginTop: 12 }}>
       <Space size={24} wrap>
         <Statistic title="板子比电脑" value={st.nowOff != null ? fmtOff(st.nowOff) : "-"} valueStyle={{ fontSize: 20 }} />
-        {srv && <Tooltip title={`往返 ${srv.rtt.toFixed(0)} ms，误差在它一半以内`}>
-          <span><Statistic title="电脑比服务器" value={fmtOff(-srv.off)} valueStyle={{ fontSize: 20 }} /></span>
-        </Tooltip>}
-        {boardSrv != null && <Statistic title="板子比服务器" value={fmtOff(boardSrv)} valueStyle={{ fontSize: 20 }} />}
         <Statistic title="板子时钟快慢" value={driftPct == null ? "-" : `${driftPct >= 0 ? "+" : ""}${driftPct.toFixed(2)}%`}
           valueStyle={{ fontSize: 20, color: driftPct != null && Math.abs(driftPct) >= 0.5 ? token.colorError : undefined }} />
       </Space>
       <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 4 }}>
         去掉前 {SKIP_S} 秒（{st.fitS.toFixed(0)} 秒）：真实时间里每秒 {st.realHz?.toFixed(2) ?? "-"} 个 · 按板子时间戳 {st.devHz?.toFixed(2) ?? "-"} Hz
+        {st.ivMed != null && <> · 采样周期（间隔中位数）{st.ivMed} ms = {(1000 / st.ivMed).toFixed(2)} Hz
+          {st.lossPct != null && <> · 丢了约 <b style={{ color: st.lossPct >= 1 ? token.colorError : undefined }}>{st.lossPct.toFixed(1)}%</b></>}</>}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H, marginTop: 6, background: token.colorFillQuaternary, borderRadius: 4 }}>
         {SKIP_S < tMax && <rect x={P} y={0} width={X(SKIP_S) - P} height={H} fill={token.colorFillSecondary} />}
