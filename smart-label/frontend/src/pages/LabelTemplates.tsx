@@ -257,7 +257,7 @@ export default function LabelTemplates() {
             </Typography.Text>
           </Space>
           {view === "tree" && (
-            <div style={{ maxHeight: 460, overflow: "auto", padding: "4px 8px", border: "1px solid #f0f0f0", borderRadius: 6 }}>
+            <div style={{ maxHeight: 460, overflow: "auto", padding: "4px 8px", border: "1px solid var(--sl-border)", borderRadius: 6 }}>
               <TemplateTreeEditor items={items} onChange={setItems} />
             </div>
           )}

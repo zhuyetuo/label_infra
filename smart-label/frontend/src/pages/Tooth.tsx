@@ -303,7 +303,7 @@ function ToothDetect() {
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                           {d.photos.filter(matches).map((p) => (
                             <div key={p.rel_path} style={{ width: 180, cursor: "pointer" }} onClick={() => openPhoto(p)}>
-                              <div style={{ width: 180, height: 135, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <div style={{ width: 180, height: 135, background: "var(--sl-fill2)", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                 {urls[p.rel_path] ? (
                                   <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} loading="lazy" />
                                 ) : (

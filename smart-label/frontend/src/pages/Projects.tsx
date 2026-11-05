@@ -2475,7 +2475,7 @@ export default function Projects() {
               const ip = indexProgress[indexTarget.id];
               if (!ip || ip.status === "idle" || !ip.detail.length) return null;
               return (
-                <div style={{ maxHeight: 160, overflow: "auto", fontSize: 12, color: "#666", background: "#fafafa", padding: 8 }}>
+                <div style={{ maxHeight: 160, overflow: "auto", fontSize: 12, color: "#666", background: "var(--sl-fill)", padding: 8 }}>
                   {ip.detail.slice(-30).map((line, i) => (<div key={i}>{line}</div>))}
                 </div>
               );
@@ -2693,7 +2693,7 @@ export default function Projects() {
               const sp = seekProgress[seekTarget.id];
               if (!sp || sp.status === "idle") return null;
               return (
-                <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
+                <div style={{ background: "var(--sl-fill)", padding: 8, borderRadius: 4 }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     上一次/当前{sp.dry_run ? "（预览）" : ""}：
                     {sp.status === "running" ? "进行中" : sp.status === "done" ? "已完成" : sp.status === "cancelled" ? "已停止" : "出错"}，
@@ -2792,7 +2792,7 @@ export default function Projects() {
               const pp = prelabelProgress[prelabelTarget.id];
               if (!pp || pp.status === "idle") return null;
               return (
-                <div style={{ background: "#fafafa", padding: 8, borderRadius: 4 }}>
+                <div style={{ background: "var(--sl-fill)", padding: 8, borderRadius: 4 }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     上一次/当前：
                     {pp.status === "running"

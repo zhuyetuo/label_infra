@@ -974,7 +974,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
       <Card
         size="small"
         style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}
-        styles={{ body: { flex: 1, overflow: "auto", display: "flex", alignItems: "flex-start", justifyContent: "center", background: "#fafafa" } }}
+        styles={{ body: { flex: 1, overflow: "auto", display: "flex", alignItems: "flex-start", justifyContent: "center", background: "var(--sl-fill)" } }}
         title={
           currentPhoto ? (
             <Space size={6} wrap>
@@ -1299,7 +1299,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
 
         {!!catalog?.score_scheme && current && (
           <>
-            <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
+            <div style={{ borderTop: "1px solid var(--sl-border)", margin: "14px 0 10px" }} />
             <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>
               {catalog.score_scheme.name}
               <OralScoreHelp scheme={catalog.score_scheme} />
@@ -1324,7 +1324,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
 
         {!!catalog?.asset_attrs?.some((d) => !d.score_item) && current && (
           <>
-            <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
+            <div style={{ borderTop: "1px solid var(--sl-border)", margin: "14px 0 10px" }} />
             <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>这张图整体</div>
             {catalog.asset_attrs.filter((def) => !def.score_item).map((def) =>
               renderAttr(def, assetAttrs[def.key], (v) => {
@@ -1340,7 +1340,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
           </>
         )}
 
-        <div style={{ borderTop: "1px solid #f0f0f0", margin: "14px 0 10px" }} />
+        <div style={{ borderTop: "1px solid var(--sl-border)", margin: "14px 0 10px" }} />
         <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
           进度：{stats?.total_boxes ?? 0} 个框
           {stats?.by_state?.length ? `　${stats.by_state.map((s) => `${STATE_META[s.state as VisionAssetState]?.text ?? s.state} ${s.n}`).join("　")}` : ""}

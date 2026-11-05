@@ -171,7 +171,7 @@ export default function DogPhotos({
                     position: "relative",
                     width: 160,
                     height: 120,
-                    background: "#f0f0f0",
+                    background: "var(--sl-fill2)",
                     borderRadius: 4,
                     overflow: "hidden",
                     display: "flex",
