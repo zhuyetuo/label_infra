@@ -9,7 +9,11 @@ import math
 import random
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "assets" / "petcollar_selftest.py"
+# 只拷了 backend 的环境（比如后端镜像里跑测试）没有前端目录：跳过，不算失败
+pytestmark = pytest.mark.skipif(not SCRIPT.exists(), reason=f"没有 {SCRIPT}（只有后端目录）")
 
 
 def _load():
