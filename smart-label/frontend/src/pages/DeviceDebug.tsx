@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Button, Card, Checkbox, Col, InputNumber, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme,
+  Alert, Button, Card, Checkbox, Col, InputNumber, Popover, Row, Segmented, Space, Statistic, Table, Tag, Tooltip, Typography, message, theme,
 } from "antd";
 import uPlot from "uplot";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import DeviceServerCompare, { type BoardEvent } from "@/components/DeviceServerCompare";
 import DeviceClockCompare from "@/components/DeviceClockCompare";
 import "uplot/dist/uPlot.min.css";
@@ -421,6 +422,18 @@ export default function DeviceDebug() {
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           用这台电脑的蓝牙直接连，数据不经过服务器
         </Typography.Text>
+        {/* 刷新会断开的说明收进问号：常驻一大块横幅太占地方，用一次就知道了 */}
+        {supported && !bt()?.getDevices && (
+          <Popover placement="bottomLeft" trigger={["hover", "click"]} title="刷新页面蓝牙会断开"
+            content={<div style={{ maxWidth: 420, fontSize: 12, lineHeight: 1.8 }}>
+              浏览器规定连接跟着页面走，默认刷新后要重新选设备。<br />
+              想刷新后自动连回上次的设备：Chrome 打开<br />
+              <Typography.Text copyable code style={{ fontSize: 12 }}>chrome://flags/#enable-web-bluetooth-new-permissions-backend</Typography.Text><br />
+              选 Enabled，重启浏览器。
+            </div>}>
+            <QuestionCircleOutlined style={{ color: token.colorTextTertiary, cursor: "pointer" }} />
+          </Popover>
+        )}
       </Space>
 
       {!supported && (
@@ -447,11 +460,6 @@ export default function DeviceDebug() {
           ) : undefined} />
       )}
 
-      {supported && !bt()?.getDevices && (
-        <Alert type="info" showIcon closable style={{ marginBottom: 12 }}
-          message="刷新页面蓝牙会断开（浏览器规定，连接跟着页面走），默认刷新后要重新选设备"
-          description={<span>想刷新后自动连回上次的设备：Chrome 打开 <Typography.Text copyable code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</Typography.Text>，选 Enabled，重启浏览器。</span>} />
-      )}
 
       <Row gutter={12}>
         <Col xs={24} xl={16}>

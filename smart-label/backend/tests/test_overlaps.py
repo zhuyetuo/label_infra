@@ -49,3 +49,37 @@ def test_列表接口给重叠数(db, run):
     lite = run(tasks_api.list_tasks(project_id=w.p.id, lite=True, db=db, user=w.admin))["data"]
     assert {r["id"] for r in lite} == set(got) and all(r["overlap_count"] == 0 and r["label_counts"] == {} for r in lite)
     assert len(run(db.execute(_select(AnnotationLabelItem))).scalars().all()) >= 6
+
+
+def test_重叠数有缓存但段一改就重算(db, run):
+    """列表接口按任务缓存重叠数（一万多个任务每次全算要十几秒）。缓存不能让徽标停在旧数上：
+    挪开、删掉、新加一段，下一次列表都要变"""
+    tasks_api._OVERLAP_CACHE.clear()
+    w = _world(db, run)
+    a = w.items[0]
+    dup = AnnotationLabelItem(annotation_record_id=w.rec.id, label_id=a.label_id, start_time_ms=a.start_time_ms + 500,
+                              end_time_ms=a.end_time_ms + 500, source_type=LabelItemSource.human_added)
+    db.add(dup)
+    run(db.commit())
+
+    def count():
+        rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+        return {r["id"]: r for r in rows}[w.t.id]["overlap_count"]
+
+    assert count() == 2
+    assert w.t.id in tasks_api._OVERLAP_CACHE
+    assert count() == 2                        # 第二次走缓存，数不变
+    # 挪开：不再压着
+    dup.start_time_ms = a.end_time_ms + 10_000
+    dup.end_time_ms = a.end_time_ms + 12_000
+    run(db.commit())
+    assert count() == 0
+    # 挪回来
+    dup.start_time_ms = a.start_time_ms + 500
+    dup.end_time_ms = a.end_time_ms + 500
+    run(db.commit())
+    assert count() == 2
+    # 删掉
+    run(db.delete(dup))
+    run(db.commit())
+    assert count() == 0
