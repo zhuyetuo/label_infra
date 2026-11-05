@@ -561,6 +561,53 @@ async def list_tasks(
     )
 
 
+@router.get("/progress")
+async def tasks_progress(mine: bool = False, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """每个项目的完成情况（片段总数 / AI 给的还没人确认的、疑似总数 / 没判的），按项目汇总好再回。
+
+    任务页的项目行要这个数，以前是把**全部任务**连同每个任务的片段统计、重叠、候选一起拉下来
+    在前端加（1.1 万个任务十几秒，经常超过 15 秒的请求超时）。这里只做两次按项目的聚合。
+    口径跟 list_tasks 里的 label_counts / cand_counts 一样（只算当前轮、只算看得到的任务）。
+    mine：只算指派给我的（任务页「只看我的」）"""
+    scoped = apply_task_scope(select(Task.id), user)
+    if mine:
+        scoped = scoped.where(Task.assigned_to == user.id)
+    scope = scoped.subquery()
+    ai_pending = case(
+        ((AnnotationLabelItem.source_type == LabelItemSource.ai_generated)
+         & (AnnotationLabelItem.ai_confirmed.is_(False))
+         & (AnnotationLabelItem.is_modified.is_(False))
+         & (AnnotationLabelItem.uncertain.is_(False)), 1),
+        else_=0,
+    )
+    out: dict[int, dict[str, int]] = {}
+
+    def row(pid: int) -> dict[str, int]:
+        return out.setdefault(int(pid), {"segs": 0, "seg_pending": 0, "cands": 0, "cand_pending": 0})
+
+    seg_rows = await db.execute(
+        select(Task.project_id, func.count(AnnotationLabelItem.id), func.sum(ai_pending))
+        .join(scope, scope.c.id == Task.id)
+        .join(AnnotationRecord, (AnnotationRecord.task_id == Task.id) & (AnnotationRecord.round_no == Task.round_no))
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .group_by(Task.project_id)
+    )
+    for pid, n, n_pending in seg_rows.all():
+        r = row(pid)
+        r["segs"], r["seg_pending"] = int(n), int(n_pending or 0)
+    cand_rows = await db.execute(
+        select(Task.project_id, func.count(AiCandidate.id),
+               func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)))
+        .join(scope, scope.c.id == Task.id)
+        .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
+        .group_by(Task.project_id)
+    )
+    for pid, n, n_pending in cand_rows.all():
+        r = row(pid)
+        r["cands"], r["cand_pending"] = int(n), int(n_pending or 0)
+    return ok({str(k): v for k, v in out.items()})
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     query = apply_task_scope(select(Task).where(Task.id == task_id), user)

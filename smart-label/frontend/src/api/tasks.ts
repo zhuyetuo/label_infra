@@ -12,6 +12,11 @@ export const getTask = (id: number) => request.get<never, Task>(`/tasks/${id}`);
 /** 轻量列表：只有任务本身 + 样本 / 指派人名字，不带片段统计。项目页先用它把每个项目的数秒出来 */
 export const listTasksLite = () => request.get<never, Task[]>("/tasks", { params: { lite: true } });
 
+/** 每个项目的完成情况（服务端按项目汇总好）。任务页项目行用，不用为它拉全部任务的统计 */
+export interface ProjectProgress { segs: number; seg_pending: number; cands: number; cand_pending: number }
+export const getTasksProgress = (mine = false) =>
+  request.get<never, Record<string, ProjectProgress>>("/tasks/progress", { params: mine ? { mine: true } : undefined });
+
 export const listTasksByIds = (ids: number[]) =>
   request.get<never, Task[]>("/tasks", { params: { ids: ids.join(",") } });
 
