@@ -147,6 +147,8 @@ class AnnotationLabelItem(Base):
     #   人改了起止 / 类别，手动加入的也失效（跟审核通过一样，改过的要重新认可）
     pool_state: Mapped[str | None] = mapped_column(String(4), nullable=True, index=True,
                                                    comment="数据池：空=自动（审核通过即在池）/ in=手动加入 / out=手动移出")
+    # 手动加入数据池的时间。审核通过进来的用 seg_reviewed_at；「刚进池的先」按这两个排
+    pool_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="手动加入数据池的时间")
 
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列
