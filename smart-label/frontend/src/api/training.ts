@@ -57,7 +57,7 @@ export interface TrainDataset {
   reduce?: {
     labels: string[];
     factor: number;
-    result: { label: string; before_sec: number; after_sec: number; before_n: number; after_n: number; target_sec: number }[];
+    result: { label: string; before_sec: number; after_sec: number; before_n: number; after_n: number; target_sec: number; /** 抽出来的小块来自几个原片段 */ from_segs?: number }[];
   };
   /** 只预览没落盘的那次返回 true */
   dry_run?: boolean;
