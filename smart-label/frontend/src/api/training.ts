@@ -370,6 +370,10 @@ export interface TrainReview {
 }
 export const trainReview = (id: number) => request.get<never, TrainReview>(`/model-versions/${id}/review`);
 export const rerunTrainReview = (id: number) => request.post<never, { ok: boolean }>(`/model-versions/${id}/review/rerun`);
+/** 回放进度：idle / starting / running（done / total 个任务）/ done / failed / unknown（算法服务老版本） */
+export interface ReviewProgress { status: "idle" | "starting" | "running" | "done" | "failed" | "unknown"; done?: number; total?: number | null;
+  started_at?: number; finished_at?: number | null; error?: string | null }
+export const trainReviewStatus = (id: number) => request.get<never, ReviewProgress>(`/model-versions/${id}/review/status`, { silent: true } as never);
 
 /** 下载端侧包（zip）：要带登录 token，所以不能直接 window.open 那个地址（会 401），
  *  先用 axios 拿成 Blob 再存盘。打包在算法机上现编，要十几秒 */
