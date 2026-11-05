@@ -27,7 +27,7 @@ import {
   Typography,
   message,
 } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useReturnedSegments } from "@/hooks/useReturnedSegments";
 import { unapprove } from "@/api/reviews";
@@ -171,9 +171,6 @@ export default function Projects() {
   // 两步拉：轻量的（只有任务状态、样本名，快）先到，项目行「共几个 / 待认领几个」马上出来；
   // 带片段统计的完整列表（要几秒）后到，到了替换掉。完整的一旦有了就一直用它（改动后只刷那几行）
   const { data: liteTasks } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
-  const { data: fullTasks } = useQuery({ queryKey: ["tasks"], queryFn: () => listTasks(), staleTime: 30_000 });
-  const allTasks = fullTasks ?? liteTasks;
-  const statsLoading = !fullTasks;
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
@@ -237,6 +234,27 @@ export default function Projects() {
       /* 存不了就算了 */
     }
   }, [expandedKeys]);
+  // 带片段统计的完整列表**只拉展开了的项目**。以前一次拉全部（1.1 万个任务，十几秒），
+  // 经常超过 15 秒的请求超时，整页报「timeout of 15000ms exceeded」，全部标签也要等它
+  const fullQs = useQueries({
+    queries: expandedKeys.map((pid) => ({
+      queryKey: ["tasks", "project", pid],
+      queryFn: () => listTasks(pid),
+      staleTime: 30_000,
+    })),
+  });
+  const fullByProject = new Map<number, Task[]>();
+  expandedKeys.forEach((pid, i) => { const d = fullQs[i]?.data; if (d) fullByProject.set(pid, d); });
+  const fullKey = expandedKeys.map((pid, i) => `${pid}:${fullQs[i]?.dataUpdatedAt ?? 0}`).join(",");
+  // 展开的项目用完整的那份，其余用轻量的（只有状态、样本名——项目行的「共几个 / 待认领几个」够用）
+  const allTasks = useMemo(() => {
+    if (!liteTasks && !fullByProject.size) return undefined;
+    const full = [...fullByProject.values()].flat();
+    return [...(liteTasks ?? []).filter((t) => !fullByProject.has(t.project_id)), ...full];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liteTasks, fullKey]);
+  const statsLoadingOf = (pid: number) => !fullByProject.has(pid);
+
   const filterOf = (projectId: number): TaskFilter => ({
     status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
     ...(taskFilters[projectId] as Partial<TaskFilter> | undefined),
@@ -408,6 +426,7 @@ export default function Projects() {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["tasks"] });
+    qc.invalidateQueries({ queryKey: ["tasks-lite"] });
     qc.invalidateQueries({ queryKey: ["labels"] });
   };
 
@@ -1002,8 +1021,10 @@ export default function Projects() {
     try {
       const fresh = await listTasksByIds(ids);
       const byId = new Map(fresh.map((t) => [t.id, t]));
-      qc.setQueryData<Task[]>(["tasks"], (old) =>
-        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old);
+      const patch = (old: Task[] | undefined) =>
+        old ? old.filter((t) => !ids.includes(t.id) || byId.has(t.id)).map((t) => byId.get(t.id) ?? t) : old;
+      qc.setQueriesData<Task[]>({ queryKey: ["tasks", "project"] }, patch);
+      qc.setQueryData<Task[]>(["tasks-lite"], patch);
       qc.invalidateQueries({ queryKey: ["projects"] });
     } catch {
       refresh();
@@ -1422,7 +1443,7 @@ export default function Projects() {
                   </Typography.Text>
                 )}
               </Space>
-              {statsLoading && (
+              {statsLoadingOf(p.id) && (
                 <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
                   片段统计加载中…（类别、时长、重叠这些马上就到）
                 </Typography.Text>
