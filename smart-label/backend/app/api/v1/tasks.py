@@ -55,6 +55,9 @@ from app.services.task_service import (
     submit_task,
 )
 
+# 任务号 → (签名, {类别: 重叠段数})。列表接口每次刷新都要这个数，见 list_tasks 里「重叠」那段
+_OVERLAP_CACHE: dict[int, tuple[tuple, dict[int, int]]] = {}
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("smart-label.tasks")
 
@@ -333,6 +336,7 @@ async def list_tasks(
     # 每个任务当前轮各类别有几段、其中多少是 AI 给的还没人确认的——列表里直接
     # 显示"抓挠 5 / 睡觉 3"，想专门审抓挠的一眼就能挑出哪些任务去看，不用逐个点开
     label_counts: dict[int, dict[int, dict[str, int]]] = {}
+    seg_sig: dict[int, list[tuple]] = {}
     if task_ids:
         from app.services.data_pool import in_pool_cond
         ai_pending = case(
@@ -363,6 +367,10 @@ async def list_tasks(
                 # 最长一段 / 合计时长：项目页按类别看时挑长片段进数据池
                 func.max(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms),
                 func.sum(AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms),
+                # 下面两个只给「重叠」那段做缓存签名用：段的位置 / 增删变了，签名就变
+                func.sum(AnnotationLabelItem.start_time_ms),
+                func.sum(AnnotationLabelItem.id),
+                func.min(AnnotationRecord.id),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -370,7 +378,8 @@ async def list_tasks(
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
-        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot in rows.all():
+        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot, s_start, s_id, rec_id in rows.all():
+            seg_sig.setdefault(task_id, []).append((rec_id, label_id, int(n), int(s_start or 0), int(tot or 0), int(s_id or 0)))
             label_counts.setdefault(task_id, {})[label_id] = {
                 "n": int(n), "ai_pending": int(n_pending or 0),
                 "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
@@ -415,12 +424,35 @@ async def list_tasks(
         ov_end = case((inner.c.pe < inner.c.e, inner.c.pe), else_=inner.c.e)
         hit = or_(and_(inner.c.pe.is_not(None), ov_end - inner.c.s >= OVERLAP_MIN_MS),
                   and_(inner.c.ns.is_not(None), inner.c.e - inner.c.ns >= OVERLAP_MIN_MS))
-        rows = await db.execute(
-            select(inner.c.tid, inner.c.lid, func.count()).where(hit).group_by(inner.c.tid, inner.c.lid)
-        )
-        for t, lid, n in rows.all():
-            overlap_counts[int(t)] = overlap_counts.get(int(t), 0) + int(n)
-            overlap_by_label.setdefault(int(t), {})[int(lid)] = int(n)
+        # 缓存：窗口函数要把范围里**每一段**排一遍，一万多个任务一次 13 秒，列表每刷一次都算。
+        # 每个任务按「各类别段数 / 起点和 / 时长和 / id 和」做签名（上面 labels 那次聚合顺手算的，
+        # 不多一次查询），签名没变就用上次的结果，只重算变了的那几个任务。
+        # 轨道配置也进签名：改了哪个类别属于哪条轨，所有任务都要重算
+        trk_sig = hash(tuple(sorted(trk_map.items())))
+        sig_now = {t: (trk_sig, tuple(sorted(seg_sig.get(t, [])))) for t in task_ids}
+        stale = [t for t in task_ids if seg_sig.get(t) and _OVERLAP_CACHE.get(t, (None,))[0] != sig_now[t]]
+        fresh: dict[int, dict[int, int]] = {t: {} for t in stale}
+
+        async def _run(q):
+            for t, lid, n in (await db.execute(q)).all():
+                fresh.setdefault(int(t), {})[int(lid)] = int(n)
+
+        base = select(inner.c.tid, inner.c.lid, func.count()).where(hit).group_by(inner.c.tid, inner.c.lid)
+        if len(stale) > 2000:
+            await _run(base)          # 第一次 / 大面积变了：整个范围一次算完
+        else:
+            # 只算变了的。inner 已经按 scope 过滤，这里再按任务号收窄（窗口按记录分区，收窄不影响结果）
+            for i in range(0, len(stale), 500):
+                await _run(base.where(inner.c.tid.in_(stale[i:i + 500])))
+        for t in task_ids:
+            if t in fresh or not seg_sig.get(t):
+                _OVERLAP_CACHE[t] = (sig_now[t], fresh.get(t, {}))
+            by = _OVERLAP_CACHE[t][1]
+            if by:
+                overlap_by_label[t] = dict(by)
+                overlap_counts[t] = sum(by.values())
+        if len(_OVERLAP_CACHE) > 300_000:
+            _OVERLAP_CACHE.clear()
 
     _lap("overlap")
     # 「疑似抓挠」候选的条数。它不在 annotation_records 里，所以上面那份 label_counts
