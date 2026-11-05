@@ -6,6 +6,7 @@ import uPlot from "uplot";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import DeviceServerCompare, { type BoardEvent } from "@/components/DeviceServerCompare";
 import DeviceClockCompare from "@/components/DeviceClockCompare";
+import DeviceSelfTest from "@/components/DeviceSelfTest";
 import "uplot/dist/uPlot.min.css";
 import {
   BEHAV_NAMES, CMD, DP, PC, WIT, WitStream, assessRate, buildAckFrame, buildTimeFrame, parseDps, parseFrame, parseSegments,
@@ -62,6 +63,9 @@ export default function DeviceDebug() {
   // 给子组件定时去取：引用固定，子组件的定时器不用每次渲染重建
   const getSamplesStable = useRef(() => samples.current).current;
   const rec = useRef<Sample[] | null>(null);
+  // 一键自检在跑的时候不为 null：每个样本 / 每条 0x07 也推一份进去（不受 KEEP_S 裁剪）
+  const selfSink = useRef<Sample[] | null>(null);
+  const selfBehavSink = useRef<number[] | null>(null);
   const total = useRef(0);
   const server = useRef<BtServer | null>(null);
   const rx = useRef<BtChar | null>(null);
@@ -103,6 +107,7 @@ export default function DeviceDebug() {
     sess.current.hostN = s.host;
     sess.current.devN = s.dev;
     if (rec.current) rec.current.push(s);
+    if (selfSink.current) selfSink.current.push(s);
     const cut = s.host - KEEP_S * 1000;
     if (samples.current.length > 40000 || samples.current[0].host < cut) {
       let i = 0;
@@ -126,6 +131,7 @@ export default function DeviceDebug() {
       const ev = { cls: d[DP.CLS] ?? -1, conf: d[DP.CONF] ?? 0, at: d[DP.TS] ?? Date.now() };
       setBehav(ev);
       setBoardEvents((old) => [...old, { ts: ev.at, cls: ev.cls, conf: ev.conf }].slice(-2000));
+      selfBehavSink.current?.push(ev.at);
       return;
     }
     if (p.cmd === CMD.SEGMENT) {
@@ -542,6 +548,8 @@ export default function DeviceDebug() {
         </Col>
       </Row>
 
+      <DeviceSelfTest sink={selfSink} behavSink={selfBehavSink} connected={status === "connected"} kind={kind}
+        device={devName} expectHz={expectHz} hasRaw={count > 0 && !noRawHint} />
       {kind === "pc" && (
         <DeviceServerCompare getSamples={() => samples.current} boardEvents={boardEvents} segs={segs} hz={expectHz} connected={status === "connected"} />
       )}
