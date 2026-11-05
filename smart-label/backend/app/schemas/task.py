@@ -88,6 +88,9 @@ class LabelItemIn(BaseModel):
     # 待定原因：no_view（画面里没拍到狗）/ ambiguous（拍到了但看不准）/
     # needs_split（是抓挠但混了别的动作，起止要调、要拆细，暂时没时间）
     uncertain_reason: str | None = None
+    # 标记（逗号分开的代码）和备注。不传 = 保持库里原值；传空串 = 清掉
+    marks: str | None = None
+    mark_note: str | None = None
 
 
 class LabelItemOut(LabelItemIn):
@@ -100,6 +103,8 @@ class LabelItemOut(LabelItemIn):
     ai_confirmed: bool
     uncertain: bool
     uncertain_reason: str | None
+    marks: str | None = None
+    mark_note: str | None = None
     from_candidate_id: int | None
     created_by: int | None
     # AI 原始判断（见模型上的说明）；从疑似片段确认来的，附上那条候选的类别和来源

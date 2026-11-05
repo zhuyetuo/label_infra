@@ -60,7 +60,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segDedupe, segDelete, segEdit, segSplit } from "@/api/segReview";
+import { segDecide, segDedupe, segDelete, segEdit, segMarks, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -1177,6 +1177,12 @@ export default function AnnotationWorkspace({
     setItems(d.items);
     message.success("已删除这一段");
   };
+  // 只看模式下打标记：直接落库（标记只是记号，不用认领、不动类别起止）
+  const marksRemote = async (it: LabelItem, marks: string[], note: string | null) => {
+    const r = await segMarks(it.id, marks, note);
+    setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, marks: r.marks, mark_note: r.mark_note } : x)));
+    message.success(r.marks ? "已标记" : "已清掉标记");
+  };
   const relabelItem = async (it: LabelItem, labelId: number) => {
     if (taskId == null || labelId === it.label_id) return;
     await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
@@ -1408,6 +1414,9 @@ export default function AnnotationWorkspace({
         ai_confirmed: i.ai_confirmed,
         uncertain: i.uncertain,
         uncertain_reason: i.uncertain_reason,
+        // 空串 = 没有标记（后端会清掉）；不能不传，不然清掉的标记存不回去
+        marks: i.marks ?? "",
+        mark_note: i.mark_note ?? "",
       }));
 
   const persist = async () => {
@@ -1914,6 +1923,9 @@ export default function AnnotationWorkspace({
         initialFilterLabels={initialSegmentFilter}
         onReviewNote={canFlag || !readOnly ? handleReviewNote : undefined}
         onSegApprove={canFlag ? handleSegApprove : undefined}
+        // 只看模式也能改类别（审核员 / 管理员，直接落库）、打标记（任务的标注员也行，后端会拦别人的）
+        onRelabelRemote={readOnly && canFlag && !segReview ? relabelItem : undefined}
+        onMarksRemote={readOnly && taskId != null ? marksRemote : undefined}
         reviewNoteClearOnly={!canFlag}
         initialFlaggedOnly={flagFocus}
       />

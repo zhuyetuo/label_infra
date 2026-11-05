@@ -99,6 +99,8 @@ async def _clone_record_forward(db: AsyncSession, task: Task, new_round_no: int)
                 ai_confirmed=item.ai_confirmed,
                 uncertain=item.uncertain,
                 uncertain_reason=item.uncertain_reason,
+                marks=item.marks,
+                mark_note=item.mark_note,
                 # 驳回开新一轮时原始判断要一起带过去，不然一驳回「AI 判的是什么」就丢了
                 ai_label_id=item.ai_label_id,
                 ai_start_ms=item.ai_start_ms,

@@ -407,6 +407,27 @@ async def edit(item_id: int, body: EditIn, db: AsyncSession = Depends(get_db),
                "label_id": it.label_id, "seg_status": it.seg_status or "pending"})
 
 
+class MarksIn(BaseModel):
+    marks: list[str] = Field(default_factory=list)
+    note: str | None = Field(None, max_length=300)
+
+
+@router.put("/{item_id}/marks")
+async def set_marks(item_id: int, body: MarksIn, db: AsyncSession = Depends(get_db),
+                    user: User = Depends(get_current_user)):
+    """打标记（复合类别 / 边界拿不准 / 画面跟 IMU 对不上 / 其它）。只看不改的时候也能打：
+    标记只是记号，不动类别起止、不改审核状态。任务的标注员和审核员 / 管理员能打"""
+    from app.services.task_service import clean_marks
+
+    it, task = await _load(db, item_id, user)
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这条不在你名下")
+    it.marks = clean_marks(",".join(body.marks))
+    it.mark_note = (body.note or "").strip()[:300] or None
+    await db.commit()
+    return ok({"id": it.id, "marks": it.marks, "mark_note": it.mark_note})
+
+
 class SplitIn(BaseModel):
     at_ms: int = Field(..., ge=0)
 
