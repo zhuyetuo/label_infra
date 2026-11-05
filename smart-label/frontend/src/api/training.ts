@@ -349,11 +349,21 @@ export interface ReviewRow {
   task_id: number; sample_code: string | null; day: string; kind: string;
   human: string | null; pred: string; start_ms: number; end_ms: number; seconds: number;
   conf: number; p_human: number | null; n_windows: number; votes: Record<string, number>;
+  /** 疑似标错 / 段里混了别的 / 难区分 / 模型偏向另一类（老版本回放没有） */
+  hint?: string;
+}
+/** 训练时的诊断（ml_rf.json 里）：按窗口的混淆矩阵 + 容易混的两类单独看分不分得开 */
+export interface TrainDiag {
+  confusion?: { labels: string[]; matrix: number[][]; top: { human: string; pred: string; n: number; frac: number }[] };
+  separability?: {
+    a: string; b: string; auc: number | null; verdict: string; n_train: number[]; n_eval: number[];
+    top_features: { feature: string; auc: number; higher: string; mean_a: number; mean_b: number }[];
+  }[];
 }
 export interface TrainReview {
   model_tag: string | null; job_id: number;
   n_tasks: number; n_tasks_ok: number; n_tasks_failed: number;
-  n_segments: number; n_wrong: number; by_kind: Record<string, number>; event_labels: string[];
+  n_segments: number; n_wrong: number; by_kind: Record<string, number>; by_hint?: Record<string, number>; event_labels: string[];
   confusion: { classes: string[]; matrix: number[][] };
   per_class: Record<string, { segments: number; correct: number; recall: number | null; precision: number | null }>;
   rows: ReviewRow[]; n_rows_total: number; errors: string[]; note?: string;
