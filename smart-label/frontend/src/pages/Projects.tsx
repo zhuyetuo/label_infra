@@ -874,7 +874,8 @@ export default function Projects() {
   // 排一次"按项目名（= 日期）降序"，换个页面回来又变回默认，每次都得重排
   const projectSort = usePersistedSort("projects-sort");
   // 列宽也让人自己拖：「片段」那列内容长短差得远，写死一个宽度总有一头不合适
-  const taskWidth = useResizableColumns("project-tasks-widths");
+  // v2：改成「片段列吃剩下的宽度、整表不用横向滚动」，以前拖宽记下来的列宽作废，不然还是会挤出滚动条
+  const taskWidth = useResizableColumns("project-tasks-widths-v2");
   const noCsv = (t: Task) => {
     const n = t.imu_row_count ?? samples?.find((s) => s.id === t.sample_id)?.imu_row_count;
     return n === 0;
@@ -1566,20 +1567,22 @@ export default function Projects() {
                 onChange={taskSort.onTableChange}
                 components={taskWidth.components}
                 tableLayout={taskWidth.tableLayout}
-                // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去
-                scroll={{ x: "max-content" }}
+                // 拖出来的列宽要生效，表格得是固定布局——antd 靠 scroll.x 切过去。
+                // x = 100%：表格跟容器一样宽，片段那一列不写宽度、吃剩下的，内容换行——不用左右拖就能一眼看全
+                scroll={{ x: "100%" }}
                 columns={taskWidth.applyResize<Task>(taskSort.applySort<Task>([
-                  { title: "任务ID", dataIndex: "id", width: 80, sorter: (a: Task, b: Task) => a.id - b.id },
+                  { title: "任务ID", dataIndex: "id", width: 72, sorter: (a: Task, b: Task) => a.id - b.id },
                   {
                     title: "样本",
                     dataIndex: "sample_id",
+                    width: 210,
                     // 样本编号里带采集时间，按字符串排就是按采集时间排；默认升序
                     sorter: (a: Task, b: Task) => String(sampleCode(a.sample_id)).localeCompare(String(sampleCode(b.sample_id))),
                     defaultSortOrder: "ascend" as const,
                     render: (id: number, task: Task) => {
                       const s = samples?.find((x) => x.id === id);
                       return (
-                        <Space size={4}>
+                        <Space size={4} wrap>
                           <Tooltip title={String(sampleCode(id))}>
                             <span>{sampleName(id)}</span>
                           </Tooltip>
@@ -1601,7 +1604,7 @@ export default function Projects() {
                   {
                     title: "总时长",
                     key: "duration",
-                    width: 110,
+                    width: 100,
                     // 按时长排，想先挑短的就点一下
                     sorter: (a: Task, b: Task) => (durationOf(a.sample_id) ?? 0) - (durationOf(b.sample_id) ?? 0),
                     render: (_: unknown, task: Task) => formatDuration(durationOf(task.sample_id)),
@@ -1609,16 +1612,16 @@ export default function Projects() {
                   {
                     title: "类型",
                     dataIndex: "task_type",
-                    width: 150,
+                    width: 120,
                     render: (t: string) => TASK_TYPE_LABEL[t] ?? t,
                   },
-                  { title: "轮次", dataIndex: "round_no", width: 60 },
+                  { title: "轮次", dataIndex: "round_no", width: 50 },
                   {
                     title: "状态",
                     dataIndex: "status",
                     width: 190,
                     render: (s: TaskStatus, task: Task) => (
-                      <Space size={4}>
+                      <Space size={4} wrap>
                         <TaskStatusTag status={s} />
                         {!!task.mark_count && (
                           <Tooltip title={`${task.mark_count} 段打了标记（复合类别 / 边界拿不准 / 画面跟 IMU 对不上…），打开后在片段列表按「有标记」筛`}>
@@ -1655,7 +1658,7 @@ export default function Projects() {
                       : "片段",
                     // 标题会随「含类别」筛选变，不能拿它当 key——记住的排序会认不出来
                     key: "segments",
-                    width: 260,
+                    // 不写宽度：吃掉剩下的，标签多了就换行
                     sorter: (a: Task, b: Task) => segmentsOrder(a, b, f.labels, f.cand),
                     sortDirections: ["descend", "ascend", "descend"],
                     render: (_, task: Task) => {
@@ -1764,6 +1767,7 @@ export default function Projects() {
                   {
                     title: "指派给",
                     dataIndex: "assigned_to",
+                    width: 150,
                     render: (id: number | null, task: Task) => {
                       if (id != null) return <UserTag name={userName(id) ?? `#${id}`} role={roleOf(id)} me={id === userId} />;
                       // 认领后太久没打开被定时任务收回的：写清原来是谁的、什么时候收回的。
@@ -1781,11 +1785,12 @@ export default function Projects() {
                   },
                   {
                     title: "操作",
+                    width: 190,
                     render: (_, task: Task) => {
                       // 自己锁着的进行中任务才能改，其余情况（已提交/别人在标/管理员旁观）只读
                       const editable = task.status === "IN_PROGRESS" && task.locked_by === userId;
                       return (
-                        <Space>
+                        <Space size={[4, 2]} wrap>
                           {/* 认领 = 领到自己名下来标（不是审核）。已经指派给别人的领不到，不显示，
                               不然点了只会报错、还让人以为认领是"我来看看" */}
                           {task.status === "PENDING_ASSIGN" && (task.assigned_to == null || task.assigned_to === userId) && (
