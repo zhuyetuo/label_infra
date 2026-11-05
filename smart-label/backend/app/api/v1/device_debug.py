@@ -37,6 +37,8 @@ class InferIn(BaseModel):
     hz: float = Field(..., gt=0)
     mode: str = "raw"   # 服务端：raw / viterbi；端侧：raw / board（板上那份后处理 C）
     model: str | None = None
+    # 端侧才用：同一批窗口 C 特征 / Python 特征交叉比，查端侧跟服务端为什么不一样
+    diagnose: bool = False
 
 
 @router.post("/infer")
@@ -44,7 +46,7 @@ async def infer(body: InferIn):
     url = f"{settings.algo_service_url.rstrip('/')}/api/v1/label/infer_samples"
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as c:
-            r = await c.post(url, json=body.model_dump())
+            r = await c.post(url, json=body.model_dump(exclude={"diagnose"}))
     except httpx.RequestError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"连不上 AI 服务：{e}") from e
     if r.status_code == 404:
