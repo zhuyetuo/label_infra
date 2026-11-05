@@ -466,6 +466,8 @@ export default function DeviceDebug() {
                 message="连上了但收不到原始采样（0x08）：正式固件（协议 v2.0）不发，要用 PB_RAW_STREAM=1 编的调试固件。当前行为和行为片段照常能看" />
             )}
           </Card>
+          {/* 放左边：右边一列已经很长，放右边的话左边波形下面空一大块 */}
+          <DeviceClockCompare getSamples={getSamplesStable} epoch={sessEpoch} expectHz={expectHz} isPc={kind === "pc"} />
         </Col>
         <Col xs={24} xl={8}>
           <Card size="small" title="采样率 / 间隔（最近 5 秒）"
@@ -511,7 +513,6 @@ export default function DeviceDebug() {
               </Card>
             );
           })()}
-          <DeviceClockCompare getSamples={getSamplesStable} epoch={sessEpoch} expectHz={expectHz} isPc={kind === "pc"} />
           {kind === "pc" && (
             <Card size="small" title="当前行为（0x07）" style={{ marginTop: 12 }}>
               {behav ? (
