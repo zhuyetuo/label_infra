@@ -258,6 +258,18 @@ async def train_review(version_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
+@router.get("/{version_id}/review/status")
+async def train_review_status(version_id: int, db: AsyncSession = Depends(get_db)):
+    """回放进度（页面轮询：跑着的时候显示进度、不让再点）"""
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        return ok(await algo_client.train_review_status(row.algo_job_id))
+    except algo_client.AlgoServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 @router.post("/{version_id}/review/rerun")
 async def rerun_train_review(version_id: int, db: AsyncSession = Depends(get_db)):
     """再跑一次回放（改完标注之后看还剩多少错例；模型不重训）。跑完刷新列表就能看到。"""

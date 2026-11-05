@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
-import { rerunTrainReview, trainReview, type DatasetStats, type ReviewRow, type TrainDiag, type TrainReview } from "@/api/training";
+import { Alert, Button, Modal, Progress, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { rerunTrainReview, trainReview, trainReviewStatus, type DatasetStats, type ReviewProgress, type ReviewRow, type TrainDiag, type TrainReview } from "@/api/training";
+import { errMsg } from "@/utils/request";
 import { fmtSecs } from "@/utils/fmtDuration";
 
 /**
@@ -59,6 +60,54 @@ export default function TrainReviewModal({
       trainReview(versionId).then(setFull).catch(() => undefined).finally(() => setLoading(false));
     }
   }, [versionId, review]);
+
+  // 回放进度：打开着就每 3 秒问一次；跑着的时候显示进度、两个按钮都不让点；跑完自动拉新结果
+  const [prog, setProg] = useState<ReviewProgress | null>(null);
+  const running = prog?.status === "running" || prog?.status === "starting";
+  useEffect(() => {
+    if (versionId == null || !modelDone) { setProg(null); return; }
+    let alive = true, last: string | undefined;
+    const tick = async () => {
+      try {
+        const p = await trainReviewStatus(versionId);
+        if (!alive) return;
+        setProg(p);
+        if ((last === "running" || last === "starting") && p.status === "done") {
+          setLoading(true);
+          trainReview(versionId).then((r) => alive && setFull(r)).catch(() => undefined).finally(() => alive && setLoading(false));
+          onRefresh?.();
+          message.success("回放跑完了");
+        }
+        last = p.status;
+      } catch { /* 算法服务连不上：不显示进度，按钮照旧 */ }
+    };
+    void tick();
+    const t = window.setInterval(tick, 3000);
+    return () => { alive = false; window.clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionId, modelDone]);
+  const startRerun = async () => {
+    if (versionId == null || running) return;
+    try {
+      await rerunTrainReview(versionId);
+      setProg({ status: "starting", done: 0, total: null });
+      message.success("回放开始跑了，下面有进度");
+    } catch (e) {
+      message.error(errMsg(e));
+    }
+  };
+  const progBar = running ? (
+    <div style={{ minWidth: 260 }}>
+      <Progress size="small" status="active"
+        percent={prog?.total ? Math.round(((prog.done ?? 0) / prog.total) * 100) : 0}
+        format={() => (prog?.total ? `${prog.done ?? 0} / ${prog.total} 个任务` : "准备中…")} />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        回放在跑{prog?.started_at ? `（已 ${Math.max(0, Math.round(Date.now() / 1000 - prog.started_at))} 秒）` : ""}，可以关掉这个窗口，跑完再打开看
+      </Typography.Text>
+    </div>
+  ) : prog?.status === "failed" ? (
+    <Alert type="error" showIcon style={{ padding: "2px 8px" }} message={`上次回放失败：${prog.error ?? ""}`} />
+  ) : null;
 
   const rows = useMemo(() => (full?.rows ?? []).filter((r) => (kind === "全部" || r.kind === kind) && (hint === "全部" || r.hint === hint)), [full, kind, hint]);
   const kinds = Object.keys(KIND_COLOR);
@@ -124,22 +173,11 @@ export default function TrainReviewModal({
           </Tooltip>
         ))}
         {modelDone && (
-          <Button
-            size="small"
-            onClick={async () => {
-              if (versionId == null) return;
-              try {
-                await rerunTrainReview(versionId);
-                message.success("回放在后台重跑，几分钟后刷新列表再看");
-                onRefresh?.();
-              } catch (e) {
-                message.error(String((e as Error)?.message ?? e));
-              }
-            }}
-          >
-            重跑回放
+          <Button size="small" disabled={running} loading={running} onClick={startRerun}>
+            {running ? "回放在跑…" : "重跑回放"}
           </Button>
         )}
+        {progBar}
       </Space>
       {full.errors.length > 0 && <Alert type="warning" showIcon message={`${full.n_tasks_failed} 个任务没跑成：${full.errors.slice(0, 3).join("；")}`} />}
       <Table
@@ -200,13 +238,14 @@ export default function TrainReviewModal({
   ) : (
     <Space direction="vertical">
       <Typography.Text type="secondary">
-        {modelDone ? "这一版还没有回放结果。训练完会自动跑；老版本点下面重跑一次（几分钟）。" : "训练完才有。"}
+        {!modelDone ? "训练完才有。" : running ? "回放在跑，跑完这里会自动出结果。" : "这一版还没有回放结果。训练完会自动跑；老版本点下面跑一次（几分钟）。"}
       </Typography.Text>
       {modelDone && versionId != null && (
-        <Button size="small" onClick={async () => { try { await rerunTrainReview(versionId); message.success("回放在后台跑，几分钟后刷新列表"); onRefresh?.(); } catch (e) { message.error(String((e as Error)?.message ?? e)); } }}>
-          跑一次回放
+        <Button size="small" disabled={running} loading={running} onClick={startRerun}>
+          {running ? "回放在跑…" : "跑一次回放"}
         </Button>
       )}
+      {progBar}
     </Space>
   );
 

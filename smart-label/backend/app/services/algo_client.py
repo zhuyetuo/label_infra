@@ -347,9 +347,28 @@ async def rerun_train_review(algo_job_id: int) -> dict:
     except httpx.RequestError as e:
         raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
     if resp.status_code == 409:
-        raise AlgoConflict("训练还没完成")
+        # 两种：训练还没完成 / 回放正在跑——把算法服务的原话带回去
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise AlgoConflict(detail or "训练还没完成")
     if resp.status_code != 200:
         raise AlgoServiceError(f"算法服务重跑回放失败（{resp.status_code}）：{resp.text[:300]}")
+    return resp.json()
+
+
+async def train_review_status(algo_job_id: int) -> dict:
+    """回放进度：idle / starting / running（done / total 个任务）/ done / failed。
+    算法服务是老版本（没这个接口）时返回 unknown，页面照旧能用"""
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/review/status"
+    try:
+        async with httpx.AsyncClient(timeout=settings.algo_service_timeout_sec) as client:
+            resp = await client.get(url)
+    except httpx.RequestError as e:
+        raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
+    if resp.status_code != 200:
+        return {"status": "unknown"}
     return resp.json()
 
 
