@@ -359,10 +359,15 @@ export interface ReviewRow {
   conf: number; p_human: number | null; n_windows: number; votes: Record<string, number>;
   /** 疑似标错 / 段里混了别的 / 难区分 / 模型偏向另一类（老版本回放没有） */
   hint?: string;
+  /** 这段来自哪份数据集（主 + 一起训练的；老版本回放没有） */
+  dataset?: string;
 }
 /** 训练时的诊断（ml_rf.json 里）：按窗口的混淆矩阵 + 容易混的两类单独看分不分得开 */
 export interface TrainDiag {
   confusion?: { labels: string[]; matrix: number[][]; top: { human: string; pred: string; n: number; frac: number }[] };
+  /** 新版流程：分数据集的交叉验证结果（含混淆矩阵）；主数据集名 */
+  per_dataset?: Record<string, { confusion?: { labels: string[]; matrix: number[][] }; macro_f1?: number }>;
+  main_dataset?: string;
   separability?: {
     a: string; b: string; auc: number | null; verdict: string; n_train: number[]; n_eval: number[];
     top_features: { feature: string; auc: number; higher: string; mean_a: number; mean_b: number }[];
@@ -373,6 +378,8 @@ export interface TrainReview {
   n_tasks: number; n_tasks_ok: number; n_tasks_failed: number;
   n_segments: number; n_wrong: number; by_kind: Record<string, number>; by_hint?: Record<string, number>; event_labels: string[];
   confusion: { classes: string[]; matrix: number[][] };
+  /** 按数据集各一份（老版本回放没有） */
+  confusion_by_dataset?: Record<string, { classes: string[]; matrix: number[][] }>;
   per_class: Record<string, { segments: number; correct: number; recall: number | null; precision: number | null }>;
   rows: ReviewRow[]; n_rows_total: number; errors: string[]; note?: string;
 }
