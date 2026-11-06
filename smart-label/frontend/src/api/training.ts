@@ -445,3 +445,24 @@ export const activateModel = (id: number) =>
     undefined,
     { timeout: 120_000 }
   );
+
+/** 导出训练数据（原始 CSV + 标签 + 训练参数，不含视频）：先换短期 token 并拿到大概，再用 <a href> 直接下载，
+ *  几百 MB 不经 axios（Blob 会整份进浏览器内存） */
+export interface DataBundleInfo {
+  token: string;
+  datasets: string[];
+  n_csv: number;
+  bytes: number;
+  n_segments: number;
+  missing: string[];
+}
+export const dataBundleInfo = (id: number) =>
+  request.post<never, DataBundleInfo>(`/model-versions/${id}/data-bundle/token`, null, { timeout: 120000 });
+export function downloadDataBundle(id: number, token: string) {
+  const a = document.createElement("a");
+  a.href = `/api/v1/model-versions/${id}/data-bundle?token=${encodeURIComponent(token)}`;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
