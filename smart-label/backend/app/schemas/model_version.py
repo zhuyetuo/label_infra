@@ -65,6 +65,10 @@ class DatasetSpecIn(BaseModel):
     label_mode: str | None = None
     # 模型超参覆盖：n_estimators / max_depth / min_samples_leaf / max_features，不填用默认
     model_params: dict | None = None
+    # 新版训练流程（imu_train src/ml/train_v2.py）：pipeline="v2"；细分训练的类别；输出校准系数
+    pipeline: str | None = None
+    fine_labels: list[str] | None = None
+    class_scale: dict[str, float] | None = None
 
 
 class TrainSubmitIn(BaseModel):

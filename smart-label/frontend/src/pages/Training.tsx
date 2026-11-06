@@ -78,6 +78,12 @@ const MIN_SEGMENTS = 5;
 type TrainCat = { name: string; n: number; sec: number; root: string; chain: string[]; nShort?: number };
 type TrainRow = TrainCat & { key: string; isGroup?: boolean; children?: TrainRow[] };
 
+/** 新版训练流程的默认值（2026-11 用 #23 / #27 的数据按「天 + 项圈」分组交叉验证定的） */
+const V2_DEFAULT_FINE = ["进食", "饮水", "甩身体"];
+const V2_DEFAULT_SCALE: Record<string, number> = { 抓挠: 1.5, "甩头/抖身": 2 };
+/** 新版流程的默认窗口：4 秒，板上特征缓冲最多 64 点 */
+const v2Window = (hz: number) => Math.min(64, Math.floor(4 * hz + 1e-9));
+
 /** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
 type TrainOpts = {
   modelType?: string;
@@ -98,6 +104,10 @@ type TrainOpts = {
   strideS?: number | null;
   labelMode?: "majority" | "center";
   modelParams?: ModelParams;
+  /** 新版训练流程（imu_train src/ml/train_v2.py）+ 它的两项：细分训练的类别、输出校准系数 */
+  pipelineV2?: boolean;
+  fineLabels?: string[] | null;
+  classScale?: Record<string, number>;
   extraDs?: string[];
   extraHz?: Record<string, number>;
   remapEdits?: Record<string, string>;
@@ -279,6 +289,21 @@ export default function Training() {
   const [strideS, setStrideS] = useState<number | null>(null);
   const [labelMode, setLabelMode] = useState<"majority" | "center">("majority");
   const [modelParams, setModelParams] = useState<ModelParams>({});
+  // 新版训练流程：按真实时间切窗口、细分训练合并输出、输出校准、按（天, 项圈）分组验证。默认开
+  const [pipelineV2, setPipelineV2] = useState(true);
+  // 细分训练：null = 默认（进食 / 饮水 / 甩身体 里这次数据有、而且被并进别的类的）
+  const [fineLabels, setFineLabels] = useState<string[] | null>(null);
+  const [classScale, setClassScale] = useState<Record<string, number>>(V2_DEFAULT_SCALE);
+  /** 打开新版流程时把相关参数摆到实验定下来的那套 */
+  const useV2Defaults = () => {
+    setModelType("rf");
+    setHz(15.625);
+    setEdgeSize(true);
+    setEdgeTrees(20);
+    setEdgeDepth(8);
+    setWindowS(null);
+    setStrideS(null);
+  };
   const [reviewFor, setReviewFor] = useState<ModelVersion | null>(null);
   const [tag, setTag] = useState("");
   // 默认就是最高质量那一档：片段审核里一条条点了「通过」的。训练集的质量决定模型的上限，
@@ -586,6 +611,9 @@ export default function Training() {
     return { short: rows.reduce((a, c) => a + (c.nShort ?? 0), 0), n: rows.reduce((a, c) => a + c.n, 0) };
   };
   const shortEffective = (shortLabels ?? trainTargets.filter((t) => shortCount(t).short > 0)).filter((t) => shortOptions.includes(t));
+  // 细分训练可选的：这次数据里被并进别的类的那些（自成一类的本来就单独训）
+  const fineOptions = trainCats.filter((c) => remapEdits[c.name] && remapEdits[c.name] !== c.name).map((c) => c.name);
+  const fineEffective = (fineLabels ?? V2_DEFAULT_FINE).filter((n) => fineOptions.includes(n));
 
   // 类别查出来之后预填，按这个顺序：
   //   1. 上次训练时这个类别算作了什么（跨数据集记的习惯：舔-大腿内侧 → 舔）
@@ -642,10 +670,20 @@ export default function Training() {
       setStrideS(base.strideS ?? null);
       setLabelMode(base.labelMode ?? "majority");
       setModelParams(base.modelParams ?? {});
+      setPipelineV2(base.pipelineV2 ?? true);
+      setFineLabels(base.fineLabels ?? null);
+      setClassScale(base.classScale ?? V2_DEFAULT_SCALE);
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
       setEdgeTrees(base.edgeTrees ?? null);
       setEdgeDepth(base.edgeDepth ?? null);
       setEdgeFilters(base.edgeFilters ?? "");
+    }
+    // 第一次用新版流程（没存过这一项）：把采样率 / 端侧规格摆到推荐值。存过的照存的来
+    if (!base || base.pipelineV2 === undefined) {
+      setPipelineV2(true);
+      setFineLabels(null);
+      setClassScale(V2_DEFAULT_SCALE);
+      useV2Defaults();
     }
     // 一起训练的那几份：删掉了的数据集别再选着——选择框里会出现一个认不出的名字
     const alive = new Set((datasets ?? []).map((x) => x.name));
@@ -696,6 +734,9 @@ export default function Training() {
           label_mode: labelMode === "center" ? "center" : null,
           model_params: modelType !== "cnn" && Object.values(modelParams).some((v) => v != null && v !== "") ? modelParams : null,
           clean: true,
+          ...(pipelineV2
+            ? { pipeline: "v2", fine_labels: fineEffective, class_scale: classScale, axes: 3, channel_mode: "inv", rot_aug: 0 }
+            : {}),
         },
         model_type: modelType,
         tag: tag.trim() || null,
@@ -704,7 +745,7 @@ export default function Training() {
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
         modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
-        windowS, strideS, labelMode, modelParams,
+        windowS, strideS, labelMode, modelParams, pipelineV2, fineLabels, classScale,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -760,6 +801,9 @@ export default function Training() {
     setStrideS(num(sp.stride_s));
     setLabelMode(sp.label_mode === "center" ? "center" : "majority");
     setModelParams((sp.model_params as ModelParams | undefined) ?? {});
+    setPipelineV2(sp.pipeline === "v2");
+    setFineLabels(Array.isArray(sp.fine_labels) ? (sp.fine_labels as string[]) : null);
+    setClassScale((sp.class_scale as Record<string, number> | undefined) ?? V2_DEFAULT_SCALE);
     const alive = new Set((datasets ?? []).map((x) => x.name));
     const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null }[] | undefined) ?? [])
       .filter((e) => alive.has(e.date) && e.date !== ds.name);
@@ -1028,7 +1072,25 @@ export default function Training() {
                     sorter: (a, b) => (f1Of(a) ?? -1) - (f1Of(b) ?? -1),
                     render: (_, v: ModelVersion) => {
                       const f1 = f1Of(v);
-                      return f1 != null ? <b>{f1.toFixed(3)}</b> : "-";
+                      if (f1 == null) return "-";
+                      const m = metricsOf(v) ?? {};
+                      if (m.pipeline !== "v2") return <b>{f1.toFixed(3)}</b>;
+                      // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
+                      const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number }>;
+                      const seg = m.segment_macro_f1 as number | undefined;
+                      const sc = m.scratch_segments as { recall?: number; precision?: number } | undefined;
+                      return (
+                        <Tooltip title={
+                          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                            <div>新版流程：按（天, 项圈）分组交叉验证，同一只狗同一天不会两边都有——比老流程的分数低一些，但更接近换一只狗的真实表现。不能跟老流程的数直接比</div>
+                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}{sc?.recall != null ? `；抓挠按次数 查全 ${sc.recall} / 查准 ${sc.precision}` : ""}</div>}
+                            {Object.keys(pd).length > 0 && <div style={{ marginTop: 4 }}>分数据集（老数据标得粗，会拉低总分）：</div>}
+                            {Object.entries(pd).map(([d, r]) => <div key={d}>{d}：{r.macro_f1.toFixed(3)}（{r.n} 窗）</div>)}
+                          </div>
+                        }>
+                          <span style={{ cursor: "help" }}><b>{f1.toFixed(3)}</b><Tag color="purple" style={{ marginLeft: 4, marginInlineEnd: 0 }}>新版</Tag></span>
+                        </Tooltip>
+                      );
                     },
                   },
                   {
@@ -1908,10 +1970,57 @@ export default function Training() {
             <Typography.Text type="secondary">
               {trainFor.n_tasks} 个任务 / {trainFor.n_segments} 段 / {trainFor.total_hours} 小时
             </Typography.Text>
+            <div style={{ border: `1px solid ${pipelineV2 ? "#7c5cff" : "rgba(128,128,128,.35)"}`, borderRadius: 8, padding: "8px 12px" }}>
+              <Space wrap>
+                <Checkbox checked={pipelineV2} onChange={(e) => { setPipelineV2(e.target.checked); if (e.target.checked) useV2Defaults(); }}>
+                  <b>新版训练流程（推荐）</b>
+                </Checkbox>
+                <Tooltip title={
+                  <div style={{ lineHeight: 1.7 }}>
+                    按真实时间切窗口（不再把不连续的几段拼在一起）；短片段以它为中心、前后用真实数据补；
+                    进食 / 饮水 / 甩身体这类像抓挠的先单独训、输出时再并回；最后按类别乘系数校准；
+                    指标按（天, 项圈）分组交叉验证——同一只狗同一天不会两边都有，比老流程的分数低一些但更真实。
+                    <br />固定 3 轴、方向无关、只训随机森林；产物照常能导出到端侧。
+                  </div>
+                }>
+                  <QuestionCircleOutlined style={{ cursor: "help", opacity: 0.7 }} />
+                </Tooltip>
+                {pipelineV2 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    推荐：训练采样率 15.625Hz、窗口 4 秒（{v2Window(hz)} 点）、20 棵 × 深 8
+                    {(hz !== 15.625 || edgeTrees !== 20 || edgeDepth !== 8) && (
+                      <Button size="small" type="link" onClick={useV2Defaults}>恢复推荐</Button>
+                    )}
+                  </Typography.Text>
+                )}
+              </Space>
+              {pipelineV2 && (
+                <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                  <Space wrap size={[8, 4]}>
+                    <Tooltip title="这几类训练时单独成一类，模型被迫学会它们跟抓挠的区别（进食、饮水低头有节奏，很像抓挠）；输出时概率并回它们归并到的那一类，最后还是 5 类。只能选这次被并进别的类的">
+                      <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>细分训练、合并输出</span>
+                    </Tooltip>
+                    <Select mode="multiple" size="small" style={{ minWidth: 260 }} placeholder="不细分"
+                      value={fineEffective} onChange={(v) => setFineLabels(v)} maxTagCount="responsive"
+                      options={fineOptions.map((n) => ({ value: n, label: `${n} → ${remapEdits[n]}` }))} />
+                  </Space>
+                  <Space wrap size={[8, 4]}>
+                    <Tooltip title="各类的概率乘这个系数再取最大。老数据里抓挠被标成活动的不少，模型学得偏保守、次数少报；抓挠乘 1.5 让查全≈查准，数出来的次数不偏。1 = 不动">
+                      <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>输出校准</span>
+                    </Tooltip>
+                    {trainTargets.map((t) => (
+                      <InputNumber key={t} size="small" min={0.2} max={5} step={0.1} style={{ width: 150 }} addonBefore={t}
+                        value={classScale[t] ?? 1} onChange={(v) => setClassScale({ ...classScale, [t]: v ?? 1 })} />
+                    ))}
+                  </Space>
+                </div>
+              )}
+            </div>
             <Space>
               <Typography.Text>模型类型</Typography.Text>
               <Select
                 style={{ width: 140 }}
+                disabled={pipelineV2}
                 value={modelType}
                 onChange={setModelType}
                 options={MODEL_TYPES.map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
@@ -1944,6 +2053,7 @@ export default function Training() {
                 ]}
               />
             </Space>
+            {!pipelineV2 && (<>
             <Space>
               <Tooltip title="项圈上有陀螺仪就用 6 轴，只有加速度计就用 3 轴。选错的后果是单向的：端侧只有加速度计、却用 6 轴训，指标再好也代表不了端上的表现——那是拿一块板子上根本没有的信号在学。反过来（端上有陀螺仪却只用 3 轴训）只是浪费了一半信号，不会不准">
                 <Typography.Text style={{ borderBottom: "1px dashed #666" }}>传感器轴数</Typography.Text>
@@ -1991,6 +2101,7 @@ export default function Training() {
                 </Typography.Text>
               )}
             </Space>
+            </>)}
             <Space>
               <Checkbox checked={edgeSize} onChange={(e) => setEdgeSize(e.target.checked)}>
                 <Tooltip title="要上端侧（烧进项圈）就勾上。默认的模型是 200 棵不限深的树，几十 MB，板子上装不下。勾上之后：rf = 20 棵 × 深 10（约 100 KB），跟板上现在跑的 edge_rf_d10 同规格；cnn = filters 32/64/128（int8 约 35 KB）；xgb = 50 轮 × 深 6。要更小的，在后面填具体规格，或者训完看「体积曲线」挑">
@@ -2028,6 +2139,7 @@ export default function Training() {
                 </Space>
               )}
             </Space>
+            {!pipelineV2 && (<>
             {axes === 3 && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 只用加速度那三列训，陀螺仪整个丢掉。
@@ -2063,6 +2175,7 @@ export default function Training() {
               )}
             </Space>
 
+            </>)}
             {/* ── 数据处理 / 模型参数 ─────────────────────────────── */}
             <Divider style={{ margin: "4px 0" }} orientation="left" plain>数据处理 / 模型参数（不填用默认）</Divider>
             <Space wrap size={[12, 6]}>
@@ -2070,12 +2183,12 @@ export default function Training() {
                 <span style={{ borderBottom: "1px dashed #666" }}>时间窗口</span>
               </Tooltip>
               <InputNumber size="small" min={0.5} max={20} step={0.256} value={windowS} onChange={(v) => setWindowS(v ?? null)}
-                placeholder={`自动 ${autoWin(hz, 2)}`} addonAfter="秒" style={{ width: 150 }} />
+                placeholder={pipelineV2 ? `自动 ${(v2Window(hz) / hz).toFixed(2)}` : `自动 ${autoWin(hz, 2)}`} addonAfter="秒" style={{ width: 150 }} />
               <Tooltip title={`窗口每次往前挪多少。越小窗口越多（训练慢、相邻窗口很像），一般取窗口的一半。不填按采样率自动：${autoWin(hz, 1)} 秒`}>
                 <span style={{ borderBottom: "1px dashed #666" }}>滑动步长</span>
               </Tooltip>
               <InputNumber size="small" min={0.1} max={20} step={0.128} value={strideS} onChange={(v) => setStrideS(v ?? null)}
-                placeholder={`自动 ${autoWin(hz, 1)}`} addonAfter="秒" style={{ width: 150 }} />
+                placeholder={pipelineV2 ? "自动 1" : `自动 ${autoWin(hz, 1)}`} addonAfter="秒" style={{ width: 150 }} />
               {(windowS != null || strideS != null) && (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   = {Math.round((windowS ?? autoWin(hz, 2)) * hz)} 点 / 步 {Math.round((strideS ?? autoWin(hz, 1)) * hz)} 点
@@ -2083,6 +2196,7 @@ export default function Training() {
                 </Typography.Text>
               )}
             </Space>
+            {!pipelineV2 && (
             <Space wrap size={[12, 6]}>
               <Tooltip title="一个窗口里混了两种动作时，这个窗口算哪一类。多数投票 = 占时间多的那类（默认）；窗口中心 = 窗口正中那一刻的标签，短促动作在窗口边上时不会被吞掉，但标签噪声大一点">
                 <span style={{ borderBottom: "1px dashed #666" }}>窗口标签</span>
@@ -2090,6 +2204,7 @@ export default function Training() {
               <Segmented size="small" value={labelMode} onChange={(v) => setLabelMode(v as "majority" | "center")}
                 options={[{ value: "majority", label: "多数投票（默认）" }, { value: "center", label: "窗口中心" }]} />
             </Space>
+            )}
             {modelType !== "cnn" && (
               <Space wrap size={[12, 6]}>
                 <Tooltip title="树模型的超参。不填用默认（随机森林 200 棵、不限深、叶子最少 1 个样本）。勾了「端侧尺寸」时棵数 / 深度以上面端侧那两格为准，这里只改叶子和特征。验证集远低于训练集（过拟合）时把「叶子最少样本」调大（5~20）">
