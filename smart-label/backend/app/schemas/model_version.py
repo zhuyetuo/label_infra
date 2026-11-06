@@ -15,6 +15,8 @@ class ExtraDatasetIn(BaseModel):
     date: str
     export_json: str
     source_hz: int | None = None
+    # 新版流程：这份数据集里不进训练的类别（归并后的名字）
+    exclude_classes: list[str] = []
 
 
 class DatasetSpecIn(BaseModel):
