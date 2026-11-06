@@ -285,3 +285,111 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         # 什么时候进的池（手动加入的时间 / 审核通过的时间）
         "entered_at": _entered(x),
     } for x, t, smp in rows]}
+
+
+# ── 数据盘点：某一类（默认抓挠）的片段都在哪一步 ──────────────────────────────
+# 回答「现在训练能用的高质量数据有多少、还有多少人看过但没进池子（没用上）、还有多少压根没人看」。
+# 每条片段只归一类，按下面的顺序先到先得（在池里的优先）
+INVENTORY_BUCKETS = [
+    ("pool_trained", "在数据池 · 已经用来训练过", True,
+     "进池时间早于最近一次从数据池导出的训练数据集——那一版训练用上了"),
+    ("pool_new", "在数据池 · 还没训练过", True, "最近一次导出之后才进池的，下次训练就能用上"),
+    ("uncertain", "标了待定", False, "没画面 / 看不清 / 要细切：不进训练集"),
+    ("returned", "片段审核退回", False, "审核员说有问题，等标注员改"),
+    ("human", "人工画的 / 从疑似片段确认的（还没审核）", False, "人自己标的，审核通过就进池"),
+    ("ai_modified", "AI 给的、被人改过（还没审核）", False, "人调过起止 / 改过类别，审核通过就进池"),
+    ("ai_confirmed", "AI 给的、人已确认（还没审核）", False, "人看过点了确认，审核通过就进池"),
+    ("ai_untouched", "AI 给的、还没人看过", False, "模型自己标的，人没确认过——不算高质量"),
+]
+
+
+async def label_inventory(db: AsyncSession, label: str = "抓挠") -> dict:
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.services import label_tree
+    from app.services.training_export_service import list_datasets
+
+    root_ids = set((await db.execute(
+        select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
+    )).scalars().all())
+    ids = await label_tree.expand_ids(db, root_ids)
+    names = set((await db.execute(select(LabelDefinition.display_name).where(LabelDefinition.id.in_(ids)))).scalars().all()) if ids else set()
+
+    # 最近一次「从数据池导出」的训练数据集：进池早于它的算已经训练过
+    last_pool_export = None
+    for m in list_datasets():
+        if m.get("scope") == "pool" and m.get("created_at"):
+            t = str(m["created_at"])
+            if last_pool_export is None or t > last_pool_export:
+                last_pool_export = t
+
+    agg = {k: {"n": 0, "seconds": 0.0, "projects": defaultdict(lambda: [0, 0.0])} for k, *_ in INVENTORY_BUCKETS}
+    if ids:
+        it = AnnotationLabelItem
+        rows = (await db.execute(
+            select(it.start_time_ms, it.end_time_ms, it.source_type, it.is_modified, it.ai_confirmed, it.uncertain,
+                   it.seg_status, it.pool_state, it.from_candidate_id, it.pool_at, it.seg_reviewed_at, it.touched_at,
+                   Project.name)
+            .join(AnnotationRecord, AnnotationRecord.id == it.annotation_record_id)
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(Project, Project.id == Task.project_id)
+            .where(it.label_id.in_(ids), AnnotationRecord.round_no == Task.round_no)
+        )).all()
+        for (s, e, src, modified, confirmed, uncertain, seg, ps, from_cand, pool_at, rev_at, touched_at, pname) in rows:
+            sec = max(0, (e or 0) - (s or 0)) / 1000
+            if in_pool(seg, ps):
+                t = (pool_at or touched_at) if ps == "in" else (rev_at or touched_at)
+                ts = t.isoformat(sep="T") if t else None
+                k = "pool_trained" if (last_pool_export and ts and ts <= last_pool_export) else "pool_new"
+            elif uncertain:
+                k = "uncertain"
+            elif seg == "returned":
+                k = "returned"
+            elif src != LabelItemSource.ai_generated or from_cand is not None:
+                k = "human"
+            elif modified:
+                k = "ai_modified"
+            elif confirmed:
+                k = "ai_confirmed"
+            else:
+                k = "ai_untouched"
+            a = agg[k]
+            a["n"] += 1
+            a["seconds"] += sec
+            a["projects"][pname][0] += 1
+            a["projects"][pname][1] += sec
+
+    # 疑似片段候选：还没人判断的（判过的要么变成正式片段、要么排除了，已经算在上面）
+    cand = {"n": 0, "seconds": 0.0}
+    if names or label:
+        q = (select(AiCandidate.start_time_ms, AiCandidate.end_time_ms)
+             .join(Task, Task.id == AiCandidate.task_id)
+             .where(AiCandidate.round_no == Task.round_no, AiCandidate.status == CandidateStatus.pending,
+                    AiCandidate.label_name.in_(names | {label})))
+        for s, e in (await db.execute(q)).all():
+            cand["n"] += 1
+            cand["seconds"] += max(0, (e or 0) - (s or 0)) / 1000
+
+    buckets = []
+    for k, name, usable, note in INVENTORY_BUCKETS:
+        a = agg[k]
+        buckets.append({"key": k, "name": name, "usable": usable, "note": note, "n": a["n"],
+                        "seconds": round(a["seconds"], 1),
+                        "by_project": sorted(({"name": p, "n": v[0], "seconds": round(v[1], 1)} for p, v in a["projects"].items()),
+                                             key=lambda x: -x["seconds"])})
+    def tot(keys):
+        sel = [b for b in buckets if b["key"] in keys]
+        return {"n": sum(b["n"] for b in sel), "seconds": round(sum(b["seconds"] for b in sel), 1)}
+    return {
+        "label": label, "labels": sorted(names),
+        "last_pool_export": last_pool_export,
+        "buckets": buckets,
+        "candidates_pending": {"n": cand["n"], "seconds": round(cand["seconds"], 1)},
+        "totals": {
+            "trained": tot({"pool_trained"}),
+            "pool": tot({"pool_trained", "pool_new"}),
+            # 人看过、但还没进池（没用上）：审核通过就能用
+            "reviewed_not_in_pool": tot({"human", "ai_modified", "ai_confirmed", "returned"}),
+            "ai_untouched": tot({"ai_untouched"}),
+            "all": tot({b["key"] for b in buckets}),
+        },
+    }

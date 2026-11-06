@@ -1,4 +1,5 @@
 import PoolCharts from "@/components/PoolCharts";
+import DataInventory from "@/components/DataInventory";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, Col, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic,
@@ -280,6 +281,9 @@ export default function DataPoolPanel({
         <Col><Statistic title="片段" value={sum?.n ?? 0} loading={loadingSum} /></Col>
         <Col><Statistic title="时长" value={fmtSecs((sum?.hours ?? 0) * 3600)} loading={loadingSum} /></Col>
         <Col flex="auto" />
+        <Col>
+          <DataInventory labelOptions={(sumAll?.by_root ?? []).map((b) => b.name)} />
+        </Col>
         <Col>
           <Button type="primary" disabled={!sum?.n} onClick={() => { setDsName(autoDsName()); setTrainOpen(true); }}>
             用这批训练

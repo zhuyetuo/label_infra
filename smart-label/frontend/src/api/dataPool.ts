@@ -130,3 +130,17 @@ export const classCompare = (body: {
   /** 3 = 只用加速度计（默认）；6 = 加上陀螺仪 */
   axes?: 3 | 6;
 }) => request.post<never, CompareResult>("/data-pool/compare", body, { timeout: 300_000 });
+
+/** 数据盘点：某一类（含细类）的片段各在哪一步 */
+export interface InventoryBucket {
+  key: string; name: string; usable: boolean; note: string; n: number; seconds: number;
+  by_project: { name: string; n: number; seconds: number }[];
+}
+export interface LabelInventory {
+  label: string; labels: string[]; last_pool_export: string | null;
+  buckets: InventoryBucket[];
+  candidates_pending: { n: number; seconds: number };
+  totals: Record<"trained" | "pool" | "reviewed_not_in_pool" | "ai_untouched" | "all", { n: number; seconds: number }>;
+}
+export const labelInventory = (label: string) =>
+  request.get<never, LabelInventory>("/data-pool/inventory", { params: { label }, timeout: 120000 });
