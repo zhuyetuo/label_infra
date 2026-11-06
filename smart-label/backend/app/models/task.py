@@ -70,6 +70,11 @@ class Task(Base):
     reclaimed_from: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # 皮肤评估里「抓挠确认无误 / 整份通过」时记一笔：复核进度要让别的管理员也看得到，
+    # 原来只记在复核人自己浏览器的 localStorage 里
+    scratch_checked_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    scratch_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

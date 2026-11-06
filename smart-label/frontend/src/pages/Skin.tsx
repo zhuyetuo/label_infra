@@ -29,7 +29,7 @@ import type { LabelDefinition, Task } from "@/types";
 import {
   getSkinDataRange,
   purgeSkinDailyStats,
-  deleteSkinRecord, deleteWeekly, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
+  deleteSkinRecord, deleteWeekly, markScratchChecked, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
   skinDailyTracking, skinLinkStaleness, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
   type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
 } from "@/api/skin";
@@ -790,8 +790,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const pickSort = usePersistedSort("skin-pick-sort");
   // 「这一段还要不要看」现在得同时读两列（人工复看 + 疑似片段）自己在心里合并。
   // 直接给个结论：抓挠都认过了、候选也没有待确认的，这一段就算复看完了
-  const reviewDone = (t: TrackingRow["tasks_detail"][number]) =>
-    (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) && t.cand_pending === 0;
+  // 「抓挠这一类复核完了」：任务上记着（谁登录都看得到）/ 本机刚点过还没刷新 / AI 标的抓挠每段都有人确认或判了待定
+  const scratchDone = (t: TrackingRow["tasks_detail"][number]) =>
+    t.status === "APPROVED" || !!t.scratch_checked_at || approved.has(t.task_id) || scratchOk.has(t.task_id) ||
+    (t.scratch_segments > 0 && t.scratch_unreviewed === 0);
+  const reviewDone = (t: TrackingRow["tasks_detail"][number]) => scratchDone(t) && t.cand_pending === 0;
   const [onlyTodo, setOnlyTodo] = useState(false);
   // 挑一段：只看戴在狗身上的那几小时（另一个项圈在充电座上的那几小时不用看）、只看白天 / 夜间。记在本机
   const [onlyWorn, setOnlyWornState] = useState(() => { try { return localStorage.getItem("smart-label:skin-pick-worn") !== "0"; } catch { return true; } });
@@ -802,7 +805,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const setDayPart = (v: "all" | "day" | "night") => { setDayPartState(v); try { localStorage.setItem("smart-label:skin-pick-daypart", v); } catch { /* ignore */ } };
   // 列宽也让人自己拖：写死的宽度总有几列挤成两行、另几列空着半格，
   // 而且不同的人关心的列不一样，没有一套宽度能同时合适
-  const trackWidth = useResizableColumns("skin-tracking-widths");
+  const trackWidth = useResizableColumns("skin-tracking-widths-v2");
   const pickWidth = useResizableColumns("skin-pick-widths");
 
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
@@ -854,6 +857,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     try {
       const r = await confirmScratchOnly(task, await scratchIdsOf(task.project_id), userId);
       setScratchOk((prev) => saveTaskMark(SCRATCH_OK_KEY, prev, task.id));
+      // 记到任务上：别的管理员在跟踪表里也看得到复核进度
+      await markScratchChecked(task.id).catch(() => {});
       // 重算这一天不等它：那一步要把当天所有样本的 AI 结果从 NAS 上读一遍，
       // 几秒起步，而它只影响跟踪表里的数字——复看的人这会儿要的是"下一段"。
       // 放到后台跑，算完自己刷新；这一段自己的状态（抓挠已确认）上面已经记下了
@@ -898,6 +903,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
     try {
       await approveWholeTask(task, userId);
       setApproved((prev) => saveTaskMark(APPROVED_KEY, prev, task.id));
+      await markScratchChecked(task.id).catch(() => {});
       // 通过之后这天的「人工版」数字才会变（联动只认已提交/已通过的任务），
       // 顺手只重算这一天再刷新跟踪表
       if (date) {
@@ -924,6 +930,17 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   // 弹窗里那张表始终跟着最新查询结果走，标完回来数字就是新的
   const checkFor = checkKey ? all.find((r) => r.date === checkKey.date && r.dog_name === checkKey.dog_name) ?? null : null;
 
+  // 一天的复核进度：只算项圈戴在狗身上的那几段（充电座上那几小时的抓挠不是这只狗的，不用看）
+  const reviewProgress = (r: TrackingRow) => {
+    const need = (r.tasks_detail ?? []).filter((t) => wornMinutes(t.sample_code, t.video_duration_sec, r.devices) !== 0);
+    const doneTasks = need.filter(reviewDone);
+    const who = [...new Set(need.map((t) => t.scratch_checked_by).filter((x): x is string => !!x))];
+    return { need, done: doneTasks.length, who };
+  };
+  const reviewRatio = (r: TrackingRow) => {
+    const { need, done } = reviewProgress(r);
+    return need.length ? done / need.length : -1;
+  };
   const sTag = (s: TrackingRow["s_no_q"]) =>
     s && s.total != null ? (
       <span>
@@ -1017,10 +1034,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         components={trackWidth.components}
         tableLayout={trackWidth.tableLayout}
         columns={trackWidth.applyResize<TrackingRow>(trackSort.applySort<TrackingRow>([
-          { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
+          { title: "日期", dataIndex: "date", width: 104, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           {
             title: "狗",
-            width: 140,
+            width: 150,
             // PM 那边的狗名是「品种-名字」，全写出来再加机位号就三行了。列表里
             // 只留名字（一眼能认），品种和机位号放 tooltip
             render: (_: unknown, r: TrackingRow) => {
@@ -1042,7 +1059,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "有效佩戴",
             key: "wear",
-            width: 120,
+            width: 88,
             sorter: (a: TrackingRow, b: TrackingRow) =>
               ((a.stats?.valid_wear_hours as number) ?? 0) - ((b.stats?.valid_wear_hours as number) ?? 0),
             // 佩戴不够的天抓挠次数天然偏低，不看这个列会把"没戴够"误读成"不痒了"
@@ -1053,7 +1070,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               const good = flag === "good";
               return (
                 <Tooltip title={good ? "佩戴 ≥12 小时，数据够用" : "佩戴不足 12 小时，这天的抓挠次数天然偏低，别当成「不痒了」；基线也不会采用这天"}>
-                  <Space size={4}>
+                  <Space size={2} wrap>
                     <span>{fmt(h, 1)} h</span>
                     {!good && <Tag color="orange">{flag === "partial" ? "偏少" : "不足"}</Tag>}
                   </Space>
@@ -1064,7 +1081,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "抓挠 次数/时长",
             key: "scratch",
-            width: 130,
+            width: 108,
             sorter: (a: TrackingRow, b: TrackingRow) =>
               ((a.stats?.event_count as number) ?? 0) - ((b.stats?.event_count as number) ?? 0),
             render: (_: unknown, r: TrackingRow) => {
@@ -1080,11 +1097,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "基线",
-            width: 110,
+            width: 124,
             render: (_: unknown, r: TrackingRow) =>
               r.n_baseline_days ? (
                 <Tooltip title={`${r.n_baseline_days} 天历史的中位数；C 值里的「变化幅度」就是拿当天跟它比`}>
-                  <Typography.Text type="secondary">{r.baseline_count} 次 / {fmt(r.baseline_duration_min, 1)} 分</Typography.Text>
+                  <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>{r.baseline_count} 次 / {fmt(r.baseline_duration_min, 1)} 分</Typography.Text>
                 </Tooltip>
               ) : (
                 <Tooltip title="还没有基线，变化幅度那 30 分不计，C 值上限只有 70">
@@ -1095,7 +1112,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           {
             title: "C 值",
             key: "c",
-            width: 150,
+            width: 108,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.c_value ?? -1) - (b.c_value ?? -1),
             render: (_: unknown, r: TrackingRow) =>
               r.c_value == null ? "—" : (
@@ -1116,7 +1133,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             : [
                 {
                   title: "AI / 人工（Δ）",
-                  width: 150,
+                  width: 118,
                   render: (_: unknown, r: TrackingRow) => (
                     <Tooltip {...EXPLAIN_TOOLTIP} title={<DeltaExplain r={r} />}>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -1134,7 +1151,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               ]),
           {
             title: "问答",
-            width: 170,
+            width: 136,
             // 没触发就整个留空：48 行里大半是 C0，每行都挂个「不必问答」全是噪音，
             // 一眼扫过去只想看到哪几天真的要去问
             render: (_: unknown, r: TrackingRow) => {
@@ -1154,29 +1171,27 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
           },
           {
-            title: "S 总分（不填问答）",
-            key: "s_no_q",
-            width: 150,
-            sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
-            render: (_: unknown, r: TrackingRow) => (
-              <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_no_q} withQ={false} />}>
-                <span>{sTag(r.s_no_q)}</span>
+            // 两列并一列（上 = 不填问答，下 = 含问答）：省出一列宽，整张表不用左右拉
+            title: (
+              <Tooltip title="上：不填问答的 S 总分；下：含问答的 S 总分（填了问答才有）">
+                <span style={{ cursor: "help" }}>S 总分<br /><span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7 }}>不填 / 含问答</span></span>
               </Tooltip>
             ),
-          },
-          {
-            title: "S 总分（含问答）",
-            key: "s_with_q",
-            width: 150,
-            sorter: (a: TrackingRow, b: TrackingRow) => (a.s_with_q?.total ?? -1) - (b.s_with_q?.total ?? -1),
-            render: (_: unknown, r: TrackingRow) =>
-              r.s_with_q ? (
-                <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_with_q} withQ />}>
-                  <span>{sTag(r.s_with_q)}</span>
+            key: "s_no_q",
+            width: 118,
+            sorter: (a: TrackingRow, b: TrackingRow) => (a.s_no_q?.total ?? -1) - (b.s_no_q?.total ?? -1),
+            render: (_: unknown, r: TrackingRow) => (
+              <div style={{ lineHeight: 1.9, whiteSpace: "nowrap" }}>
+                <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_no_q} withQ={false} />}>
+                  <div>{sTag(r.s_no_q)}</div>
                 </Tooltip>
-              ) : (
-                sTag(r.s_with_q)
-              ),
+                {r.s_with_q && (
+                  <Tooltip {...EXPLAIN_TOOLTIP} title={<SExplain s={r.s_with_q} withQ />}>
+                    <div>{sTag(r.s_with_q)}</div>
+                  </Tooltip>
+                )}
+              </div>
+            ),
           },
           {
             title: (
@@ -1185,7 +1200,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               </Tooltip>
             ),
             key: "ml",
-            width: 120,
+            width: 92,
             render: (_: unknown, r: TrackingRow) => {
               const m = r.ml;
               if (!m) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -1211,35 +1226,46 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
           },
           {
-            title: "复看标注",
-            width: 100,
-            // 这天的抓挠是好几个小时段任务加起来的，点开挑一个进标注工作台，
-            // 片段列表会默认筛到「抓挠」，直接核对是不是真有这么多
-            render: (_: unknown, r: TrackingRow) =>
-              r.tasks_detail?.length ? (
-                <Button size="small" type="link" onClick={() => setCheckKey({ date: r.date, dog_name: r.dog_name })}>
-                  查看标注
-                </Button>
-              ) : (
-                // 这一页的行来自 IMU 日统计，每天每只狗都有；能不能复看是另一回事——
-                // 得这天这只狗在标注平台上有任务才行。写清楚缺的是哪一步，不然
-                // 一个「—」看着像出了故障
-                <Tooltip title="这天这只狗在标注平台上还没有任务，没得可看。要么样本还没扫进来，要么扫进来了还没建任务（去「项目」里给这天建任务）">
-                  <Typography.Text type="secondary">—</Typography.Text>
+            title: (
+              <Tooltip title="这天要复核的小时段（项圈戴在狗身上的那几段）里复核完了几段：抓挠确认过（「抓挠确认无误」/「整份通过」，或者 AI 标的抓挠每段都有人确认或判了待定），疑似片段也没有待确认的。点进去挑一段看">
+                <span style={{ cursor: "help" }}>抓挠复核</span>
+              </Tooltip>
+            ),
+            key: "review",
+            width: 128,
+            sorter: (a: TrackingRow, b: TrackingRow) => reviewRatio(a) - reviewRatio(b),
+            render: (_: unknown, r: TrackingRow) => {
+              if (!r.tasks_detail?.length) {
+                // 这一页的行来自 IMU 日统计，每天每只狗都有；能不能复看得这天在标注平台上有任务
+                return (
+                  <Tooltip title="这天这只狗在标注平台上还没有任务，没得可看。要么样本还没扫进来，要么扫进来了还没建任务（去「项目」里给这天建任务）">
+                    <Typography.Text type="secondary">—</Typography.Text>
+                  </Tooltip>
+                );
+              }
+              const { need, done, who } = reviewProgress(r);
+              const full = need.length > 0 && done === need.length;
+              return (
+                <Tooltip title={
+                  <div style={{ fontSize: 12 }}>
+                    <div>要复核 {need.length} 段，复核完 {done} 段{full ? "：这天复核完了" : ""}</div>
+                    {who.length > 0 && <div>复核人：{who.join("、")}</div>}
+                    <div style={{ opacity: 0.7 }}>点开挑一段去看</div>
+                  </div>
+                }>
+                  <div style={{ cursor: "pointer", minWidth: 96 }} onClick={() => setCheckKey({ date: r.date, dog_name: r.dog_name })}>
+                    {full ? (
+                      <Tag color="success" style={{ marginRight: 0 }}>✓ 复核完 {need.length} 段</Tag>
+                    ) : (
+                      <>
+                        <Typography.Link style={{ fontSize: 12 }}>{done} / {need.length} 段</Typography.Link>
+                        <Progress percent={need.length ? Math.round((done / need.length) * 100) : 0} size="small" showInfo={false} style={{ margin: 0, lineHeight: 1 }} />
+                      </>
+                    )}
+                  </div>
                 </Tooltip>
-              ),
-          },
-          {
-            title: "照片",
-            width: 80,
-            render: (_: unknown, r: TrackingRow) =>
-              r.photo_count ? (
-                <Button size="small" type="link" onClick={() => setPhotoFor(r)}>
-                  {r.photo_count} 张
-                </Button>
-              ) : (
-                <Typography.Text type="secondary">—</Typography.Text>
-              ),
+              );
+            },
           },
           {
             title: (
@@ -1248,13 +1274,15 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               </Tooltip>
             ),
             key: "photo_grade",
-            width: 130,
+            width: 120,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.photo_grade ?? "").localeCompare(b.photo_grade ?? ""),
             render: (_: unknown, r: TrackingRow) => {
               if (!r.photo_count) return <Typography.Text type="secondary">—</Typography.Text>;
               const rs = r.photo_ratings ?? [];
+              // 「照片」那一列并进来了：张数写在这里，点了一样打开照片
+              const n = <Typography.Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>{r.photo_count} 张</Typography.Text>;
               if (!rs.length) {
-                return <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setPhotoFor(r)}>去评级</Button>;
+                return <span style={{ whiteSpace: "nowrap" }}><Button size="small" type="link" style={{ padding: 0 }} onClick={() => setPhotoFor(r)}>去评级</Button>{n}</span>;
               }
               const color = { S0: "green", S1: "gold", S2: "red" } as const;
               const sTier = (r.s_with_q ?? r.s_no_q)?.s_tier ?? null;
@@ -1272,7 +1300,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 >
                   <Space size={2} style={{ cursor: "pointer" }} onClick={() => setPhotoFor(r)}>
                     {r.photo_grade ? <Tag color={color[r.photo_grade]} style={{ marginRight: 0 }}>{r.photo_grade}</Tag> : <Tag>看不清</Tag>}
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>{rs.length}人</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>{rs.length}人·{r.photo_count}张</Typography.Text>
                     {differ && <Tag color="warning" style={{ marginRight: 0 }}>≠{sTier}</Tag>}
                   </Space>
                 </Tooltip>
@@ -1388,7 +1416,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               // 顺手把「还剩几段」写出来：不然得自己数一遍绿标签
               const all = checkFor?.tasks_detail ?? [];
               const done = all.filter(reviewDone).length;
-              return all.length ? `共 ${all.length} 段，已完成 ${done} · ` : "";
+              const pr = checkFor ? reviewProgress(checkFor) : null;
+              const who = pr?.who.length ? `（复核人：${pr.who.join("、")}）` : "";
+              return all.length
+                ? pr && pr.need.length !== all.length
+                  ? `共 ${all.length} 段（戴在狗身上的 ${pr.need.length} 段），复核完 ${pr.done}${who} · `
+                  : `共 ${all.length} 段，复核完 ${done}${who} · `
+                : "";
             })()}
             挑一段点「查看标注」进工作台核对，看完在工作台底部下结论{" "}
             <Tooltip
@@ -1501,11 +1535,10 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               sorter: (a, b) => Number(reviewDone(a)) - Number(reviewDone(b)),
               render: (_: unknown, t) =>
                 reviewDone(t) ? (
-                  <Tooltip title="抓挠片段都确认过了，疑似片段也没有待确认的——这一段不用再看了">
+                  <Tooltip title={`抓挠片段都确认过了，疑似片段也没有待确认的——这一段不用再看了${t.scratch_checked_by ? `（${t.scratch_checked_by} ${dayjs(t.scratch_checked_at).format("MM-DD HH:mm")}）` : ""}`}>
                     <Tag color="success">已完成</Tag>
                   </Tooltip>
-                ) : t.cand_pending > 0 &&
-                  (t.status === "APPROVED" || approved.has(t.task_id) || scratchOk.has(t.task_id)) ? (
+                ) : t.cand_pending > 0 && scratchDone(t) ? (
                   <Tooltip title={`抓挠已经认过了，但还有 ${t.cand_pending} 条「疑似片段」没判断`}>
                     <Tag color="warning">还差候选</Tag>
                   </Tooltip>
@@ -1555,7 +1588,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                 const progress =
                   approved.has(t.task_id) || t.status === "APPROVED" ? (
                     <Tag color="green">整份已通过</Tag>
-                  ) : scratchOk.has(t.task_id) ? (
+                  ) : scratchOk.has(t.task_id) || t.scratch_checked_at ? (
                     <Tag color="cyan">抓挠已确认</Tag>
                   ) : viewed.has(t.task_id) ? (
                     <Tag color="blue">已看过</Tag>
@@ -1567,7 +1600,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                   // 各说一半
                   if (t.scratch_segments === 0) {
                     if (approved.has(t.task_id) || t.status === "APPROVED") return progress;
-                    if (scratchOk.has(t.task_id)) {
+                    if (scratchOk.has(t.task_id) || t.scratch_checked_at) {
                       return (
                         <Tooltip title="这一段 AI 没标出抓挠，人看过、确认确实没有">
                           <Tag color="cyan">确认没有抓挠</Tag>
