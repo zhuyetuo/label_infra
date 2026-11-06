@@ -240,7 +240,7 @@ export const submitTrain = (body: {
     export_json?: string | null;
     extra_date?: string[];
     /** 一起训练的其它数据集（各带自己的 json 和采样率） */
-    extra_datasets?: { date: string; export_json: string; source_hz?: number | null }[];
+    extra_datasets?: { date: string; export_json: string; source_hz?: number | null; exclude_classes?: string[] }[];
     /** 类别归并 {原名: 新名}，AI 服务整理数据时改写，不动 NAS 上的导出 */
     label_remap?: Record<string, string>;
     /** 用几轴：6=加速度+陀螺仪，3=只用加速度（端侧没有陀螺仪时用） */

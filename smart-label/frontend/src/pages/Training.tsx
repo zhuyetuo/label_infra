@@ -112,6 +112,8 @@ type TrainOpts = {
   classScale?: Record<string, number>;
   extraDs?: string[];
   extraHz?: Record<string, number>;
+  /** 新版流程：一起训练的每份数据集里不用的类别 */
+  extraExclude?: Record<string, string[]>;
   remapEdits?: Record<string, string>;
 };
 const TRAIN_OPTS_KEY = "train-submit-opts";
@@ -263,6 +265,8 @@ export default function Training() {
   // 每份额外数据集自己的真实采样率。**不能跟主批次一刀切**：老批次是 16Hz
   // 导出的，新的 NAS 原始数据是 50Hz，报错了合并时就按错的采样率重采样
   const [extraHz, setExtraHz] = useState<Record<string, number>>({});
+  // 新版流程：一起训练的数据集里哪几类不用（老数据标得粗的那几类，比如抓挠间隙被标成「活动」）
+  const [extraExclude, setExtraExclude] = useState<Record<string, string[]>>({});
   // 类别归并 {原名: 新名}。细类太少就并进兄弟类别，不训的行为折进「活动」当负样本
   const [remapEdits, setRemapEdits] = useState<Record<string, string>>({});
   const [modelType, setModelType] = useState("rf");
@@ -691,6 +695,7 @@ export default function Training() {
     const alive = new Set((datasets ?? []).map((x) => x.name));
     setExtraDs(mine ? (mine.extraDs ?? []).filter((n) => alive.has(n) && n !== d.name) : []);
     setExtraHz(mine?.extraHz ?? {});
+    setExtraExclude(mine?.extraExclude ?? {});
     // 归并表：恢复上次的；这次多出来的类别，下面那个 effect 按默认表补上
     // 空的不恢复：以前没设过的行也存成了 ""，恢复回来会挡住上面的预填（上级 / 习惯）。
     // 真选过「不参与」的，习惯表里记着，预填时还是空
@@ -712,6 +717,7 @@ export default function Training() {
             // 各批次自己的采样率：老批次 16Hz、新的 50Hz，不分开报就会按错的
             // 采样率重采样
             source_hz: extraHz[d.name] ?? sourceHz,
+            ...(pipelineV2 && extraExclude[d.name]?.length ? { exclude_classes: extraExclude[d.name] } : {}),
           })),
           // **整张表都送**，不只改过的那几行：算法侧按这张表生成这次训练专用的
           // 重映射配置，训练类别就是表里那些目标名。只送改动过的话，没动过的
@@ -746,7 +752,7 @@ export default function Training() {
       // 记下这次每个类别算作了什么，下一份数据集里同名的类别直接照这个预填
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
-        modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, edgeTrees, edgeDepth, edgeFilters, balance,
+        modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, extraExclude, edgeTrees, edgeDepth, edgeFilters, balance,
         windowS, strideS, labelMode, modelParams, pipelineV2, fineLabels, classScale,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
@@ -807,9 +813,10 @@ export default function Training() {
     setFineLabels(Array.isArray(sp.fine_labels) ? (sp.fine_labels as string[]) : null);
     setClassScale((sp.class_scale as Record<string, number> | undefined) ?? V2_DEFAULT_SCALE);
     const alive = new Set((datasets ?? []).map((x) => x.name));
-    const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null }[] | undefined) ?? [])
+    const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null; exclude_classes?: string[] }[] | undefined) ?? [])
       .filter((e) => alive.has(e.date) && e.date !== ds.name);
     setExtraDs(extras.map((e) => e.date));
+    setExtraExclude(Object.fromEntries(extras.filter((e) => e.exclude_classes?.length).map((e) => [e.date, e.exclude_classes as string[]])));
     setExtraHz(Object.fromEntries(extras.filter((e) => e.source_hz).map((e) => [e.date, e.source_hz as number])));
     const remap = (sp.label_remap as Record<string, string> | undefined) ?? {};
     if (Object.keys(remap).length) setRemapEdits(remap);
@@ -2273,6 +2280,28 @@ export default function Training() {
                   </Space>
                 ))}
               </Space>
+            )}
+            {pipelineV2 && extraRows.length > 0 && (
+              <div style={{ display: "grid", gap: 4 }}>
+                <Tooltip title="老数据有的类别标得粗：比如 ds_old_0811_0827 的「活动」大多是两次抓挠之间的空隙（平均 2.7 秒），当成活动教给模型，模型就会把抓挠认成活动。这里选上的类别，这份数据里就不进训练（只在新版流程里生效）。训完看 F1 悬停里 pool 那份的分数有没有变好">
+                  <Typography.Text type="secondary" style={{ fontSize: 12, borderBottom: "1px dashed #666", width: "fit-content" }}>各自不用的类别（可不选）：</Typography.Text>
+                </Tooltip>
+                {extraRows.map((d) => (
+                  <Space key={d.name} size={4}>
+                    <Typography.Text style={{ fontSize: 12, minWidth: 130, display: "inline-block" }}>{d.name}</Typography.Text>
+                    <Select
+                      mode="multiple"
+                      size="small"
+                      allowClear
+                      style={{ minWidth: 220 }}
+                      placeholder="全都用"
+                      value={extraExclude[d.name] ?? []}
+                      onChange={(v) => setExtraExclude((m) => ({ ...m, [d.name]: v }))}
+                      options={trainTargets.map((t) => ({ value: t, label: t }))}
+                    />
+                  </Space>
+                ))}
+              </div>
             )}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               「按片段取」的数据集只收人确认过的片段，而没人会去确认「活动」「睡觉」——
