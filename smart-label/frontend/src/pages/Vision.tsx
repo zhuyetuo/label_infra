@@ -918,7 +918,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
                     )}
                   </div>
                   {d.assignment?.state === "rejected" && d.assignment.review_note && (
-                    <div style={{ fontSize: 12, color: "#d4380d", background: "#fff2e8", padding: "2px 6px", borderRadius: 3 }}>
+                    <div style={{ fontSize: 12, color: "#d4380d", background: "var(--sl-hl-orange)", padding: "2px 6px", borderRadius: 3 }}>
                       打回：{d.assignment.review_note}
                     </div>
                   )}
@@ -939,7 +939,7 @@ export default function Vision({ fixedAlbum, embedded }: { fixedAlbum?: VisionAl
                       onClick={() => tryOpen(p.rel_path)}
                       style={{
                         cursor: "pointer", padding: "2px 6px", borderRadius: 3, fontSize: 12,
-                        background: p.rel_path === current ? "#e6f4ff" : undefined,
+                        background: p.rel_path === current ? "var(--sl-hl-blue)" : undefined,
                         display: "flex", justifyContent: "space-between", gap: 6,
                       }}
                     >

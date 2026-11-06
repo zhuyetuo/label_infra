@@ -185,7 +185,7 @@ export default function DeviceSelfTest({ sink, behavSink, connected, kind, devic
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 12, marginTop: 12 }}>
             {[["采样率（每 10 秒：传感器节奏 / 实际到手）", charts.rate], ["帧间隔分布（红 = 缝 / 异常，纵轴开方）", charts.hist],
               ["板子时钟（板上 − 电脑，从 0 起）", charts.clock], ["三轴每 10 秒均值变化（mg）", charts.axes]].map(([t, svg]) => svg ? (
-              <div key={t} style={{ background: "#fff", borderRadius: 6, padding: 8 }}>
+              <div key={t} style={{ background: "var(--sl-fill)", borderRadius: 6, padding: 8 }}>
                 <div style={{ fontSize: 12, color: "#555", marginBottom: 4 }}>{t}</div>
                 {/* SVG 是自己拼的、只有数字，没有外部内容 */}
                 <div dangerouslySetInnerHTML={{ __html: svg }} />

@@ -170,7 +170,7 @@ export default function SimilarHitsGrid({ taskId, projectId, refPath, refT, refS
               // 没勾的**不压暗、不去色**：这一屏是拿来比"像不像"的，把没勾的调暗，
               // 等于在人还没判断之前就先把画面改了，还怎么比。选没选只体现在
               // 勾选框和边框上——那是状态，不该动图本身
-              style={{ width: 150, border: `2px solid ${isPlaying(h) ? "#faad14" : isDropped(h) ? "#f0f0f0" : "#52c41a"}`, borderRadius: 6, padding: 3, cursor: "pointer", background: isPlaying(h) ? "rgba(250,173,20,0.08)" : isDropped(h) ? undefined : "rgba(82,196,26,0.08)", position: "relative" }}
+              style={{ width: 150, border: `2px solid ${isPlaying(h) ? "#faad14" : isDropped(h) ? "var(--sl-border2)" : "#52c41a"}`, borderRadius: 6, padding: 3, cursor: "pointer", background: isPlaying(h) ? "rgba(250,173,20,0.08)" : isDropped(h) ? undefined : "rgba(82,196,26,0.08)", position: "relative" }}
               title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 综合 ${h.score.toFixed(3)}${h.vis_score != null ? ` · 画面 ${h.vis_score.toFixed(3)}` : ""}${h.pose_score != null ? ` · 姿态 ${h.pose_score.toFixed(3)}` : ""}`}
             >
               {/* 勾选框盖在图上：点它只管要不要，别顺带把这几秒放起来 */}

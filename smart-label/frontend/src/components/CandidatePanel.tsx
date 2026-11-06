@@ -433,7 +433,7 @@ export default function CandidatePanel({
         dataSource={rows}
         // 正在循环的那一行高亮：暂停去干别的回来，一眼看到是哪一段
         rowClassName={(c: AiCandidate) => [isFocus(c) ? "cand-focus-row" : "", isLooping(c) ? "cand-loop-row" : ""].filter(Boolean).join(" ")}
-        onRow={(c: AiCandidate) => (isFocus(c) ? { style: { background: "#e6f4ff" } } : {})}
+        onRow={(c: AiCandidate) => (isFocus(c) ? { style: { background: "var(--sl-hl-blue)" } } : {})}
         pagination={false}
         // 只留横向滚动：给了 y 之后表格自己会出一条纵向滚动条，跟外面那条
         // 套在一起——鼠标在表格里滚的是里面那条，想滚整页还得把鼠标挪出去。
@@ -518,7 +518,7 @@ export default function CandidatePanel({
             render: (_, c: AiCandidate) =>
               c.evidence ? (
                 <Tooltip title={c.evidence}>
-                  <span style={{ fontSize: 12, color: "#595959", display: "block",
+                  <span style={{ fontSize: 12, color: "var(--sl-text2)", display: "block",
                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {c.evidence}
                   </span>

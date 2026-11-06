@@ -109,7 +109,7 @@ export default function SimilarClipPlayer({ taskId, clip, onOpenTask, onClose }:
 
   if (!clip) {
     return (
-      <div style={{ flex: 1, border: "1px dashed #d9d9d9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 12 }}>
+      <div style={{ flex: 1, border: "1px dashed var(--sl-border2)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 12 }}>
         右边点一张命中（或样例），这里看大图；要看动作再点「循环播放」
       </div>
     );
