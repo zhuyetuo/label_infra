@@ -1046,7 +1046,7 @@ export default function AnnotationWorkspace({
     try { localStorage.setItem("smart-label:wave-pieces-open", v ? "1" : "0"); } catch { /* ignore */ }
   };
   const splitPanel = (
-    <div style={{ width: "100%", borderTop: "1px dashed #ddd", paddingTop: 4, marginTop: 2 }}>
+    <div style={{ width: "100%", borderTop: "1px dashed var(--sl-border2)", paddingTop: 4, marginTop: 2 }}>
       <Space size={6} wrap style={{ marginBottom: 4 }}>
         <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，存草稿后生效"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
           <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>

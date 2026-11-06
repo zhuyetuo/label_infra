@@ -16,10 +16,31 @@ body,
   --sl-fill2: #f0f0f0;
   --sl-border: #f0f0f0;
   --sl-page: #f0f2f5;
+  /* 次要文字、虚线框、高亮行底 */
+  --sl-text2: #595959;
+  --sl-border2: #d9d9d9;
+  --sl-hl-blue: #e6f4ff;
+  --sl-hl-orange: #fff2e8;
+  --sl-row-pending: #fffbf0;
 }
 :root[data-theme="dark"] {
   --sl-fill: #1f1f1f;
   --sl-fill2: #262626;
   --sl-border: #303030;
   --sl-page: #000;
+  --sl-text2: #a6a6a6;
+  --sl-border2: #424242;
+  --sl-hl-blue: rgba(22, 119, 255, 0.18);
+  --sl-hl-orange: rgba(250, 84, 28, 0.16);
+  --sl-row-pending: rgba(250, 173, 20, 0.10);
 }
+
+/* 暗黑模式兜底：代码里漏网的行内白底 / 浅灰底统一压成深色（React 把 #fff 写成 rgb(255, 255, 255)） */
+:root[data-theme="dark"] [style*="background: rgb(255, 255, 255)"],
+:root[data-theme="dark"] [style*="background-color: rgb(255, 255, 255)"],
+:root[data-theme="dark"] [style*="background: rgb(250, 250, 250)"],
+:root[data-theme="dark"] [style*="background: rgb(245, 245, 245)"],
+:root[data-theme="dark"] [style*="background: rgb(240, 240, 240)"] {
+  background: var(--sl-fill) !important;
+}
+

@@ -431,7 +431,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
             )}
           </>
         ) : (
-          <div style={{ flex: 1, border: "1px dashed #d9d9d9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13, padding: 12, textAlign: "center" }}>
+          <div style={{ flex: 1, border: "1px dashed var(--sl-border2)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13, padding: 12, textAlign: "center" }}>
             打一句英文（或选个现成的）→ 搜 → 右边点一张在这儿看大图。
             <br />看准了勾上写成候选，或者「用这一张去扩」接着找更多
           </div>
@@ -478,7 +478,7 @@ export default function ProjectPhraseSearch({ projectId, labelNames = [] }: Prop
                   <div
                     key={k}
                     onClick={() => select(h)}
-                    style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "#f0f0f0"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
+                    style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "var(--sl-border2)"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
                     title={`${h.sample_code ?? h.path} · ${formatMs(h.t * 1000)} · 分 ${h.score.toFixed(3)}`}
                   >
                     {/* **勾选框要大、要有字。** 原来是个 16px 的深色描边方框压在深色图上，

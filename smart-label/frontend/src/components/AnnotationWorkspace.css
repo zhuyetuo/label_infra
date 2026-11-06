@@ -28,7 +28,7 @@
 .ws-charts {
   overflow-y: auto;
   overflow-x: hidden;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--sl-border);
   border-radius: 4px;
   padding: 4px 8px;
 }
@@ -125,7 +125,8 @@
   position: sticky;
   top: 0;
   z-index: 3;
-  background: #f5f5f5;
+  /* 跟主题走：写死浅灰的话暗黑模式下这一行是一条白带，标题字看不见 */
+  background: var(--sl-fill2);
 }
 
 /* 标题右侧的「上移 / 下移 / 隐藏」：平时淡一点，别跟标题上的筛选按钮抢眼 */
@@ -148,7 +149,7 @@
 
 /* AI 预测还没人确认的片段行：淡橙底，扫一眼就知道哪些还没看过 */
 .seg-row--pending > td {
-  background: #fffbf0 !important;
+  background: var(--sl-row-pending) !important;
 }
 
 

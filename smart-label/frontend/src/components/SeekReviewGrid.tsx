@@ -174,7 +174,7 @@ export default function SeekReviewGrid({ projectId, found, labelNames = [], onWr
             )}
           </>
         ) : (
-          <div style={{ flex: 1, border: "1px dashed #d9d9d9", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13, padding: 12, textAlign: "center" }}>
+          <div style={{ flex: 1, border: "1px dashed var(--sl-border2)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 13, padding: 12, textAlign: "center" }}>
             右边点一张：这里看大图、看模型说了什么，要看动作再点「循环播放」。
             <br />勾选框只管要不要，点图不会顺带勾上
           </div>
@@ -223,7 +223,7 @@ export default function SeekReviewGrid({ projectId, found, labelNames = [], onWr
               <div
                 key={k}
                 onClick={() => select(f)}
-                style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "#f0f0f0"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
+                style={{ width: 160, border: `2px solid ${now ? "#faad14" : on ? "#52c41a" : "var(--sl-border2)"}`, background: now ? "rgba(250,173,20,0.08)" : on ? "rgba(82,196,26,0.08)" : undefined, borderRadius: 6, padding: 3, cursor: "pointer", position: "relative" }}
                 title={`${f.sample_code ?? f.path} · ${formatMs(f.start_ms)} ~ ${formatMs(f.end_ms)}${f.confidence != null ? ` · 置信 ${(f.confidence * 100).toFixed(0)}%` : ""}${f.evidence ? `\n模型说：${f.evidence}` : ""}`}
               >
                 <Checkbox
