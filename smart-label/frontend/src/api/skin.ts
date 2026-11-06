@@ -129,6 +129,8 @@ export const purgeSkinDailyStats = (b: {
 export const listSkinRecords = () => request.get<never, SkinRecord[]>("/skin/records");
 export const saveSkinRecord = (body: Partial<SkinRecord> & { dog_name: string; fill_date: string; filler: string; confirm_overwrite?: boolean }) =>
   request.post<never, SkinRecord>("/skin/records", body);
+/** 这一段的抓挠复核完了：记到任务上，别的管理员也看得到进度 */
+export const markScratchChecked = (taskId: number) => request.post<never, { task_id: number; scratch_checked_at: string }>(`/skin/tasks/${taskId}/scratch-checked`);
 export const deleteSkinRecord = (id: number) => request.delete<never, null>(`/skin/records/${id}`);
 
 export const listWeekly = (imu?: string) => request.get<never, WeeklyRow[]>("/skin/weekly", { params: imu ? { imu } : {} });
@@ -212,6 +214,11 @@ export interface TrackingRow {
     cand_uncertain_no_view: number;
     cand_uncertain_ambiguous: number;
     cand_uncertain_needs_split: number;
+    /** AI 标的抓挠里还没人碰过的（没确认、没判待定） */
+    scratch_unreviewed?: number;
+    /** 谁、什么时候点的「抓挠确认无误 / 整份通过」（存在任务上，谁登录都看得到） */
+    scratch_checked_by?: string | null;
+    scratch_checked_at?: string | null;
   }[];
   c_ai: CSide | null;
   c_human: CSide | null;

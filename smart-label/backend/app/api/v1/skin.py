@@ -642,3 +642,16 @@ async def weekly_recompute_all(imu: str | None = None, db: AsyncSession = Depend
             r.data = json.dumps(_to_dict(cols, new), ensure_ascii=False)
         await db.commit()
     return ok({"count": len(rows)}, msg=f"已重新计算 {len(rows)} 行的对比/误差列")
+
+
+@router.post("/tasks/{task_id}/scratch-checked")
+async def mark_scratch_checked(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """这一段的抓挠复核完了（「抓挠确认无误」/「整份通过」之后前端调一下）。
+    记在任务上而不是浏览器里：别的管理员要在跟踪表里看到复核进度。重复点只刷新时间和人"""
+    t = await db.get(Task, task_id)
+    if t is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    t.scratch_checked_by = user.id
+    t.scratch_checked_at = _dt.datetime.now()
+    await db.commit()
+    return ok({"task_id": task_id, "scratch_checked_at": t.scratch_checked_at.isoformat()})

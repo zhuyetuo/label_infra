@@ -240,7 +240,7 @@ async def daily_tracking(
     task_rows = (
         await db.execute(
             select(Task.id, Task.status, Sample.sample_code, Sample.session_date, Sample.video_duration_sec,
-                   Sample.video_cam1_path, Sample.imu_csv_path)
+                   Sample.video_cam1_path, Sample.imu_csv_path, Task.scratch_checked_by, Task.scratch_checked_at)
             .join(Sample, Sample.id == Task.sample_id)
             .where(Sample.session_date >= date_from, Sample.session_date <= date_to)
             .order_by(Sample.sample_code)
@@ -272,6 +272,8 @@ async def daily_tracking(
             "uncertain_ambiguous": 0,
             "uncertain_needs_split": 0,
             "relabeled": 0,
+            # AI 标的抓挠里还没人碰过的（没确认、没判待定）。0 且有抓挠 = 这一段的抓挠都看过了
+            "scratch_unreviewed": 0,
         }
     )
     if task_rows and scratch_label_ids:
@@ -307,6 +309,8 @@ async def daily_tracking(
                     review_counts[tid][key] += 1
                 elif confirmed:
                     review_counts[tid]["confirmed"] += 1
+                elif is_ai:
+                    review_counts[tid]["scratch_unreviewed"] += 1
             elif is_ai and modified:
                 # AI 给的、被人改过、现在不是抓挠了——「甩身体误判成抓挠」这类。
                 # 严格说也可能是别的类别之间互改，但复看时人只动抓挠这一类，够用
@@ -359,7 +363,11 @@ async def daily_tracking(
     tasks_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
     # (日期, IMU) 是哪个狗场的：同一天同一个 IMU 号只会在一个狗场（项圈是同一批，搬过去了）
     site_by_key: dict[tuple[str, str], str] = {}
-    for tid, status, code, sdate, dur, cam1, csv in task_rows:
+    checker_ids = {r[7] for r in task_rows if r[7]}
+    checker_names = {uid: dn or un for uid, dn, un in (await db.execute(
+        select(User.id, User.display_name, User.username).where(User.id.in_(checker_ids))
+    )).all()} if checker_ids else {}
+    for tid, status, code, sdate, dur, cam1, csv, chk_by, chk_at in task_rows:
         imu = _imu_of(code)
         if imu is None or sdate is None:
             continue
@@ -376,6 +384,9 @@ async def daily_tracking(
                 **cand_counts[tid],
                 # 前端要拿它把「09:00:14 ~ ?」补成「09:00:14 ~ 10:00:00」
                 "video_duration_sec": dur,
+                # 谁、什么时候点的「抓挠确认无误 / 整份通过」（存在任务上，所有管理员都看得到）
+                "scratch_checked_by": checker_names.get(chk_by) if chk_by else None,
+                "scratch_checked_at": chk_at.isoformat() if chk_at else None,
             }
         )
     imu_dog_map = imu_dog_map or {}
