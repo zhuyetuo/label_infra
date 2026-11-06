@@ -147,3 +147,24 @@ def test_刚进池的先(db, run):
     assert all(x["entered_at"] for x in r["items"])
     manual = next(x for x in r["items"] if x["id"] == w.items[2].id)
     assert manual["via"] == "manual"
+
+
+def test_数据盘点_每条只归一类(db, run, monkeypatch):
+    w = _world(db, run)
+    run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    monkeypatch.setattr("app.services.training_export_service.list_datasets", lambda: [])
+    inv = run(data_pool.label_inventory(db, "抓挠"))
+    b = {x["key"]: x for x in inv["buckets"]}
+    # 没导出过数据池数据集：池里的都算「还没训练过」
+    assert b["pool_trained"]["n"] == 0 and b["pool_new"]["n"] == 1
+    # 另外两条人画的还没审核；那条 AI 给的没人看过；「活动」那条不算
+    assert b["human"]["n"] == 2 and b["ai_untouched"]["n"] == 1 and b["human"]["seconds"] == 6.0
+    assert sum(x["n"] for x in inv["buckets"]) == inv["totals"]["all"]["n"]
+    assert inv["totals"]["pool"]["n"] == 1 and "抓挠-头颈耳" in inv["labels"]
+    # 导出一份「数据池」数据集之后：之前进池的算训练过
+    monkeypatch.setattr("app.services.training_export_service.list_datasets",
+                        lambda: [{"scope": "pool", "created_at": "2999-01-01T00:00:00"}])
+    inv2 = run(data_pool.label_inventory(db, "抓挠"))
+    b2 = {x["key"]: x for x in inv2["buckets"]}
+    assert b2["pool_trained"]["n"] == 1 and b2["pool_new"]["n"] == 0
+    assert inv2["totals"]["trained"]["n"] == 1

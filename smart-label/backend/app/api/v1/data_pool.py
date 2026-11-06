@@ -47,6 +47,12 @@ async def get_summary(f: data_pool.PoolFilter = Depends(_qfilter),
     return ok(await data_pool.summary(db, f))
 
 
+@router.get("/inventory")
+async def get_inventory(label: str = "抓挠", db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """数据盘点：某一类（含细类）的片段各在哪一步——在池里（训练过 / 还没训练）、人看过没进池、AI 没人看、疑似待确认"""
+    return ok(await data_pool.label_inventory(db, label))
+
+
 @router.get("/items")
 async def get_items(f: data_pool.PoolFilter = Depends(_qfilter), sort: str = "long", page: int = 1, page_size: int = 50,
                     db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
