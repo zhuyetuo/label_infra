@@ -83,8 +83,8 @@ const V2_DEFAULT_FINE = ["进食", "饮水", "甩身体"];
 // 抓挠 2.5：系数是乘在每棵树的叶子上的（每棵树再归一化），比乘在平均概率上弱；
 // #27 的数据上 2.5 时 pool 那份抓挠按次数 查全 0.78 / 查准 0.92，再大就开始多算抓挠时长
 const V2_DEFAULT_SCALE: Record<string, number> = { 抓挠: 2.5, "甩头/抖身": 2 };
-/** 新版流程的默认窗口：4 秒，板上特征缓冲最多 64 点 */
-const v2Window = (hz: number) => Math.min(64, Math.floor(4 * hz + 1e-9));
+/** 新版流程的默认窗口：4 秒（最多 128 点）。#27 的数据上窗口长短比采样率要紧得多 */
+const v2Window = (hz: number) => Math.min(128, Math.floor(4 * hz + 1e-9));
 
 /** 提交训练时的那一套选项。按数据集记，另存一份"上一次"给没训过的数据集当起点 */
 type TrainOpts = {
@@ -303,7 +303,7 @@ export default function Training() {
   /** 打开新版流程时把相关参数摆到实验定下来的那套 */
   const useV2Defaults = () => {
     setModelType("rf");
-    setHz(15.625);
+    setHz(20);
     setEdgeSize(true);
     setEdgeTrees(20);
     setEdgeDepth(8);
@@ -2003,8 +2003,8 @@ export default function Training() {
                 </Tooltip>
                 {pipelineV2 && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    推荐：训练采样率 15.625Hz、窗口 4 秒（{v2Window(hz)} 点）、20 棵 × 深 8
-                    {(hz !== 15.625 || edgeTrees !== 20 || edgeDepth !== 8) && (
+                    推荐：训练采样率 20Hz、窗口 4 秒（{v2Window(hz)} 点）、20 棵 × 深 8
+                    {(hz !== 20 || edgeTrees !== 20 || edgeDepth !== 8) && (
                       <Button size="small" type="link" onClick={useV2Defaults}>恢复推荐</Button>
                     )}
                   </Typography.Text>
@@ -2023,11 +2023,22 @@ export default function Training() {
                     // 训练采样率比某份数据的原始采样率高：那份不往上插，整份跳过
                     const low = extraRows.filter((d) => (extraHz[d.name] ?? sourceHz) < hz - 0.5).map((d) => d.name);
                     if (sourceHz < hz - 0.5) low.unshift(trainFor.name);
-                    return low.length ? (
-                      <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                        ⚠ {low.join("、")} 的原始采样率低于训练采样率 {hz}Hz，不往上插值，这次训练里会被整份跳过。想用上它就选 15.625Hz
+                    const win = windowS != null ? Math.floor(windowS * hz + 1e-9) : v2Window(hz);
+                    const boardNote = edgeSize && win > 64 ? (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        窗口 {win} 点：服务端推理没问题；要导到板上，板上的特征缓冲（TM_FEAT_MAX_T，现在 64 点）得跟着调大
                       </Typography.Text>
                     ) : null;
+                    if (!low.length) return boardNote;
+                    return (
+                      <>
+                        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                          ⚠ {low.join("、")} 的原始采样率低于训练采样率 {hz}Hz：不往上插值（#27 的数据上插上去每次都更差），这次训练会整份跳过。
+                          跳过它影响不大（20Hz 不用它跟 15.625Hz 用上它效果一样）
+                        </Typography.Text>
+                        {boardNote}
+                      </>
+                    );
                   })()}
                   <Space wrap size={[8, 4]}>
                     <Tooltip title="这几类训练时单独成一类，模型被迫学会它们跟抓挠的区别（进食、饮水低头有节奏，很像抓挠）；输出时概率并回它们归并到的那一类，最后还是 5 类。只能选这次被并进别的类的">
@@ -2079,6 +2090,7 @@ export default function Training() {
                 popupMatchSelectWidth={false}
                 options={[
                   { value: 16, label: "16Hz" },
+                  { value: 20, label: "20Hz（新版推荐）" },
                   { value: 25, label: "25Hz" },
                   { value: 15.625, label: "15.625Hz（31.25 二分频）" },
                   { value: 31.25, label: "31.25Hz（QMI8658 原生）" },
