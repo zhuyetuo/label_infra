@@ -684,6 +684,16 @@ async def _run_project(
         query = query.where(Task.id.in_(task_ids))
     tasks = (await db.execute(query.order_by(Task.id))).scalars().all()
 
+    # 项目一个标签都没有（建项目时没选标签模板）：先克隆一套，不然模型的片段全被丢掉
+    from app.models.project import Project as _Project
+    from app.services.label_fallback import ensure_project_labels
+    _proj = await db.get(_Project, project_id)
+    if _proj is not None:
+        src = await ensure_project_labels(db, _proj)
+        if src:
+            await db.commit()
+            progress.log(f"这个项目还没有标签，已从「{src}」复制了一套")
+
     labels = (
         (
             await db.execute(

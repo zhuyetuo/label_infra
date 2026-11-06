@@ -104,6 +104,9 @@ async def bulk_create_tasks(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
     if not body.sample_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有选中任何样本")
+    # 建任务时项目还没标签（建项目没选模板）：从同源 / 最近的项目克隆一套，AI 片段和人工标注才有标签可用
+    from app.services.label_fallback import ensure_project_labels
+    await ensure_project_labels(db, project)
 
     # IN 列表不能一次塞几千个：MySQL 的 range optimizer 有内存上限
     # （range_optimizer_max_mem_size，默认 8MB），超了它就放弃区间优化改走扫描，

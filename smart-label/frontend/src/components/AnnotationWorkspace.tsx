@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Collapse,
   Segmented,
+  Switch,
   Space,
   Spin,
   Tag,
@@ -776,20 +777,35 @@ export default function AnnotationWorkspace({
     const set = new Set(labels.map((l) => trackOf(labelById, l.id)).filter(Boolean));
     return TRACKS.map((t) => t.key).filter((k) => set.has(k));
   }, [labels, labelById]);
+  // 片段列表里筛了（类别：只看抓挠 / 某几类；来源：只看人工 / AI 待确认……），波形图也只画列表里留下的那些：
+  // 几百段挤在一起一个个认太累。
+  // 筛掉的段挪到时间轴外面（不删、不改顺序）——波形上拖动 / 右键是按下标对回 items 的
+  const [chartFilter, setChartFilter] = useState<Set<number> | null>(null);
+  // 人工标注模式（按项目记在本机）：AI 片段先藏起来，从零自己标；在片段列表里选类别就把那几类的 AI 片段拿出来参考
+  const manualKey = task?.project_id != null ? `smart-label:manual-mode:${task.project_id}` : null;
+  const [manualMode, setManualModeState] = useState(false);
+  useEffect(() => {
+    try { setManualModeState(manualKey ? localStorage.getItem(manualKey) === "1" : false); } catch { setManualModeState(false); }
+  }, [manualKey]);
+  const setManualMode = (v: boolean) => {
+    setManualModeState(v);
+    try { if (manualKey) localStorage.setItem(manualKey, v ? "1" : "0"); } catch { /* ignore */ }
+  };
   const segments: ChartSegment[] = useMemo(
     () =>
       items.map((i) => {
         const t = trackOf(labelById, i.label_id);
         const lane = usedTracks.indexOf(t);
+        const off = chartFilter != null && !chartFilter.has(i.id);
         return {
-          start_time_ms: i.start_time_ms,
-          end_time_ms: i.end_time_ms,
+          start_time_ms: off ? -1e12 : i.start_time_ms,
+          end_time_ms: off ? -1e12 : i.end_time_ms,
           color: colorOf(i.label_id),
           label: nameOf(i.label_id),
           ...(usedTracks.length > 1 && lane >= 0 ? { lane, lanes: usedTracks.length } : {}),
         };
       }),
-    [items, labels, usedTracks]
+    [items, labels, usedTracks, chartFilter]
   );
 
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
@@ -1346,6 +1362,36 @@ export default function AnnotationWorkspace({
   const splitAtPlayheadRef = useRef(splitAtPlayhead);
   splitAtPlayheadRef.current = splitAtPlayhead;
 
+  // 边播边标：选好标签，看到动作开始按 [（或点「标起点」），结束按 ]（或「标终点」），中间这段就建好了。
+  // 从零标注时比在波形上拖准（对着视频按），也不用停下来
+  const [markStartMs, setMarkStartMs] = useState<number | null>(null);
+  const fmtMs = (ms: number) => {
+    const t = Math.max(0, ms) / 1000, h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+    return `${h ? `${h}:` : ""}${String(m).padStart(2, "0")}:${sec.toFixed(1).padStart(4, "0")}`;
+  };
+  const markAt = (which: "start" | "end") => {
+    const now = Math.round(curSecRef.current * 1000);
+    if (labelId == null) {
+      message.info({ content: "先选一个标签（点下面的标签按钮或按数字键），再标起点", key: "mark" });
+      return;
+    }
+    if (which === "start" || markStartMs == null) {
+      setMarkStartMs(now);
+      message.info({ content: `起点 ${fmtMs(now)}，看到结束时按 ] 或点「标终点」`, key: "mark" });
+      return;
+    }
+    const a = Math.min(markStartMs, now), b = Math.max(markStartMs, now);
+    if (b - a < 200) {
+      message.info({ content: "起止太近（不到 0.2 秒），没建", key: "mark" });
+      return;
+    }
+    appendItem(a, b, labelId);
+    setMarkStartMs(null);
+    message.success({ content: `已标 ${nameOf(labelId)} ${fmtMs(a)} ~ ${fmtMs(b)}`, key: "mark" });
+  };
+  const markAtRef = useRef(markAt);
+  markAtRef.current = markAt;
+
   // ── 疑似片段确认后跟已有片段重叠 ──
   // 同一轨不同类别压在一起是矛盾标注：提交会被拦，导出时重叠那一截两边都挖掉（白白少了数据）。
   // 确认时就提示，并给一键「裁掉旧片段被盖住的部分」：新确认的是人刚看过的，以它为准
@@ -1634,8 +1680,14 @@ export default function AnnotationWorkspace({
       if (readOnly) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
-        // 取消选中 -> 回到拖动平移模式
+        // 取消选中 -> 回到拖动平移模式；正在边播边标的也一起取消
         setLabelId(null);
+        setMarkStartMs(null);
+        return;
+      }
+      if (e.key === "[" || e.key === "]") {
+        e.preventDefault();
+        markAtRef.current(e.key === "[" ? "start" : "end");
         return;
       }
       const k = e.key.toLowerCase();
@@ -1887,6 +1939,8 @@ export default function AnnotationWorkspace({
     ),
     children: (
       <SegmentPanel
+        onFilterChange={setChartFilter}
+        manualMode={manualMode}
         persistKey={taskId != null && !segReview ? `seg-panel:${taskId}` : null}
         controlsPortalTarget={segControlsHost}
         projectKey={task?.project_id ?? null}
@@ -2673,6 +2727,27 @@ export default function AnnotationWorkspace({
               ))}
               {labels.length === 0 && (
                 <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
+              )}
+              {labels.length > 0 && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8, paddingLeft: 8, borderLeft: "1px solid var(--sl-border, #ddd)" }}>
+                  <Tooltip title="边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消">
+                    <Button size="small" type={markStartMs == null ? "primary" : "default"} danger={markStartMs != null}
+                      onClick={() => markAt("start")}>
+                      {markStartMs == null ? "● 标起点 [" : `● 重标起点（现在 ${fmtMs(markStartMs)}）`}
+                    </Button>
+                  </Tooltip>
+                  <Button size="small" type={markStartMs != null ? "primary" : "default"} disabled={markStartMs == null}
+                    onClick={() => markAt("end")}>
+                    ■ 标终点 ]
+                  </Button>
+                  {labelId == null && <Typography.Text type="secondary" style={{ fontSize: 12 }}>先选标签</Typography.Text>}
+                  <Tooltip title="人工标注模式（这个项目记在本机）：AI 片段先藏起来（列表和波形都不显示），自己从零标，用「标起点 / 标终点」边播边标。想参考 AI：在下面片段列表的「全部类别」里选几类（比如抓挠），那几类的 AI 片段就出来了，对着调位置——比一段段审几百条快">
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+                      <Switch size="small" checked={manualMode} onChange={setManualMode} />
+                      <span style={{ fontSize: 12 }}>人工标注模式</span>
+                    </span>
+                  </Tooltip>
+                </span>
               )}
               {hasCsv && sampleId != null && labels.length > 0 && (
                 /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
