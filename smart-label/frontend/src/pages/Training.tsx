@@ -743,7 +743,7 @@ export default function Training() {
           model_params: modelType !== "cnn" && Object.values(modelParams).some((v) => v != null && v !== "") ? modelParams : null,
           clean: true,
           ...(pipelineV2
-            ? { pipeline: "v2", fine_labels: fineEffective, class_scale: classScale, axes: 3, channel_mode: "inv", rot_aug: 0 }
+            ? { pipeline: "v2", fine_labels: fineEffective, class_scale: classScale, axes, channel_mode: "inv", rot_aug: 0 }
             : {}),
         },
         model_type: modelType,
@@ -2012,6 +2012,23 @@ export default function Training() {
               </Space>
               {pipelineV2 && (
                 <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                  <Space wrap size={[8, 4]}>
+                    <Tooltip title="3 轴 = 只用加速度（板子平时只开加速度计，省电）；6 轴 = 再加陀螺仪。#27 的数据上 6 轴按片段 F1 0.84 → 0.88（主要是甩头变好），抓挠差不多。上板的话板子要开陀螺仪，功耗会高">
+                      <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>传感器轴数</span>
+                    </Tooltip>
+                    <Radio.Group size="small" optionType="button" value={axes} onChange={(e) => setAxes(e.target.value)}
+                      options={[{ value: 3, label: "3 轴（只用加速度）" }, { value: 6, label: "6 轴（加陀螺仪）" }]} />
+                  </Space>
+                  {(() => {
+                    // 训练采样率比某份数据的原始采样率高：那份不往上插，整份跳过
+                    const low = extraRows.filter((d) => (extraHz[d.name] ?? sourceHz) < hz - 0.5).map((d) => d.name);
+                    if (sourceHz < hz - 0.5) low.unshift(trainFor.name);
+                    return low.length ? (
+                      <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                        ⚠ {low.join("、")} 的原始采样率低于训练采样率 {hz}Hz，不往上插值，这次训练里会被整份跳过。想用上它就选 15.625Hz
+                      </Typography.Text>
+                    ) : null;
+                  })()}
                   <Space wrap size={[8, 4]}>
                     <Tooltip title="这几类训练时单独成一类，模型被迫学会它们跟抓挠的区别（进食、饮水低头有节奏，很像抓挠）；输出时概率并回它们归并到的那一类，最后还是 5 类。只能选这次被并进别的类的">
                       <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>细分训练、合并输出</span>
