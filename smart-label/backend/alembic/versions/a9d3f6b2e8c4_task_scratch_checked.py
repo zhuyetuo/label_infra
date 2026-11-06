@@ -1,13 +1,13 @@
 """任务上记「抓挠复核完」：谁、什么时候（皮肤评估里看复核进度用，原来只记在复核人自己的浏览器里）
 
-Revision ID: f1a3c5e7b9d2
+Revision ID: a9d3f6b2e8c4
 Revises: e4b6c8d2a9f1
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "f1a3c5e7b9d2"
+revision = "a9d3f6b2e8c4"
 down_revision = "e4b6c8d2a9f1"
 branch_labels = None
 depends_on = None

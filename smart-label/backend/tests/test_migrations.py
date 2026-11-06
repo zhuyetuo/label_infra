@@ -86,3 +86,23 @@ def test_revision_id_matches_filename():
     revs = _graph()
     for r, (_, f) in revs.items():
         assert f.startswith(r), f"{f} 的文件名跟 revision={r} 对不上"
+
+
+def test_revision_ids_unique():
+    """**同一个 revision id 不能出现在两个文件里。**
+
+    _graph() 用 dict 收，后一个会悄悄盖掉前一个，上面几条检查全绿；alembic 那边却报
+    "present more than once" + 一长串 "Cycle is detected"，migrate 容器 exit 255（2026-11-06 真事）。
+    """
+    seen: dict[str, str] = {}
+    dup = []
+    for f in sorted(os.listdir(VERSIONS)):
+        if not f.endswith(".py"):
+            continue
+        with open(os.path.join(VERSIONS, f), encoding="utf-8") as fh:
+            m = re.search(r'^revision\s*=\s*["\']([^"\']+)', fh.read(), re.M)
+        if m:
+            if m.group(1) in seen:
+                dup.append((m.group(1), seen[m.group(1)], f))
+            seen[m.group(1)] = f
+    assert not dup, f"revision id 重复：{dup}"
