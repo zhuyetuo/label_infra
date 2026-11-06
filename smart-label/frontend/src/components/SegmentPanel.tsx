@@ -230,9 +230,16 @@ interface Props {
    * 命中它的那条片段排到最前并高亮——不然人得在几十上百条里自己找刚点的是哪条。
    */
   focusMs?: number | null;
+  /** 筛选（类别 / 来源 / 置信度）变了告诉外面：列表里留下的这些片段 id，工作台让波形图也只画它们；null = 没筛 */
+  onFilterChange?: (itemIds: Set<number> | null) => void;
+  /** 人工标注模式：没选类别时 AI 的片段先藏起来（列表和波形都不显示），从零自己标；
+   *  选了类别（比如抓挠）就把这几类的 AI 片段拿出来当参考——半自动 */
+  manualMode?: boolean;
 }
 
 export default function SegmentPanel({
+  onFilterChange,
+  manualMode,
   items,
   labels,
   readOnly,
@@ -437,6 +444,7 @@ export default function SegmentPanel({
         }
         if (filterLabels.length && !filterLabelSet.has(i.label_id)) return false;
         const st = aiState(i);
+        if (manualMode && !filterLabels.length && filterSource === "all" && st) return false;
         if (filterSource === "ai" && !st) return false;
         if (filterSource === "human" && st) return false;
         if (filterSource === "ai_pending" && st !== "pending") return false;
@@ -460,8 +468,13 @@ export default function SegmentPanel({
         if (maxConf != null && (i.ai_confidence == null || i.ai_confidence * 100 > maxConf)) return false;
         return true;
       }),
-    [sorted, filterLabelSet, filterSource, minConf, maxConf, justEdited, overlaps]
+    [sorted, filterLabelSet, filterSource, minConf, maxConf, justEdited, overlaps, manualMode]
   );
+  const filterActive = !!manualMode || filterLabels.length > 0 || filterSource !== "all" || minConf != null || maxConf != null;
+  useEffect(() => {
+    onFilterChange?.(filterActive ? new Set(filtered.map((i) => i.id)) : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, filterActive]);
 
   // 按类别统计：数量、总时长、置信度范围、待确认/已确认/已纠正/人工各多少
   const stats = useMemo(() => {

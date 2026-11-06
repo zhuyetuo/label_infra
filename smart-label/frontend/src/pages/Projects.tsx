@@ -629,11 +629,33 @@ export default function Projects() {
     if (dates.length === 2) return `${dates[0]}、${dates[1]}`;
     return `${dates[0]}~${dates[dates.length - 1]}（${dates.length}天）`;
   };
+  // 同一份数据换个模型再建一个项目（看不同模型在同样数据上的效果）：日期名已经有了，
+  // 就自动起「日期 · 模型」，再撞名加 (2)(3)……不用人自己想后缀
+  const modelShort = (mode: string) => {
+    const flat: { value?: string; label?: unknown }[] = [];
+    for (const g of inferOptions as unknown as { value?: string; label?: unknown; options?: { value?: string; label?: unknown }[] }[]) {
+      if (g.options) flat.push(...g.options); else flat.push(g);
+    }
+    const lab = flat.find((o) => o.value === mode)?.label;
+    const t = typeof lab === "string" ? lab : String(mode);
+    return t.replace("训练记录 ", "").replace(/ · F1 [0-9.]+/, "").replace(/\s+/g, " ").trim();
+  };
+  const autoName = (ids: Set<number>, mode: string = createInferMode, type: string = createTaskType) => {
+    const base = defaultNameFor(ids);
+    if (!base) return "";
+    const names = new Set((data ?? []).map((p) => p.name));
+    if (!names.has(base)) return base;
+    const tagged = type === "ai_assisted" ? `${base} · ${modelShort(mode)}` : `${base} · 人工`;
+    if (!names.has(tagged)) return tagged;
+    let k = 2;
+    while (names.has(`${tagged} (${k})`)) k += 1;
+    return `${tagged} (${k})`;
+  };
   const updateCreateSelected = (updater: (prev: Set<number>) => Set<number>) => {
     setCreateSelected((prev) => {
       const next = updater(prev);
       // 「每天各建一个」时名字由日期决定，别被这里的自动填名盖掉
-      if (nameAuto && !perDate) form.setFieldsValue({ name: defaultNameFor(next) });
+      if (nameAuto && !perDate) form.setFieldsValue({ name: autoName(next) });
       return next;
     });
   };
@@ -2902,10 +2924,14 @@ export default function Projects() {
         open={open}
         onCancel={() => setOpen(false)}
         footer={null}
-        width={editing ? 520 : 680}
+        // 新建：左边挑样本、右边填参数，一屏放下不用上下滚
+        width={editing ? 520 : "min(1160px, 96vw)"}
+        style={editing ? undefined : { top: 20 }}
         destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
+          <div style={editing ? undefined : { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 24, alignItems: "start" }}>
+          <div>
           {!editing && (
             <Form.Item
               label={
@@ -2917,7 +2943,7 @@ export default function Projects() {
                 </Space>
               }
             >
-              <div style={{ maxHeight: 260, overflow: "auto" }}>
+              <div style={{ maxHeight: "calc(100vh - 300px)", minHeight: 240, overflow: "auto" }}>
                 {renderSamplePicker(createSelected, updateCreateSelected, new Set())}
               </div>
             </Form.Item>
@@ -2931,7 +2957,7 @@ export default function Projects() {
                   // 分开建的时候名字是每天各自的日期，这里的输入框用不上；
                   // 但表单的必填校验还在，填个占位让它过
                   if (e.target.checked) form.setFieldsValue({ name: "（按日期分别命名）" });
-                  else form.setFieldsValue({ name: defaultNameFor(createSelected) });
+                  else form.setFieldsValue({ name: autoName(createSelected) });
                 }}
               >
                 每天各建一个项目
@@ -2942,6 +2968,8 @@ export default function Projects() {
               </Typography.Text>
             </Form.Item>
           )}
+          </div>
+          <div>
           <Form.Item
             name="name"
             label="项目名"
@@ -2952,7 +2980,7 @@ export default function Projects() {
                 : perDate
                   ? `会建 ${new Set((samples ?? []).filter((x) => createSelected.has(x.id)).map((x) => x.session_date ?? "未知日期")).size} 个项目，名字分别是各自的日期`
                   : nameAuto
-                    ? "默认用选中样本的日期目录名，可以改"
+                    ? "默认用选中样本的日期；这天已经有项目了就自动加上模型名（同一份数据比不同模型），可以改"
                     : undefined
             }
           >
@@ -2968,14 +2996,14 @@ export default function Projects() {
                 <Select
                   style={{ width: 300 }}
                   value={createTaskType}
-                  onChange={setCreateTaskType}
+                  onChange={(v) => { setCreateTaskType(v); if (nameAuto && !perDate) form.setFieldsValue({ name: autoName(createSelected, createInferMode, v) }); }}
                   options={[
                     { value: "ai_assisted", label: "AI预标注+人工修改（建好后自动跑 AI）" },
                     { value: "from_scratch", label: "从零标注" },
                   ]}
                 />
                 {createTaskType === "ai_assisted" && (
-                  <Space size={6}><Select {...INFER_SELECT_PROPS} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
+                  <Space size={6}><Select {...INFER_SELECT_PROPS} value={createInferMode} onChange={(v) => { setCreateInferMode(v); saveText(CREATE_MODE_KEY, v); if (nameAuto && !perDate) form.setFieldsValue({ name: autoName(createSelected, v) }); }} options={inferOptions} title={hintOf(createInferMode)} /><InferModeHelp /></Space>
                 )}
                 <Select
                   style={{ width: 200 }}
@@ -2993,7 +3021,7 @@ export default function Projects() {
             </Form.Item>
           )}
           <Form.Item name="description" label="说明">
-            <Input.TextArea rows={3} placeholder="这个项目要标什么、给谁用" />
+            <Input.TextArea rows={2} placeholder="这个项目要标什么、给谁用" />
           </Form.Item>
           <Form.Item
             name="templateId"
@@ -3059,6 +3087,8 @@ export default function Projects() {
                   ? `创建项目并导入 ${createSelected.size} 个任务${createTaskType === "ai_assisted" ? "（自动 AI 预标注）" : ""}`
                   : "创建空项目"}
           </Button>
+          </div>
+          </div>
         </Form>
       </Modal>
 
