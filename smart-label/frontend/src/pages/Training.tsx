@@ -831,6 +831,16 @@ export default function Training() {
     }));
   };
   const f1Color = (f1: number) => (f1 >= 0.8 ? "green" : f1 >= 0.6 ? "gold" : "red");
+  /** 新版流程的主数据集那一份（一般标得最干净）：列表默认看它，全部合在一起的放悬停 */
+  const mainOf = (v: ModelVersion) => {
+    const m = metricsOf(v);
+    if (!m || m.pipeline !== "v2" || !m.main_dataset) return null;
+    const d = (m.per_dataset as Record<string, { macro_f1: number; per_class?: Record<string, Record<string, number>> }> | undefined)?.[m.main_dataset as string];
+    // 要有分数据集的各类指标才算（更新前训的新版记录没有，F1 和各类 F1 一起退回全部的，别一列一个口径）
+    return d?.per_class ? { name: m.main_dataset as string, ...d } : null;
+  };
+  /** 列表上显示 / 排序用的 F1：新版流程看主数据集，老流程照旧 */
+  const shownF1 = (v: ModelVersion) => mainOf(v)?.macro_f1 ?? f1Of(v);
 
   const f1Of = (v: ModelVersion) => {
     const m = metricsOf(v);
@@ -1078,12 +1088,13 @@ export default function Training() {
                   {
                     title: <Tooltip title="macro-F1：各类别 F1 的平均，每一类算一票。少数类（抓挠）训不好这个数就上不去——比准确率更能说明问题">F1</Tooltip>,
                     width: 70,
-                    sorter: (a, b) => (f1Of(a) ?? -1) - (f1Of(b) ?? -1),
+                    sorter: (a, b) => (shownF1(a) ?? -1) - (shownF1(b) ?? -1),
                     render: (_, v: ModelVersion) => {
                       const f1 = f1Of(v);
                       if (f1 == null) return "-";
                       const m = metricsOf(v) ?? {};
                       if (m.pipeline !== "v2") return <b>{f1.toFixed(3)}</b>;
+                      const main = mainOf(v);
                       // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
                       const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number; segment_macro_f1?: number; scratch_segments?: { recall?: number | null; precision?: number | null } }>;
                       const seg = m.segment_macro_f1 as number | undefined;
@@ -1104,7 +1115,11 @@ export default function Training() {
                             ))}
                           </div>
                         }>
-                          <span style={{ cursor: "help" }}><b>{f1.toFixed(3)}</b><Tag color="purple" style={{ marginLeft: 4, marginInlineEnd: 0 }}>新版</Tag></span>
+                          <span style={{ cursor: "help" }}>
+                            <b>{(main?.macro_f1 ?? f1).toFixed(3)}</b>
+                            <Tag color="purple" style={{ marginLeft: 4, marginInlineEnd: 0 }}>新版</Tag>
+                            {main && <div style={{ fontSize: 11, opacity: 0.6, whiteSpace: "nowrap" }}>主数据集 · 全部 {f1.toFixed(3)}</div>}
+                          </span>
                         </Tooltip>
                       );
                     },
@@ -1112,10 +1127,23 @@ export default function Training() {
                   {
                     title: <Tooltip title="每一类自己的 F1（绿 ≥0.8，黄 ≥0.6，红 <0.6）。**看这一列比看总的 F1 有用**：静止占了大头的话总分会很好看，而抓挠可能是红的">各类 F1</Tooltip>,
                     render: (_, v: ModelVersion) => {
-                      const pc = perClassOf(v);
+                      // 新版流程：默认看主数据集那份（全部合在一起的会被标得粗的老数据拉低）
+                      const main = mainOf(v);
+                      const pc = main?.per_class
+                        ? Object.entries(main.per_class).map(([cls, m]) => ({ cls, p: m.precision ?? 0, r: m.recall ?? 0, f1: m["f1-score"] ?? 0 }))
+                        : perClassOf(v);
                       if (!pc.length) return "-";
+                      const all = main ? perClassOf(v) : [];
                       return (
                         <Space size={2} wrap>
+                          {main && (
+                            <Tooltip title={<div style={{ fontSize: 12 }}>
+                              <div>这里是主数据集 {main.name} 的（交叉验证，没训练过的数据）。全部数据集合在一起：</div>
+                              {all.map((c) => <div key={c.cls}>{c.cls} {c.f1.toFixed(2)}（P {c.p.toFixed(2)} / R {c.r.toFixed(2)}）</div>)}
+                            </div>}>
+                              <Tag style={{ marginInlineEnd: 0, cursor: "help" }}>主数据集</Tag>
+                            </Tooltip>
+                          )}
                           {pc.map((c) => (
                             <Tooltip key={c.cls} title={`${c.cls}：精确率 ${c.p.toFixed(2)} / 召回 ${c.r.toFixed(2)} / F1 ${c.f1.toFixed(2)}`}>
                               <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>

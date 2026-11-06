@@ -74,6 +74,8 @@ export default function TrainReviewModal({
   const [cell, setCell] = useState<{ human: string; pred: string } | null>(null);
   const [tab, setTab] = useState<string>(review ? "review" : "stats");
   const [loading, setLoading] = useState(false);
+  // 看哪份数据集：全部 / 某一份。新版训练默认看主数据集（一般标得最干净）
+  const [dsSel, setDsSel] = useState<string>("all");
   // 取回放结果失败（算法服务正在重启、网络超时……）跟「还没跑过」分开：前者给重试，别让人以为结果没了
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const loadFull = (id: number, alive: () => boolean = () => true) => {
@@ -101,6 +103,7 @@ export default function TrainReviewModal({
     setCls(null);
     setCell(null);
     setLoadErr(null);
+    setDsSel(diag?.main_dataset ?? "all");
     setTab(review ? "review" : "stats");
     // 训练记录里那份摘要可能比回放旧（记录在回放跑完前刷新过，就没有摘要）：不管有没有，都去算法服务取一次全量
     if (versionId != null && modelDone) loadFull(versionId);
@@ -154,7 +157,19 @@ export default function TrainReviewModal({
     <Alert type="error" showIcon style={{ padding: "2px 8px" }} message={`上次回放失败：${prog.error ?? ""}`} />
   ) : null;
 
+  const dsNames = useMemo(
+    () => [...new Set([...Object.keys(full?.confusion_by_dataset ?? {}), ...Object.keys(diag?.per_dataset ?? {})])].sort(),
+    [full, diag]
+  );
+  const dsOn = dsSel !== "all";
+  // 回放的混淆矩阵：选了数据集就用那份的（老版本回放没有分数据集，退回全部）
+  const repCm = (dsOn && full?.confusion_by_dataset?.[dsSel]) || full?.confusion || { classes: [], matrix: [] };
+  const repByDs = !dsOn || !!full?.confusion_by_dataset?.[dsSel];
+  // 诊断（交叉验证）的混淆矩阵：同上
+  const diagCm = (dsOn && diag?.per_dataset?.[dsSel]?.confusion) || diag?.confusion;
+  const diagByDs = !dsOn || !!diag?.per_dataset?.[dsSel]?.confusion;
   const rows = useMemo(() => (full?.rows ?? []).filter((r) => {
+    if (dsSel !== "all" && r.dataset && r.dataset !== dsSel) return false;
     if (kind !== "全部" && r.kind !== kind) return false;
     if (hint !== "全部" && r.hint !== hint) return false;
     if (cell && (r.human !== cell.human || r.pred !== cell.pred)) return false;
@@ -163,7 +178,7 @@ export default function TrainReviewModal({
       if (!hit) return false;
     }
     return true;
-  }), [full, kind, hint, cls, clsSide, cell]);
+  }), [full, kind, hint, cls, clsSide, cell, dsSel]);
   const allClasses = useMemo(() => [...new Set((full?.rows ?? []).flatMap((r) => [r.human, r.pred]).filter(Boolean) as string[])], [full]);
   /** 从「诊断」的建议跳过来：直接筛好「人标 A → 判成 B」 */
   const showPair = (human: string, pred: string) => { setKind("全部"); setHint("全部"); setCls(null); setCell({ human, pred }); setTab("review"); };
@@ -239,11 +254,19 @@ export default function TrainReviewModal({
       {full.errors.length > 0 && <Alert type="warning" showIcon message={`${full.n_tasks_failed} 个任务没跑成：${full.errors.slice(0, 3).join("；")}`} />}
       <Table
         size="small" rowKey={(_, i) => String(i)} pagination={false}
-        title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>混淆矩阵（按段）：行 = 人标的，列 = 模型说的。对角线是认对的</Typography.Text>}
-        dataSource={full.confusion.classes.map((c, i) => ({ cls: c, row: full.confusion.matrix[i], i }))}
+        title={() => (
+          <div style={{ fontSize: 12 }}>
+            <Typography.Text type="secondary">
+              混淆矩阵（按段）：行 = 人标的，列 = 模型说的。对角线是认对的。
+              <b>这是训练集回放——模型预测自己训练过的数据，用来找标错的段，不代表准确率</b>（准确率看「诊断」页或列表上的 F1）
+            </Typography.Text>
+            {!repByDs && <div style={{ color: "#faad14" }}>这次回放是老版本跑的，没分数据集，下面是全部数据的；点「重跑回放」就能分开看</div>}
+          </div>
+        )}
+        dataSource={repCm.classes.map((c, i) => ({ cls: c, row: repCm.matrix[i], i }))}
         columns={[
           { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <ClassTag name={c} /> },
-          ...full.confusion.classes.map((c, j) => ({
+          ...repCm.classes.map((c, j) => ({
             title: <ClassTag name={c} />, width: 80, align: "center" as const,
             render: (_: unknown, r: { row: number[]; i: number; cls: string }) => {
               const v = r.row[j];
@@ -260,7 +283,7 @@ export default function TrainReviewModal({
               ) : txt;
             },
           })),
-          { title: "召回", width: 70, render: (_, r: { cls: string }) => pct(full.per_class[r.cls]?.recall) },
+          { title: "召回", width: 70, render: (_, r: { row: number[]; i: number }) => { const t = r.row.reduce((a, b) => a + b, 0); return t ? pct(r.row[r.i] / t) : "-"; } },
         ]}
       />
       <Space>
@@ -332,7 +355,8 @@ export default function TrainReviewModal({
   );
 
   const sepColor = (auc: number | null) => (auc == null ? "default" : auc >= 0.9 ? "green" : auc >= 0.75 ? "gold" : "red");
-  const advice = advise(diag, full, stats?.window_s ?? null);
+  // 建议跟着选的数据集走（只看主数据集时，不会被老数据的标注问题带偏）
+  const advice = advise(diagCm ? { ...diag, confusion: { top: [], ...diagCm } } : diag, full, stats?.window_s ?? null);
   const diagTab = diag?.confusion || diag?.separability ? (
     <Space direction="vertical" style={{ width: "100%" }} size={10}>
       {advice.length > 0 && (
@@ -358,13 +382,21 @@ export default function TrainReviewModal({
         训练时在验证集上算的（按窗口，验证集按片段划分）。先看混淆矩阵：一类 recall 低、另一类 precision 低，多半是前者被认成了后者。
         再看「分不分得开」：只拿这两类单独训一个二分类，如果连它都分不开，一直补数据作用有限，要考虑合并 / 改类别定义、加特征、换模型或采样率。
       </Typography.Text>
-      {diag.confusion && (
+      {diagCm && (
         <Table size="small" rowKey="cls" pagination={false}
-          title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>混淆矩阵（按窗口）：行 = 人标的，列 = 模型判的</Typography.Text>}
-          dataSource={diag.confusion.labels.map((c, i) => ({ cls: c, row: diag.confusion!.matrix[i], i }))}
+          title={() => (
+            <div style={{ fontSize: 12 }}>
+              <Typography.Text type="secondary">
+                混淆矩阵（按窗口）：行 = 人标的，列 = 模型判的。<b>这是交叉验证——模型没训练过的数据，代表真实准确率</b>
+                {dsOn && diagByDs ? `（只看 ${dsSel}）` : "（全部数据集合在一起）"}
+              </Typography.Text>
+              {!diagByDs && <div style={{ color: "#faad14" }}>这一版不是新版流程训的，没分数据集，下面是全部数据的</div>}
+            </div>
+          )}
+          dataSource={diagCm.labels.map((c, i) => ({ cls: c, row: diagCm.matrix[i], i }))}
           columns={[
             { title: "人标 \\ 模型", dataIndex: "cls", width: 110, render: (c: string) => <ClassTag name={c} /> },
-            ...diag.confusion.labels.map((c, j) => ({
+            ...diagCm.labels.map((c, j) => ({
               title: <ClassTag name={c} />, width: 90, align: "center" as const,
               render: (_: unknown, r: { row: number[]; i: number }) => {
                 const v = r.row[j], total = r.row.reduce((a, b) => a + b, 0) || 1, d = r.i === j;
@@ -391,6 +423,15 @@ export default function TrainReviewModal({
 
   return (
     <Modal title={title} open={versionId != null} onCancel={onClose} footer={null} width={980} destroyOnClose>
+      {dsNames.length > 1 && (
+        <Space style={{ marginBottom: 4 }} wrap>
+          <Tooltip title="回放和诊断的混淆矩阵、错例列表都按这里选的数据集来。老数据标得粗，混在一起看会把错例和分数都拉偏；看模型准不准，选标得最干净的那份">
+            <Typography.Text type="secondary" style={{ fontSize: 12, borderBottom: "1px dashed #666" }}>看哪份数据</Typography.Text>
+          </Tooltip>
+          <Segmented size="small" value={dsSel} onChange={(v) => setDsSel(String(v))}
+            options={[{ value: "all", label: "全部" }, ...dsNames.map((d) => ({ value: d, label: d === diag?.main_dataset ? `${d}（主）` : d }))]} />
+        </Space>
+      )}
       <Tabs
         activeKey={tab}
         onChange={setTab}
