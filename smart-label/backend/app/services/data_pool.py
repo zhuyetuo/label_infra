@@ -288,12 +288,12 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
 
 
 # ── 数据盘点：某一类（默认抓挠）的片段都在哪一步 ──────────────────────────────
-# 回答「现在训练能用的高质量数据有多少、还有多少人看过但没进池子（没用上）、还有多少压根没人看」。
-# 每条片段只归一类，按下面的顺序先到先得（在池里的优先）
+# 「高质量、已经有的数据」= 训练记录里真的用过的：每条训练记录的主数据集 + 一起训练的那几份，
+# 读它们导出给训练的那份 JSON（就是模型实际吃进去的），同一段被几份数据集重复用只算一次。
+# 剩下的（数据库里这一类、跟用过的那些不重叠的）按走到哪一步分开数：在池里还没训练过、人看过没进池……
 INVENTORY_BUCKETS = [
-    ("pool_trained", "在数据池 · 已经用来训练过", True,
-     "进池时间早于最近一次从数据池导出的训练数据集——那一版训练用上了"),
-    ("pool_new", "在数据池 · 还没训练过", True, "最近一次导出之后才进池的，下次训练就能用上"),
+    ("used", "训练记录里已经用过", True, "训练记录的主数据集 + 一起训练的数据集里的，模型实际训过"),
+    ("pool_unused", "在数据池、还没被训练用过", True, "审核通过 / 手动加入了，下次从数据池导出就能用上"),
     ("uncertain", "标了待定", False, "没画面 / 看不清 / 要细切：不进训练集"),
     ("returned", "片段审核退回", False, "审核员说有问题，等标注员改"),
     ("human", "人工画的 / 从疑似片段确认的（还没审核）", False, "人自己标的，审核通过就进池"),
@@ -304,42 +304,94 @@ INVENTORY_BUCKETS = [
 
 
 async def label_inventory(db: AsyncSession, label: str = "抓挠") -> dict:
+    import json
+    import os
+
+    from app.core.config import settings
     from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.models.model_version import ModelVersion
     from app.services import label_tree
-    from app.services.training_export_service import list_datasets
 
     root_ids = set((await db.execute(
         select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
     )).scalars().all())
     ids = await label_tree.expand_ids(db, root_ids)
     names = set((await db.execute(select(LabelDefinition.display_name).where(LabelDefinition.id.in_(ids)))).scalars().all()) if ids else set()
+    names.add(label)
 
-    # 最近一次「从数据池导出」的训练数据集：进池早于它的算已经训练过
-    last_pool_export = None
-    for m in list_datasets():
-        if m.get("scope") == "pool" and m.get("created_at"):
-            t = str(m["created_at"])
-            if last_pool_export is None or t > last_pool_export:
-                last_pool_export = t
+    # 1) 训练记录用过的数据集（主 + 一起训练的），按导出 JSON 路径去重
+    ds_users: dict[str, dict] = {}
+    for vid, spec_s in (await db.execute(select(ModelVersion.id, ModelVersion.dataset_spec))).all():
+        try:
+            spec = json.loads(spec_s or "{}")
+        except ValueError:
+            continue
+        for d in [spec] + list(spec.get("extra_datasets") or []):
+            ej = d.get("export_json")
+            if not ej:
+                continue
+            e = ds_users.setdefault(ej, {"name": d.get("date") or os.path.basename(os.path.dirname(ej)), "versions": set()})
+            e["versions"].add(vid)
+    used: dict[int, set[tuple[int, int]]] = defaultdict(set)
+    per_ds = []
+    for ej, info in sorted(ds_users.items(), key=lambda kv: kv[1]["name"]):
+        n = 0
+        sec = 0.0
+        ok = True
+        try:
+            with open(os.path.join(settings.nas_root, ej), encoding="utf-8") as f:
+                tasks = json.load(f)
+        except (OSError, ValueError):
+            tasks, ok = [], False
+        for t in tasks:
+            tid = t.get("id")
+            for ann in t.get("annotations") or []:
+                for r in ann.get("result") or []:
+                    v = r.get("value") or {}
+                    if not any(c in names for c in (v.get("timeserieslabels") or [])):
+                        continue
+                    a, b = v.get("start_ms"), v.get("end_ms")
+                    if a is None or b is None:
+                        continue
+                    n += 1
+                    sec += max(0, b - a) / 1000
+                    if tid is not None:
+                        used[int(tid)].add((int(a), int(b)))
+        per_ds.append({"name": info["name"], "versions": sorted(info["versions"]), "n": n, "seconds": round(sec, 1),
+                       "missing": not ok})
+    used_n = sum(len(v) for v in used.values())
+    used_sec = sum(b - a for v in used.values() for a, b in v) / 1000
 
+    def overlaps_used(tid: int, s_: int, e_: int) -> bool:
+        # 跟用过的某一段重叠超过一半就算同一段（导出后人可能微调过起止）
+        for a, b in used.get(tid, ()):
+            ov = min(e_, b) - max(s_, a)
+            if ov > 0 and ov >= 0.5 * min(e_ - s_, b - a):
+                return True
+        return False
+
+    # 2) 数据库里这一类、没被用过的，按走到哪一步分
     agg = {k: {"n": 0, "seconds": 0.0, "projects": defaultdict(lambda: [0, 0.0])} for k, *_ in INVENTORY_BUCKETS}
+    agg["used"]["n"], agg["used"]["seconds"] = used_n, used_sec
+    for d in per_ds:
+        agg["used"]["projects"][f"数据集 {d['name']}（训练记录 #{'、#'.join(map(str, d['versions']))}）"] = [d["n"], d["seconds"]]
     if ids:
         it = AnnotationLabelItem
         rows = (await db.execute(
-            select(it.start_time_ms, it.end_time_ms, it.source_type, it.is_modified, it.ai_confirmed, it.uncertain,
-                   it.seg_status, it.pool_state, it.from_candidate_id, it.pool_at, it.seg_reviewed_at, it.touched_at,
-                   Project.name)
+            select(Task.id, it.start_time_ms, it.end_time_ms, it.source_type, it.is_modified, it.ai_confirmed, it.uncertain,
+                   it.seg_status, it.pool_state, it.from_candidate_id, Project.name)
             .join(AnnotationRecord, AnnotationRecord.id == it.annotation_record_id)
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(Project, Project.id == Task.project_id)
             .where(it.label_id.in_(ids), AnnotationRecord.round_no == Task.round_no)
         )).all()
-        for (s, e, src, modified, confirmed, uncertain, seg, ps, from_cand, pool_at, rev_at, touched_at, pname) in rows:
-            sec = max(0, (e or 0) - (s or 0)) / 1000
+        for (tid, s_, e_, src, modified, confirmed, uncertain, seg, ps, from_cand, pname) in rows:
+            s_, e_ = s_ or 0, e_ or 0
+            if overlaps_used(tid, s_, e_):
+                continue
+            sec = max(0, e_ - s_) / 1000
             if in_pool(seg, ps):
-                t = (pool_at or touched_at) if ps == "in" else (rev_at or touched_at)
-                ts = t.isoformat(sep="T") if t else None
-                k = "pool_trained" if (last_pool_export and ts and ts <= last_pool_export) else "pool_new"
+                k = "pool_unused"
             elif uncertain:
                 k = "uncertain"
             elif seg == "returned":
@@ -358,16 +410,15 @@ async def label_inventory(db: AsyncSession, label: str = "抓挠") -> dict:
             a["projects"][pname][0] += 1
             a["projects"][pname][1] += sec
 
-    # 疑似片段候选：还没人判断的（判过的要么变成正式片段、要么排除了，已经算在上面）
+    # 3) 疑似片段候选：还没人判断的
     cand = {"n": 0, "seconds": 0.0}
-    if names or label:
-        q = (select(AiCandidate.start_time_ms, AiCandidate.end_time_ms)
-             .join(Task, Task.id == AiCandidate.task_id)
-             .where(AiCandidate.round_no == Task.round_no, AiCandidate.status == CandidateStatus.pending,
-                    AiCandidate.label_name.in_(names | {label})))
-        for s, e in (await db.execute(q)).all():
-            cand["n"] += 1
-            cand["seconds"] += max(0, (e or 0) - (s or 0)) / 1000
+    q = (select(AiCandidate.start_time_ms, AiCandidate.end_time_ms)
+         .join(Task, Task.id == AiCandidate.task_id)
+         .where(AiCandidate.round_no == Task.round_no, AiCandidate.status == CandidateStatus.pending,
+                AiCandidate.label_name.in_(names)))
+    for s_, e_ in (await db.execute(q)).all():
+        cand["n"] += 1
+        cand["seconds"] += max(0, (e_ or 0) - (s_ or 0)) / 1000
 
     buckets = []
     for k, name, usable, note in INVENTORY_BUCKETS:
@@ -376,19 +427,20 @@ async def label_inventory(db: AsyncSession, label: str = "抓挠") -> dict:
                         "seconds": round(a["seconds"], 1),
                         "by_project": sorted(({"name": p, "n": v[0], "seconds": round(v[1], 1)} for p, v in a["projects"].items()),
                                              key=lambda x: -x["seconds"])})
+
     def tot(keys):
         sel = [b for b in buckets if b["key"] in keys]
         return {"n": sum(b["n"] for b in sel), "seconds": round(sum(b["seconds"] for b in sel), 1)}
     return {
         "label": label, "labels": sorted(names),
-        "last_pool_export": last_pool_export,
+        "datasets": per_ds,
         "buckets": buckets,
         "candidates_pending": {"n": cand["n"], "seconds": round(cand["seconds"], 1)},
         "totals": {
-            "trained": tot({"pool_trained"}),
-            "pool": tot({"pool_trained", "pool_new"}),
-            # 人看过、但还没进池（没用上）：审核通过就能用
-            "reviewed_not_in_pool": tot({"human", "ai_modified", "ai_confirmed", "returned"}),
+            "used": tot({"used"}),
+            "pool_unused": tot({"pool_unused"}),
+            # 人看过、还没用上的：在池里没训练过的 + 人确认 / 改过 / 画的 / 退回的
+            "reviewed_unused": tot({"pool_unused", "human", "ai_modified", "ai_confirmed", "returned"}),
             "ai_untouched": tot({"ai_untouched"}),
             "all": tot({b["key"] for b in buckets}),
         },
