@@ -31,7 +31,7 @@ import {
   type DatasetSegment,
   getDatasetSegments,
   deleteDataset,
-  activateModel, cancelModelVersion, downloadEdgeBundle, type EdgeBundleKind, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
+  activateModel, cancelModelVersion, dataBundleInfo, downloadDataBundle, downloadEdgeBundle, type EdgeBundleKind, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
   type ModelVersion, type TrainDataset,
   type DatasetStats,
@@ -792,6 +792,7 @@ export default function Training() {
   };
   const [exportingEdge, setExportingEdge] = useState<number | null>(null);
   const [downloadingEdge, setDownloadingEdge] = useState<number | null>(null);
+  const [bundling, setBundling] = useState<number | null>(null);
   const edgeZipName = (v: ModelVersion, kind: EdgeBundleKind = "src") =>
     `edge_${v.model_type || "rf"}_train${v.algo_job_id}_v${v.id}${kind === "lib" ? "_lib" : ""}.zip`;
   /** 一键下载端侧包：还没导过端侧就先导（算端侧 F1、挂端侧服务），再打包下载 */
@@ -1205,6 +1206,45 @@ export default function Training() {
                                 </Button>
                               </Tooltip>
                             </Dropdown>
+                          )}
+                          {v.status === "done" && (
+                            <Tooltip title="这次训练用到的原始 CSV + 标签 + 训练参数打成一个 zip（不含视频），拿去别处复现 / 重训">
+                              <Button
+                                size="small"
+                                type="link"
+                                loading={bundling === v.id}
+                                onClick={async () => {
+                                  setBundling(v.id);
+                                  try {
+                                    const r = await dataBundleInfo(v.id);
+                                    const mb = r.bytes / 1024 / 1024;
+                                    Modal.confirm({
+                                      title: `导出训练数据 #${v.id}`,
+                                      width: 560,
+                                      okText: "开始下载",
+                                      cancelText: "取消",
+                                      content: (
+                                        <div style={{ fontSize: 13 }}>
+                                          <div>数据集：{r.datasets.join("、")}</div>
+                                          <div>
+                                            {r.n_segments} 段标签，{r.n_csv} 个原始 CSV，约 {mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`}（压缩前）
+                                          </div>
+                                          <div style={{ opacity: 0.7 }}>边打包边下载，浏览器下载栏里看进度；里面有 README 说明怎么读</div>
+                                          {r.missing.length > 0 && (
+                                            <Alert style={{ marginTop: 8 }} type="warning" showIcon message="有些没装进来" description={r.missing.map((m) => <div key={m}>{m}</div>)} />
+                                          )}
+                                        </div>
+                                      ),
+                                      onOk: () => downloadDataBundle(v.id, r.token),
+                                    });
+                                  } finally {
+                                    setBundling(null);
+                                  }
+                                }}
+                              >
+                                导出训练数据
+                              </Button>
+                            </Tooltip>
                           )}
                           {!busy && (
                             <Tooltip title="照这一版的数据集和配置再训一版新的（方向无关默认勾上），原来这版不动">

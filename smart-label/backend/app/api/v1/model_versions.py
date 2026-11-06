@@ -286,6 +286,57 @@ async def rerun_train_review(version_id: int, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
+def _bundle_spec(row: ModelVersion) -> dict:
+    try:
+        spec = json.loads(row.dataset_spec or "{}")
+    except ValueError:
+        spec = {}
+    try:
+        metrics = json.loads(row.metrics) if row.metrics else None
+    except ValueError:
+        metrics = None
+    return {"version_id": row.id, "algo_job_id": row.algo_job_id, "model_type": row.model_type,
+            "model_version": row.model_version, "created_at": row.created_at.isoformat() if row.created_at else None,
+            "dataset": spec, "metrics": metrics}
+
+
+@router.post("/{version_id}/data-bundle/token")
+async def data_bundle_token(version_id: int, db: AsyncSession = Depends(get_db)):
+    """导出训练数据（原始 CSV + 标签 + 训练参数）前先要个下载 token，顺便回个大概：几个 CSV、多大、缺了什么。"""
+    from app.services import train_bundle
+
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    try:
+        p = await asyncio.to_thread(train_bundle.plan, _bundle_spec(row)["dataset"])
+    except train_bundle.BundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return ok({"token": train_bundle.issue_token(version_id), **train_bundle.summary(p)})
+
+
+@callback_router.get("/{version_id}/data-bundle")
+async def data_bundle(version_id: int, token: str, db: AsyncSession = Depends(get_db)):
+    """下载 zip。走 <a href> 直接下（几百 MB 不能进浏览器内存），所以挂在不校验登录的路由上、靠短期 token。"""
+    from fastapi.responses import StreamingResponse
+    from app.services import train_bundle
+
+    if not train_bundle.verify_token(version_id, token):
+        raise HTTPException(status_code=401, detail="下载链接无效或已过期，回训练记录重新点一次")
+    row = await db.get(ModelVersion, version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
+    doc = _bundle_spec(row)
+    try:
+        p = await asyncio.to_thread(train_bundle.plan, doc["dataset"])
+    except train_bundle.BundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    fname = f"train_data_v{row.id}_job{row.algo_job_id}.zip"
+    return StreamingResponse(train_bundle.stream(p, doc), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                                      "X-Accel-Buffering": "no"})
+
+
 @router.get("/{version_id}/edge-bundle")
 async def edge_bundle(version_id: int, kind: str = "src", db: AsyncSession = Depends(get_db)):
     """下载这一版的端侧包（zip）。kind=src 源码包：core/ 运行时 + 模型导出的 C + README；
