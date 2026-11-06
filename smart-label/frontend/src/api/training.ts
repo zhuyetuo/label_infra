@@ -376,7 +376,9 @@ export interface TrainReview {
   per_class: Record<string, { segments: number; correct: number; recall: number | null; precision: number | null }>;
   rows: ReviewRow[]; n_rows_total: number; errors: string[]; note?: string;
 }
-export const trainReview = (id: number) => request.get<never, TrainReview>(`/model-versions/${id}/review`);
+/** 回放全量结果：几千段错例的大 JSON，要两跳（平台 → 算法服务），给足时间；silent 是让调用方自己说怎么回事 */
+export const trainReview = (id: number) =>
+  request.get<never, TrainReview>(`/model-versions/${id}/review`, { timeout: 120000, silent: true } as never);
 export const rerunTrainReview = (id: number) => request.post<never, { ok: boolean }>(`/model-versions/${id}/review/rerun`);
 /** 回放进度：idle / starting / running（done / total 个任务）/ done / failed / unknown（算法服务老版本） */
 export interface ReviewProgress { status: "idle" | "starting" | "running" | "done" | "failed" | "unknown"; done?: number; total?: number | null;

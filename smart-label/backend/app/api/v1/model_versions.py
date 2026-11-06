@@ -254,6 +254,8 @@ async def train_review(version_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"model_version #{version_id} 不存在")
     try:
         return ok(await algo_client.train_review(row.algo_job_id))
+    except algo_client.AlgoNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except algo_client.AlgoServiceError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
