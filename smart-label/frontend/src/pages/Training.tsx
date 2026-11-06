@@ -80,7 +80,9 @@ type TrainRow = TrainCat & { key: string; isGroup?: boolean; children?: TrainRow
 
 /** 新版训练流程的默认值（2026-11 用 #23 / #27 的数据按「天 + 项圈」分组交叉验证定的） */
 const V2_DEFAULT_FINE = ["进食", "饮水", "甩身体"];
-const V2_DEFAULT_SCALE: Record<string, number> = { 抓挠: 1.5, "甩头/抖身": 2 };
+// 抓挠 2.5：系数是乘在每棵树的叶子上的（每棵树再归一化），比乘在平均概率上弱；
+// #27 的数据上 2.5 时 pool 那份抓挠按次数 查全 0.78 / 查准 0.92，再大就开始多算抓挠时长
+const V2_DEFAULT_SCALE: Record<string, number> = { 抓挠: 2.5, "甩头/抖身": 2 };
 /** 新版流程的默认窗口：4 秒，板上特征缓冲最多 64 点 */
 const v2Window = (hz: number) => Math.min(64, Math.floor(4 * hz + 1e-9));
 
@@ -1076,7 +1078,7 @@ export default function Training() {
                       const m = metricsOf(v) ?? {};
                       if (m.pipeline !== "v2") return <b>{f1.toFixed(3)}</b>;
                       // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
-                      const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number }>;
+                      const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number; segment_macro_f1?: number; scratch_segments?: { recall?: number | null; precision?: number | null } }>;
                       const seg = m.segment_macro_f1 as number | undefined;
                       const sc = m.scratch_segments as { recall?: number; precision?: number } | undefined;
                       return (
@@ -1085,7 +1087,14 @@ export default function Training() {
                             <div>新版流程：按（天, 项圈）分组交叉验证，同一只狗同一天不会两边都有——比老流程的分数低一些，但更接近换一只狗的真实表现。不能跟老流程的数直接比</div>
                             {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}{sc?.recall != null ? `；抓挠按次数 查全 ${sc.recall} / 查准 ${sc.precision}` : ""}</div>}
                             {Object.keys(pd).length > 0 && <div style={{ marginTop: 4 }}>分数据集（老数据标得粗，会拉低总分）：</div>}
-                            {Object.entries(pd).map(([d, r]) => <div key={d}>{d}：{r.macro_f1.toFixed(3)}（{r.n} 窗）</div>)}
+                            {Object.entries(pd).map(([d, r]) => (
+                              <div key={d}>
+                                {d}：{r.macro_f1.toFixed(3)}
+                                {r.segment_macro_f1 != null ? `，按片段 ${r.segment_macro_f1.toFixed(3)}` : ""}
+                                {r.scratch_segments?.recall != null ? `，抓挠按次数 查全 ${r.scratch_segments.recall} / 查准 ${r.scratch_segments.precision}` : ""}
+                                （{r.n} 窗）
+                              </div>
+                            ))}
                           </div>
                         }>
                           <span style={{ cursor: "help" }}><b>{f1.toFixed(3)}</b><Tag color="purple" style={{ marginLeft: 4, marginInlineEnd: 0 }}>新版</Tag></span>
@@ -2005,7 +2014,7 @@ export default function Training() {
                       options={fineOptions.map((n) => ({ value: n, label: `${n} → ${remapEdits[n]}` }))} />
                   </Space>
                   <Space wrap size={[8, 4]}>
-                    <Tooltip title="各类的概率乘这个系数再取最大。老数据里抓挠被标成活动的不少，模型学得偏保守、次数少报；抓挠乘 1.5 让查全≈查准，数出来的次数不偏。1 = 不动">
+                    <Tooltip title="各类的概率乘这个系数再取最大。老数据里抓挠被标成活动的不少，模型学得偏保守、次数少报；抓挠乘 2.5 让查全和查准接近，数出来的次数基本不偏（再大会多算抓挠时长）。1 = 不动。训完看 F1 悬停里 pool 那份的「抓挠按次数 查全 / 查准」，查全明显低就调大、查准明显低就调小">
                       <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>输出校准</span>
                     </Tooltip>
                     {trainTargets.map((t) => (
