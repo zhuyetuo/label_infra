@@ -1218,6 +1218,7 @@ export default function Training() {
                                   try {
                                     const r = await dataBundleInfo(v.id);
                                     const mb = r.bytes / 1024 / 1024;
+                                    const sz = (m: number) => (m >= 1024 ? `${(m / 1024).toFixed(1)} GB` : `${Math.max(1, Math.round(m))} MB`);
                                     Modal.confirm({
                                       title: `导出训练数据 #${v.id}`,
                                       width: 560,
@@ -1227,7 +1228,8 @@ export default function Training() {
                                         <div style={{ fontSize: 13 }}>
                                           <div>数据集：{r.datasets.join("、")}</div>
                                           <div>
-                                            {r.n_segments} 段标签，{r.n_csv} 个原始 CSV，约 {mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`}（压缩前）
+                                            {r.n_segments} 段标签，{r.n_csv} 个原始 CSV（只有 CSV，不含视频）。下载下来约 {sz(mb * 0.17)}
+                                            <span style={{ opacity: 0.6 }}>（CSV 解压后 {sz(mb)}；文本压得很小，实测约 1/6）</span>
                                           </div>
                                           <div style={{ opacity: 0.7 }}>边打包边下载，浏览器下载栏里看进度；里面有 README 说明怎么读</div>
                                           {r.missing.length > 0 && (
