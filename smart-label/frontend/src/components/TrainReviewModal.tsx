@@ -74,6 +74,25 @@ export default function TrainReviewModal({
   const [cell, setCell] = useState<{ human: string; pred: string } | null>(null);
   const [tab, setTab] = useState<string>(review ? "review" : "stats");
   const [loading, setLoading] = useState(false);
+  // 取回放结果失败（算法服务正在重启、网络超时……）跟「还没跑过」分开：前者给重试，别让人以为结果没了
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const loadFull = (id: number, alive: () => boolean = () => true) => {
+    setLoading(true);
+    setLoadErr(null);
+    trainReview(id)
+      .then((r) => {
+        if (!alive()) return;
+        setFull(r);
+        // 记录里没有摘要、算法服务那边却有结果：记录是在回放跑完之前刷新的，顺手同步一下（列表上就不再是「回放未跑」）
+        if (!review) onRefresh?.();
+      })
+      .catch((e: { response?: { status?: number; data?: { detail?: string } }; message?: string }) => {
+        if (!alive()) return;
+        if (e?.response?.status === 404) return;   // 真的还没跑过
+        setLoadErr(e?.response?.data?.detail || e?.message || "取回放结果失败");
+      })
+      .finally(() => { if (alive()) setLoading(false); });
+  };
 
   useEffect(() => {
     setFull(review);
@@ -81,11 +100,11 @@ export default function TrainReviewModal({
     setHint("全部");
     setCls(null);
     setCell(null);
+    setLoadErr(null);
     setTab(review ? "review" : "stats");
-    if (versionId != null && review) {
-      setLoading(true);
-      trainReview(versionId).then(setFull).catch(() => undefined).finally(() => setLoading(false));
-    }
+    // 训练记录里那份摘要可能比回放旧（记录在回放跑完前刷新过，就没有摘要）：不管有没有，都去算法服务取一次全量
+    if (versionId != null && modelDone) loadFull(versionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionId, review]);
 
   // 回放进度：打开着就每 3 秒问一次；跑着的时候显示进度、两个按钮都不让点；跑完自动拉新结果
@@ -100,8 +119,7 @@ export default function TrainReviewModal({
         if (!alive) return;
         setProg(p);
         if ((last === "running" || last === "starting") && p.status === "done") {
-          setLoading(true);
-          trainReview(versionId).then((r) => alive && setFull(r)).catch(() => undefined).finally(() => alive && setLoading(false));
+          loadFull(versionId, () => alive);
           onRefresh?.();
           message.success("回放跑完了");
         }
@@ -299,9 +317,12 @@ export default function TrainReviewModal({
   ) : (
     <Space direction="vertical">
       <Typography.Text type="secondary">
-        {!modelDone ? "训练完才有。" : running ? "回放在跑，跑完这里会自动出结果。" : "这一版还没有回放结果。训练完会自动跑；老版本点下面跑一次（几分钟）。"}
+        {!modelDone ? "训练完才有。" : running ? "回放在跑，跑完这里会自动出结果。" : loading ? "正在取回放结果（几千段，要几秒）…" : loadErr ? `取回放结果失败：${loadErr}（算法服务刚重启的话等一两分钟再试）` : "这一版还没有回放结果。训练完会自动跑；老版本点下面跑一次（几分钟）。"}
       </Typography.Text>
-      {modelDone && versionId != null && (
+      {modelDone && versionId != null && loadErr && !running && (
+        <Button size="small" type="primary" loading={loading} onClick={() => loadFull(versionId)}>重新取结果</Button>
+      )}
+      {modelDone && versionId != null && !loadErr && !loading && (
         <Button size="small" disabled={running} loading={running} onClick={startRerun}>
           {running ? "回放在跑…" : "跑一次回放"}
         </Button>

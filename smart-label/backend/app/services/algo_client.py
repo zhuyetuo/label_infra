@@ -323,6 +323,10 @@ async def edge_bundle(algo_job_id: int, kind: str = "src") -> bytes:
     return resp.content
 
 
+class AlgoNotFound(AlgoServiceError):
+    """算法服务明确说「没有」（404），跟连不上 / 出错分开：页面上一个是「还没跑」，一个是「取失败了，重试」"""
+
+
 async def train_review(algo_job_id: int) -> dict:
     """训练完回放的完整结果（错例全量）。训练记录 metrics.review 里只带前几百条。"""
     url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/review"
@@ -332,7 +336,7 @@ async def train_review(algo_job_id: int) -> dict:
     except httpx.RequestError as e:
         raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
     if resp.status_code == 404:
-        raise AlgoServiceError("这一版还没有回放结果（训练完会自动跑；老版本可以点「重跑回放」）")
+        raise AlgoNotFound("这一版还没有回放结果（训练完会自动跑；老版本可以点「重跑回放」）")
     if resp.status_code != 200:
         raise AlgoServiceError(f"算法服务取回放结果失败（{resp.status_code}）：{resp.text[:300]}")
     return resp.json()
