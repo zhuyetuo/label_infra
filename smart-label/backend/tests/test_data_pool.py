@@ -149,22 +149,37 @@ def test_刚进池的先(db, run):
     assert manual["via"] == "manual"
 
 
-def test_数据盘点_每条只归一类(db, run, monkeypatch):
+def test_数据盘点_训练记录用过的才算已用上(db, run, monkeypatch, tmp_path):
+    import json
+
+    from app.core.config import settings
+    from app.models.model_version import ModelTrainStatus, ModelVersion
+
     w = _world(db, run)
     run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
-    monkeypatch.setattr("app.services.training_export_service.list_datasets", lambda: [])
+    monkeypatch.setattr(settings, "nas_root", str(tmp_path))
+    # 没有训练记录：一段都不算用过，审核通过的那段在「池里没训练过」
     inv = run(data_pool.label_inventory(db, "抓挠"))
     b = {x["key"]: x for x in inv["buckets"]}
-    # 没导出过数据池数据集：池里的都算「还没训练过」
-    assert b["pool_trained"]["n"] == 0 and b["pool_new"]["n"] == 1
-    # 另外两条人画的还没审核；那条 AI 给的没人看过；「活动」那条不算
+    assert b["used"]["n"] == 0 and b["pool_unused"]["n"] == 1
     assert b["human"]["n"] == 2 and b["ai_untouched"]["n"] == 1 and b["human"]["seconds"] == 6.0
     assert sum(x["n"] for x in inv["buckets"]) == inv["totals"]["all"]["n"]
-    assert inv["totals"]["pool"]["n"] == 1 and "抓挠-头颈耳" in inv["labels"]
-    # 导出一份「数据池」数据集之后：之前进池的算训练过
-    monkeypatch.setattr("app.services.training_export_service.list_datasets",
-                        lambda: [{"scope": "pool", "created_at": "2999-01-01T00:00:00"}])
+    assert "抓挠-头颈耳" in inv["labels"]
+
+    # 一条训练记录用了一份数据集，里面有 items[1] 那段（起止导出后被微调过一点也认）和一段别的类别
+    d = tmp_path / "data_train" / "ds1"
+    d.mkdir(parents=True)
+    it = w.items[1]
+    seg = lambda a, b, labs: {"value": {"start_ms": a, "end_ms": b, "timeserieslabels": labs}}
+    (d / "merged_tmp.json").write_text(json.dumps([{"id": w.t.id, "data": {}, "annotations": [{"result": [
+        seg(it.start_time_ms + 200, it.end_time_ms, ["抓挠", "抓挠-头颈耳"]), seg(50000, 60000, ["活动"])]}]}],
+        ensure_ascii=False), encoding="utf-8")
+    db.add(ModelVersion(algo_job_id=1, status=ModelTrainStatus.done, model_type="rf", created_by=w.admin.id,
+                        dataset_spec=json.dumps({"date": "pool_x", "export_json": "data_train/ds1/merged_tmp.json",
+                                                 "extra_datasets": [{"date": "ds1", "export_json": "data_train/ds1/merged_tmp.json"}]})))
+    run(db.commit())
     inv2 = run(data_pool.label_inventory(db, "抓挠"))
     b2 = {x["key"]: x for x in inv2["buckets"]}
-    assert b2["pool_trained"]["n"] == 1 and b2["pool_new"]["n"] == 0
-    assert inv2["totals"]["trained"]["n"] == 1
+    assert b2["used"]["n"] == 1 and b2["used"]["seconds"] == 2.8      # 同一份数据集被引用两次只算一次
+    assert b2["human"]["n"] == 1                                         # 用过的那段不再算进「还没审核」
+    assert inv2["datasets"][0]["n"] == 1 and inv2["totals"]["used"]["n"] == 1

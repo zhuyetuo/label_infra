@@ -137,10 +137,12 @@ export interface InventoryBucket {
   by_project: { name: string; n: number; seconds: number }[];
 }
 export interface LabelInventory {
-  label: string; labels: string[]; last_pool_export: string | null;
+  label: string; labels: string[];
+  /** 训练记录用过的数据集：各自这一类有几段 / 多长，被哪几条训练记录用了 */
+  datasets: { name: string; versions: number[]; n: number; seconds: number; missing: boolean }[];
   buckets: InventoryBucket[];
   candidates_pending: { n: number; seconds: number };
-  totals: Record<"trained" | "pool" | "reviewed_not_in_pool" | "ai_untouched" | "all", { n: number; seconds: number }>;
+  totals: Record<"used" | "pool_unused" | "reviewed_unused" | "ai_untouched" | "all", { n: number; seconds: number }>;
 }
 export const labelInventory = (label: string) =>
   request.get<never, LabelInventory>("/data-pool/inventory", { params: { label }, timeout: 120000 });

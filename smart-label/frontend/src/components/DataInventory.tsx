@@ -46,16 +46,23 @@ export default function DataInventory({ labelOptions }: { labelOptions: string[]
         {data && (
           <>
             <Row gutter={32} style={{ marginBottom: 12 }}>
-              {stat("已经用来训练过", t?.trained, "#52c41a", "在数据池里、而且进池早于最近一次从数据池导出的训练数据集")}
-              {stat("数据池里（能直接训练）", t?.pool, undefined, "审核通过的 + 手动加入的；含上面已经训练过的")}
-              {stat("人看过、还没进池（没用上）", t?.reviewed_not_in_pool, "#faad14", "AI 已确认 / 人改过 / 人工画的 / 从疑似确认的 / 审核退回的：片段审核里通过（或手动加入数据池）就能用上")}
+              {stat("训练记录里已经用过（高质量）", t?.used, "#52c41a", "训练记录的主数据集 + 一起训练的数据集里的，模型实际训过；几份数据集重复的只算一次")}
+              {stat("人看过、还没用上", t?.reviewed_unused, "#faad14", "在数据池但没被训练用过的 + AI 已确认 / 人改过 / 人工画的 / 从疑似确认的 / 审核退回的（都没进过任何训练）")}
+              {stat("其中已在数据池", t?.pool_unused, undefined, "审核通过 / 手动加入了，下次从数据池导出训练就能用上")}
               {stat("AI 给的、没人看过", t?.ai_untouched, "#8c8c8c", "模型自己标的，不算高质量；人确认一遍就能变成可用的")}
               {stat("疑似片段还没判", data.candidates_pending, "#8c8c8c", "「疑似片段」里还没人点确认 / 排除的")}
             </Row>
             <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message={data.last_pool_export
-                ? `最近一次从数据池导出训练数据集：${data.last_pool_export.replace("T", " ").slice(0, 16)}。「已经训练过」按进池时间早于它算——那次导出如果按类别 / 狗 / 日期筛过，实际用上的会少一些`
-                : "还没从数据池导出过训练数据集，所以「已经训练过」是 0；池里的都还没用上"} />
+              message="「已经用过」直接读训练记录用过的那几份数据集（模型实际吃进去的标签）；下面其它几行是数据库里这一类、跟用过的不重叠的片段"
+              description={data.datasets.length ? (
+                <div style={{ fontSize: 12 }}>
+                  {data.datasets.map((d) => (
+                    <div key={d.name}>
+                      {d.name}：{d.n} 段 · {fmtSecs(d.seconds)}（训练记录 #{d.versions.join("、#")}）{d.missing ? " ⚠ 导出文件找不到了" : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : "还没有训练记录用过数据集"} />
             <Table<InventoryBucket>
               size="small" rowKey="key" pagination={false} dataSource={data.buckets}
               expandable={{
