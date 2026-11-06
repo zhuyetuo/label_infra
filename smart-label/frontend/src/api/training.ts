@@ -255,6 +255,10 @@ export const submitTrain = (body: {
     stride_s?: number | null;
     label_mode?: "majority" | "center" | null;
     model_params?: { n_estimators?: number | null; max_depth?: number | null; min_samples_leaf?: number | null; max_features?: string | null } | null;
+    /** 新版训练流程（imu_train train_v2.py）："v2"；细分训练的类别；输出校准系数 */
+    pipeline?: "v2" | null;
+    fine_labels?: string[] | null;
+    class_scale?: Record<string, number> | null;
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
     /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */
