@@ -114,6 +114,16 @@ export const skinMlPredictS = (b: { rows: MlRow[]; date_label: string; imu: stri
 
 export const skinLinkStats = (p: { date_from: string; date_to: string; project_id?: number | null; ai_min_conf?: number; include_drafts?: boolean; refresh?: boolean }) =>
   request.get<never, LinkResult>("/skin/link/stats", { params: p, timeout: 300_000 });
+export interface LinkRefreshStatus {
+  status: "idle" | "running" | "done" | "error";
+  date_from?: string; date_to?: string; by?: string;
+  started_at?: number; finished_at?: number | null; elapsed_sec?: number; estimate_sec?: number;
+  rows?: number | null; warnings?: string[]; error?: string | null;
+}
+/** 在服务器后台重新拉取：立刻返回，进度用 skinLinkRefreshStatus 查 */
+export const skinLinkRefreshStart = (p: { date_from: string; date_to: string; project_id?: number | null; include_drafts?: boolean }) =>
+  request.post<never, LinkRefreshStatus>("/skin/link/refresh", null, { params: p });
+export const skinLinkRefreshStatus = () => request.get<never, LinkRefreshStatus>("/skin/link/refresh", { silent: true } as object);
 /** 标注平台上现在有任务的数据覆盖范围。每日跟踪表的日期默认跟着它走 */
 export const getSkinDataRange = () =>
   request.get<never, { date_from: string | null; date_to: string | null }>("/skin/data-range");

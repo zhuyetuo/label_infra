@@ -8,7 +8,9 @@ export interface ApiEnvelope<T = unknown> {
   data: T;
 }
 
-const request = axios.create({ baseURL: "/api/v1", timeout: 15000 });
+// 默认等 60 秒。原来 15 秒：服务器一忙（有人在跑重新拉取 / 大批量操作、数据库在等锁），
+// 平时一两秒的请求偶尔要十几秒，页面上就到处弹英文的 "timeout of 15000ms exceeded"
+const request = axios.create({ baseURL: "/api/v1", timeout: 60000 });
 
 // 访客能发的非 GET 请求，跟后端 app/core/deps.py 的 VIEWER_ALLOWED_POSTS 一致
 const VIEWER_ALLOWED = ["/auth/logout", "/model-eval/compare", "/data-pool/compare-preview",
@@ -75,6 +77,13 @@ request.interceptors.response.use(
       return Promise.reject(error);
     }
     let msg = error.response?.data?.msg || error.message || "网络错误";
+    if (error.code === "ECONNABORTED" || /timeout/i.test(error.message)) {
+      const sec = Math.round((error.config?.timeout ?? 60000) / 1000);
+      msg = `服务器 ${sec} 秒没响应，可能正忙（有人在跑大计算 / 数据库卡住），稍后再试；「系统监控」里能看到慢在哪`;
+      // 同时好几个请求超时只弹一条
+      if (!(error.config as { silent?: boolean } | undefined)?.silent) message.error({ content: msg, key: "timeout" });
+      return Promise.reject(error);
+    }
     // responseType=blob 时出错，后端的 JSON 报错也被装成了 Blob，读出来才看得到原因
     const blobData = error.response?.data as unknown;
     if (blobData instanceof Blob) {

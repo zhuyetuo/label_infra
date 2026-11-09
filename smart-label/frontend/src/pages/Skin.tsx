@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
   Segmented,
@@ -30,7 +30,7 @@ import {
   getSkinDataRange,
   purgeSkinDailyStats,
   deleteSkinRecord, deleteWeekly, markScratchChecked, getSkinOptions, listSkinRecords, listWeekly, saveSkinRecord, skinCScore, skinMlPredictC, skinMlPredictS,
-  skinDailyTracking, skinLinkStaleness, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
+  skinDailyTracking, skinLinkRefreshStart, skinLinkRefreshStatus, skinLinkStaleness, skinLinkStats, skinMlPreview, skinMlScan, skinQScore, skinSTotal, skinStatsScan, skinStatsToC, upsertWeekly, weeklyAutofill, weeklyDefaults, weeklyRecomputeAll,
   type Answers, type CInputs, type CResult, type CSource, type LinkRow, type MlPredict, type MlRow, type QScore, type SResult, type SkinOptions, type SkinRecord, type StatsRow, type TrackingRow, type WeeklyRow,
 } from "@/api/skin";
 import { listProjects } from "@/api/projects";
@@ -1756,22 +1756,9 @@ const loadLinkFilter = (): LinkFilter => {
   };
 };
 
-// 「重新拉取」的进度是估出来的，不是后端报的——那一趟是一次原子计算：
-// 基线要用**库里所有天**的中位数（不只界面上选的范围，见 skin_link_service 里
-// _stats_with_full_baseline 的说明），所以没法按日期切成几段、边算边报进度。
-//
-// 于是拿上一次的实测速度来标定：记住「每天大约几秒」，下次按选中的天数估总时长。
-// 计时是真的，估算是学出来的，越用越准；第一次用下面这个保守默认值。
-// 超过预估也不跳到 100%——封在 99% 并改口说「比预估久」，别让人以为卡死了。
-const LINK_PACE_KEY = "smart-label:skin-link-pace-sec-per-day";
-const LINK_PACE_DEFAULT = 1.5;
-const loadLinkPace = (): number => {
-  try {
-    const v = Number(localStorage.getItem(LINK_PACE_KEY));
-    return Number.isFinite(v) && v > 0 ? v : LINK_PACE_DEFAULT;
-  } catch { return LINK_PACE_DEFAULT; }
-};
-
+// 「重新拉取」在服务器后台跑（见后端 services/skin_link_job.py）：点一下只是开始，
+// 页面每两秒问一次进度——刷新页面、换电脑打开都能接着看到，也不会一直占着一个请求等到超时。
+// 进度是后端按上一次的实测速度估的；开始时间、谁点的、算完没有是真的。
 function LinkTab(p: {
   opts: SkinOptions;
   onApply: (c: CInputs, meta: { fill_date: string | null; dog_name: string | null; imu: string; source: CSource; ai: { total: number | null; tier: string | null } | null; human: { total: number | null; tier: string | null } | null }) => void;
@@ -1793,10 +1780,23 @@ function LinkTab(p: {
     queryFn: () => skinLinkStats({ date_from: f.from, date_to: f.to }),
     refetchOnWindowFocus: false,
   });
-  const [recomputing, setRecomputing] = useState(false);
-  // 这一趟已经跑了多少秒（真实计时）、预计一共多少秒（按上次速度估）
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [estimateMs, setEstimateMs] = useState(0);
+  // 后台那一趟的状态：打开页面就查一次，在算就每 2 秒再查
+  const { data: job, refetch: refetchJob } = useQuery({
+    queryKey: ["skin-link-refresh"],
+    queryFn: skinLinkRefreshStatus,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 2000 : false),
+    refetchOnWindowFocus: true,
+  });
+  const recomputing = job?.status === "running";
+  // 秒数自己走（200ms 一跳），不用等下一次轮询
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!recomputing) return;
+    const t = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(t);
+  }, [recomputing]);
+  const elapsedMs = recomputing && job?.started_at ? Math.max(0, now - job.started_at * 1000) : 0;
+  const estimateMs = (job?.estimate_sec ?? 0) * 1000;
   // 哪些天的标注在上次算完之后改过。不自动重算：改一天会牵动别的天（基线是这只狗
   // 所有算过的天的中位数），而且一次全量是几百次 algo 调用——标注是高频操作，
   // 自动触发等于每存一次草稿就打一轮后端。提醒到位，按钮还是人按。
@@ -1816,36 +1816,31 @@ function LinkTab(p: {
   const pull = async (over?: { from: string; to: string }) => {
     const from = over?.from ?? f.from;
     const to = over?.to ?? f.to;
-    const days = Math.max(1, dayjs(to).diff(dayjs(from), "day") + 1);
-    const t0 = Date.now();
-    setElapsedMs(0);
-    setEstimateMs(days * loadLinkPace() * 1000);
-    // 200ms 一跳：秒数看得出在动，又不至于每帧重渲染整张表
-    const timer = window.setInterval(() => setElapsedMs(Date.now() - t0), 200);
-    setRecomputing(true);
-    try {
-      const r = await skinLinkStats({
-        date_from: from, date_to: to, project_id: f.projectId, include_drafts: f.includeDrafts, refresh: true,
-      });
-      // 换了范围就把筛选也跟着挪过去，不然算完的行跟界面上显示的范围对不上
-      if (over) setFilter({ from, to });
-      qcLink.setQueryData(["skin-link", from, to], r);
-      if (!r.rows.length) message.info(r.warnings[0] ?? "这段日期里没有样本/任务");
-      else message.success(`已重新计算并保存 ${r.rows.length} 行`);
-      refetchStale();
-      // 用这次的实测速度修正估算。取指数滑动平均而不是直接覆盖：偶尔一次
-      // 特别慢（别人在跑别的任务、NAS 正忙）不该把下次的估算带偏。
-      try {
-        const pace = (Date.now() - t0) / 1000 / days;
-        if (Number.isFinite(pace) && pace > 0) {
-          localStorage.setItem(LINK_PACE_KEY, String(loadLinkPace() * 0.6 + pace * 0.4));
-        }
-      } catch { /* localStorage 不可用就算了，下次还用默认值 */ }
-    } finally {
-      window.clearInterval(timer);
-      setRecomputing(false);
+    // 换了范围就把筛选也跟着挪过去，不然算完的行跟界面上显示的范围对不上
+    if (over) setFilter({ from, to });
+    const st = await skinLinkRefreshStart({
+      date_from: from, date_to: to, project_id: f.projectId, include_drafts: f.includeDrafts,
+    });
+    if (st.status === "running" && (st.date_from !== from || st.date_to !== to)) {
+      message.info(`${st.by} 正在算 ${st.date_from} ~ ${st.date_to}，等它算完再点`);
     }
+    refetchJob();
   };
+  // 从「在算」变成「算完 / 出错」：刷新表格、提示一次（只在这个页面上看着它算完时提示）
+  const lastStatus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = lastStatus.current;
+    lastStatus.current = job?.status;
+    if (prev !== "running" || !job || job.status === "running") return;
+    if (job.status === "done") {
+      qcLink.invalidateQueries({ queryKey: ["skin-link"] });
+      refetchStale();
+      if (!job.rows) message.info(job.warnings?.[0] ?? "这段日期里没有样本/任务");
+      else message.success(`已重新计算并保存 ${job.rows} 行`);
+    } else if (job.status === "error") {
+      message.error(`重新拉取失败：${job.error}`, 8);
+    }
+  }, [job, qcLink, refetchStale]);
   const apply = (row: LinkRow, source: "ai" | "human") => {
     const side = source === "ai" ? row.ai : row.human;
     if (!side) return;
@@ -1897,12 +1892,12 @@ function LinkTab(p: {
                 style={{ width: 160, marginBottom: 0 }}
               />
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                已用 {sec(elapsedMs)}
+                {job?.by} 在算 {job?.date_from} ~ {job?.date_to}，已用 {sec(elapsedMs)}
                 {over
                   ? <>，比预估（{sec(estimateMs)}）久了，还在算…</>
                   : <>，预计还要 {sec(Math.max(0, estimateMs - elapsedMs))}</>}
               </Typography.Text>
-              <Tooltip title="这一趟是一次整体计算：C 值的基线要用库里所有天的中位数，没法切成几段边算边报进度。所以进度是按上一次的实测速度估的——计时是真的，估算会越用越准。第一次点、或者改了日期范围，估得不准很正常。">
+              <Tooltip title="这一趟是一次整体计算：C 值的基线要用库里所有天的中位数，没法切成几段边算边报进度。所以进度是按上一次的实测速度估的——计时是真的，估算会越用越准。在服务器后台算，刷新页面、关掉再开都不影响，回来还能看到进度。">
                 <QuestionCircleOutlined style={{ color: "#999" }} />
               </Tooltip>
             </span>
