@@ -22,6 +22,10 @@ export const listFeatures = () => request.get<never, FeatureDef[]>("/users/featu
 
 export const deleteUser = (id: number) => request.delete<never, null>(`/users/${id}`);
 
-/** 重置密码，返回一次性临时密码（系统只存哈希，看不到原密码） */
+/** 超级管理员回看系统发的临时密码；本人改过密码就是 null */
+export const getTempPassword = (id: number) =>
+  request.get<never, { username: string; temp_password: string | null }>(`/users/${id}/temp-password`);
+
+/** 重置密码，返回临时密码 */
 export const resetUserPassword = (id: number) =>
   request.post<never, { username: string; temp_password: string }>(`/users/${id}/reset-password`);

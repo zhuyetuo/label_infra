@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import permissions as perms
 from app.core.deps import get_current_user, require_role
 from app.core.security import hash_password
+from app.core.temp_password import seal, unseal
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.user import User, UserRole
@@ -43,11 +44,21 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
 
     temp_password = secrets.token_urlsafe(9)
     user.password_hash = hash_password(temp_password)
+    user.temp_password_enc = seal(temp_password)
     user.must_change_password = True
     # 改密码要把该账号已经发出去的 token 全部作废，否则原会话还能继续用
     user.token_version += 1
     await db.commit()
     return ok({"username": user.username, "temp_password": temp_password})
+
+
+@router.get("/{user_id}/temp-password", dependencies=[Depends(require_role(UserRole.super_admin))])
+async def get_temp_password(user_id: int, db: AsyncSession = Depends(get_db)):
+    """超级管理员回看系统发的临时密码。本人改过密码就没有了——本人的密码谁都看不到，只能重置"""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "账号不存在")
+    return ok({"username": user.username, "temp_password": unseal(user.temp_password_enc)})
 
 
 @router.delete("/{user_id}", dependencies=[Depends(require_role(UserRole.super_admin))])
@@ -169,13 +180,14 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
         is_outsourced=body.is_outsourced,
         remark=body.remark,
         password_hash=hash_password(temp_password),
+        temp_password_enc=seal(temp_password),
         must_change_password=True,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    # 临时密码只在这一次响应里返回，管理员自行通过其他渠道告知本人，数据库/日志不留明文
+    # 临时密码加密存了一份，本人改密码前超级管理员能在账号管理里再看（见 core/temp_password.py）
     return ok(
         UserCreateOut(user=UserOut.model_validate(user), temp_password=temp_password).model_dump()
     )

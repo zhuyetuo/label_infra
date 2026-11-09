@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createUser, deleteUser, listFeatures, listUsers, resetUserPassword, updateUser } from "@/api/users";
+import { createUser, deleteUser, getTempPassword, listFeatures, listUsers, resetUserPassword, updateUser } from "@/api/users";
 import { useAuthStore } from "@/stores/authStore";
 import { RoleTag } from "@/utils/taskStatus";
 import type { AppUser } from "@/types";
@@ -13,6 +13,49 @@ const ROLE_OPTIONS = [
   { value: "reviewer", label: "审核员" },
   { value: "viewer", label: "访客（只能看）" },
 ];
+
+/** 账号 + 密码 + 登录地址，一次复制好直接发给本人 */
+function credentialText(username: string, password: string) {
+  return `登录地址：${window.location.origin}\n账号：${username}\n密码：${password}\n（第一次登录会要求改成自己的密码）`;
+}
+
+function Credential({ username, password, note }: { username: string; password: string; note?: string }) {
+  const text = credentialText(username, password);
+  return (
+    <div>
+      <div style={{ margin: "8px 0" }}>
+        账号：<Typography.Text code copyable style={{ fontSize: 15 }}>{username}</Typography.Text>
+      </div>
+      <div style={{ margin: "8px 0" }}>
+        密码：<Typography.Text code copyable style={{ fontSize: 15 }}>{password}</Typography.Text>
+      </div>
+      <Button
+        type="primary"
+        block
+        style={{ margin: "8px 0" }}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            // http 下没有 clipboard API：退回老办法
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            ta.remove();
+          }
+          message.success("账号和密码已复制，直接粘贴发给本人");
+        }}
+      >
+        复制账号和密码
+      </Button>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {note ?? "对方第一次登录会被要求改成自己的密码；改之前超级管理员可以在账号列表里点「看密码」再拿出来。"}
+      </Typography.Text>
+    </div>
+  );
+}
 
 /** 离职（禁用）的排到最后，同组里新建的在前 */
 function sortUsers(list: AppUser[] | undefined) {
@@ -26,7 +69,7 @@ export default function Users() {
   const { data: features } = useQuery({ queryKey: ["user-features"], queryFn: listFeatures });
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
-  const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [tempPassword, setTempPassword] = useState<{ username: string; password: string } | null>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["users"] });
 
@@ -38,7 +81,7 @@ export default function Users() {
     remark?: string;
   }) => {
     const result = await createUser(values);
-    setTempPassword(result.temp_password);
+    setTempPassword({ username: result.user.username, password: result.temp_password });
     form.resetFields();
     refresh();
   };
@@ -51,19 +94,27 @@ export default function Users() {
 
   const handleReset = async (u: AppUser) => {
     const r = await resetUserPassword(u.id);
+    refresh();
     Modal.success({
-      title: `已重置 ${r.username} 的密码`,
-      content: (
-        <div>
-          <p>
-            临时密码：<Typography.Text copyable strong>{r.temp_password}</Typography.Text>
-          </p>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            请把它交给本人，登录后会强制修改。系统只保存密码的哈希值，
-            所以任何人都看不到已有账号的原密码，只能这样重置。
-          </Typography.Text>
-        </div>
-      ),
+      title: `已重置 ${u.display_name} 的密码`,
+      width: 460,
+      content: <Credential username={r.username} password={r.temp_password} />,
+    });
+  };
+
+  const showPassword = async (u: AppUser) => {
+    const r = await getTempPassword(u.id);
+    if (!r.temp_password) {
+      Modal.info({
+        title: `${u.display_name} 已经改成自己的密码了`,
+        content: "本人设的密码只存了不可逆的哈希，谁都看不到（包括超级管理员）。需要的话点「重置密码」发一个新的。",
+      });
+      return;
+    }
+    Modal.info({
+      title: `${u.display_name} 的初始密码（还没改过）`,
+      width: 460,
+      content: <Credential username={r.username} password={r.temp_password} />,
     });
   };
 
@@ -235,7 +286,7 @@ export default function Users() {
           },
           {
             title: "操作",
-            width: 260,
+            width: 320,
             render: (_, u: AppUser) => (
               <Space>
                 <Button size="small" onClick={() => toggleActive(u)}>
@@ -246,6 +297,13 @@ export default function Users() {
                     重置密码
                   </Button>
                 </Popconfirm>
+                {isSuperAdmin && (
+                  <Tooltip title={u.has_temp_password ? "看系统发给他的初始 / 重置密码（他还没改）" : "他已经改成自己的密码，看不到；需要就重置"}>
+                    <Button size="small" type="link" disabled={!u.has_temp_password} onClick={() => showPassword(u)}>
+                      看密码
+                    </Button>
+                  </Tooltip>
+                )}
                 {isSuperAdmin && (
                   <Popconfirm
                     title="删除账号"
@@ -276,12 +334,8 @@ export default function Users() {
       >
         {tempPassword ? (
           <>
-            <Typography.Paragraph>
-              账号创建成功，临时密码只显示这一次，请通过其他渠道告知本人：
-            </Typography.Paragraph>
-            <Typography.Text code copyable style={{ fontSize: 16 }}>
-              {tempPassword}
-            </Typography.Text>
+            <Typography.Paragraph>账号创建成功，把下面的账号和密码发给本人：</Typography.Paragraph>
+            <Credential username={tempPassword.username} password={tempPassword.password} />
             <Button block style={{ marginTop: 16 }} onClick={() => setTempPassword(null)}>
               关闭
             </Button>

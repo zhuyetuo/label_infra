@@ -36,6 +36,8 @@ class User(Base):
     # 单独开的功能权限，逗号分隔的功能键（见 app/core/permissions.py）。
     # 管理员不看这一列；其他角色靠它在本角色之外多用几样
     permissions: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 系统发的临时密码，加密存着给超级管理员回看；本人改密码后清空（见 app/core/temp_password.py）
+    temp_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # 每次强制下线（改密码/管理员踢人）时 +1，refresh token 里带的 version 与此不符即失效，
     # 免去维护 Redis 黑名单
@@ -43,3 +45,7 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    @property
+    def has_temp_password(self) -> bool:
+        return bool(self.temp_password_enc)
