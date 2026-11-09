@@ -1,3 +1,4 @@
+import { segDedupeProject } from "@/api/segReview";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
@@ -201,6 +202,8 @@ export default function Projects() {
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
+    /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
+    overlapOnly?: boolean; uncertainOnly?: boolean;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
     minSec?: number | null };
   // 筛选和展开的项目记在 localStorage：刷新页面回来还是刚才那个视图（比如只看抓挠），不用重新点
@@ -1277,12 +1280,22 @@ export default function Projects() {
                 .filter(([lid]) => !f.labels.length || f.labels.includes(Number(lid)))
                 .reduce((s2, [, c]) => s2 + (c.returned ?? 0), 0);
             const segReturnedTasks = all.filter((t) => segReturnedOf(t) > 0).length;
+            // 标了「待定」的段数（选了类别就只算那几类，含子类）
+            const uncertainOf = (t: Task) =>
+              Object.entries(t.label_counts ?? {})
+                .filter(([lid]) => !f.labels.length || wantLabelIds.has(Number(lid)))
+                .reduce((s2, [, c]) => s2 + (c.uncertain ?? 0), 0);
+            const overlapTasks = all.filter((t) => overlapOf(t) > 0).length;
+            const uncertainTasks = all.filter((t) => uncertainOf(t) > 0).length;
+            const submittedTasks = all.filter((t) => t.status === "SUBMITTED").length;
             const rows = all.filter(
               (t) =>
                 matchImu(t) &&
                 (!f.noCsv || noCsv(t)) &&
                 (!f.unassigned || t.assigned_to == null) &&
                 (!f.segReturned || segReturnedOf(t) > 0) &&
+                (!f.overlapOnly || overlapOf(t) > 0) &&
+                (!f.uncertainOnly || uncertainOf(t) > 0) &&
                 (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
@@ -1417,6 +1430,30 @@ export default function Projects() {
                     </Button>
                   </Popconfirm>
                 )}
+                {/* 审核最常看的三样：有重叠 / 待审核 / 有待定，做成带颜色的开关，一点就筛 */}
+                {(() => {
+                  const chip = (on: boolean, n: number, color: string, text: string, tip: string, onClick: () => void) => (
+                    <Tooltip title={tip}>
+                      <Button size="small" onClick={onClick}
+                        style={{ borderColor: color, color: on ? "#fff" : color, background: on ? color : "transparent", fontWeight: on ? 600 : 400 }}>
+                        {text} {n}
+                      </Button>
+                    </Tooltip>
+                  );
+                  return (
+                    <>
+                      {chip(!!f.overlapOnly, overlapTasks, "#ff4d4f", "⚠ 有重叠",
+                        "片段跟同一轨上别的片段压着（同类重复 / 父子 / 类别冲突）的任务。项目行右边「一键去重」能整个项目一起处理",
+                        () => setFilter(p.id, { overlapOnly: !f.overlapOnly }))}
+                      {chip(f.status === "SUBMITTED", submittedTasks, "#9254de", "待审核",
+                        "标注员提交了、等审核的任务",
+                        () => setFilter(p.id, { status: f.status === "SUBMITTED" ? "ALL" : "SUBMITTED" }))}
+                      {chip(!!f.uncertainOnly, uncertainTasks, "#eb2f96", "有待定",
+                        "有片段标了「待定」（没画面 / 看不清 / 要细切）的任务。选了类别就只算那几类",
+                        () => setFilter(p.id, { uncertainOnly: !f.uncertainOnly }))}
+                    </>
+                  );
+                })()}
                 {segReturnedTasks > 0 && (
                   <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
                     <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
@@ -1460,7 +1497,7 @@ export default function Projects() {
                     </Button>
                   </Tooltip>
                 )}
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned || !!minMs) && (
+                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned || f.overlapOnly || f.uncertainOnly || !!minMs) && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     筛出 {rows.length} 个
                   </Typography.Text>
@@ -1709,6 +1746,11 @@ export default function Projects() {
                               </Tag>
                             </Tooltip>
                           )}
+                          {uncertainOf(task) > 0 && (
+                            <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${uncertainOf(task)} 段标了待定（没画面 / 看不清 / 要细切）`}>
+                              <Tag color="magenta" style={{ marginRight: 0 }}>待定 {uncertainOf(task)} 段</Tag>
+                            </Tooltip>
+                          )}
                           {entries.map((l) => {
                               const c = lc[l.id];
                               const ok = c.approved ?? 0, ret = c.returned ?? 0;
@@ -1751,6 +1793,11 @@ export default function Projects() {
                                 onClick={() => pickOpen(task, p.id, { overlap: true, labels: f.labels.length ? f.labels : undefined })}>
                                 ⚠ 重叠 {overlapOf(task)} 段
                               </Tag>
+                            </Tooltip>
+                          )}
+                          {uncertainOf(task) > 0 && (
+                            <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${uncertainOf(task)} 段标了待定（没画面 / 看不清 / 要细切）`}>
+                              <Tag color="magenta" style={{ marginRight: 0 }}>待定 {uncertainOf(task)} 段</Tag>
                             </Tooltip>
                           )}
                           {entries.map((l) => {
@@ -2318,6 +2365,20 @@ export default function Projects() {
                   </Tooltip>
                   {/* 试错留下的候选散在几百个任务里。没有这一处，想推倒重来
                       只能删掉整个项目重建——那会把人工标的片段一起带走 */}
+                  <Popconfirm
+                    title={`整个项目一键去重？`}
+                    description={<div style={{ maxWidth: 360 }}>每个任务（当前这一轮）：同类别互相重叠的并成一条（留审核通过 / 人确认过的那条，起止取并集）；父子类别压在一起的删粗的。类别冲突（同一轨不同类）要人看画面，不动，只报个数</div>}
+                    okText="去重"
+                    onConfirm={async () => {
+                      const r = await segDedupeProject(p.id);
+                      message.success(`处理了 ${r.tasks_changed} / ${r.tasks} 个任务：并掉 ${r.merged} 段重复，删掉 ${r.removed_parent} 段被细类盖住的粗类${r.conflicts_left ? `；还剩 ${r.conflicts_left} 段类别冲突要人看` : ""}`, 8);
+                      refresh();
+                    }}
+                  >
+                    <Tooltip title="整个项目的重复片段一次清掉（同类重叠并一条、父子压着删粗的），不用一个个任务点开">
+                      <Button size="small" type="link">一键去重</Button>
+                    </Tooltip>
+                  </Popconfirm>
                   <Tooltip title="按来源清点 / 整批删掉画面候选（一句话找画面、用这一张去扩）。不用为了清一轮试错去删项目">
                     <Button size="small" type="link" onClick={() => openPurge(p)}>
                       清理候选

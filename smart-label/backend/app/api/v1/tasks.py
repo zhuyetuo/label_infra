@@ -380,6 +380,8 @@ async def list_tasks(
                 func.sum(AnnotationLabelItem.start_time_ms),
                 func.sum(AnnotationLabelItem.id),
                 func.min(AnnotationRecord.id),
+                # 标了「待定」的（没画面 / 看不清 / 要细切）：项目页要能一眼挑出来
+                func.sum(case((AnnotationLabelItem.uncertain.is_(True), 1), else_=0)),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -387,12 +389,12 @@ async def list_tasks(
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
-        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot, s_start, s_id, rec_id in rows.all():
+        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot, s_start, s_id, rec_id, n_unc in rows.all():
             seg_sig.setdefault(task_id, []).append((rec_id, label_id, int(n), int(s_start or 0), int(tot or 0), int(s_id or 0)))
             label_counts.setdefault(task_id, {})[label_id] = {
                 "n": int(n), "ai_pending": int(n_pending or 0),
                 "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
-                "max_ms": int(mx or 0), "ms": int(tot or 0),
+                "max_ms": int(mx or 0), "ms": int(tot or 0), "uncertain": int(n_unc or 0),
             }
 
     _lap("labels")
