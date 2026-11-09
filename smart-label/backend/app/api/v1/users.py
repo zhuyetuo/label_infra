@@ -1,6 +1,7 @@
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,24 +29,28 @@ async def list_users(db: AsyncSession = Depends(get_db)):
     return ok([UserOut.model_validate(u).model_dump() for u in users])
 
 
-@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
-async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
-    """
-    重置密码，返回一次性临时密码交给本人。
+class ResetPasswordIn(BaseModel):
+    # 留空：系统随机生成
+    password: str | None = None
 
-    注意：系统里存的是 bcrypt 哈希，设计上就不可逆，所以任何人（包括管理员）
-    都看不到别人的原始密码——这不是没做，是不能做：库一旦泄露，明文密码等于
-    把所有账号连同用户在别处复用的密码一起交出去。需要帮人恢复访问时走这里，
-    发一个临时密码，对方登录后会被强制改掉。
+
+@router.post("/{user_id}/reset-password", dependencies=[Depends(require_role(UserRole.super_admin))])
+async def reset_password(user_id: int, body: ResetPasswordIn | None = None, db: AsyncSession = Depends(get_db)):
+    """
+    改密码：只有超级管理员能改（任何人都不能改自己的，见 auth.change_password）。
+    给了 password 就用它，没给就随机生成一个。密码加密存一份，超级管理员随时能看。
     """
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "账号不存在")
 
-    temp_password = secrets.token_urlsafe(9)
+    temp_password = (body.password or "").strip() if body else ""
+    if temp_password and len(temp_password) < 6:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "密码至少 6 位")
+    temp_password = temp_password or secrets.token_urlsafe(9)
     user.password_hash = hash_password(temp_password)
     user.temp_password_enc = seal(temp_password)
-    user.must_change_password = True
+    user.must_change_password = False
     # 改密码要把该账号已经发出去的 token 全部作废，否则原会话还能继续用
     user.token_version += 1
     await db.commit()
@@ -181,7 +186,7 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
         remark=body.remark,
         password_hash=hash_password(temp_password),
         temp_password_enc=seal(temp_password),
-        must_change_password=True,
+        must_change_password=False,  # 不让本人改密码，也就不要求第一次登录改
     )
     db.add(user)
     await db.commit()

@@ -92,11 +92,16 @@ export default function Users() {
     refresh();
   };
 
-  const handleReset = async (u: AppUser) => {
-    const r = await resetUserPassword(u.id);
+  // 改密码：只有超级管理员能改，可以自己填，也可以留空随机生成
+  const [pwdUser, setPwdUser] = useState<AppUser | null>(null);
+  const [newPwd, setNewPwd] = useState("");
+  const handleReset = async (u: AppUser, password?: string) => {
+    const r = await resetUserPassword(u.id, password);
+    setPwdUser(null);
+    setNewPwd("");
     refresh();
     Modal.success({
-      title: `已重置 ${u.display_name} 的密码`,
+      title: `已修改 ${u.display_name} 的密码`,
       width: 460,
       content: <Credential username={r.username} password={r.temp_password} />,
     });
@@ -107,7 +112,7 @@ export default function Users() {
     if (!r.temp_password) {
       Modal.info({
         title: `看不到 ${u.display_name} 的密码`,
-        content: "这个账号的密码是这次更新之前设的，系统里没存。点「重置密码」发一个新的，之后就能一直看到。",
+        content: "这个账号的密码是这次更新之前设的，系统里没存。点「改密码」设一个新的，之后就能一直看到。",
       });
       return;
     }
@@ -292,13 +297,13 @@ export default function Users() {
                 <Button size="small" onClick={() => toggleActive(u)}>
                   {u.is_active ? "禁用" : "启用"}
                 </Button>
-                <Popconfirm title="重置密码" description="会生成一个临时密码，原密码立即失效" onConfirm={() => handleReset(u)}>
-                  <Button size="small" type="link">
-                    重置密码
-                  </Button>
-                </Popconfirm>
                 {isSuperAdmin && (
-                  <Tooltip title={u.has_temp_password ? "看他现在的密码" : "密码是这次更新之前设的，系统里没存；重置一次之后就能看"}>
+                  <Button size="small" type="link" onClick={() => setPwdUser(u)}>
+                    改密码
+                  </Button>
+                )}
+                {isSuperAdmin && (
+                  <Tooltip title={u.has_temp_password ? "看他现在的密码" : "密码是这次更新之前设的，系统里没存；改一次密码之后就能看"}>
                     <Button size="small" type="link" disabled={!u.has_temp_password} onClick={() => showPassword(u)}>
                       看密码
                     </Button>
@@ -322,6 +327,28 @@ export default function Users() {
         ]}
       />
 
+      <Modal
+        title={pwdUser ? `改 ${pwdUser.display_name}（${pwdUser.username}）的密码` : ""}
+        open={!!pwdUser}
+        okText="确定修改"
+        onOk={() => pwdUser && handleReset(pwdUser, newPwd.trim() || undefined)}
+        onCancel={() => {
+          setPwdUser(null);
+          setNewPwd("");
+        }}
+        destroyOnClose
+      >
+        <Input.Password
+          autoFocus
+          placeholder="新密码（至少 6 位）；留空就随机生成一个"
+          value={newPwd}
+          onChange={(e) => setNewPwd(e.target.value)}
+          onPressEnter={() => pwdUser && handleReset(pwdUser, newPwd.trim() || undefined)}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          改完原密码立即失效，对方已登录的会被踢下线。密码只有超级管理员能改，本人不能改自己的。
+        </Typography.Text>
+      </Modal>
       <Modal
         title="新建账号"
         open={open}

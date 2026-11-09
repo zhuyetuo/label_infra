@@ -58,11 +58,6 @@ def test_改东西一律不行(client, method, path):
     assert r.status_code == 403 and "访客" in r.json().get("msg", r.text)
 
 
-def test_能改自己的密码(client):
-    c, _ = client
-    assert c.post("/api/v1/auth/change-password", json={"old_password": "x", "new_password": "y" * 8}).status_code != 403
-
-
 def test_me_告诉前端是访客_角色本身没被改成管理员(client):
     c, u = client
     me = c.get("/api/v1/users/me").json()["data"]
@@ -91,3 +86,18 @@ def test_列表里标出还有没改掉的临时密码():
     assert UserOut.model_validate(u).has_temp_password is False
     u.temp_password_enc = seal("x")
     assert UserOut.model_validate(u).has_temp_password is True
+
+
+def test_非超级管理员不能改自己的密码(client):
+    c, u = client
+    r = c.post("/api/v1/auth/change-password", json={"old_password": "x", "new_password": "y" * 8})
+    assert r.status_code == 403
+
+
+def test_只有超级管理员能改别人的密码():
+    from app.api.v1.users import router
+    route = next(r for r in router.routes if r.path.endswith("/reset-password"))
+    deps = [d.call for d in route.dependant.dependencies]
+    # require_role(super_admin) 的闭包里只有 super_admin
+    roles = [c.cell_contents for d in deps if d.__closure__ for c in d.__closure__ if isinstance(c.cell_contents, tuple)]
+    assert roles == [(UserRole.super_admin,)]
