@@ -24,7 +24,7 @@ label_infra/
 │   │   ├── transcoded/     # 转码后的视频
 │   │   └── frames/         # 抽帧图片
 │   ├── imu/                # IMU 原始 TXT 文件
-│   └── nginx.conf
+│   └── nginx/default.conf
 └── logs/                   # 日志（gitignore，不提交）
 ```
 

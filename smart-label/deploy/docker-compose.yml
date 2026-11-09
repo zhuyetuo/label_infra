@@ -60,9 +60,17 @@ services:
     command: alembic upgrade head
     networks: [smart-label]
 
-  api:
+  # 后端主实例。更新不打断别人用：up.sh 先换下面的备用实例 api_b、等它好了再重启这个，
+  # 这个重启的那几秒 nginx 自动把请求转给 api_b（见 frontend/nginx/default.conf）
+  api: &api_service
     image: smart-label-backend:latest
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8283/health', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     depends_on:
       mysql:
         condition: service_healthy
@@ -111,6 +119,16 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8283
     networks: [smart-label]
 
+  # 备用实例：跟 api 一模一样（同一个镜像、同样的配置），平时不接请求，
+  # 只在 api 重启 / 挂掉的那几秒顶上。不对外开端口；日志单独一个目录（两个进程滚同一个日志文件会打架）
+  api_b:
+    <<: *api_service
+    ports: []
+    volumes:
+      - ${NAS_ROOT_HOST:-/home/toky/ai_data}:${NAS_ROOT:-/home/toky/ai_data}
+      - ${MATERIAL_ROOT_HOST:-/home/toky/alg_material}:${MATERIAL_ROOT:-/home/toky/alg_material}:ro
+      - ../../logs/smart-label/api_b:/app/logs
+
   scheduler:
     image: smart-label-backend:latest
     restart: unless-stopped
@@ -132,11 +150,10 @@ services:
     command: python -m app.workers.scheduler
     networks: [smart-label]
 
+  # 前端：nginx 只管发文件，网页文件放在 web_dist 卷里。更新时 up.sh 把新打包的文件拷进卷、
+  # nginx 平滑重载——容器不重建，正在用的人不会断；老版本的 js 留 7 天，开着旧页面的人点到别的页也不白屏
   frontend:
-    build:
-      context: ../frontend
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: nginx:1.27-alpine
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -144,10 +161,26 @@ services:
       - api
     ports:
       - "${FRONTEND_PORT:-8284}:8284"
+    volumes:
+      - web_dist:/usr/share/nginx/html
+      # 挂整个目录而不是单个文件：git pull 换文件时是新文件替换旧文件，单文件挂载的话容器里还是旧的
+      - ../frontend/nginx:/etc/nginx/conf.d:ro
     networks: [smart-label]
+
+  # 只用来打包前端（up.sh 里 build 一下、把文件拷进 web_dist），平时不运行
+  web_build:
+    build:
+      context: ../frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: smart-label-web:latest
+    profiles: ["build"]
 
 volumes:
   mysql_data:
+  # 名字写死：up.sh 要用 docker run 往里拷前端文件
+  web_dist:
+    name: smart-label-web-dist
 
 networks:
   smart-label:
