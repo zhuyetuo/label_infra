@@ -34,6 +34,12 @@ function isDark(): boolean {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 }
 
+/** 秒级时间戳 → 「11-03」 */
+const dayLabel = (sec: number) => {
+  const d = new Date(sec * 1000);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 const valueOf = (r: TrackingRow, m: Metric): number | null => {
   if (m === "count") return (r.stats?.event_count as number | undefined) ?? null;
   if (m === "c") return r.c_value;
@@ -116,11 +122,17 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
         cursor: { points: { size: 8 }, focus: { prox: 24 } },
         scales: { x: { time: true } },
         axes: [
-          { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
+          // 一天一个点，横轴只写日期：刻度只取整天（1 / 2 / 7 / 14 / 30 天一格，按宽度挑），不出 12am / 12pm
+          {
+            stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke },
+            space: 48,
+            incrs: [1, 2, 7, 14, 30].map((d) => d * 86400),
+            values: (_u: uPlot, splits: number[]) => splits.map(dayLabel),
+          },
           { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
         ],
         series: [
-          { label: "日期" },
+          { label: "日期", value: (_u: uPlot, v: number | null) => (v == null ? "--" : dayLabel(v)) },
           ...dogs.map((d, i) => ({
             label: d,
             stroke: palette[i % palette.length],
