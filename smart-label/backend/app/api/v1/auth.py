@@ -115,6 +115,7 @@ async def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "原密码错误")
     user.password_hash = hash_password(body.new_password)
     user.must_change_password = False
+    user.temp_password_enc = None  # 本人设了自己的密码，系统发的临时密码作废、不再留
     user.token_version += 1  # 强制所有旧 refresh token 失效，需重新登录
     await db.commit()
     return ok(msg="密码已修改，请重新登录")

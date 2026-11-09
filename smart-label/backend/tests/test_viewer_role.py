@@ -76,3 +76,18 @@ def test_列表里的访客显示成访客():
     u = _viewer()
     assert UserOut.model_validate(u).role == UserRole.viewer
     assert UserOut.model_validate(u).read_only is True
+
+
+def test_临时密码加密存_能解开_换密钥解不开不报错():
+    from app.core import temp_password as T
+    tok = T.seal("Abc123xyz")
+    assert "Abc123xyz" not in tok and T.unseal(tok) == "Abc123xyz"
+    assert T.unseal("garbage") is None and T.unseal(None) is None
+
+
+def test_列表里标出还有没改掉的临时密码():
+    from app.core.temp_password import seal
+    u = _viewer()
+    assert UserOut.model_validate(u).has_temp_password is False
+    u.temp_password_enc = seal("x")
+    assert UserOut.model_validate(u).has_temp_password is True
