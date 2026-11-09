@@ -230,7 +230,7 @@ export default function Projects() {
   const [expandedKeys, setExpandedKeys] = useState<number[]>(() => {
     try {
       const v = JSON.parse(localStorage.getItem("projects-expanded") || "[]");
-      return Array.isArray(v) ? v.filter((x) => typeof x === "number") : [];
+      return Array.isArray(v) ? v.filter((x) => typeof x === "number").slice(-1) : [];
     } catch {
       return [];
     }
@@ -1049,7 +1049,7 @@ export default function Projects() {
       patch.candLabels = [...names];
     }
     setFilter(pid, patch);
-    setExpandedKeys((prev) => (prev.includes(pid) ? prev : [...prev, pid]));
+    setExpandedKeys(() => [pid]);
     const next = new URLSearchParams(urlParams);
     next.delete("project");
     next.delete("label");
@@ -1060,7 +1060,7 @@ export default function Projects() {
 
   // 刷新页面还能回到打开着的任务（?task=ID），顺便把它所在的项目行展开
   useUrlTask(allTasks, workspaceTask?.id ?? null, (task) => {
-    setExpandedKeys((prev) => (prev.includes(task.project_id) ? prev : [...prev, task.project_id]));
+    setExpandedKeys(() => [task.project_id]);
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), task.project_id, undefined, true);
   });
 
@@ -1284,7 +1284,8 @@ export default function Projects() {
           // 点行内空白处就能展开，不用非得点最左边那个小箭头
           expandRowByClick: true,
           expandedRowKeys: expandedKeys,
-          onExpandedRowsChange: (keys) => setExpandedKeys(keys as number[]),
+          // 一次只展开一个项目：展开新的就把别的收起来，不然展开几个以后整页都是任务，找不到项目
+          onExpand: (expanded, p: Project) => setExpandedKeys(expanded ? [p.id] : []),
           // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
           rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
@@ -2312,7 +2313,7 @@ export default function Projects() {
                         // 点状态 Tag = 展开这个项目并只看这个状态；别触发行本身的展开/收起切换
                         e.stopPropagation();
                         setFilter(p.id, { status: s });
-                        setExpandedKeys((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                        setExpandedKeys(() => [p.id]);
                       }}
                     >
                       {TASK_STATUS_META[s]?.label ?? s} {counts[s]}
@@ -2342,7 +2343,7 @@ export default function Projects() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setFilter(p.id, { unassigned: true, status: "ALL" });
-                          setExpandedKeys((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                          setExpandedKeys(() => [p.id]);
                         }}
                       >
                         未指派 {unassignedN}
