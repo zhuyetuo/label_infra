@@ -103,7 +103,7 @@ async def _gpu() -> dict:
 
 
 @router.get("/status")
-async def get_status(db: AsyncSession = Depends(get_db)):
+async def get_status():
     # CPU 占用：隔 0.3 秒采两次 /proc/stat
     a = _cpu_times()
     await asyncio.sleep(0.3)
@@ -135,28 +135,13 @@ async def get_status(db: AsyncSession = Depends(get_db)):
     if m:
         rss = int(m.group(1)) * 1024
 
-    # 数据库：连一下多快、连接数、正在跑超过 3 秒的查询（页面卡住时多半是它）
-    dbinfo: dict = {"ok": False}
-    try:
-        t0 = time.perf_counter()
-        await db.execute(text("SELECT 1"))
-        dbinfo = {"ok": True, "ms": round((time.perf_counter() - t0) * 1000, 1)}
-        bind = getattr(db, "bind", None)
-        if bind is not None and bind.dialect.name == "mysql":
-            r = (await db.execute(text("SHOW STATUS LIKE 'Threads_connected'"))).first()
-            dbinfo["connections"] = int(r[1]) if r else None
-            # performance_schema.processlist（8.0.22+）；老版本退回 information_schema——后者在新版
-            # 每查一次就往日志里打一条 deprecated 警告，5 秒刷一次能把日志刷满
-            sql = ("SELECT ID, TIME, STATE, LEFT(INFO, 300) FROM {t} "
-                   "WHERE COMMAND <> 'Sleep' AND TIME >= 3 AND INFO IS NOT NULL ORDER BY TIME DESC LIMIT 10")
-            try:
-                rows = (await db.execute(text(sql.format(t="performance_schema.processlist")))).all()
-            except Exception:  # noqa: BLE001
-                await db.rollback()
-                rows = (await db.execute(text(sql.format(t="information_schema.PROCESSLIST")))).all()
-            dbinfo["slow_queries"] = [{"id": r[0], "sec": r[1], "state": r[2], "sql": r[3]} for r in rows]
-    except Exception as e:  # noqa: BLE001
-        dbinfo = {"ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
+    # 数据库：连一下多快、连接数、正在跑 / 等锁的查询、连接池（页面卡住时多半是它）。
+    # 带超时：库卡死了这一页照样能打开，并且直接说「数据库 3 秒没回应」
+    from app.core import perf
+    dbinfo = await perf.db_snapshot(3.0)
+    perf._hit_rate(dbinfo)
+    dbinfo["history"] = perf.db_history()
+    web = perf.web_summary()
 
     # 依赖服务 1 分钟探一次就够：页面 5 秒刷一次，每次都探的话 httpx 往日志里每 5 秒打两行
     global _svc_cache
@@ -175,6 +160,7 @@ async def get_status(db: AsyncSession = Depends(get_db)):
         "uptime_sec": float(up[0]) if up else None,
         "api_rss": rss,
         "db": dbinfo,
+        "web": web,
         "gpu": gpu,
         "services": [{"name": "algo_service（训练 / 推理）", **services[0]},
                      {"name": "vision_service（SAM）", **services[1]}],
@@ -227,3 +213,14 @@ async def get_logs(file: str = "api.log", lines: int = 500, q: str | None = None
     files = sorted(f for f in os.listdir(settings.log_dir) if f.startswith(file)) if os.path.isdir(settings.log_dir) else []
     dates = sorted({f[len(file) + 1:] for f in files if f != file}, reverse=True)
     return ok({"file": name, "exists": os.path.exists(path), "lines": list(out), "dates": dates})
+
+
+@router.post("/db/kill/{query_id}", dependencies=[Depends(require_role(UserRole.super_admin))])
+async def kill_query(query_id: int, db: AsyncSession = Depends(get_db)):
+    """终止一条卡住的查询（KILL QUERY：只停这条语句，连接留着）。只给超级管理员。
+    典型用法：一条长查询 / 长事务锁着表，后面所有页面都在排队——停掉它，后面的就都动了"""
+    try:
+        await db.execute(text(f"KILL QUERY {int(query_id)}"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"停不掉：{type(e).__name__}: {e}"[:300]) from e
+    return ok({"killed": query_id})

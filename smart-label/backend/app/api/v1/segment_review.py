@@ -464,6 +464,41 @@ class DedupeIn(BaseModel):
 
 @router.post("/dedupe")
 async def dedupe(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    task = await db.get(Task, body.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+    out = await _dedupe_task(db, task, user)
+    await db.commit()
+    return ok(out)
+
+
+class DedupeProjectIn(BaseModel):
+    project_id: int
+
+
+@router.post("/dedupe-project")
+async def dedupe_project(body: DedupeProjectIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """整个项目一键去重：每个任务（当前这一轮）各跑一遍上面那套，只给审核员 / 管理员。
+    返回合计 + 动过的任务，同类别冲突（要人看画面的）只报数"""
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能整个项目去重")
+    tasks = (await db.execute(select(Task).where(Task.project_id == body.project_id).order_by(Task.id))).scalars().all()
+    tot = {"tasks": len(tasks), "tasks_changed": 0, "merged": 0, "removed_parent": 0, "conflicts_left": 0, "changed": []}
+    for t in tasks:
+        r = await _dedupe_task(db, t, user)
+        tot["merged"] += r["merged"]
+        tot["removed_parent"] += r["removed_parent"]
+        tot["conflicts_left"] += r["conflicts_left"]
+        if r["merged"] or r["removed_parent"]:
+            tot["tasks_changed"] += 1
+            tot["changed"].append({"task_id": t.id, **r})
+    await db.commit()
+    return ok(tot)
+
+
+async def _dedupe_task(db: AsyncSession, task: Task, user: User) -> dict:
     """一键去重（当前这一轮）：
       · 同一类别互相重叠（≥0.2s）的：并成一条，起止取并集。留「最靠谱」的那条——审核通过的 >
         人确认 / 改过 / 人加的 > 时长长的，其余删掉
@@ -475,12 +510,7 @@ async def dedupe(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User 
     from app.services.label_tracks import OVERLAP_MIN_MS, conflict_checker, track_of
     from app.services.task_service import _append_boundary_edit
 
-    task = await db.get(Task, body.task_id)
-    if task is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
     reviewer = _is_reviewer(user)
-    if not reviewer and task.assigned_to != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
     items = (await db.execute(
         select(AnnotationLabelItem)
         .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
@@ -601,8 +631,8 @@ async def dedupe(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User 
         if cand is not None and cand.status == CandidateStatus.confirmed:
             cand.status = CandidateStatus.rejected
             cand.decided_by, cand.decided_at = user.id, now
-    await db.commit()
-    return ok({"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)})
+    await db.flush()
+    return {"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)}
 
 
 @router.post("/{item_id}/split")

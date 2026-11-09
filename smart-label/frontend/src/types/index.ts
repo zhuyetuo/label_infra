@@ -79,7 +79,7 @@ export interface Task {
   /** 打了标记的段数（当前轮） */
   mark_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
-  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number }>;
+  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number; uncertain?: number }>;
   /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
   cand_count?: number;
   /** 同一轨上有重叠的片段数（同类重复 / 父子 / 类别冲突；只有列表接口会算） */

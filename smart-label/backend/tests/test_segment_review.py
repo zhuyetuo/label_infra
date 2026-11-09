@@ -287,3 +287,24 @@ def test_一键去重(db, run):
     # 再跑一次没东西可去
     r = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.admin))["data"]
     assert r["merged"] == 0 and r["removed_parent"] == 0
+
+
+def test_整个项目一键去重(db, run):
+    import pytest
+    from fastapi import HTTPException
+
+    w = _world(db, run)
+    a, b, c = w.items
+    b.start_time_ms, b.end_time_ms = a.start_time_ms + 1000, a.end_time_ms + 2000
+    run(db.commit())
+    # 标注员不能整个项目去重
+    with pytest.raises(HTTPException):
+        run(api.dedupe_project(api.DedupeProjectIn(project_id=w.p.id), db, w.ann))
+    r = run(api.dedupe_project(api.DedupeProjectIn(project_id=w.p.id), db, w.rev))["data"]
+    assert r["tasks"] == 1 and r["tasks_changed"] == 1 and r["merged"] == 1
+    assert r["changed"][0]["task_id"] == w.t.id
+    ids = {x.id for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()}
+    assert len({a.id, b.id} & ids) == 1 and c.id in ids
+    # 再跑一次：没东西可去
+    r = run(api.dedupe_project(api.DedupeProjectIn(project_id=w.p.id), db, w.rev))["data"]
+    assert r["tasks_changed"] == 0 and r["merged"] == 0

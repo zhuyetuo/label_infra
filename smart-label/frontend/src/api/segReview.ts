@@ -81,6 +81,11 @@ export const segDelete = (id: number) => request.delete<never, { id: number; del
 export const segDedupe = (taskId: number) =>
   request.post<never, { merged: number; removed_parent: number; conflicts_left: number }>("/segments/dedupe", { task_id: taskId });
 
+/** 整个项目一键去重（每个任务各跑一遍上面那套）。只给审核员 / 管理员 */
+export const segDedupeProject = (projectId: number) =>
+  request.post<never, { tasks: number; tasks_changed: number; merged: number; removed_parent: number; conflicts_left: number }>(
+    "/segments/dedupe-project", { project_id: projectId }, { timeout: 300000 } as never);
+
 /** 从 at_ms 拆成两条（类别不变，两条都回到待审）。退回原因是「应该拆成几段」时用 */
 export const segSplit = (id: number, atMs: number) =>
   request.post<never, { left: { id: number; start_time_ms: number; end_time_ms: number };
