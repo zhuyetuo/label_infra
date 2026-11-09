@@ -4,6 +4,7 @@ import "uplot/dist/uPlot.min.css";
 import { Space, Tag, Typography } from "antd";
 import type { TrackingRow } from "@/api/skin";
 import "./TrackingCharts.css";
+import DogInfoPopover from "./DogInfoPopover";
 
 /**
  * 「趋势图表」页用的两个图：一条线一只狗的折线图，和 C 档位时间线（一只狗一行、一天一格）。
@@ -32,6 +33,12 @@ function isDark(): boolean {
   if (attr) return attr === "dark";
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 }
+
+/** 秒级时间戳 → 「11-03」 */
+const dayLabel = (sec: number) => {
+  const d = new Date(sec * 1000);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 const valueOf = (r: TrackingRow, m: Metric): number | null => {
   if (m === "count") return (r.stats?.event_count as number | undefined) ?? null;
@@ -115,11 +122,17 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
         cursor: { points: { size: 8 }, focus: { prox: 24 } },
         scales: { x: { time: true } },
         axes: [
-          { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
+          // 一天一个点，横轴只写日期：刻度只取整天（1 / 2 / 7 / 14 / 30 天一格，按宽度挑），不出 12am / 12pm
+          {
+            stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke },
+            space: 48,
+            incrs: [1, 2, 7, 14, 30].map((d) => d * 86400),
+            values: (_u: uPlot, splits: number[]) => splits.map(dayLabel),
+          },
           { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
         ],
         series: [
-          { label: "日期" },
+          { label: "日期", value: (_u: uPlot, v: number | null) => (v == null ? "--" : dayLabel(v)) },
           ...dogs.map((d, i) => ({
             label: d,
             stroke: palette[i % palette.length],
@@ -208,7 +221,7 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
         byDate.forEach((r) => { counts[r.c_tier!] = (counts[r.c_tier!] ?? 0) + 1; });
         return (
           <div key={dog} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-            <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}>{dog}</span>
+            <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}><DogInfoPopover name={dog} /></span>
             <div style={{ flex: 1, display: "flex", height: 20, gap: 2 }}>
               {days.map((d) => {
                 const r = byDate.get(d);

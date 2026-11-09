@@ -33,6 +33,10 @@ class Dog(Base):
     # 看或单独排除都得先能筛出来。跟皮肤评估那一页按周记录的详细数据不是一回事，
     # 那边是每次评估的原始记录，这里只是档案上的一个当前状态。
     skin_level: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="皮肤状况：正常/轻度/中度/重度")
+    # 入档时的皮肤情况：建档那天兽医 / 饲养员看到的样子。skin_level 会随治疗变，
+    # 这一份不变——是"这只狗是带着什么问题进来的"，看后面 C 值 / 档位走势时的起点
+    intake_skin_level: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="入档时皮肤：正常/轻度/中度/重度")
+    intake_skin_note: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="入档时皮肤情况说明：部位、症状、在不在用药")
     # 存出生日期而不是年龄：年龄天天在长，存下来第二天就不对了
     birth_date: Mapped[_date | None] = mapped_column(Date, nullable=True, comment="出生日期，年龄按它现算")
     # 别名，逗号分隔。NAS 上的照片目录名常常是另一种写法（bibi / Bali / 露露），

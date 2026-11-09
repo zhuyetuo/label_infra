@@ -27,6 +27,8 @@ interface FormValues {
   site?: string;
   size?: string;
   skin_level?: string;
+  intake_skin_level?: string;
+  intake_skin_note?: string;
   // DatePicker 给的是 dayjs 对象，提交时才转成 YYYY-MM-DD
   birth_date?: import("dayjs").Dayjs | null;
 }
@@ -578,6 +580,59 @@ export default function Dogs() {
           },
           {
             title: (
+              <Tooltip title="建档那天看到的皮肤情况：等级 + 说明（部位、症状、在不在用药）。不随治疗变——是这只狗带着什么问题进来的，看后面 C 值 / 档位走势的起点。右边「皮肤」是现在的">
+                <span>入档皮肤</span>
+              </Tooltip>
+            ),
+            key: "intake_skin_level",
+            dataIndex: "intake_skin_level",
+            width: 220,
+            render: (v: string | null, d: Dog) => (
+              <div>
+                {cell(
+                  d,
+                  "intake_skin_level",
+                  <Select
+                    size="small"
+                    autoFocus
+                    defaultOpen
+                    allowClear
+                    style={{ width: "100%" }}
+                    value={v ?? undefined}
+                    placeholder="正常/轻度…"
+                    options={SKIN_LEVELS.map((x) => ({ value: x, label: x }))}
+                    onChange={(x) => {
+                      saveField(d, { intake_skin_level: x ?? null });
+                      doneEditing();
+                    }}
+                    onBlur={doneEditing}
+                  />,
+                  v ? <Tag color={SKIN_COLOR[v]}>{v}</Tag> : <Typography.Text type="secondary">未填</Typography.Text>
+                )}
+                {cell(
+                  d,
+                  "intake_skin_note",
+                  <Input.TextArea
+                    size="small"
+                    autoFocus
+                    autoSize={{ minRows: 1, maxRows: 4 }}
+                    defaultValue={d.intake_skin_note ?? ""}
+                    placeholder="部位、症状、在不在用药"
+                    onBlur={(e) => {
+                      const t = e.target.value.trim();
+                      if (t !== (d.intake_skin_note ?? "")) saveField(d, { intake_skin_note: t || null });
+                      doneEditing();
+                    }}
+                  />,
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {d.intake_skin_note || "（点这里写说明）"}
+                  </Typography.Text>
+                )}
+              </div>
+            ),
+          },
+          {
+            title: (
               <Tooltip title="这只狗现在大概什么皮肤状况，人工判断。挑数据用：重度的那几只抓挠明显更多，训练和验证时想单独看或单独排除都得先能筛出来。跟「皮肤评估」那一页按次记录的详细数据不是一回事，那边是每次评估的原始记录">
                 <span>皮肤</span>
               </Tooltip>
@@ -736,6 +791,16 @@ export default function Dogs() {
             tooltip="正常 / 轻度 / 中度 / 重度，人工判断当前状况。「正常」和留空不是一回事：留空是还没评过"
           >
             <Select allowClear placeholder="正常 / 轻度 / 中度 / 重度" options={SKIN_LEVELS.map((x) => ({ value: x, label: x }))} />
+          </Form.Item>
+          <Form.Item
+            name="intake_skin_level"
+            label="入档时皮肤"
+            tooltip="建档这天看到的皮肤情况，以后不随治疗改（上面「皮肤」是现在的）"
+          >
+            <Select allowClear placeholder="正常 / 轻度 / 中度 / 重度" options={SKIN_LEVELS.map((x) => ({ value: x, label: x }))} />
+          </Form.Item>
+          <Form.Item name="intake_skin_note" label="入档时皮肤说明">
+            <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} placeholder="哪里红 / 掉毛 / 有没有破皮结痂，在不在用药" />
           </Form.Item>
           <Form.Item
             name="birth_date"

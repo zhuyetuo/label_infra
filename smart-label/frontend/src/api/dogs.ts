@@ -15,6 +15,9 @@ export interface Dog {
   size: string | null;
   /** 当前皮肤状况：正常 / 轻度 / 中度 / 重度。人工判断，用来挑数据 */
   skin_level: string | null;
+  /** 入档时的皮肤情况：建档时看到的样子，不随治疗变（skin_level 是现在的） */
+  intake_skin_level: string | null;
+  intake_skin_note: string | null;
   /** 出生日期。年龄不存数字存生日——存「3岁」第二年就错了 */
   birth_date: string | null;
   remark: string | null;
@@ -40,12 +43,14 @@ export const createDog = (body: {
   site?: string;
   size?: string;
   skin_level?: string;
+  intake_skin_level?: string;
+  intake_skin_note?: string;
   birth_date?: string;
   remark?: string;
 }) =>
   request.post<never, Dog>("/dogs", body);
 
-export const updateDog = (id: number, body: Partial<Pick<Dog, "name" | "breed" | "imu" | "aliases" | "site" | "size" | "skin_level" | "birth_date" | "remark">>) =>
+export const updateDog = (id: number, body: Partial<Pick<Dog, "name" | "breed" | "imu" | "aliases" | "site" | "size" | "skin_level" | "intake_skin_level" | "intake_skin_note" | "birth_date" | "remark">>) =>
   request.patch<never, Dog>(`/dogs/${id}`, body);
 
 export const deleteDog = (id: number) => request.delete<never, null>(`/dogs/${id}`);

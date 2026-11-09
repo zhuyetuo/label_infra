@@ -15,6 +15,8 @@ class DogOut(BaseModel):
     site: str | None
     size: str | None
     skin_level: str | None
+    intake_skin_level: str | None = None
+    intake_skin_note: str | None = None
     birth_date: date | None
     remark: str | None
     created_at: datetime
@@ -35,6 +37,8 @@ class DogCreate(BaseModel):
     site: str | None = None
     size: str | None = None
     skin_level: str | None = None
+    intake_skin_level: str | None = None
+    intake_skin_note: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
@@ -47,6 +51,8 @@ class DogUpdate(BaseModel):
     site: str | None = None
     size: str | None = None
     skin_level: str | None = None
+    intake_skin_level: str | None = None
+    intake_skin_note: str | None = None
     birth_date: date | None = None
     remark: str | None = None
 
