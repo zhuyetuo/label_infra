@@ -440,6 +440,8 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
 @dataclass
 class PrelabelProgress:
     status: str = "idle"  # idle | running | done | cancelled | error
+    # 排队中（同时跑的项目数满了，在等前面的）：status 照样是 running，页面照常轮询
+    queued: bool = False
     project_id: int = 0
     total: int = 0
     processed: int = 0
@@ -543,10 +545,27 @@ async def start_project_prelabel(
     return True
 
 
+_slots: asyncio.Semaphore | None = None
+
+
+def _project_slots() -> asyncio.Semaphore:
+    global _slots
+    if _slots is None:
+        _slots = asyncio.Semaphore(max(1, settings.prelabel_max_projects))
+    return _slots
+
+
 async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, mode: str | None = None,
                keep_human: bool = False) -> None:
     progress = PrelabelProgress(status="running", project_id=project_id, started_at=time.time())
     _progress[project_id] = progress
+    slots = _project_slots()
+    if slots.locked():
+        progress.queued = True
+        progress.log(f"排队中：同时最多 {settings.prelabel_max_projects} 个项目在跑 AI 预标注，前面的跑完就轮到")
+    await slots.acquire()
+    progress.queued = False
+    progress.started_at = time.time()
     try:
         while True:
             async with SessionLocal() as db:
@@ -571,6 +590,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
         progress.current_sample_code = None
         _running.discard(project_id)
         _cancelled.discard(project_id)
+        slots.release()
         await _record_run(progress)
 
 

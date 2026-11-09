@@ -100,6 +100,9 @@ async def purge_task_children(db: AsyncSession, task_ids: list[int]) -> None:
         await db.execute(delete(ReviewRecord).where(ReviewRecord.task_id.in_(batch)))
         # 子任务的 parent 指向要删的任务，先断开，免得自引用外键挡住
         await db.execute(update(Task).where(Task.parent_task_id.in_(batch)).values(parent_task_id=None))
+        # 剪出来的视频片段（clip_jobs）也挂着 task_id：断开，片段文件和记录留着
+        from app.models.clip import ClipJob
+        await db.execute(update(ClipJob).where(ClipJob.task_id.in_(batch)).values(task_id=None))
 
 
 async def claim_task(db: AsyncSession, task_id: int, user: User) -> Task:
