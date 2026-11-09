@@ -10,6 +10,23 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-smart_label}
       MYSQL_USER: ${MYSQL_USER:-smart_label}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    # 默认配置是给小机器的：数据缓存（buffer pool）只有 128MB，服务器 60G 内存几乎没用上，
+    # 表一大查询就一直读磁盘，页面卡、锁等得久。下面这几项都能在 .env 里改
+    command:
+      # 数据和索引缓存在内存里：越大越少读磁盘。留够给训练 / 推理（机器 62G，默认给 8G）
+      - --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-8G}
+      # 写日志的容量：大了批量写（AI 预标注一次写几百个任务）不用频繁刷盘
+      - --loose-innodb-redo-log-capacity=${MYSQL_REDO_LOG:-2G}
+      - --max-connections=${MYSQL_MAX_CONNECTIONS:-500}
+      # 等锁最多等这么久（默认 50 秒）：被一个长事务锁住时，后面的请求早点报错，而不是整页转一分钟
+      - --innodb-lock-wait-timeout=${MYSQL_LOCK_WAIT:-20}
+      # 统计 / 分组这类查询的内存临时表（默认 16M，超了落到磁盘上做）
+      - --tmp-table-size=${MYSQL_TMP_TABLE:-256M}
+      - --max-heap-table-size=${MYSQL_TMP_TABLE:-256M}
+      # 慢查询记下来（超过 2 秒）：卡过之后能查到是哪条，在 mysql 容器里 /var/lib/mysql/slow.log
+      - --slow-query-log=ON
+      - --long-query-time=${MYSQL_SLOW_SEC:-2}
+      - --slow-query-log-file=/var/lib/mysql/slow.log
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

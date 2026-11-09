@@ -63,8 +63,12 @@ async def _seed_builtin_templates():
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    from app.core import perf
+
     await _seed_builtin_templates()
+    perf.start()   # 系统监控：事件循环延迟、数据库每 15 秒采样
     yield
+    await perf.stop()
 
 
 app = FastAPI(title="smart-label", version="0.1.0", lifespan=_lifespan)
@@ -89,6 +93,10 @@ async def _log_slow(request: Request, call_next):
     t0 = time.perf_counter()
     resp = await call_next(request)
     ms = (time.perf_counter() - t0) * 1000
+    # 系统监控的「网页卡不卡」：按路由模板记（/tasks/{task_id} 而不是每个 id 一条）
+    from app.core import perf
+    route = request.scope.get("route")
+    perf.record_request(request.method, getattr(route, "path", request.url.path), ms, resp.status_code)
     if ms >= SLOW_MS:
         logging.getLogger("slow").warning("SLOW %s %s %.0fms -> %s", request.method, request.url.path, ms, resp.status_code)
     return resp
