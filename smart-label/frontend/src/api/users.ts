@@ -27,5 +27,5 @@ export const getTempPassword = (id: number) =>
   request.get<never, { username: string; temp_password: string | null }>(`/users/${id}/temp-password`);
 
 /** 重置密码，返回临时密码 */
-export const resetUserPassword = (id: number) =>
-  request.post<never, { username: string; temp_password: string }>(`/users/${id}/reset-password`);
+export const resetUserPassword = (id: number, password?: string) =>
+  request.post<never, { username: string; temp_password: string }>(`/users/${id}/reset-password`, { password: password || null });
