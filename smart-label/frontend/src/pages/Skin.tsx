@@ -16,6 +16,7 @@ import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
 import { METRICS, TierDistribution, TrendChart } from "@/components/TrackingCharts";
+import DogInfoPopover from "@/components/DogInfoPopover";
 import { parseSampleTime, sampleDisplayName } from "@/utils/sampleName";
 import { imuOf } from "@/utils/imuOf";
 import { usePersistedSort } from "@/utils/persistedSort";
@@ -452,7 +453,7 @@ function ChartsTab() {
               render: (_: unknown, sm: typeof summary[number]) => (
                 <Tooltip title="点一下只看这只狗的曲线；再点回到全部">
                   <div style={{ cursor: "pointer" }} onClick={() => setFilter({ dogs: f.dogs.length === 1 && f.dogs[0] === sm.dog ? [] : [sm.dog] })}>
-                    <b>{sm.dog}</b>
+                    <b><DogInfoPopover name={sm.dog} /></b>
                     {sm.meta && <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{sm.meta}</div>}
                   </div>
                 </Tooltip>
@@ -1044,9 +1045,11 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
               const short = r.dog_name.includes("-") ? r.dog_name.split("-").slice(-1)[0] : r.dog_name;
               return (
                 <div>
-                  <Tooltip title={`${r.dog_name}（${r.imu}）`}>
-                    <span style={{ whiteSpace: "nowrap" }}>{short}</span>
-                  </Tooltip>
+                  <DogInfoPopover name={r.dog_name}>
+                    <Tooltip title={`${r.dog_name}（${r.imu}）`}>
+                      <span style={{ whiteSpace: "nowrap" }}>{short}</span>
+                    </Tooltip>
+                  </DogInfoPopover>
                   {dogMetaText(r) && (
                     <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{dogMetaText(r)}</div>
                   )}

@@ -4,6 +4,7 @@ import "uplot/dist/uPlot.min.css";
 import { Space, Tag, Typography } from "antd";
 import type { TrackingRow } from "@/api/skin";
 import "./TrackingCharts.css";
+import DogInfoPopover from "./DogInfoPopover";
 
 /**
  * 「趋势图表」页用的两个图：一条线一只狗的折线图，和 C 档位时间线（一只狗一行、一天一格）。
@@ -208,7 +209,7 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
         byDate.forEach((r) => { counts[r.c_tier!] = (counts[r.c_tier!] ?? 0) + 1; });
         return (
           <div key={dog} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-            <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}>{dog}</span>
+            <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}><DogInfoPopover name={dog} /></span>
             <div style={{ flex: 1, display: "flex", height: 20, gap: 2 }}>
               {days.map((d) => {
                 const r = byDate.get(d);
