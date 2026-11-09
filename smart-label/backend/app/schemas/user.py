@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.core import permissions as perms
 from app.models.user import UserRole
@@ -22,6 +22,16 @@ class UserOut(BaseModel):
     permissions: list[str] = []
     last_login_at: datetime | None
     created_at: datetime
+    # 访客在请求里临时当管理员用（见 core/deps.py），这里还原成 viewer 给前端看
+    read_only: bool = False
+
+    @model_validator(mode="after")
+    def _viewer(self):
+        if self.read_only:
+            self.role = UserRole.viewer
+        elif self.role == UserRole.viewer:
+            self.read_only = True
+        return self
 
     @field_validator("permissions", mode="before")
     @classmethod

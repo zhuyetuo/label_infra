@@ -12,6 +12,8 @@ class UserRole(str, enum.Enum):
     admin = "admin"
     annotator = "annotator"
     reviewer = "reviewer"
+    # 访客：能看管理员能看的全部页面，但什么都改不了（只放行 GET；见 app/core/deps.py）
+    viewer = "viewer"
 
 
 class User(Base):
