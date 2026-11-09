@@ -54,7 +54,7 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{user_id}/temp-password", dependencies=[Depends(require_role(UserRole.super_admin))])
 async def get_temp_password(user_id: int, db: AsyncSession = Depends(get_db)):
-    """超级管理员回看系统发的临时密码。本人改过密码就没有了——本人的密码谁都看不到，只能重置"""
+    """超级管理员看某人现在的密码（新建 / 重置 / 本人改密码时都会更新）。存这功能之前设的密码没有，重置一次就有"""
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "账号不存在")
@@ -187,7 +187,7 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(user)
 
-    # 临时密码加密存了一份，本人改密码前超级管理员能在账号管理里再看（见 core/temp_password.py）
+    # 密码加密存了一份，超级管理员能在账号管理里看（见 core/temp_password.py）
     return ok(
         UserCreateOut(user=UserOut.model_validate(user), temp_password=temp_password).model_dump()
     )

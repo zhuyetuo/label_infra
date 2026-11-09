@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
 
 /** 账号 + 密码 + 登录地址，一次复制好直接发给本人 */
 function credentialText(username: string, password: string) {
-  return `登录地址：${window.location.origin}\n账号：${username}\n密码：${password}\n（第一次登录会要求改成自己的密码）`;
+  return `登录地址：${window.location.origin}\n账号：${username}\n密码：${password}`;
 }
 
 function Credential({ username, password, note }: { username: string; password: string; note?: string }) {
@@ -51,7 +51,7 @@ function Credential({ username, password, note }: { username: string; password: 
         复制账号和密码
       </Button>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {note ?? "对方第一次登录会被要求改成自己的密码；改之前超级管理员可以在账号列表里点「看密码」再拿出来。"}
+        {note ?? "以后忘了，超级管理员在账号列表里点「看密码」就能再拿到。"}
       </Typography.Text>
     </div>
   );
@@ -106,13 +106,13 @@ export default function Users() {
     const r = await getTempPassword(u.id);
     if (!r.temp_password) {
       Modal.info({
-        title: `${u.display_name} 已经改成自己的密码了`,
-        content: "本人设的密码只存了不可逆的哈希，谁都看不到（包括超级管理员）。需要的话点「重置密码」发一个新的。",
+        title: `看不到 ${u.display_name} 的密码`,
+        content: "这个账号的密码是这次更新之前设的，系统里没存。点「重置密码」发一个新的，之后就能一直看到。",
       });
       return;
     }
     Modal.info({
-      title: `${u.display_name} 的初始密码（还没改过）`,
+      title: `${u.display_name} 现在的密码`,
       width: 460,
       content: <Credential username={r.username} password={r.temp_password} />,
     });
@@ -298,7 +298,7 @@ export default function Users() {
                   </Button>
                 </Popconfirm>
                 {isSuperAdmin && (
-                  <Tooltip title={u.has_temp_password ? "看系统发给他的初始 / 重置密码（他还没改）" : "他已经改成自己的密码，看不到；需要就重置"}>
+                  <Tooltip title={u.has_temp_password ? "看他现在的密码" : "密码是这次更新之前设的，系统里没存；重置一次之后就能看"}>
                     <Button size="small" type="link" disabled={!u.has_temp_password} onClick={() => showPassword(u)}>
                       看密码
                     </Button>

@@ -162,7 +162,7 @@ export interface Draft {
 }
 
 export interface AppUser {
-  /** 还有没被本人改掉的系统临时密码（超级管理员能看） */
+  /** 系统里存了他现在的密码（超级管理员能看） */
   has_temp_password?: boolean;
   id: number;
   username: string;
