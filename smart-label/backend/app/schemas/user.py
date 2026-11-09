@@ -24,7 +24,7 @@ class UserOut(BaseModel):
     created_at: datetime
     # 访客在请求里临时当管理员用（见 core/deps.py），这里还原成 viewer 给前端看
     read_only: bool = False
-    # 还有没改掉的临时密码（超级管理员可以点「看密码」）
+    # 存了现在的密码（超级管理员可以点「看密码」）
     has_temp_password: bool = False
 
     @model_validator(mode="after")

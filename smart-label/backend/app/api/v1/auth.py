@@ -13,6 +13,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.core.temp_password import seal
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenPair
@@ -44,6 +45,7 @@ async def bootstrap_admin(body: BootstrapAdminRequest, db: AsyncSession = Depend
         display_name=body.display_name,
         role=UserRole.admin,
         password_hash=hash_password(body.password),
+        temp_password_enc=seal(body.password),
         must_change_password=False,
     )
     db.add(admin)
@@ -115,7 +117,7 @@ async def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "原密码错误")
     user.password_hash = hash_password(body.new_password)
     user.must_change_password = False
-    user.temp_password_enc = None  # 本人设了自己的密码，系统发的临时密码作废、不再留
+    user.temp_password_enc = seal(body.new_password)  # 超级管理员要能看到每个人现在的密码（见 core/temp_password.py）
     user.token_version += 1  # 强制所有旧 refresh token 失效，需重新登录
     await db.commit()
     return ok(msg="密码已修改，请重新登录")
