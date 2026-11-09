@@ -184,6 +184,9 @@ export default function Projects() {
   });
 
   const [open, setOpen] = useState(false);
+  // 一键去重：勾了几个项目就去重那几个，没勾就全部项目；一个一个跑，按钮上显示做到第几个
+  const [dedupeSel, setDedupeSel] = useState<number[]>([]);
+  const [dedupeRun, setDedupeRun] = useState<{ done: number; total: number } | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
 
@@ -1207,6 +1210,51 @@ export default function Projects() {
             新建项目
           </Button>
         )}
+        {isAdmin && (() => {
+          const targets = (data ?? []).filter((p) => p.is_active && (dedupeSel.length === 0 || dedupeSel.includes(p.id)));
+          const runDedupe = async () => {
+            const sum = { tasks: 0, changed: 0, merged: 0, removed: 0, conflicts: 0 };
+            const failed: string[] = [];
+            setDedupeRun({ done: 0, total: targets.length });
+            for (const [i, p] of targets.entries()) {
+              try {
+                const r = await segDedupeProject(p.id);
+                sum.tasks += r.tasks; sum.changed += r.tasks_changed; sum.merged += r.merged;
+                sum.removed += r.removed_parent; sum.conflicts += r.conflicts_left;
+              } catch {
+                failed.push(p.name);
+              }
+              setDedupeRun({ done: i + 1, total: targets.length });
+            }
+            setDedupeRun(null);
+            setDedupeSel([]);
+            refresh();
+            Modal.info({
+              title: `去重完成：${targets.length} 个项目`,
+              content: (
+                <div>
+                  <div>处理了 {sum.changed} / {sum.tasks} 个任务</div>
+                  <div>并掉重复片段 {sum.merged} 段，删掉被细类盖住的粗类 {sum.removed} 段</div>
+                  {sum.conflicts > 0 && <div>还剩 {sum.conflicts} 段类别冲突（同一处标了不同类别），要人看画面判断，用「有重叠」筛出来看</div>}
+                  {failed.length > 0 && <div style={{ color: "#d03b3b" }}>没做成：{failed.join("、")}（再点一次试试）</div>}
+                </div>
+              ),
+            });
+          };
+          return (
+            <Popconfirm
+              title={dedupeSel.length ? `给勾选的 ${targets.length} 个项目去重？` : `给全部 ${targets.length} 个项目去重？`}
+              description={<div style={{ maxWidth: 380 }}>每个任务（当前这一轮）：同类别互相重叠的并成一条（留审核通过 / 人确认过的那条，起止取并集）；父子类别压在一起的删粗的。类别冲突要人看画面，不动，只报个数。只想做某几个项目，先在左边勾上</div>}
+              okText="去重"
+              disabled={!!dedupeRun || targets.length === 0}
+              onConfirm={runDedupe}
+            >
+              <Button loading={!!dedupeRun} disabled={targets.length === 0}>
+                {dedupeRun ? `去重中 ${dedupeRun.done}/${dedupeRun.total}` : dedupeSel.length ? `一键去重（勾选的 ${dedupeSel.length} 个）` : "一键去重（全部项目）"}
+              </Button>
+            </Popconfirm>
+          );
+        })()}
       </Space>
       {delProg.some((x) => x.status === "queued" || x.status === "running") && (
         <Alert type="info" showIcon style={{ marginBottom: 8 }}
@@ -1224,6 +1272,12 @@ export default function Projects() {
         rowKey="id"
         loading={isLoading}
         dataSource={data}
+        rowSelection={isAdmin ? {
+          selectedRowKeys: dedupeSel,
+          onChange: (keys) => setDedupeSel(keys as number[]),
+          getCheckboxProps: (p: Project) => ({ disabled: !p.is_active }),
+          columnWidth: 36,
+        } : undefined}
         // 排序是人的看法，不是页面的初始状态——记住它，下次回来还按上次排的
         onChange={projectSort.onTableChange}
         expandable={{
