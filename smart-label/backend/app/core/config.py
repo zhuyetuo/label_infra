@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     db_pool_size: int = 20
     db_max_overflow: int = 30
     db_pool_timeout_sec: int = 10
+    # 同时最多几个项目在跑 AI 预标注：一次建十几个项目时，各自的预标注都同时开跑，
+    # AI 服务和数据库写入一起被打满、全都超时。多出来的排队
+    prelabel_max_projects: int = 2
 
     # --- NAS ---
     # 所有原始/标注/切片文件的根目录，数据库里只存相对这个根目录的相对路径

@@ -685,20 +685,16 @@ async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)):
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    # 放到后台一小批一小批删（见 project_delete）：原来一个大事务锁着表，删几个项目整个平台卡死
+    from app.services import project_delete
 
-    task_ids = (
-        (await db.execute(select(Task.id).where(Task.project_id == project_id))).scalars().all()
-    )
-    if task_ids:
-        await purge_task_children(db, task_ids)
-        await db.execute(delete(Task).where(Task.project_id == project_id))
-    # 标签有父子自引用外键（parent_id）：整批 DELETE 时父可能先于子被删，MySQL 直接报
-    # 外键错。先把这个项目里的 parent_id 全清空，再删
-    await db.execute(update(LabelDefinition).where(LabelDefinition.project_id == project_id).values(parent_id=None))
-    label_count = (
-        await db.execute(delete(LabelDefinition).where(LabelDefinition.project_id == project_id))
-    ).rowcount or 0
+    st = await project_delete.enqueue(project_id, project.name)
+    return ok(st, msg="已在后台删除，项目先停用了；几个项目会排队一个一个删")
 
-    await db.delete(project)
-    await db.commit()
-    return ok(msg=f"项目已删除（连带 {len(task_ids)} 个任务、{label_count} 个标签）")
+
+@router.get("/delete-progress")
+async def delete_progress(user: User = Depends(get_current_user)):
+    """后台删除的进度（排队 / 删到第几个任务 / 删完 / 失败）"""
+    from app.services import project_delete
+
+    return ok(list(project_delete.progress().values()))

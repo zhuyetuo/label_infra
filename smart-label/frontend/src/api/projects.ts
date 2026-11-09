@@ -10,7 +10,10 @@ export const createProject = (body: { name: string; description?: string }) =>
 export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "description" | "is_active">>) =>
   request.patch<never, Project>(`/projects/${id}`, body);
 
-export const deleteProject = (id: number) => request.delete<never, null>(`/projects/${id}`);
+export const deleteProject = (id: number) => request.delete<never, DeleteProgress>(`/projects/${id}`);
+/** 后台删除项目的进度：排队 / 删到第几个任务 / 删完 / 失败 */
+export interface DeleteProgress { project_id: number; name: string; status: "queued" | "running" | "done" | "error"; done: number; total: number | null; error: string | null }
+export const deleteProgress = () => request.get<never, DeleteProgress[]>("/projects/delete-progress", { silent: true } as never);
 
 /** 把混了好多天的老项目按采集日期拆成一天一个项目（副本进新项目，原项目不动） */
 export const splitProjectByDate = (id: number) =>
@@ -27,6 +30,8 @@ export const unsplitProject = (id: number) =>
 
 export interface PrelabelProgress {
   status: "idle" | "running" | "done" | "cancelled" | "error";
+  /** 排队中：同时跑预标注的项目数满了，在等前面的（status 仍是 running） */
+  queued?: boolean;
   project_id: number;
   total: number;
   processed: number;

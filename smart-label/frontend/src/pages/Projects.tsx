@@ -36,6 +36,8 @@ import {
   assignProject,
   createProject,
   deleteProject,
+  deleteProgress,
+  type DeleteProgress,
   splitProjectByDate,
   unsplitProject,
   getProjectPrelabelHistory,
@@ -845,10 +847,29 @@ export default function Projects() {
     />
   );
 
+  // 删项目在后台一小批一小批地删（一次删好几个也不会把平台卡死），这里轮询进度
+  const [delProg, setDelProg] = useState<DeleteProgress[]>([]);
+  const delTimer = useRef<number | null>(null);
+  const pollDelete = async () => {
+    try {
+      const list = await deleteProgress();
+      setDelProg(list);
+      const active = list.some((x) => x.status === "queued" || x.status === "running");
+      if (list.some((x) => x.status === "done")) refresh();
+      if (active) {
+        delTimer.current = window.setTimeout(pollDelete, 3000);
+      } else {
+        delTimer.current = null;
+        list.filter((x) => x.status === "error").forEach((x) => message.error(`删除「${x.name}」失败：${x.error}`, 8));
+      }
+    } catch { /* 下次再看 */ }
+  };
+  useEffect(() => { void pollDelete(); return () => { if (delTimer.current) window.clearTimeout(delTimer.current); }; }, []);
   const handleDelete = async (id: number) => {
     await deleteProject(id);
-    message.success("项目及其任务、标签已删除");
+    message.success("已在后台删除（项目先停用了）；删好几个会排队一个一个删，不会卡住平台", 5);
     refresh();
+    if (!delTimer.current) void pollDelete();
   };
 
   // 指派项目：默认选上次指派给的那个人（一般连着好几个项目都分给同一个实习生）。
@@ -1187,6 +1208,11 @@ export default function Projects() {
           </Button>
         )}
       </Space>
+      {delProg.some((x) => x.status === "queued" || x.status === "running") && (
+        <Alert type="info" showIcon style={{ marginBottom: 8 }}
+          message={<span>后台正在删除：{delProg.filter((x) => x.status === "queued" || x.status === "running").map((x) =>
+            x.status === "running" ? `「${x.name}」${x.total ? `${x.done}/${x.total} 个任务` : "准备中"}` : `「${x.name}」排队中`).join("；")}</span>} />
+      )}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         同一批数据在不同业务下要标的东西不一样，所以先建项目，再在项目里建任务、配标签。
         项目之间的标签互不干扰，同一个样本可以同时出现在多个项目里。
@@ -2038,7 +2064,12 @@ export default function Projects() {
                 // 进度块单独占一行，别跟"共 N"和状态 Tag 混在同一个 wrap 的 Space 里
                 // ——混在一起时"共 N"会被挤到进度条右边，看着像显示错了
                 <div>
-                  {pp?.status === "running" && (
+                  {pp?.status === "running" && pp.queued && (
+                    <Tooltip title="同时最多 2 个项目在跑 AI 预标注（一次建十几个项目时全一起跑会把 AI 服务和数据库都压垮、全部超时），前面的跑完自动轮到">
+                      <Tag color="gold" style={{ marginBottom: 4 }}>AI 预标注排队中</Tag>
+                    </Tooltip>
+                  )}
+                  {pp?.status === "running" && !pp.queued && (
                     <Tooltip
                       title={`${pp.current_sample_code ?? ""}
 成功 ${pp.succeeded} · 跳过 ${pp.skipped} · 失败 ${pp.failed} · 等 AI 共 ${fmtClock(pp.ai_wait_sec)}`}

@@ -265,7 +265,23 @@ def test_删项目_有父子的标签也能整批删掉(db, run):
     run(db.flush())
     db.add(LabelDefinition(project_id=p.id, code="fore", display_name="舔-前爪", parent_id=lick.id, created_by=admin.id))
     run(db.commit())
-    run(papi.delete_project(p.id, db=db))
+    from contextlib import asynccontextmanager
+
+    from app.services import project_delete as pd
+
+    @asynccontextmanager
+    async def shim_session():
+        yield db
+    pd._factory = shim_session
+    try:
+        # 接口立刻返回、项目先停用；后台按批删（测试里直接跑后台那一步）
+        st = run(papi.delete_project(p.id, db=db))["data"]
+        assert st["status"] in ("queued", "running", "done") and st["project_id"] == p.id
+        if pd.PROGRESS[p.id]["status"] != "done":
+            run(pd._run(p.id))
+        assert pd.PROGRESS[p.id]["status"] == "done", pd.PROGRESS[p.id]
+    finally:
+        pd._factory = None
     assert _labels(db, run, p.id) == {}
     assert run(db.get(Project, p.id)) is None
 
