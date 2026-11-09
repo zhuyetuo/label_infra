@@ -6,7 +6,7 @@ import type { TrackingRow } from "@/api/skin";
 import "./TrackingCharts.css";
 
 /**
- * 「趋势图表」页用的两个图：一条线一只狗的折线图，和 C 档位分布条。
+ * 「趋势图表」页用的两个图：一条线一只狗的折线图，和 C 档位时间线（一只狗一行、一天一格）。
  *
  * 三个指标（抓挠次数 / C 值 / S 总分）量纲完全不同，不做双轴——图表页把三张图
  * 上下排开（小倍数），各自一套 Y 轴，比两条 Y 轴叠在一张图上好读得多。
@@ -152,63 +152,104 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
   return <div className="tracking-charts"><div ref={hostRef} /></div>;
 }
 
-/** C 档位分布：每只狗 C0/C1/C2 各多少天 */
+/** 一个日期区间里的每一天（YYYY-MM-DD），中间缺的天也列出来，好看出哪天没数据 */
+function allDays(dates: string[]): string[] {
+  if (!dates.length) return [];
+  const sorted = [...dates].sort();
+  const out: string[] = [];
+  const d = new Date(sorted[0] + "T00:00:00");
+  const end = new Date(sorted[sorted.length - 1] + "T00:00:00");
+  while (d <= end && out.length < 400) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+/** C 档位时间线：一只狗一行，一天一格，按日期从左到右，格子颜色是那天的档位；右边是各档天数 */
 export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
-  const tierDist = useMemo(() => {
-    const m = new Map<string, Record<string, number>>();
+  const { days, dogs } = useMemo(() => {
+    const byDog = new Map<string, Map<string, TrackingRow>>();
     for (const r of rows) {
       if (!r.c_tier) continue;
-      const rec = m.get(r.dog_name) ?? { C0: 0, C1: 0, C2: 0 };
-      rec[r.c_tier] = (rec[r.c_tier] ?? 0) + 1;
-      m.set(r.dog_name, rec);
+      const m = byDog.get(r.dog_name) ?? new Map<string, TrackingRow>();
+      m.set(r.date, r);
+      byDog.set(r.dog_name, m);
     }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const days = allDays(rows.filter((r) => r.c_tier).map((r) => r.date));
+    const dogs = [...byDog.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return { days, dogs };
   }, [rows]);
-  if (!tierDist.length) return null;
+  if (!dogs.length) return null;
+  // 天多的时候日期标签隔几天写一个，免得挤在一起
+  const labelEvery = Math.max(1, Math.ceil(days.length / 20));
+  const cellText = days.length <= 31; // 格子够宽才在格子里写档位
+  const NAME_W = 150;
+  const SUM_W = 150;
   return (
-        <div style={{ marginTop: 12 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            C 档位分布（天数）：
-          </Typography.Text>
-          {tierDist.map(([dog, counts]) => {
-            const total = counts.C0 + counts.C1 + counts.C2;
-            return (
-              <div key={dog} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-                <span style={{ width: 150, fontSize: 12, flex: "0 0 auto" }}>{dog}</span>
-                <div style={{ flex: 1, display: "flex", height: 18, borderRadius: 4, overflow: "hidden", gap: 2 }}>
-                  {(["C0", "C1", "C2"] as const).map((t) =>
-                    counts[t] ? (
-                      <div
-                        key={t}
-                        title={`${t}：${counts[t]} 天`}
-                        style={{
-                          width: `${(counts[t] / total) * 100}%`,
-                          background: TIER_COLOR[t],
-                          color: t === "C1" ? "#0b0b0b" : "#fff",
-                          fontSize: 11,
-                          lineHeight: "18px",
-                          textAlign: "center",
-                          borderRadius: 3,
-                        }}
-                      >
-                        {t} {counts[t]}
-                      </div>
-                    ) : null
-                  )}
-                </div>
-                <span style={{ fontSize: 12, width: 50, flex: "0 0 auto" }}>共 {total} 天</span>
-              </div>
-            );
-          })}
-          <Space size={4} style={{ marginTop: 6 }}>
-            {(["C0", "C1", "C2"] as const).map((t) => (
-              <Tag key={t} color={TIER_COLOR[t]}>
-                {t}
-                {t === "C0" ? " 正常" : t === "C1" ? " 偏高" : " 严重"}
-              </Tag>
-            ))}
-          </Space>
+    <div style={{ marginTop: 12 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        C 档位（按日期，一格一天；灰格 = 那天没数据）：
+      </Typography.Text>
+      {/* 日期刻度 */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginTop: 4 }}>
+        <span style={{ width: NAME_W, flex: "0 0 auto" }} />
+        <div style={{ flex: 1, display: "flex", gap: 2 }}>
+          {days.map((d, i) => (
+            <div key={d} style={{ flex: 1, minWidth: 0, fontSize: 10, color: "#999", textAlign: "center", whiteSpace: "nowrap", overflow: "visible" }}>
+              {i % labelEvery === 0 ? d.slice(5) : ""}
+            </div>
+          ))}
         </div>
+        <span style={{ width: SUM_W, flex: "0 0 auto" }} />
+      </div>
+      {dogs.map(([dog, byDate]) => {
+        const counts: Record<string, number> = { C0: 0, C1: 0, C2: 0 };
+        byDate.forEach((r) => { counts[r.c_tier!] = (counts[r.c_tier!] ?? 0) + 1; });
+        return (
+          <div key={dog} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+            <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}>{dog}</span>
+            <div style={{ flex: 1, display: "flex", height: 20, gap: 2 }}>
+              {days.map((d) => {
+                const r = byDate.get(d);
+                const t = r?.c_tier;
+                return (
+                  <div
+                    key={d}
+                    title={t ? `${d} ${dog}：${t}${r?.c_value != null ? `（C 值 ${r.c_value}）` : ""}` : `${d} ${dog}：没数据`}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      borderRadius: 3,
+                      background: t ? TIER_COLOR[t] : "rgba(128,128,128,0.18)",
+                      color: t === "C1" ? "#0b0b0b" : "#fff",
+                      fontSize: 10,
+                      lineHeight: "20px",
+                      textAlign: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {cellText && t ? t : ""}
+                  </div>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 12, width: SUM_W, flex: "0 0 auto", whiteSpace: "nowrap" }}>
+              C0 {counts.C0} · C1 {counts.C1} · C2 {counts.C2}
+            </span>
+          </div>
+        );
+      })}
+      <Space size={4} style={{ marginTop: 6 }}>
+        {(["C0", "C1", "C2"] as const).map((t) => (
+          <Tag key={t} color={TIER_COLOR[t]}>
+            {t}
+            {t === "C0" ? " 正常" : t === "C1" ? " 偏高" : " 严重"}
+          </Tag>
+        ))}
+        <Tag>灰 没数据</Tag>
+      </Space>
+    </div>
   );
 }
 
