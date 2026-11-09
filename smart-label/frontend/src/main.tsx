@@ -14,6 +14,20 @@ const queryClient = new QueryClient({
 
 applyThemeAttr(useThemeStore.getState().mode);
 
+// 服务器更新后，开着的旧页面去拿已经不存在的 js 分包会失败：自动刷新一次拿新版本
+// （一分钟内只刷一次，免得真出问题时无限刷新）
+window.addEventListener("vite:preloadError", (e) => {
+  try {
+    const last = Number(sessionStorage.getItem("reloadAfterDeploy") || 0);
+    if (Date.now() - last < 60_000) return;
+    sessionStorage.setItem("reloadAfterDeploy", String(Date.now()));
+  } catch {
+    /* 没 sessionStorage 也照样刷新 */
+  }
+  e.preventDefault();
+  window.location.reload();
+});
+
 /** 明亮 / 暗黑两套：antd 自带的算法换整套颜色，主题紫不变 */
 function Root() {
   const mode = useThemeStore((s) => s.mode);

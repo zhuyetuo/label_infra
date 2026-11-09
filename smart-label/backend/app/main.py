@@ -124,4 +124,20 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/v1/health")
+async def api_health():
+    """走 nginx 的那一路通不通（nginx 只转 /api/ 开头的）：up.sh 更新完用它确认 前端 → 后端 是通的"""
+    return {"status": "ok"}
+
+
+@app.get("/health/busy")
+async def health_busy():
+    """后台在跑什么（给 up.sh 更新前看一眼）：重启后端会把这些打断。只回数字，不要登录"""
+    from app.services import project_delete
+    from app.services.ai_prelabel_service import _running as prelabel_running
+
+    deleting = [v for v in project_delete.progress().values() if v["status"] in ("queued", "running")]
+    return {"prelabel_projects": len(prelabel_running), "deleting_projects": len(deleting)}
+
+
 app.include_router(api_router)

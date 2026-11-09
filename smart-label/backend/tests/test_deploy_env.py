@@ -190,3 +190,78 @@ def test_up_sh_shows_migrate_logs_when_compose_fails():
     assert "if ! docker compose up" in s, \
         "compose 失败会被 set -e 直接掐掉，后面的诊断打不出来"
     assert "logs --tail" in s and "migrate" in s, "没有把 migrate 的日志打出来"
+
+
+# ── 滚动更新：更新时不打断别人 ────────────────────────────────────────────
+
+
+def _run_up(tmp_path, args, fail_on=None, busy='{"prelabel_projects":0,"deleting_projects":0}'):
+    """用假的 docker / curl / git 跑 up.sh，记下 docker 命令的顺序。fail_on：命令里含这个字串就返回失败"""
+    import shutil
+    import subprocess
+
+    deploy = os.path.join(os.path.dirname(__file__), "..", "..", "deploy")
+    d = tmp_path / "deploy"
+    d.mkdir()
+    shutil.copy(os.path.join(deploy, "up.sh"), d / "up.sh")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "docker.log"
+    (bin_ / "docker").write_text(f'''#!/bin/bash
+echo "$*" >> {log}
+if [ -n "{fail_on or ''}" ] && [[ "$*" == *"{fail_on or '__none__'}"* ]]; then exit 1; fi
+exit 0
+''')
+    (bin_ / "curl").write_text(f'''#!/bin/bash
+for a in "$@"; do [[ "$a" == *health/busy* ]] && {{ echo '{busy}'; exit 0; }}; done
+exit 0
+''')
+    (bin_ / "sleep").write_text("#!/bin/bash\nexit 0\n")
+    for b in ("docker", "curl", "sleep"):
+        os.chmod(bin_ / b, 0o755)
+    env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}
+    r = subprocess.run(["bash", str(d / "up.sh"), *args], capture_output=True, text=True, env=env, timeout=60)
+    cmds = log.read_text().splitlines() if log.exists() else []
+    return r, cmds
+
+
+def _idx(cmds, needle):
+    for i, c in enumerate(cmds):
+        if needle in c:
+            return i
+    raise AssertionError(f"没找到 {needle!r}：{cmds}")
+
+
+def test_滚动更新的顺序_先打包_再迁移_前端换文件_先备用后主(tmp_path):
+    r, cmds = _run_up(tmp_path, ["-y"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    order = [_idx(cmds, "compose build migrate"), _idx(cmds, "build web_build"), _idx(cmds, "--no-recreate --wait mysql"),
+             _idx(cmds, "--exit-code-from migrate migrate"), _idx(cmds, "smart-label-web-dist"),
+             _idx(cmds, "--wait --wait-timeout 180 api_b"), _idx(cmds, "--wait --wait-timeout 180 api"),
+             _idx(cmds, "nginx -s reload")]
+    assert order == sorted(order), cmds
+    # 平时不碰 MySQL，也不用 --build 一把全重建（那样每个容器都先停后起，会断）
+    assert not any("up -d --build" in c for c in cmds)
+    assert not any(c.endswith("up -d --wait mysql") for c in cmds)
+
+
+def test_打包失败什么都不动(tmp_path):
+    r, cmds = _run_up(tmp_path, ["-y"], fail_on="build web_build")
+    assert r.returncode == 1 and "没动" in r.stdout
+    assert not any("api_b" in c or "migrate migrate" in c for c in cmds)
+
+
+def test_新的备用后端起不来_主后端不动(tmp_path):
+    r, cmds = _run_up(tmp_path, ["-y"], fail_on="180 api_b")
+    assert r.returncode == 1 and "主后端没动" in r.stdout
+    assert not any(c.endswith("--wait-timeout 180 api") for c in cmds)
+
+
+def test_后台有活儿时先提示(tmp_path):
+    r, _ = _run_up(tmp_path, [], busy='{"prelabel_projects":2,"deleting_projects":0}')
+    assert "后台正在跑" in r.stdout and "Ctrl+C" in r.stdout
+
+
+def test_要求重启mysql才重启(tmp_path):
+    _, cmds = _run_up(tmp_path, ["-y", "--mysql"])
+    assert any(c.endswith("up -d --wait mysql") for c in cmds)
