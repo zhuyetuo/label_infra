@@ -1,4 +1,4 @@
-export type UserRole = "super_admin" | "admin" | "annotator" | "reviewer";
+export type UserRole = "super_admin" | "admin" | "annotator" | "reviewer" | "viewer";
 
 export interface Project {
   id: number;

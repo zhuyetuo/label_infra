@@ -11,7 +11,13 @@ const ROLE_OPTIONS = [
   { value: "admin", label: "管理员" },
   { value: "annotator", label: "标注员" },
   { value: "reviewer", label: "审核员" },
+  { value: "viewer", label: "访客（只能看）" },
 ];
+
+/** 离职（禁用）的排到最后，同组里新建的在前 */
+function sortUsers(list: AppUser[] | undefined) {
+  return [...(list ?? [])].sort((a, b) => Number(b.is_active) - Number(a.is_active) || b.id - a.id);
+}
 
 export default function Users() {
   const qc = useQueryClient();
@@ -114,7 +120,8 @@ export default function Users() {
       <Table
         rowKey="id"
         loading={isLoading}
-        dataSource={data}
+        dataSource={sortUsers(data)}
+        rowClassName={(u: AppUser) => (u.is_active ? "" : "user-row-inactive")}
         columns={[
           { title: "ID", dataIndex: "id", width: 60 },
           {
@@ -176,6 +183,8 @@ export default function Users() {
             render: (keys: string[] | undefined, u: AppUser) =>
               u.role === "admin" || u.role === "super_admin" ? (
                 <Typography.Text type="secondary">全部（管理员）</Typography.Text>
+              ) : u.role === "viewer" ? (
+                <Typography.Text type="secondary">全部页面只能看，不能改</Typography.Text>
               ) : (
                 <Select
                   mode="multiple"
@@ -222,7 +231,7 @@ export default function Users() {
           {
             title: "状态",
             dataIndex: "is_active",
-            render: (v: boolean) => <Tag color={v ? "green" : "default"}>{v ? "启用" : "禁用"}</Tag>,
+            render: (v: boolean) => <Tag color={v ? "green" : "default"}>{v ? "启用" : "禁用（离职）"}</Tag>,
           },
           {
             title: "操作",

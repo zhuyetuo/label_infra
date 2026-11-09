@@ -21,7 +21,8 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
 async def list_users(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).order_by(User.created_at.desc()))
+    # 离职（禁用）的排到最后
+    result = await db.execute(select(User).order_by(User.is_active.desc(), User.created_at.desc()))
     users = result.scalars().all()
     return ok([UserOut.model_validate(u).model_dump() for u in users])
 

@@ -7,12 +7,14 @@ export const ROLE_COLOR: Record<UserRole, string> = {
   admin: "geekblue",
   annotator: "green",
   reviewer: "orange",
+  viewer: "default",
 };
 export const ROLE_LABEL: Record<UserRole, string> = {
   super_admin: "超级管理员",
   admin: "管理员",
   annotator: "标注员",
   reviewer: "审核员",
+  viewer: "访客",
 };
 
 export function UserTag({ name, role, me }: { name: string; role?: UserRole | null; me?: boolean }) {

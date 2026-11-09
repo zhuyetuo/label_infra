@@ -26,6 +26,7 @@ export const ROLE_META: Record<string, { label: string; color: string; hex: stri
   admin: { label: "管理员", color: "red", hex: "#f5222d" },
   annotator: { label: "标注员", color: "blue", hex: "#1677ff" },
   reviewer: { label: "审核员", color: "green", hex: "#52c41a" },
+  viewer: { label: "访客（只能看）", color: "default", hex: "#8c8c8c" },
 };
 
 export function RoleTag({ role }: { role: string }) {

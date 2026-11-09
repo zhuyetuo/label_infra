@@ -10,9 +10,20 @@ export interface ApiEnvelope<T = unknown> {
 
 const request = axios.create({ baseURL: "/api/v1", timeout: 15000 });
 
+// 访客能发的非 GET 请求，跟后端 app/core/deps.py 的 VIEWER_ALLOWED_POSTS 一致
+const VIEWER_ALLOWED = ["/auth/change-password", "/auth/logout", "/model-eval/compare", "/data-pool/compare-preview",
+  "/skin/ml/preview", "/candidates/similar/preview"];
+
 request.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().accessToken;
+  const { accessToken: token, userInfo } = useAuthStore.getState();
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // 访客：修改类请求不发了，提示一次（同一个 key，连点也只显示一条）
+  const method = (config.method ?? "get").toLowerCase();
+  if (userInfo?.readOnly && !["get", "head", "options"].includes(method)
+      && !VIEWER_ALLOWED.some((p) => config.url?.split("?")[0].endsWith(p))) {
+    message.warning({ content: "访客账号只能查看，不能修改", key: "read-only" });
+    return Promise.reject(new axios.Cancel("read-only"));
+  }
   return config;
 });
 
@@ -46,6 +57,7 @@ request.interceptors.response.use(
     return envelope?.data as unknown as AxiosResponse;
   },
   async (error: AxiosError<ApiEnvelope>) => {
+    if (axios.isCancel(error)) return Promise.reject(error); // 访客被拦下的，上面已经提示过
     const original = error.config as InternalAxiosRequestConfig & { _retried?: boolean };
     if (error.response?.status === 401 && original && !original._retried && !original.url?.includes("/auth/")) {
       original._retried = true;

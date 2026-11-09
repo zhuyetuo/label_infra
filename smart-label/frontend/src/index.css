@@ -44,3 +44,12 @@ body,
   background: var(--sl-fill) !important;
 }
 
+
+/* 账号管理：离职（禁用）的账号置灰、名字划掉；操作列不灰，方便再启用 */
+.user-row-inactive > td:not(:last-child) {
+  opacity: 0.45;
+}
+.user-row-inactive > td:nth-child(2),
+.user-row-inactive > td:nth-child(3) {
+  text-decoration: line-through;
+}

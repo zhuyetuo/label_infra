@@ -82,7 +82,7 @@ export default function AppLayout() {
         </Typography.Text>
         <Space>
           <ThemeSwitch />
-          {userInfo && <RoleTag role={userInfo.role} />}
+          {userInfo && <RoleTag role={userInfo.readOnly ? "viewer" : userInfo.role} />}
           <Typography.Text style={{ color: "#fff" }}>{userInfo?.display_name}</Typography.Text>
           <a
             style={{ color: "#fff" }}
