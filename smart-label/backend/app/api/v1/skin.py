@@ -26,6 +26,7 @@ from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
+from app.services import skin_link_job
 from app.services.skin_link_service import SkinLinkError, ml_for, collect_link_stats, ml_inputs, read_stored_link_stats
 from app.services.skin_tracking_service import SkinTrackingError, daily_tracking
 
@@ -86,6 +87,29 @@ async def link_stats(
         # 出了预料之外的错也要让人在界面上看到原因，而不是"暂无数据"一片空白
         _logger.exception("项目联动统计失败 %s~%s project=%s", date_from, date_to, project_id)
         return ok({"rows": [], "warnings": [f"统计失败：{type(e).__name__}: {e}"]})
+
+
+@router.post("/link/refresh")
+async def link_refresh(
+    date_from: _dt.date,
+    date_to: _dt.date,
+    project_id: int | None = None,
+    ai_min_conf: float = 0.0,
+    include_drafts: bool = False,
+    user: User = Depends(get_current_user),
+):
+    """开始在后台重新拉取（见 services/skin_link_job.py）：立刻返回，进度看 GET /link/refresh"""
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束日期不能早于开始日期")
+    if (date_to - date_from).days > 92:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "一次最多拉 3 个月")
+    return ok(await skin_link_job.start(date_from, date_to, project_id, include_drafts, ai_min_conf,
+                                        by=user.display_name or user.username))
+
+
+@router.get("/link/refresh")
+async def link_refresh_status():
+    return ok(skin_link_job.status())
 
 
 @router.get("/link/staleness")
