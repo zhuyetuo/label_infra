@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Alert, Button, Card, Col, Input, InputNumber, Progress, Radio, Row, Select, Space, Statistic, Switch, Table, Tag,
-  Tooltip, Typography, theme,
+  Tooltip, Typography, theme, Collapse,
 } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
@@ -107,7 +107,7 @@ export default function System() {
           message={`后端 20 秒没回应${st ? `（下面是 ${new Date(dataUpdatedAt).toLocaleTimeString()} 的旧数据）` : ""}`}
           description={<div style={{ lineHeight: 1.8 }}>
             这一页不查业务数据库，连它都打不开，说明后端整个被堵住了（多半是数据库锁住、或者某个请求把后端占死）。在服务器上：
-            <div><Typography.Text code copyable>cd ~/label_infra/smart-label/deploy && docker compose logs --since 10m api | grep -E "STUCK|SLOW" | tail -20</Typography.Text> 看卡在哪</div>
+            <div><Typography.Text code copyable>cd ~/label_infra/smart-label/deploy && docker compose logs --since 10m api | grep -E -A12 "BLOCKED|STUCK|SLOW" | tail -60</Typography.Text> 看卡在哪</div>
             <div><Typography.Text code copyable>docker compose exec mysql mysql -uroot -p -e "SELECT * FROM sys.schema_table_lock_waits\G; SELECT * FROM information_schema.innodb_trx\G"</Typography.Text> 看谁锁着</div>
             <div><Typography.Text code copyable>docker compose restart api</Typography.Text> 实在不行重启后端（另一个后端 api_b 会顶上，别人不受影响）</div>
           </div>} />
@@ -232,6 +232,23 @@ export default function System() {
                         { title: "已等", dataIndex: "sec", width: 70, render: (v: number) => <span style={{ color: v > 10 ? token.colorError : undefined }}>{v}s</span> },
                         { title: "请求", dataIndex: "req", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v}</Typography.Text> },
                       ]} />
+                  )}
+                  {!!w.blocked?.length && (
+                    <div style={{ marginTop: 8 }}>
+                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                        后端整个被堵住过 {w.blocked.length} 次（这期间所有页面都转圈）：点开看卡在哪一行代码，截图发给开发
+                      </Typography.Text>
+                      <Collapse size="small" style={{ marginTop: 4 }} items={w.blocked.map((b, i) => ({
+                        key: String(i),
+                        label: <span style={{ fontSize: 12 }}>{b.at} · 堵了 <b style={{ color: token.colorError }}>{b.sec}s</b> · {b.requests.slice(0, 2).join("、") || "（没有在处理的请求）"}</span>,
+                        children: (
+                          <div style={{ fontSize: 11 }}>
+                            <div>当时手上的请求：{b.requests.join("、") || "无"}</div>
+                            <pre style={{ fontSize: 11, whiteSpace: "pre-wrap", margin: "6px 0 0", maxHeight: 260, overflow: "auto" }}>{b.stack}</pre>
+                          </div>
+                        ),
+                      }))} />
+                    </div>
                   )}
                   {!!w.lag_suspects?.length && (
                     <Table size="small" rowKey="route" pagination={false} style={{ marginTop: 8 }} dataSource={w.lag_suspects.slice(0, 6)}
