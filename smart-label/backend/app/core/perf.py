@@ -71,8 +71,46 @@ def record_request(method: str, route: str, ms: float, status: int) -> None:
     REQS.append((time.time(), f"{method} {route}", ms, status))
 
 
-async def _loop_lag() -> None:
+# ── 看门狗：后端被整个堵住时，记下「堵在哪一行代码」────────────────────────
+#
+# 事件循环被一段同步的重活占住时，所有请求（包括系统监控这一页）都没响应，上面那些采样
+# 也跑不了——卡完恢复了什么都查不到。所以另起一个**普通线程**盯着：循环超过 5 秒没转，
+# 就把循环那条线程此刻的调用栈 + 手上的请求记下来（写 api.log，搜 BLOCKED；系统监控页也能看）。
+LAST_TICK = time.monotonic()
+BLOCKED: deque = deque(maxlen=20)          # {"at", "sec", "requests", "stack"}
+_watch_started = False
+
+
+def _watchdog_thread(loop_thread_id: int) -> None:
+    import sys
+    import traceback
+    episode_logged_at = 0.0
     while True:
+        time.sleep(1)
+        lag = time.monotonic() - LAST_TICK
+        if lag < 5:
+            episode_logged_at = 0.0
+            continue
+        # 一次卡住记第一笔，之后每 20 秒补一笔（看是不是一直卡在同一个地方）
+        if episode_logged_at and time.monotonic() - episode_logged_at < 20:
+            continue
+        episode_logged_at = time.monotonic()
+        frame = sys._current_frames().get(loop_thread_id)
+        stack = traceback.format_stack(frame) if frame else []
+        # 只留我们自己的代码那几层 + 最底下两层（库里具体在干什么），整段太长没人看
+        mine = [s for s in stack if "/app/" in s]
+        keep = (mine[-8:] + stack[-2:]) if mine else stack[-10:]
+        reqs = [w for _t, w in sorted(INFLIGHT.values())][:10]
+        ev = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "sec": round(lag, 1), "requests": reqs,
+              "stack": "".join(dict.fromkeys(keep))}
+        BLOCKED.append(ev)
+        log.warning("BLOCKED 后端已经 %.0f 秒没响应 | 手上的请求: %s\n卡在:\n%s", lag, reqs, ev["stack"])
+
+
+async def _loop_lag() -> None:
+    global LAST_TICK
+    while True:
+        LAST_TICK = time.monotonic()
         t0 = time.perf_counter()
         await asyncio.sleep(0.5)
         lag = (time.perf_counter() - t0 - 0.5) * 1000
@@ -220,8 +258,13 @@ async def _db_sampler() -> None:
 
 
 def start() -> None:
+    global _watch_started
     if _tasks:
         return
+    if not _watch_started:
+        import threading
+        _watch_started = True
+        threading.Thread(target=_watchdog_thread, args=(threading.get_ident(),), daemon=True, name="loop-watchdog").start()
     _tasks.append(asyncio.create_task(_loop_lag()))
     _tasks.append(asyncio.create_task(_db_sampler()))
 

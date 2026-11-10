@@ -82,3 +82,19 @@ def test_照片按日期匹配():
     idx = [("2026-11-08", "002拉布拉多小七", 12, "f1"), ("2026-11-07", "002拉布拉多小七", 5, "f0"), ("2026-11-08", "旺财", 3, "f1")]
     n, dog, pairs = _match_photos(idx, "2026-11-08", "小七")
     assert n == 12 and dog == "002拉布拉多小七" and pairs == [("f1", "002拉布拉多小七")]
+
+
+def test_看门狗_循环被堵住时记下卡在哪一行(monkeypatch):
+    import threading
+    import time as _t
+
+    perf.BLOCKED.clear()
+    perf.LAST_TICK = _t.monotonic() - 10          # 假装循环已经 10 秒没转
+    me = threading.get_ident()
+    th = threading.Thread(target=perf._watchdog_thread, args=(me,), daemon=True)
+    th.start()
+    _t.sleep(1.5)                                  # 当前线程「卡」在 sleep 里
+    assert perf.BLOCKED, "看门狗没记下来"
+    ev = perf.BLOCKED[-1]
+    assert ev["sec"] >= 5 and "test_monitor_stuck" in ev["stack"]
+    perf.LAST_TICK = _t.monotonic() + 3600        # 让线程恢复安静

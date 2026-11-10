@@ -169,6 +169,8 @@ async def get_status():
     # 卡在哪：后端现在手上还没返回的请求（超过 1 秒的），按等了多久排
     web["inflight"] = perf.inflight_list(1.0)
     web["inflight_total"] = len(perf.INFLIGHT)
+    # 后端整个被堵住过的记录：堵了多久、当时在处理哪些请求、卡在哪一行（看门狗线程记的）
+    web["blocked"] = list(perf.BLOCKED)[-10:][::-1]
 
     # 依赖服务 1 分钟探一次就够：页面 5 秒刷一次，每次都探的话 httpx 往日志里每 5 秒打两行
     global _svc_cache
