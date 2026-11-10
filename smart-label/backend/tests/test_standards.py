@@ -14,6 +14,7 @@ def _admin():
 
 def test_上传_列表_下载(tmp_path, monkeypatch):
     monkeypatch.setattr(api.settings, "nas_root", str(tmp_path))
+    monkeypatch.setattr(api.settings, "log_dir", str(tmp_path / "logs"))   # 上传后后台转 PDF 的缓存别落到代码目录里
     app.dependency_overrides[get_current_user] = _admin
     try:
         c = TestClient(app)
