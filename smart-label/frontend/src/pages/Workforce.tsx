@@ -20,6 +20,10 @@ const fmtSec = (s: number | null | undefined) => {
   if (s < 60) return `${Math.round(s)} 秒`;
   return `${(s / 60).toFixed(1)} 分`;
 };
+/** 看皮肤照片评级花的有效工时：后端把它单独记成一个「项目」（皮肤照片评级） */
+const PHOTO_PROJECT = "皮肤照片评级";
+const photoSecOf = (d: { projects?: { project: string; work_seconds: number }[] }) =>
+  (d.projects ?? []).find((p) => p.project === PHOTO_PROJECT)?.work_seconds ?? 0;
 const fmtHours = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)} 小时` : `${Math.round(s / 60)} 分`);
 const fmtTime = (v: string | null, f = "MM-DD HH:mm") => (v ? dayjs(v).format(f) : "-");
 const FILTER_KEY = "workforce-range";
@@ -286,11 +290,21 @@ export default function Workforce() {
                 <span><b>{r.photo_ratings ?? 0}</b>{r.photo_flags ? <span style={{ color: "#888" }}>（标 {r.photo_flags}）</span> : null}</span>
               ) : <span style={{ color: "#888" }}>-</span>),
             },
+            {
+              title: <Tooltip title="看皮肤照片评级花的有效工时（已经算在左边「有效工时」里，这里单独拎出来）">看图工时</Tooltip>,
+              width: 90,
+              sorter: (a: DayRow, b: DayRow) => photoSecOf(a) - photoSecOf(b),
+              render: (_, r: DayRow) => (photoSecOf(r) ? <b>{fmtHours(photoSecOf(r))}</b> : <span style={{ color: "#888" }}>-</span>),
+            },
             { title: "动过的任务", dataIndex: "tasks", width: 90 },
             {
-              title: <Tooltip title="（确认片段 + 判疑似）÷ 有效工时">每小时确认</Tooltip>,
+              title: <Tooltip title="（确认片段 + 判疑似）÷ 有效工时（不含看图评级的时间）">每小时确认</Tooltip>,
               width: 100,
-              render: (_, r: DayRow) => (r.work_seconds ? ((r.segments + r.cands) / (r.work_seconds / 3600)).toFixed(0) : "-"),
+              // 分母去掉看图评级的时间：那段时间没在确认片段，算进去会把标注速度拉低
+              render: (_, r: DayRow) => {
+                const s = r.work_seconds - photoSecOf(r);
+                return s > 0 ? ((r.segments + r.cands) / (s / 3600)).toFixed(0) : "-";
+              },
             },
             {
               title: <Tooltip title="这天动了哪些项目：有效工时 · 确认片段 · 判疑似 · 交任务。悬停看动了几个任务">动了哪些项目</Tooltip>,
@@ -354,7 +368,10 @@ export default function Workforce() {
                 <Table.Summary.Cell index={7}>
                   <b>{rows.reduce((n, r) => n + (r.photo_ratings ?? 0), 0)}</b>
                 </Table.Summary.Cell>
-                <Table.Summary.Cell index={8} colSpan={4} />
+                <Table.Summary.Cell index={8}>
+                  <b>{fmtHours(rows.reduce((n, r) => n + photoSecOf(r), 0))}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={9} colSpan={4} />
               </Table.Summary.Row>
             ) : null;
           }}
@@ -378,6 +395,15 @@ export default function Workforce() {
             {
               title: <Tooltip title="动作之间的间隔累加（超过 10 分钟的不算），约等于真正在标注的时间">有效工时</Tooltip>,
               dataIndex: "total_work_seconds", width: 100, render: (s: number) => fmtHours(s),
+            },
+            {
+              title: <Tooltip title="其中看皮肤照片评级的有效工时 · 评了几只狗">看图工时</Tooltip>,
+              width: 120,
+              render: (_, u: EffUser) => {
+                const sec = u.days.reduce((n, d) => n + photoSecOf(d), 0);
+                const n = u.days.reduce((k, d) => k + (d.photo_ratings ?? 0), 0);
+                return sec || n ? <span>{fmtHours(sec)} · {n} 只</span> : <span style={{ color: "#555" }}>·</span>;
+              },
             },
             {
               title: "每小时动作",
