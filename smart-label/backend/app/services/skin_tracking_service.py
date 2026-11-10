@@ -301,6 +301,8 @@ async def daily_tracking(
                 AnnotationLabelItem.ai_confirmed,
                 AnnotationLabelItem.uncertain,
                 AnnotationLabelItem.uncertain_reason,
+                AnnotationLabelItem.seg_status,
+                AnnotationLabelItem.review_note,
             )
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
             .join(Task, Task.id == AnnotationRecord.task_id)
@@ -309,7 +311,10 @@ async def daily_tracking(
                 AnnotationRecord.round_no == Task.round_no,
             )
         )
-        for tid, label_id, source, modified, confirmed, uncertain, reason in rows_c.all():
+        for tid, label_id, source, modified, confirmed, uncertain, reason, seg_status, review_note in rows_c.all():
+            # 跟项目页的片段审核同步：审核通过的、人改过的，都算人看过（原来只认「AI 确认」，
+            # 项目页显示抓挠全部通过，这边还写着「未复看」）
+            confirmed = bool(confirmed or modified or (seg_status == "approved" and review_note is None))
             is_scratch = label_id in scratch_label_ids
             is_ai = source == LabelItemSource.ai_generated
             if is_scratch:
