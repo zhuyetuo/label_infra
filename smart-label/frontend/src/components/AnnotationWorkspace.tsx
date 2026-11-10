@@ -1220,7 +1220,30 @@ export default function AnnotationWorkspace({
   };
 
   // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
+  // 保存起止出错 / 超时：不知道服务器到底存没存上。重新拉一次看实际的起止，明确告诉人
   const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number) => {
+    try {
+      await adjustFromWaveInner(target, startMs, endMs);
+    } catch (e) {
+      if (target.kind !== "item" || taskId == null) throw e;
+      try {
+        const d = await getDraft(taskId);
+        const it = d.items.find((x) => x.id === target.id);
+        if (it && Math.abs(it.start_time_ms - startMs) < 2 && Math.abs(it.end_time_ms - endMs) < 2) {
+          setItems(d.items);
+          showRange({ startMs, endMs });
+          message.success({ content: "刚才服务器回得慢，但起止其实已经保存上了", key: "timeout" });
+          return;
+        }
+        message.warning({ content: "起止没保存上（还是原来的），多半是这条正被别的操作锁着。等一会再点一次「保存起止」；一直不行看「系统监控」里谁在等锁", key: "timeout", duration: 8 });
+      } catch {
+        /* 连草稿都拉不到：服务器整个没响应，上面已经提示过了 */
+      }
+      throw e;
+    }
+  };
+
+  const adjustFromWaveInner = async (target: AdjustTarget, startMs: number, endMs: number) => {
     // 审核员 / 管理员看只读的任务（已提交的、别人的）：直接改这一条，走片段接口，
     // 不用为了调个起止去认领整个任务
     if (readOnly && canFlag && !segReview && target.kind === "item" && taskId != null) {
