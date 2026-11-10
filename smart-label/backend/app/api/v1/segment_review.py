@@ -488,6 +488,9 @@ async def dedupe_project(body: DedupeProjectIn, db: AsyncSession = Depends(get_d
     tot = {"tasks": len(tasks), "tasks_changed": 0, "merged": 0, "removed_parent": 0, "conflicts_left": 0, "changed": []}
     for t in tasks:
         r = await _dedupe_task(db, t, user)
+        # 每个任务做完就提交：原来整个项目几百个任务在一个事务里，做完才提交——
+        # 这期间被改到的片段全锁着，别人点「保存起止」/ 存草稿要干等锁（几十秒），全部项目一起去重时全站卡住
+        await db.commit()
         tot["merged"] += r["merged"]
         tot["removed_parent"] += r["removed_parent"]
         tot["conflicts_left"] += r["conflicts_left"]
