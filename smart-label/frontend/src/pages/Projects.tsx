@@ -1291,7 +1291,14 @@ export default function Projects() {
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
           expandedRowRender: (p: Project) => {
             const all = tasksOf(p.id);
-            const f = filterOf(p.id);
+            // 记住的类别筛选里，有的类别可能已经不在这个项目里了（标签删了重建、标签模板换了、
+            // 筛选是在别的项目上选的）。这种 id 下拉框里显示不出来，却会把所有任务都挡掉——
+            // 表现就是「整个项目一个任务都看不到，又看不出开了什么筛选」。标签加载完以后把它们去掉
+            const f0 = filterOf(p.id);
+            const projLabelIds = new Set(labelsOf(p.id).map((l) => l.id));
+            const f = allLabels && f0.labels.some((id) => !projLabelIds.has(id))
+              ? { ...f0, labels: f0.labels.filter((id) => projLabelIds.has(id)) }
+              : f0;
             const counts = statusSummary(p.id);
             const q = f.q.trim().toLowerCase();
             const matchStatus = (t: Task) => {
@@ -1382,6 +1389,29 @@ export default function Projects() {
                 matchLabels(t) &&
                 (!q || String(sampleCode(t.sample_id)).toLowerCase().includes(q) || sampleName(t.sample_id).includes(q) || String(t.id) === q)
             );
+            // 现在开着哪些筛选。筛选记在这台电脑上（刷新还在），有的开关在数变成 0 以后会藏起来——
+            // 不列出来的话就是「整个项目一个任务都看不到」，又找不到是哪个开关挡住的
+            const STATUS_TEXT: Record<string, string> = { PENDING: "待认领", IN_PROGRESS: "标注中", IN_PROGRESS_STARTED: "标注中·已开始",
+              IN_PROGRESS_EMPTY: "标注中·没动过", SUBMITTED: "待审核", APPROVED: "已通过", REJECTED: "已驳回" };
+            const activeFilters = [
+              f.status !== "ALL" && `状态：${STATUS_TEXT[f.status] ?? f.status}`,
+              q && `搜索「${q}」`,
+              f.labels.length > 0 && `含类别：${projLabelNames(p.id, f.labels).join("、") || "（已删掉的类别）"}`,
+              f.aiPending && "只看 AI 待确认",
+              f.cand && "有待判断的疑似片段",
+              f.candLabels.length > 0 && `候选类别：${f.candLabels.join("、")}`,
+              f.imu !== "ALL" && `设备 ${f.imu}`,
+              f.noCsv && "无 CSV 数据",
+              f.unassigned && "只看未指派",
+              f.segReturned && "有退回待改",
+              f.overlapOnly && "有重叠",
+              f.uncertainOnly && "有待定",
+              !!minMs && `片段 ≥${f.minSec} 秒`,
+            ].filter((x): x is string => !!x);
+            const clearFilters = () => setFilter(p.id, {
+              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
+              noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, minSec: null,
+            });
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
             // 片段汇总：按大类（数含全部细类，点 ▸ 展开）/ 全部标签（老样子平铺），顶上切换
@@ -1535,21 +1565,21 @@ export default function Projects() {
                     </>
                   );
                 })()}
-                {segReturnedTasks > 0 && (
+                {(segReturnedTasks > 0 || f.segReturned) && (
                   <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
                     <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
                       <span style={{ color: "#ff4d4f" }}>有退回待改 {segReturnedTasks}</span>
                     </Checkbox>
                   </Tooltip>
                 )}
-                {unassignedN > 0 && (
+                {(unassignedN > 0 || f.unassigned) && (
                   <Tooltip title="没指派给任何人的任务。多半是认领后超过 48 小时没打开、被自动收回的——行里「指派给」那一列写着原来是谁的">
                     <Checkbox checked={f.unassigned} onChange={(e) => setFilter(p.id, { unassigned: e.target.checked })}>
                       只看未指派 {unassignedN}
                     </Checkbox>
                   </Tooltip>
                 )}
-                {isAdmin && noCsvTasks.length > 0 && (
+                {isAdmin && (noCsvTasks.length > 0 || f.noCsv) && (
                   <>
                     <Checkbox checked={f.noCsv} onChange={(e) => setFilter(p.id, { noCsv: e.target.checked })}>
                       <span style={{ color: "#ff4d4f" }}>无 CSV 数据 {noCsvTasks.length}</span>
@@ -1578,10 +1608,15 @@ export default function Projects() {
                     </Button>
                   </Tooltip>
                 )}
-                {(f.status !== "ALL" || q || f.labels.length > 0 || f.aiPending || f.cand || f.imu !== "ALL" || f.noCsv || f.unassigned || f.segReturned || f.overlapOnly || f.uncertainOnly || !!minMs) && (
+                {activeFilters.length > 0 && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    筛出 {rows.length} 个
+                    筛出 {rows.length} 个（{activeFilters.join(" + ")}）
                   </Typography.Text>
+                )}
+                {activeFilters.length > 0 && (
+                  <Button size="small" type={rows.length === 0 ? "primary" : "link"} onClick={clearFilters}>
+                    清除筛选
+                  </Button>
                 )}
               </Space>
               {statsLoadingOf(p.id) && (
@@ -1703,7 +1738,14 @@ export default function Projects() {
                 pagination={rows.length > 10 ? { pageSize: 10, showSizeChanger: true } : false}
                 // 只在升/降之间切，不要 antd 默认第三档"取消排序"（看着像乱序）
                 sortDirections={["ascend", "descend", "ascend"]}
-                locale={{ emptyText: all.length ? "没有符合筛选条件的任务" : "这个项目下还没有任务" }}
+                locale={{
+                  emptyText: all.length ? (
+                    <span>
+                      {all.length} 个任务都被筛选挡住了：{activeFilters.join(" + ") || "筛选条件"}。
+                      <Button size="small" type="link" onClick={clearFilters}>清除筛选，看全部</Button>
+                    </span>
+                  ) : "这个项目下还没有任务",
+                }}
                 onChange={taskSort.onTableChange}
                 components={taskWidth.components}
                 tableLayout={taskWidth.tableLayout}
