@@ -20,3 +20,24 @@ def test_flag_标改取消(db, run):
     assert run(api.list_flags("skin", db, w.ann))["data"]["flags"] == []
     with pytest.raises(HTTPException):
         run(api.put_flag("skin", api.FlagIn(**key, reason="乱写"), db, w.ann))
+
+
+def test_看图评级算进人力和标注统计(db, run):
+    from datetime import date
+
+    from app.services import annotator_work_service as aws
+    from app.services import workforce_service as wf
+    w = _world(db, run)
+    for i in range(3):
+        run(api.put_rating("skin", api.RatingIn(folder="博朗旺20261109", dog_folder=f"00{i}狗", grade="S1"), db, w.ann))
+    run(api.put_flag("skin", api.FlagIn(folder="博朗旺20261109", dog_folder="000狗", filename="a (1).jpg", reason="blurry"), db, w.ann))
+    from app.models.skin_photo_rating import SkinPhotoRating
+    from sqlalchemy import select
+    day = run(db.execute(select(SkinPhotoRating.created_at))).scalars().first().date()
+    eff = run(wf.efficiency(db, day, day))
+    me = next(u for u in eff if u["user_id"] == w.ann.id)
+    d = me["days"][0]
+    assert d["photo_ratings"] == 3 and d["photo_flags"] == 1
+    assert any(p["project"] == wf.PHOTO_PROJECT and p["photo_ratings"] == 3 for p in d["projects"])
+    work = run(aws.annotator_work(db, day, day, w.ann.id))
+    assert len(work["photo_ratings"]) == 3 and work["photo_ratings"][0]["grade"] == "S1"

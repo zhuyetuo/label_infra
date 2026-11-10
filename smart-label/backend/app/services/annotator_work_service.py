@@ -223,7 +223,24 @@ async def annotator_work(db: AsyncSession, date_from: date, date_to: date,
         "user_id": uid, "user_name": (dn or un) if uid is not None else None,
         "project_id": pid, "project_name": pname,
     } for d, st, ln, tid, uid, dn, un, pid, pname in (await db.execute(cq)).all()]
-    return {"submissions": submissions, "candidate_decisions": decisions}
+
+    # 看皮肤照片评级：给一只狗那一次评一档算一次（改评级会覆盖，按最后一次的时间）。
+    # 时间是数据库本地时间（func.now()），跟上面 UTC 的那两种不一样，不用换算
+    from app.models.skin_photo_rating import SkinPhotoRating
+    llo = datetime.combine(date_from, datetime.min.time())
+    lhi = datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+    at = func.coalesce(SkinPhotoRating.updated_at, SkinPhotoRating.created_at)
+    rq = (select(at, SkinPhotoRating.grade, SkinPhotoRating.folder, SkinPhotoRating.dog_folder,
+                 User.id, User.display_name, User.username)
+          .join(User, User.id == SkinPhotoRating.user_id)
+          .where(at >= llo, at < lhi).order_by(at.asc()))
+    if user_id is not None:
+        rq = rq.where(SkinPhotoRating.user_id == user_id)
+    ratings = [{
+        "rated_at": _iso(t), "grade": g, "folder": f, "dog_folder": dog,
+        "user_id": uid, "user_name": dn or un,
+    } for t, g, f, dog, uid, dn, un in (await db.execute(rq)).all()]
+    return {"submissions": submissions, "candidate_decisions": decisions, "photo_ratings": ratings}
 
 
 async def project_progress(db: AsyncSession, only_active: bool = True) -> list[dict]:
