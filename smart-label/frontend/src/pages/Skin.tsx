@@ -11,7 +11,7 @@ import PhotoGallery from "@/components/PhotoGallery";
 import SkinAccuracy from "@/components/SkinAccuracy";
 import { MlResults, MlSimulate, MlTraining } from "@/components/SkinMl";
 import { MlFeatureTable } from "@/components/SkinMlExplain";
-import { SkinGradeHelp } from "@/components/SkinRatingBar";
+import { SkinStandardHelp } from "@/components/SkinStandard";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
@@ -89,7 +89,7 @@ function SkinPhotosOnly() {
     <div>
       <Space style={{ marginBottom: 12 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>皮肤照片</Typography.Title>
-        <SkinGradeHelp />
+        <SkinStandardHelp text="评级标准（兽医版，带图）" />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           看完一只狗的全部照片，在它标题栏右边点一档；评错了点「撤销」。各评各的，互相看不到
         </Typography.Text>
