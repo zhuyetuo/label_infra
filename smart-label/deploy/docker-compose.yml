@@ -20,6 +20,9 @@ services:
       - --max-connections=${MYSQL_MAX_CONNECTIONS:-500}
       # 等锁最多等这么久（默认 50 秒）：被一个长事务锁住时，后面的请求早点报错，而不是整页转一分钟
       - --innodb-lock-wait-timeout=${MYSQL_LOCK_WAIT:-20}
+      # 等表锁（元数据锁，改表结构时会有）最多 60 秒。MySQL 默认等一年：一条 ALTER 卡在那里，
+      # 后面所有用这张表的查询都排在它后面，全站卡死
+      - --lock-wait-timeout=${MYSQL_MDL_WAIT:-60}
       # 统计 / 分组这类查询的内存临时表（默认 16M，超了落到磁盘上做）
       - --tmp-table-size=${MYSQL_TMP_TABLE:-256M}
       - --max-heap-table-size=${MYSQL_TMP_TABLE:-256M}

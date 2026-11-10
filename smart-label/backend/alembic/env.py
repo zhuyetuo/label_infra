@@ -38,6 +38,11 @@ async def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
+        # ALTER TABLE 要拿表的元数据锁（MDL）。表上有没结束的事务时它会一直等——而它排着队的时候，
+        # 后面所有读这张表的普通查询也跟着排在它后面，全站卡死（MySQL 默认等一年）。
+        # 这里最多等 15 秒，等不到就让迁移失败：up.sh 会停下、报错，线上照常用旧版本，挑空闲时再更新
+        if connection.dialect.name == "mysql":
+            await connection.exec_driver_sql("SET SESSION lock_wait_timeout = 15")
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
