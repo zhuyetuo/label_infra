@@ -63,3 +63,22 @@ def test_卡住时写STUCK日志_事后能查(caplog):
     with caplog.at_level(logging.WARNING, logger="perf"):
         perf._watchdog({"ok": True})
     assert not caplog.records
+
+
+def test_被堵时在处理的请求_算嫌疑():
+    import time
+    perf.LAG_EVENTS.append((time.time(), 1400.0, ["GET /api/v1/skin/daily-tracking", "GET /api/v1/tasks/12"]))
+    perf.LAG_EVENTS.append((time.time(), 300.0, ["GET /api/v1/skin/daily-tracking"]))
+    try:
+        s = perf._lag_suspects(300)
+        assert s[0]["route"] == "GET /api/v1/skin/daily-tracking" and s[0]["n"] == 2 and s[0]["max_lag"] == 1400.0
+        assert any(x["route"] == "GET /api/v1/tasks/{id}" for x in s)
+    finally:
+        perf.LAG_EVENTS.clear()
+
+
+def test_照片按日期匹配():
+    from app.services.skin_tracking_service import _match_photos
+    idx = [("2026-11-08", "002拉布拉多小七", 12, "f1"), ("2026-11-07", "002拉布拉多小七", 5, "f0"), ("2026-11-08", "旺财", 3, "f1")]
+    n, dog, pairs = _match_photos(idx, "2026-11-08", "小七")
+    assert n == 12 and dog == "002拉布拉多小七" and pairs == [("f1", "002拉布拉多小七")]

@@ -148,6 +148,20 @@ def _scan_photos() -> list[tuple[str, str, int, str]]:
     return out
 
 
+_by_day_cache: tuple[int, dict] | None = None
+
+
+def _by_day(index: list[tuple[str, str, int, str]]) -> dict[str, list[tuple[str, str, int, str]]]:
+    """照片目录按日期分组；同一份 index（60 秒缓存）只分一次"""
+    global _by_day_cache
+    if _by_day_cache is None or _by_day_cache[0] != id(index):
+        g: dict[str, list] = {}
+        for row in index:
+            g.setdefault(row[0], []).append(row)
+        _by_day_cache = (id(index), g)
+    return _by_day_cache[1]
+
+
 def _match_photos(
     index: list[tuple[str, str, int, str]], day: str, dog: str, extra: set[str] | None = None
 ) -> tuple[int, str | None, list[tuple[str, str]]]:
@@ -155,9 +169,9 @@ def _match_photos(
     aliases = _norm_dog(dog, extra)
     total, matched = 0, None
     pairs: list[tuple[str, str]] = []
-    for d, folder_dog, n, folder in index:
-        if d != day:
-            continue
+    # 只看这一天的：原来每一行都把全部照片目录（几个月、几千条）扫一遍，几百行就是上百万次比较，
+    # 而且是在事件循环里同步做的——这期间整个后端谁的请求都处理不了
+    for d, folder_dog, n, folder in _by_day(index).get(day, ()):
         fd = folder_dog.strip()
         fdl = fd.lower()
         # 狗场目录是「002拉布拉多小七」这种：编号 + 品种 + 名字，按包含关系认

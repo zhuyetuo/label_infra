@@ -36,6 +36,8 @@ export interface SysStatus {
     /** 后端手上还没返回的请求（超过 1 秒的），等得最久的在前 */
     inflight?: { sec: number; req: string }[];
     inflight_total?: number;
+    /** 后端被堵（>200ms）那几次当时在处理的接口：按次数排，嫌疑最大的在前 */
+    lag_suspects?: { route: string; n: number; max_lag: number }[];
   };
   services: { name: string; url: string; ok: boolean | null; ms: number | null; error: string | null }[];
   /** GPU 在视觉服务那台机器上：nvidia-smi 每张卡 + 视觉服务里每个模型常驻显存 */
