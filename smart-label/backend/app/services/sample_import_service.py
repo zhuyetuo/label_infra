@@ -397,7 +397,9 @@ def session_has_video(group: dict) -> bool:
     videos = group.get("videos") or {}
     if 1 in videos:
         return True
-    return bool(group.get("paired_site")) and bool(videos)
+    # 户外那种机器（博朗旺 3 号机）：几路摄像头拍整片场地，不跟哪只狗一一对应，
+    # 录下来只有不带 imu 号的 {base}_camN_raw.mp4 + 各项圈的 CSV——这也算有视频
+    return bool(group.get("paired_site")) and (bool(videos) or bool(group.get("shared_videos")))
 
 
 def cams_for_imu(group: dict, imu_idx: int, shared_cams: dict[int, str],
@@ -412,6 +414,11 @@ def cams_for_imu(group: dict, imu_idx: int, shared_cams: dict[int, str],
     videos_by_imu = group.get("videos_by_imu") or {}
     paired_site = bool(group.get("paired_site")) and bool(videos_by_imu)
     if not paired_site:
+        if not shared_cams and group.get("paired_site") and group.get("shared_videos"):
+            # 户外那台：这一场一路配对视频都没有，只有拍全场的几路——当场每只狗都挂这几路
+            # （按机位号从小到大占 cam1~3 三个槽）
+            sv = shared_videos if shared_videos is not None else genuinely_shared_cams(group)
+            return {slot: path for slot, (_c, path) in enumerate(sorted(sv.items()), start=1) if slot <= 3}
         return shared_cams
     if shared_videos is None:
         shared_videos = genuinely_shared_cams(group)
