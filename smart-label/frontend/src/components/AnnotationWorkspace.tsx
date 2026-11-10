@@ -1243,13 +1243,23 @@ export default function AnnotationWorkspace({
     }
   };
 
+  // 片段接口存完：先用它返回的起止把这一条改了（立刻看到），再在后台把整份草稿拉一遍对齐
+  // （起止调过几次、审核状态这些）。原来是等整份草稿重拉完才算存好——老项目一个任务几十上百段，
+  // 每点一次保存都要多等一两秒
+  const savedLocally = (id: number, r: { start_time_ms: number; end_time_ms: number; label_id: number; seg_status: string }) => {
+    setItems((prev) => prev.map((it) => (it.id === id
+      ? { ...it, start_time_ms: r.start_time_ms, end_time_ms: r.end_time_ms, label_id: r.label_id,
+          seg_status: (r.seg_status === "pending" ? null : r.seg_status) as LabelItem["seg_status"] }
+      : it)));
+    if (taskId != null) getDraft(taskId).then((d) => setItems(d.items)).catch(() => { /* 对齐失败就用本地这份，下次打开会重拉 */ });
+  };
+
   const adjustFromWaveInner = async (target: AdjustTarget, startMs: number, endMs: number) => {
     // 审核员 / 管理员看只读的任务（已提交的、别人的）：直接改这一条，走片段接口，
     // 不用为了调个起止去认领整个任务
     if (readOnly && canFlag && !segReview && target.kind === "item" && taskId != null) {
-      await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
-      const d = await getDraft(taskId);
-      setItems(d.items);
+      const r = await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
+      savedLocally(target.id, r);
       showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
@@ -1264,9 +1274,8 @@ export default function AnnotationWorkspace({
     }
     if (segReview && target.kind === "item" && inGroup(target.id) && taskId != null) {
       // 拆出来的其它几段：直接走片段接口
-      await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
-      const d = await getDraft(taskId);
-      setItems(d.items);
+      const r = await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
+      savedLocally(target.id, r);
       showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
