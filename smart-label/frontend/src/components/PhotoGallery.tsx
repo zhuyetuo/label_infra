@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Checkbox, Collapse, Empty, Image, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { getMaterialPhotoToken, listMaterialPhotos, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
+import { getMaterialPhotoToken, listMaterialPhotos, listPhotoFlags, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
 import SkinRatingBar, { SKIN_GRADES } from "@/components/SkinRatingBar";
+import { FlagButton, FlagSummaryButton, flagKey } from "@/components/PhotoFlags";
 import { useAuthStore } from "@/stores/authStore";
 import { getSavedText, saveText } from "@/utils/persistedSize";
 
@@ -102,6 +103,11 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     return rating ? `${name} 我已评 ${c.done}/${c.n} 次` : `${name} ${c.n} 次 · ${c.photos} 张`;
   };
   const [urls, setUrls] = useState<Record<string, string>>({});
+  // 单张照片的拍摄问题标记（模糊 / 太暗…），评级模式下才有
+  const { data: flagData, refetch: refetchFlags } = useQuery({
+    queryKey: ["photo-flags", album], queryFn: () => listPhotoFlags(album), enabled: !!rating,
+  });
+  const flagMap = useMemo(() => new Map((flagData?.flags ?? []).map((f) => [flagKey(f.folder, f.dog_folder, f.filename), f])), [flagData]);
   const [preview, setPreview] = useState<{ open: boolean; current: number }>({ open: false, current: 0 });
 
   // 带上狗名，弹窗标题里能看出翻到哪只狗了；顺序 = 页面上的顺序（日期 > 狗 > 文件名）
@@ -218,8 +224,15 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
       {photos.map((p) => {
         const idx = allPhotos.findIndex((x) => x.rel_path === p.rel_path);
         return (
-          <div key={p.rel_path} style={{ width: 160, cursor: "pointer" }} onClick={() => urls[p.rel_path] && setPreview({ open: true, current: idx })}>
-            <div style={{ width: 160, height: 120, background: "var(--sl-fill2)", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div key={p.rel_path} style={{ width: 160, cursor: "pointer", position: "relative" }} onClick={() => urls[p.rel_path] && setPreview({ open: true, current: idx })}>
+            {rating && allPhotos[idx] && (
+              <div style={{ position: "absolute", top: 4, right: 4, zIndex: 2 }}>
+                <FlagButton album={album} folder={allPhotos[idx].folder} dog={allPhotos[idx].dog} filename={p.filename}
+                  flag={flagMap.get(flagKey(allPhotos[idx].folder, allPhotos[idx].dog, p.filename))} onChanged={() => refetchFlags()} />
+              </div>
+            )}
+            <div style={{ width: 160, height: 120, background: "var(--sl-fill2)", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
+              boxSizing: "border-box", border: rating && allPhotos[idx] && flagMap.has(flagKey(allPhotos[idx].folder, allPhotos[idx].dog, p.filename)) ? "3px solid #ff4d4f" : undefined }}>
               {urls[p.rel_path] ? <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
@@ -233,6 +246,15 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     <div>
       {filters}
       {problemAlert}
+      {rating && (
+        <div style={{ marginBottom: 8 }}>
+          <FlagSummaryButton flags={(flagData?.flags ?? []).filter((f) => allPhotos.some((p) => p.folder === f.folder))}
+            urlOf={(f) => { const ph = allPhotos.find((p) => p.folder === f.folder && p.dog === f.dog_folder && p.filename === f.filename); return ph ? urls[ph.rel_path] : undefined; }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            哪张拍得不行（模糊、太暗、没拍到皮肤…），点照片右上角的小旗标出来；汇总里一键复制发给狗场
+          </Typography.Text>
+        </div>
+      )}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         {hint ?? "照片来自素材库 NAS"} <code>{data.root}</code>，按「日期目录 / 狗」归类，只读；{(() => {
           const n = data.folders.reduce((k, f) => k + f.dogs.length, 0);
@@ -260,6 +282,11 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
               <Button size="small" disabled={info.current <= 0} onClick={() => info.actions.onActive?.(-1)}>← 上一张</Button>
               {originalNode}
               <Button size="small" disabled={info.current >= info.total - 1} onClick={() => info.actions.onActive?.(1)}>下一张 →</Button>
+              {rating && allPhotos[info.current] && (() => {
+                const ph = allPhotos[info.current];
+                return <FlagButton album={album} folder={ph.folder} dog={ph.dog} filename={ph.filename}
+                  flag={flagMap.get(flagKey(ph.folder, ph.dog, ph.filename))} onChanged={() => refetchFlags()} />;
+              })()}
             </Space>
           ),
         }}

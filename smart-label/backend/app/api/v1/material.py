@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
+from app.models.photo_flag import PhotoFlag
 from app.models.skin_photo_rating import SkinPhotoRating
 from app.core import permissions as perms
 from app.models.user import User, UserRole
@@ -120,3 +121,62 @@ async def put_rating(album: str, body: RatingIn, db: AsyncSession = Depends(get_
         row.grade, row.note = body.grade, note
     await db.commit()
     return ok({"grade": row.grade, "note": row.note})
+
+
+# ── 单张照片拍摄不合格：标出来，汇总给狗场 ────────────────────────────────
+
+FLAG_REASONS = {
+    "blurry": "模糊 / 没对焦",
+    "dark": "太暗 / 过曝",
+    "no_skin": "没拍到皮肤（只拍到毛 / 整只狗太远）",
+    "blocked": "被手 / 东西挡住",
+    "far": "离太远，看不清细节",
+    "other": "其他",
+}
+
+
+@router.get("/{album}/flags")
+async def list_flags(album: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """这个相册里所有被标了拍摄问题的照片（大家共用一份：谁标的都算）"""
+    _check_album(album, user)
+    rows = (await db.execute(
+        select(PhotoFlag, User.display_name, User.username).join(User, User.id == PhotoFlag.user_id)
+        .where(PhotoFlag.album == album).order_by(PhotoFlag.folder, PhotoFlag.dog_folder, PhotoFlag.filename))).all()
+    return ok({"reasons": FLAG_REASONS, "flags": [{
+        "folder": f.folder, "dog_folder": f.dog_folder, "filename": f.filename, "reason": f.reason,
+        "reason_text": FLAG_REASONS.get(f.reason, f.reason), "note": f.note, "user_name": dn or un,
+        "updated_at": f.updated_at.isoformat(sep=" ", timespec="minutes") if f.updated_at else None,
+    } for f, dn, un in rows]})
+
+
+class FlagIn(BaseModel):
+    folder: str = Field(..., max_length=200)
+    dog_folder: str = Field(..., max_length=200)
+    filename: str = Field(..., max_length=200)
+    # 不给 / null = 取消这张的标记
+    reason: str | None = None
+    note: str | None = Field(None, max_length=300)
+
+
+@router.put("/{album}/flags")
+async def put_flag(album: str, body: FlagIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    _check_album(album, user)
+    if body.reason is not None and body.reason not in FLAG_REASONS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"reason 只能是 {' / '.join(FLAG_REASONS)}")
+    row = (await db.execute(select(PhotoFlag).where(
+        PhotoFlag.album == album, PhotoFlag.folder == body.folder, PhotoFlag.dog_folder == body.dog_folder,
+        PhotoFlag.filename == body.filename))).scalar_one_or_none()
+    if body.reason is None:
+        if row is not None:
+            await db.delete(row)
+            await db.commit()
+        return ok({"reason": None})
+    note = (body.note or "").strip() or None
+    if row is None:
+        row = PhotoFlag(album=album, folder=body.folder, dog_folder=body.dog_folder, filename=body.filename,
+                        reason=body.reason, note=note, user_id=user.id)
+        db.add(row)
+    else:
+        row.reason, row.note, row.user_id = body.reason, note, user.id
+    await db.commit()
+    return ok({"reason": row.reason, "note": row.note})
