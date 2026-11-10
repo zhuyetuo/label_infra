@@ -200,6 +200,8 @@ export function SkinStandardDrawer() {
     <>
     {open && (
       <>
+        {/* 点开照片放大（全屏预览）时也让出右边：预览只占左边，标准不被盖住、也不盖住照片 */}
+        <style>{`.ant-image-preview-mask,.ant-image-preview-wrap,.ant-image-preview-operations-wrapper{right:${width}px !important;}.ant-image-preview-footer{left:calc((100vw - ${width}px) / 2) !important;}.ant-image-preview-switch-right{inset-inline-end:${width + 8}px !important;}.ant-image-preview-close{inset-inline-end:${width + 32}px !important;}`}</style>
         {/* 拖这条边改宽窄（双击回到中等宽度） */}
         <Tooltip title="拖动改宽窄，双击恢复" placement="left">
           <div onMouseDown={startDrag} onDoubleClick={() => setWidth(presets[1][1])}
