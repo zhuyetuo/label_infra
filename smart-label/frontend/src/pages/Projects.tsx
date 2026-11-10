@@ -61,6 +61,7 @@ import {
   deleteTask,
   deleteTasksBatch,
   editAgain,
+  getLabelReview,
   listTasksByIds,
   listTasksLite,
   listTasks,
@@ -173,6 +174,11 @@ export default function Projects() {
   const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   // 两步拉：轻量的（只有任务状态、样本名，快）先到，项目行「共几个 / 待认领几个」马上出来；
   // 带片段统计的完整列表（要几秒）后到，到了替换掉。完整的一旦有了就一直用它（改动后只刷那几行）
+  // 每个项目「抓挠」还有多少没通过 / 没审：不用展开就能看到（服务端按项目汇总）
+  const { data: scratchReview } = useQuery({
+    queryKey: ["label-review", "抓挠"], queryFn: () => getLabelReview("抓挠"),
+    refetchInterval: 60_000, staleTime: 20_000,
+  });
   const { data: liteTasks } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
@@ -438,6 +444,7 @@ export default function Projects() {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["tasks-lite"] });
     qc.invalidateQueries({ queryKey: ["labels"] });
+    qc.invalidateQueries({ queryKey: ["label-review"] });
   };
 
   const pollPrelabel = async (ids: number[]) => {
@@ -2381,6 +2388,44 @@ export default function Projects() {
                     </Tag>
                   ))}
                 </Space>
+                {(() => {
+                  const sr = scratchReview?.projects[String(p.id)];
+                  if (!sr || !sr.n) return null;
+                  const notPassed = sr.n - sr.approved;
+                  // 点一下：展开这个项目，只看抓挠还没审的任务
+                  // 还有没审的就看没审的；全审过了、只剩退回的，就看退回待改的
+                  const open = (e: React.MouseEvent, unreviewed: boolean) => {
+                    e.stopPropagation();
+                    const ids = labelsOf(p.id).filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id);
+                    const u = unreviewed && sr.unreviewed > 0;
+                    setFilter(p.id, { labels: ids, unreviewedOnly: u, segReturned: !u && sr.returned > 0, status: "ALL" });
+                    setExpandedKeys(() => [p.id]);
+                  };
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <Tooltip title={`抓挠（含细类）共 ${sr.n} 段：通过 ${sr.approved}、退回待改 ${sr.returned}、还没审 ${sr.unreviewed}。点一下展开、只看抓挠还没审的任务`}>
+                        {notPassed > 0 ? (
+                          <Space size={4} wrap>
+                            <Tag color="red" style={{ cursor: "pointer" }} onClick={(e) => open(e, true)}>
+                              抓挠 未通过 {notPassed}
+                            </Tag>
+                            {sr.unreviewed > 0 && (
+                              <Tag color="orange" style={{ cursor: "pointer" }} onClick={(e) => open(e, true)}>未审 {sr.unreviewed}</Tag>
+                            )}
+                            {sr.returned > 0 && (
+                              <Tag color="magenta" style={{ cursor: "pointer" }}
+                                onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter((l) => l.display_name === "抓挠").map((l) => l.id), segReturned: true, unreviewedOnly: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
+                                退回待改 {sr.returned}
+                              </Tag>
+                            )}
+                          </Space>
+                        ) : (
+                          <Tag color="green">抓挠 {sr.n} 段全部通过</Tag>
+                        )}
+                      </Tooltip>
+                    </div>
+                  );
+                })()}
                 </div>
               );
             },

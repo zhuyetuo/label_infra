@@ -620,6 +620,44 @@ async def tasks_progress(mine: bool = False, db: AsyncSession = Depends(get_db),
     return ok({str(k): v for k, v in out.items()})
 
 
+@router.get("/label-review")
+async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depends(get_db),
+                                user: User = Depends(get_current_user)):
+    """某个类别（默认抓挠，含子类）每个项目的片段审核进度：多少段、通过、退回、还没审。
+
+    项目页每行（不用展开）和左边菜单上标「抓挠 未通过 N / 未审 M」用。只算当前轮、只算看得到的任务，
+    跟 list_tasks 里 label_counts 的 approved / returned 同一个口径。"""
+    from app.models.label import LabelDefinition
+    from app.services import label_tree
+
+    root_ids = set((await db.execute(
+        select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
+    )).scalars().all())
+    if not root_ids:
+        return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}})
+    label_ids = await label_tree.expand_ids(db, root_ids)
+    scope = apply_task_scope(select(Task.id), user).subquery()
+    ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
+    ret_c = case(((AnnotationLabelItem.seg_status == "returned") | AnnotationLabelItem.review_note.is_not(None), 1), else_=0)
+    rows = await db.execute(
+        select(Task.project_id, func.count(AnnotationLabelItem.id), func.sum(ok_c), func.sum(ret_c))
+        .join(scope, scope.c.id == Task.id)
+        .join(AnnotationRecord, (AnnotationRecord.task_id == Task.id) & (AnnotationRecord.round_no == Task.round_no))
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .where(AnnotationLabelItem.label_id.in_(label_ids))
+        .group_by(Task.project_id)
+    )
+    projects: dict[str, dict[str, int]] = {}
+    total = {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}
+    for pid, n, n_ok, n_ret in rows.all():
+        n, n_ok, n_ret = int(n), int(n_ok or 0), int(n_ret or 0)
+        r = {"n": n, "approved": n_ok, "returned": n_ret, "unreviewed": max(0, n - n_ok - n_ret)}
+        projects[str(pid)] = r
+        for k in total:
+            total[k] += r[k]
+    return ok({"label": label, "projects": projects, "total": total})
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     query = apply_task_scope(select(Task).where(Task.id == task_id), user)
