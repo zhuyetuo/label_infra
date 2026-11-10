@@ -5,6 +5,7 @@ description = "smart-label FastAPI backend"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "orjson>=3.9",
     "uvicorn[standard]>=0.30",
     "sqlalchemy[asyncio]>=2.0",
     "asyncmy>=0.2.9",

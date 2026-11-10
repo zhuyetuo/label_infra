@@ -9,7 +9,9 @@ import App from "./App";
 import { applyThemeAttr, useThemeStore } from "./stores/themeStore";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  // staleTime：15 秒内切回同一个页面直接用手上的数据，不再整份重拉（样本 / 任务这种大列表来回切页面时
+  // 每次都重拉一遍，是「点哪都要等几秒」的一大来源）。改了东西的地方都会主动 invalidate，照样立刻刷新
+  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: 15_000 } },
 });
 
 applyThemeAttr(useThemeStore.getState().mode);

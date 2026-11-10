@@ -1029,7 +1029,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
       <Table
         size="small"
         rowKey={(r: TrackingRow) => `${r.date}-${r.imu}`}
-        loading={isFetching}
+        loading={isFetching && !data}
         dataSource={rows}
         pagination={{ pageSize: 30, showSizeChanger: true }}
         scroll={{ x: "max-content" }}
