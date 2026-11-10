@@ -85,7 +85,7 @@ def test_workforce(db, run):
     assert d["categories"] == {"抓挠": 3, "静止/休息": 1}
     assert (d["first"], d["last"], d["work_seconds"], d["tasks"]) == ("09:00", "09:03", 200, 1)
     # 这天只动了一个项目（任务 0 在 2026-09-23 里）
-    assert d["projects"] == [{"project": "2026-09-23", "segments": 4, "cands": 2, "submits": 1,
+    assert d["projects"] == [{"project": "2026-09-23", "segments": 4, "cands": 2, "submits": 1, "photo_ratings": 0, "photo_flags": 0,
                               "work_seconds": 200, "tasks": 1}]
     est = wf.estimate(led, eff)
     assert est[0]["tasks_left"] == 1 and est[0]["hours_left"] is None
