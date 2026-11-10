@@ -37,9 +37,25 @@ export default function SkinRatingBar({
   const [note, setNote] = useState(mine?.note ?? "");
   useEffect(() => setNote(mine?.note ?? ""), [mine?.note]);
   const save = async (grade: SkinGrade | null, n = note) => {
+    // 记下改之前的样子：提示条上点「撤回」就还原（点错档、误撤销都能回去）
+    const prev = mine ? { grade: mine.grade, note: mine.note } : null;
     await putPhotoRating("skin", { folder, dog_folder: dog, grade, note: n || null });
-    message.success({ content: grade ? `${dog}：${gradeMeta(grade).label}` : `${dog}：已撤销，算没评过`, key: "skin-rate", duration: 1 });
     onChanged();
+    const undo = async () => {
+      message.destroy("skin-rate");
+      await putPhotoRating("skin", { folder, dog_folder: dog, grade: prev?.grade ?? null, note: prev?.note ?? null });
+      onChanged();
+      message.success({ content: `${dog}：已撤回，还原成${prev ? `「${gradeMeta(prev.grade).label}」` : "没评过"}`, key: "skin-rate", duration: 2 });
+    };
+    message.success({
+      key: "skin-rate", duration: 5,
+      content: (
+        <span>
+          {grade ? `${dog}：${gradeMeta(grade).label}` : `${dog}：已撤回，算没评过`}
+          <Button type="link" size="small" onClick={undo}>撤回</Button>
+        </span>
+      ),
+    });
   };
   return (
     <Space size={6} wrap onClick={(e) => e.stopPropagation()}>
@@ -52,11 +68,10 @@ export default function SkinRatingBar({
         ))}
       </Radio.Group>
       {/* 点错了还原成「没评过」（备注一起清掉）。再点一下已选的那档也一样 */}
-      {mine && (
-        <Tooltip title="还原成没评过（备注一起清掉），不算进跟踪表">
-          <Button size="small" type="text" onClick={() => save(null, "")}>撤销</Button>
-        </Tooltip>
-      )}
+      {/* 一直显示：评错了点它还原成「没评过」（备注一起清掉）；还没评时是灰的 */}
+      <Tooltip title={mine ? "评错了？还原成没评过（备注一起清掉），不算进跟踪表" : "还没评，评了之后点这里能撤回"}>
+        <Button size="small" danger={!!mine} disabled={!mine} onClick={() => save(null, "")}>↶ 撤回</Button>
+      </Tooltip>
       <Input
         size="small"
         placeholder="备注（哪里、什么样）"
