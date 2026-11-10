@@ -233,6 +233,18 @@ export default function System() {
                         { title: "请求", dataIndex: "req", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v}</Typography.Text> },
                       ]} />
                   )}
+                  {!!w.lag_suspects?.length && (
+                    <Table size="small" rowKey="route" pagination={false} style={{ marginTop: 8 }} dataSource={w.lag_suspects.slice(0, 6)}
+                      title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        <Tooltip title="后端是一条流水线：某个请求在里面埋头算（不让出来），这段时间所有人的请求都得等。下面是最近 5 分钟每次被堵住时手上正在处理的接口——次数最多的那个基本就是堵路的">
+                          <span style={{ cursor: "help" }}>最近 5 分钟后端被堵时在处理的接口（嫌疑） ?</span>
+                        </Tooltip></Typography.Text>}
+                      columns={[
+                        { title: "接口", dataIndex: "route", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v}</Typography.Text> },
+                        { title: "被堵次数", dataIndex: "n", width: 80 },
+                        { title: "最长一次", dataIndex: "max_lag", width: 90, render: (v: number) => <span style={{ color: v > 1000 ? token.colorError : undefined }}>{v}ms</span> },
+                      ]} />
+                  )}
                   {w.slowest.length > 0 && (
                     <Table size="small" rowKey="route" pagination={false} style={{ marginTop: 8 }} dataSource={w.slowest.slice(0, 6)}
                       title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 5 分钟最慢的接口</Typography.Text>}

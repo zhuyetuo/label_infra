@@ -22,6 +22,8 @@ log = logging.getLogger("perf")
 
 REQS: deque = deque(maxlen=30000)          # (ts, method route, ms, status)
 LOOP_LAG: deque = deque(maxlen=3600)       # (ts, lag_ms)  每秒一个
+# 后端被堵（事件循环超过 200ms 没转）的那一刻手上正在处理哪些请求：堵它的多半就在里面
+LAG_EVENTS: deque = deque(maxlen=500)      # (ts, lag_ms, [请求])
 DB_HIST: deque = deque(maxlen=240)         # 每 15 秒一个 dict，一小时
 _tasks: list[asyncio.Task] = []
 
@@ -75,6 +77,8 @@ async def _loop_lag() -> None:
         await asyncio.sleep(0.5)
         lag = (time.perf_counter() - t0 - 0.5) * 1000
         LOOP_LAG.append((time.time(), max(0.0, lag)))
+        if lag > 200:
+            LAG_EVENTS.append((time.time(), lag, [w for _t, w in INFLIGHT.values() if not w.endswith("/system/status")]))
         await asyncio.sleep(0.5)
 
 
@@ -235,6 +239,25 @@ def _pct(xs: list[float], p: float) -> float | None:
     return round(xs[min(len(xs) - 1, int(len(xs) * p))], 1)
 
 
+def _strip_ids(path: str) -> str:
+    import re
+    return re.sub(r"/\d+(?=/|$)", "/{id}", path.split("?")[0])
+
+
+def _lag_suspects(window_sec: int) -> list[dict]:
+    """最近几分钟后端被堵的那几次，当时都在处理哪些接口：按次数排，次数多、堵得久的就是嫌疑最大的"""
+    now = time.time()
+    agg: dict[str, dict] = {}
+    for ts, lag, reqs in LAG_EVENTS:
+        if now - ts > window_sec:
+            continue
+        for r in set(_strip_ids(x) for x in reqs):
+            a = agg.setdefault(r, {"route": r, "n": 0, "max_lag": 0.0})
+            a["n"] += 1
+            a["max_lag"] = round(max(a["max_lag"], lag), 1)
+    return sorted(agg.values(), key=lambda x: (-x["n"], -x["max_lag"]))[:8]
+
+
 def web_summary(window_sec: int = 300) -> dict:
     """最近几分钟：请求数、p50 / p95、超过 3 秒的请求数、最慢的几个接口；事件循环被堵的情况；一小时的分钟级曲线"""
     now = time.time()
@@ -268,6 +291,7 @@ def web_summary(window_sec: int = 300) -> dict:
         "loop_lag_now": round(LOOP_LAG[-1][1], 1) if LOOP_LAG else None,
         "loop_lag_max": round(max(lag_recent), 1) if lag_recent else None,
         "loop_blocked_sec": round(sum(x for x in lag_recent if x > 200) / 1000, 1),
+        "lag_suspects": _lag_suspects(window_sec),
         "history": hist,
     }
 
