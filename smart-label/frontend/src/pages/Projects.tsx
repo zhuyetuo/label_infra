@@ -209,6 +209,8 @@ export default function Projects() {
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
     /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
     overlapOnly?: boolean; uncertainOnly?: boolean;
+    /** 只看还有片段没审的（选了类别就只算那几类，含子类）：比如只看抓挠还没审的 */
+    unreviewedOnly?: boolean;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
     minSec?: number | null };
   // 筛选和展开的项目记在 localStorage：刷新页面回来还是刚才那个视图（比如只看抓挠），不用重新点
@@ -1011,7 +1013,11 @@ export default function Projects() {
     // 片段列表记住的筛选只给「刷新页面回来」用；从列表重新点开就从项目页的筛选开始
     if (!fromRefresh) {
       try {
-        sessionStorage.removeItem(`seg-panel:${task.id}`);
+        // 列表开着「还没审」：进工作台片段列表也直接只列还没审的
+        if (filterOf(projectId).unreviewedOnly)
+          sessionStorage.setItem(`seg-panel:${task.id}`,
+            JSON.stringify({ labels: filterOf(projectId).labels, source: "seg_unreviewed" }));
+        else sessionStorage.removeItem(`seg-panel:${task.id}`);
       } catch {
         /* 无所谓 */
       }
@@ -1373,6 +1379,13 @@ export default function Projects() {
               Object.entries(t.label_counts ?? {})
                 .filter(([lid]) => !f.labels.length || wantLabelIds.has(Number(lid)))
                 .reduce((s2, [, c]) => s2 + (c.uncertain ?? 0), 0);
+            // 片段还没审的段数：总段数 - 审核通过 - 已退回（选了类别就只算那几类，含子类）
+            const unreviewedOf = (t: Task) =>
+              Object.entries(t.label_counts ?? {})
+                .filter(([lid]) => !f.labels.length || wantLabelIds.has(Number(lid)))
+                .reduce((s2, [, c]) => s2 + Math.max(0, c.n - (c.approved ?? 0) - (c.returned ?? 0)), 0);
+            const unreviewedTasks = all.filter((t) => unreviewedOf(t) > 0).length;
+            const unreviewedSegs = all.reduce((s2, t) => s2 + unreviewedOf(t), 0);
             const overlapTasks = all.filter((t) => overlapOf(t) > 0).length;
             const uncertainTasks = all.filter((t) => uncertainOf(t) > 0).length;
             const submittedTasks = all.filter((t) => t.status === "SUBMITTED").length;
@@ -1384,6 +1397,7 @@ export default function Projects() {
                 (!f.segReturned || segReturnedOf(t) > 0) &&
                 (!f.overlapOnly || overlapOf(t) > 0) &&
                 (!f.uncertainOnly || uncertainOf(t) > 0) &&
+                (!f.unreviewedOnly || unreviewedOf(t) > 0) &&
                 (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
                 matchLabels(t) &&
@@ -1406,11 +1420,12 @@ export default function Projects() {
               f.segReturned && "有退回待改",
               f.overlapOnly && "有重叠",
               f.uncertainOnly && "有待定",
+              f.unreviewedOnly && "片段还没审",
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
               status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
-              noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, minSec: null,
+              noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null,
             });
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
@@ -1559,6 +1574,10 @@ export default function Projects() {
                       {chip(f.status === "SUBMITTED", submittedTasks, "#9254de", "待审核",
                         "标注员提交了、等审核的任务",
                         () => setFilter(p.id, { status: f.status === "SUBMITTED" ? "ALL" : "SUBMITTED" }))}
+                      {chip(!!f.unreviewedOnly, unreviewedTasks, "#fa8c16",
+                        f.labels.length ? `${focusNames.join("、")}还没审` : "片段还没审",
+                        `还有片段没审（不是通过、也不是退回）的任务，共 ${unreviewedSegs} 段。先在上面「含类别」或片段汇总里点一个类别（比如抓挠），就只看这一类还没审的`,
+                        () => setFilter(p.id, { unreviewedOnly: !f.unreviewedOnly }))}
                       {chip(!!f.uncertainOnly, uncertainTasks, "#eb2f96", "有待定",
                         "有片段标了「待定」（没画面 / 看不清 / 要细切）的任务。选了类别就只算那几类",
                         () => setFilter(p.id, { uncertainOnly: !f.uncertainOnly }))}
