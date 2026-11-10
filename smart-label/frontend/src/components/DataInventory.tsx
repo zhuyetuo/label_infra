@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Modal, Select, Space, Statistic, Table, Tag, Tooltip, Typography, Row, Col } from "antd";
+import { Button, Collapse, Modal, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { labelInventory, type InventoryBucket } from "@/api/dataPool";
 import { fmtSecs } from "@/utils/fmtDuration";
@@ -18,16 +18,6 @@ export default function DataInventory({ labelOptions }: { labelOptions: string[]
     enabled: open,
     refetchOnWindowFocus: false,
   });
-  const t = data?.totals;
-  const stat = (title: string, v?: { n: number; seconds: number }, color?: string, tip?: string) => (
-    <Col>
-      <Tooltip title={tip}>
-        <Statistic title={<span style={{ cursor: tip ? "help" : undefined }}>{title}</span>}
-          value={v ? fmtSecs(v.seconds) : "-"} valueStyle={{ color, fontSize: 20 }}
-          suffix={v ? <span style={{ fontSize: 12, opacity: 0.7 }}> · {v.n} 段</span> : null} loading={isFetching} />
-      </Tooltip>
-    </Col>
-  );
   return (
     <>
       <Button onClick={() => setOpen(true)}>数据盘点</Button>
@@ -43,18 +33,47 @@ export default function DataInventory({ labelOptions }: { labelOptions: string[]
             </Typography.Text>
           )}
         </Space>
-        {data && (
+        {data && (() => {
+          const bk = (k: string) => data.buckets.find((x) => x.key === k) ?? { n: 0, seconds: 0 };
+          const sum = (...ks: string[]) => ks.reduce((acc, k) => ({ n: acc.n + bk(k).n, seconds: acc.seconds + bk(k).seconds }), { n: 0, seconds: 0 });
+          // 一条流水线，从左到右越来越「能用」：每一格写清楚现在有多少、下一步要做什么
+          const stages: { title: string; v: { n: number; seconds: number }; color: string; next: string; tip: string }[] = [
+            { title: "疑似片段，还没判", v: data.candidates_pending, color: "#8c8c8c", next: "在工作台里确认 / 排除",
+              tip: "AI 觉得可能是这一类、还没成为正式片段的候选（「疑似片段」）。确认了才变成片段" },
+            { title: "AI 标的，还没人看", v: bk("ai_untouched"), color: "#8c8c8c", next: "人确认一遍",
+              tip: "AI 预标注给的片段，没人确认过、没改过。不算高质量" },
+            { title: "人看过，等审核", v: sum("human", "ai_modified", "ai_confirmed"), color: "#faad14", next: "片段审核「通过」",
+              tip: "人确认过的 / 改过起止或类别的 / 人自己画的 / 从疑似片段确认来的，还没审核通过" },
+            { title: "审核通过，在数据池", v: bk("pool_unused"), color: "#1677ff", next: "导出成数据集去训练",
+              tip: "审核通过（或手动加入）的高质量片段，还没被任何一次训练用过。导出过数据集但那份数据集还没训练过的，也算这里" },
+            { title: "已经训练过", v: bk("used"), color: "#52c41a", next: "",
+              tip: "训练记录用过的数据集里的这一类片段（模型实际训过）；几份数据集重复的只算一次" },
+          ];
+          return (
           <>
-            <Row gutter={32} style={{ marginBottom: 12 }}>
-              {stat("训练记录里已经用过（高质量）", t?.used, "#52c41a", "训练记录的主数据集 + 一起训练的数据集里的，模型实际训过；几份数据集重复的只算一次")}
-              {stat("人看过、还没用上", t?.reviewed_unused, "#faad14", "在数据池但没被训练用过的 + AI 已确认 / 人改过 / 人工画的 / 从疑似确认的 / 审核退回的（都没进过任何训练）")}
-              {stat("其中已在数据池", t?.pool_unused, undefined, "审核通过 / 手动加入了，下次从数据池导出训练就能用上")}
-              {stat("AI 给的、没人看过", t?.ai_untouched, "#8c8c8c", "模型自己标的，不算高质量；人确认一遍就能变成可用的")}
-              {stat("疑似片段还没判", data.candidates_pending, "#8c8c8c", "「疑似片段」里还没人点确认 / 排除的")}
-            </Row>
-            <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message="「已经用过」直接读训练记录用过的那几份数据集（模型实际吃进去的标签）；下面其它几行是数据库里这一类、跟用过的不重叠的片段"
-              description={data.datasets.length ? (
+            <div style={{ display: "flex", alignItems: "stretch", gap: 4, marginBottom: 8, overflowX: "auto" }}>
+              {stages.map((st, i) => (
+                <div key={st.title} style={{ display: "flex", alignItems: "center", flex: "1 1 0", minWidth: 170 }}>
+                  <Tooltip title={st.tip}>
+                    <div style={{ flex: 1, border: `1px solid ${st.color}`, borderTop: `4px solid ${st.color}`, borderRadius: 8, padding: "10px 12px", cursor: "help", height: "100%" }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}><span style={{ color: st.color, marginRight: 4 }}>{"①②③④⑤"[i]}</span>{st.title}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: st.color, marginTop: 4 }}>{fmtSecs(st.v.seconds)}</div>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>{st.v.n} 段</div>
+                      {st.next && <div style={{ fontSize: 12, marginTop: 6 }}>下一步：<b>{st.next}</b></div>}
+                    </div>
+                  </Tooltip>
+                  {i < stages.length - 1 && <span style={{ fontSize: 18, opacity: 0.5, padding: "0 4px" }}>→</span>}
+                </div>
+              ))}
+            </div>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+              另外：标了「待定」的 {bk("uncertain").n} 段、审核退回等标注员改的 {bk("returned").n} 段，不进训练。
+              {" "}<b>数据池</b> = 所有审核通过的高质量片段的总库；<b>数据集</b> = 某次从池里挑一部分导出的一份快照；<b>训练记录</b>用的是数据集。
+              只算每个任务当前这一轮、所有项目合在一起。
+            </Typography.Paragraph>
+            <Collapse size="small" style={{ marginBottom: 12 }} items={[{
+              key: "ds", label: `训练用过的数据集（${data.datasets.length} 份）`,
+              children: data.datasets.length ? (
                 <div style={{ fontSize: 12 }}>
                   {data.datasets.map((d) => (
                     <div key={d.name}>
@@ -62,7 +81,10 @@ export default function DataInventory({ labelOptions }: { labelOptions: string[]
                     </div>
                   ))}
                 </div>
-              ) : "还没有训练记录用过数据集"} />
+              ) : "还没有训练记录用过数据集",
+            }, {
+              key: "detail", label: "明细：每一步分别在哪些项目里（点 + 展开）",
+              children: (
             <Table<InventoryBucket>
               size="small" rowKey="key" pagination={false} dataSource={data.buckets}
               expandable={{
@@ -81,8 +103,11 @@ export default function DataInventory({ labelOptions }: { labelOptions: string[]
                 { title: "说明", dataIndex: "note", render: (x: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{x}</Typography.Text> },
               ]}
             />
+              ),
+            }]} />
           </>
-        )}
+          );
+        })()}
       </Modal>
     </>
   );
