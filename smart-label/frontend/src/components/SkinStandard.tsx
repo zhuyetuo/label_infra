@@ -1,4 +1,7 @@
-import { Button, Drawer, Image, Table, Tooltip, theme } from "antd";
+import { Button, Drawer, Dropdown, Image, Modal, Table, Tooltip, Upload, message, theme } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { listStandards, standardFileUrl, standardViewUrl, uploadStandard, type StandardFile } from "@/api/standards";
+import { useAuthStore } from "@/stores/authStore";
 import { create } from "zustand";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 
@@ -139,7 +142,64 @@ export function SkinStandardContent() {
           <div key={t}><span style={{ color: "#ff4d4f", fontWeight: 800, marginRight: 6 }}>✕</span>{t}</div>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 16 }}>来源：兽医《犬只皮肤状态评估 · 标注员培训》2026.11。拿不准在两档之间的选重的，备注写一句哪里拿不准。</div>
+      <StandardSource />
+    </div>
+  );
+}
+
+// 平台上这页要点是按哪一版 PPT 整理的：NAS 上有比这更新的版本时提醒一句
+const SYNCED_AT = "2026-11-10";
+
+/** 来源：NAS 上的原始 PPT（点开就下载），历史版本，管理员能传新版 */
+function StandardSource() {
+  const { token } = theme.useToken();
+  const role = useAuthStore((st) => st.userInfo?.role);
+  const readOnly = useAuthStore((st) => st.userInfo?.readOnly);
+  const isAdmin = (role === "admin" || role === "super_admin") && !readOnly;
+  const { data, refetch } = useQuery({ queryKey: ["standards", "skin"], queryFn: () => listStandards("skin"), staleTime: 60_000 });
+  const files = data?.files ?? [];
+  const latest = files[0];
+  const newer = latest && latest.mtime.slice(0, 10) > SYNCED_AT;
+  const link = (f: StandardFile) => (
+    <a href={standardFileUrl("skin", f)} target="_blank" rel="noreferrer">📄 {f.name}</a>
+  );
+  return (
+    <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 16, lineHeight: 1.9,
+      borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 10 }}>
+      <div>
+        <b>来源：兽医《犬只皮肤状态评估 · 标注员培训》</b>（这页是按 {SYNCED_AT.slice(0, 7).replace("-", ".")} 版整理的要点）
+      </div>
+      {latest ? (
+        <div>
+          原件：{link(latest)} <span style={{ color: token.colorTextTertiary }}>（{latest.mtime} 更新）</span>
+          <Button size="small" type="primary" ghost style={{ marginLeft: 8 }} onClick={() => useSkinStandard.getState().setCompare(latest)}>
+            左右对照看原件
+          </Button>
+          {files.length > 1 && (
+            <Dropdown menu={{ items: files.slice(1).map((f) => ({ key: f.name, label: <span>{link(f)} <span style={{ color: "#999" }}>{f.mtime}</span>{" "}
+              <a onClick={() => useSkinStandard.getState().setCompare(f)}>对照看</a></span> })) }}>
+              <a style={{ marginLeft: 8 }}>历史版本 {files.length - 1} ▾</a>
+            </Dropdown>
+          )}
+          {newer && <div style={{ color: token.colorWarning }}>NAS 上的 PPT 比这页要点新，以原件为准；需要把要点同步过来就说一声</div>}
+        </div>
+      ) : (
+        <div>原件还没放上来：管理员点右边「上传新版本」，或者直接放到 NAS 的 <code>{data?.dir ?? "docs/评级标准/皮肤评估"}</code></div>
+      )}
+      {isAdmin && (
+        <Upload accept=".pptx,.ppt,.pdf,.docx" showUploadList={false}
+          customRequest={async ({ file, onSuccess, onError }) => {
+            try {
+              const r = await uploadStandard("skin", file as File);
+              message.success(`已上传：${r.name}（旧版本都留着）`);
+              refetch();
+              onSuccess?.(r);
+            } catch (e) { onError?.(e as Error); }
+          }}>
+          <Button size="small" style={{ marginTop: 4 }}>上传新版本</Button>
+        </Upload>
+      )}
+      <div style={{ marginTop: 4 }}>拿不准在两档之间的选重的，备注写一句哪里拿不准。</div>
     </div>
   );
 }
@@ -154,8 +214,14 @@ const loadW = () => {
   } catch { /* 用默认 */ }
   return Math.min(Math.round(window.innerWidth * 0.42), 860);
 };
-export const useSkinStandard = create<{ open: boolean; width: number; setOpen: (v: boolean) => void; setWidth: (w: number) => void }>((set) => ({
+export const useSkinStandard = create<{
+  open: boolean; width: number; setOpen: (v: boolean) => void; setWidth: (w: number) => void;
+  /** 左右对照：左边原件（PPT 转的 PDF），右边这页要点 */
+  compare: StandardFile | null; setCompare: (f: StandardFile | null) => void;
+}>((set) => ({
   open: false,
+  compare: null,
+  setCompare: (compare) => set({ compare }),
   width: loadW(),
   setOpen: (open) => set({ open }),
   setWidth: (w) => {
@@ -186,8 +252,9 @@ export function SkinStandardHelp({ text }: { text?: string }) {
 /** 右边的标准面板：不加遮罩、压在弹窗上面，放在 AppLayout 里全站一份。
  *  左边那条竖边可以拖宽拖窄；右上角「窄 / 中 / 宽」一键切 */
 export function SkinStandardDrawer() {
-  const { open, setOpen, width, setWidth } = useSkinStandard();
+  const { open, setOpen, width, setWidth, compare, setCompare } = useSkinStandard();
   const { token } = theme.useToken();
+  const { data: std } = useQuery({ queryKey: ["standards", "skin"], queryFn: () => listStandards("skin"), staleTime: 60_000, enabled: open });
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault();
     const move = (ev: MouseEvent) => setWidth(window.innerWidth - ev.clientX);
@@ -215,6 +282,9 @@ export function SkinStandardDrawer() {
       title="评级标准 S0 / S1 / S2"
       extra={
         <span style={{ display: "inline-flex", gap: 4 }}>
+          {std?.files[0] && (
+            <Button size="small" type="primary" ghost onClick={() => setCompare(std.files[0])}>对照原件</Button>
+          )}
           {presets.map(([t, w]) => (
             <Button key={t} size="small" type={Math.abs(width - w) < 30 ? "primary" : "default"} onClick={() => setWidth(w)}>{t}</Button>
           ))}
@@ -223,6 +293,26 @@ export function SkinStandardDrawer() {
       styles={{ body: { overflowX: "hidden", padding: "12px 16px", position: "relative" } }}>
       <SkinStandardContent />
     </Drawer>
+    {/* 左右对照：左边兽医原件（PPT 转 PDF，浏览器自带的阅读器，能翻页、缩放、搜字），右边整理的要点 */}
+    <Modal open={!!compare} onCancel={() => setCompare(null)} footer={null} width="98vw" style={{ top: 10, maxWidth: "none" }}
+      zIndex={1300} destroyOnClose
+      title={compare ? <span>对照阅读：左边原件 <b>{compare.name}</b>（{compare.mtime}），右边平台上的要点
+        <a href={standardFileUrl("skin", compare)} target="_blank" rel="noreferrer" style={{ marginLeft: 12, fontWeight: 400 }}>下载原件</a></span> : ""}
+      styles={{ body: { height: "calc(100vh - 110px)", padding: 0 } }}>
+      {compare && (
+        <div style={{ display: "flex", height: "100%", gap: 0 }}>
+          <div style={{ flex: "1 1 58%", minWidth: 0, borderRight: `1px solid ${token.colorBorderSecondary}`, position: "relative" }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextTertiary, zIndex: 0 }}>
+              第一次打开要把 PPT 转成 PDF，大概半分钟…
+            </div>
+            <iframe title="原件" src={standardViewUrl("skin", compare)} style={{ position: "relative", zIndex: 1, width: "100%", height: "100%", border: 0, background: "transparent" }} />
+          </div>
+          <div style={{ flex: "1 1 42%", minWidth: 0, overflowY: "auto", overflowX: "hidden", padding: "12px 16px" }}>
+            <SkinStandardContent />
+          </div>
+        </div>
+      )}
+    </Modal>
     </>
   );
 }

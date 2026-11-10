@@ -16,6 +16,11 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends ffmpeg tzdata && rm -rf /var/lib/apt/lists/*
 
+# 评级标准原件（兽医的 PPT）在网页上对照看：用 LibreOffice 转成 PDF 再给浏览器显示。
+# 单独一层：只有这里变了才重装；中文字体不装的话转出来全是方块
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-impress fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -e .
 
