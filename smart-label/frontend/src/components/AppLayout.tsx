@@ -12,6 +12,9 @@ import { useReturnedSegments } from "@/hooks/useReturnedSegments";
 
 const { Header, Content, Sider } = Layout;
 
+/** 3736 → 3.7k：菜单栏窄，四位数放不下 */
+const kfmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+
 const ALL_ITEMS = [
   { key: "/projects", label: "项目", roles: ["super_admin", "admin", "annotator", "reviewer"] },
   { key: "/tasks", label: "任务", roles: ["super_admin", "admin", "annotator", "reviewer"] },
@@ -119,14 +122,15 @@ export default function AppLayout() {
                 i.key === "/projects" && scratch && scratchNotPassed > 0 ? (
                   <Tooltip placement="right"
                     title={`抓挠：未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段`}>
-                    <Space size={4}>
+                    {/* 菜单栏窄：数字超过 999 写成 3.7k，「项目」后面只放两个小数字，鼠标停上去看完整 */}
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
                       {i.label}
-                      <span style={{ fontSize: 11, color: "#ff4d4f" }}>抓挠</span>
-                      <Badge count={scratchNotPassed} overflowCount={9999} size="small" />
+                      <span style={{ fontSize: 10, color: "#ff4d4f", marginLeft: 2 }}>抓挠</span>
+                      <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
                       {scratch.total.unreviewed > 0 && (
-                        <Badge count={scratch.total.unreviewed} overflowCount={9999} size="small" color="#fa8c16" />
+                        <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#fa8c16", color: "#fff" }}>{kfmt(scratch.total.unreviewed)}</span>
                       )}
-                    </Space>
+                    </span>
                   </Tooltip>
                 ) : i.key === "/segment-review" && returned.total > 0 ? (
                   <Space size={6}>

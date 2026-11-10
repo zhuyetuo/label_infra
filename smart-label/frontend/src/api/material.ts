@@ -13,6 +13,11 @@ export const listMaterialPhotos = (album: Album) => request.get<never, { root: s
 export const getMaterialPhotoToken = (album: Album, path: string) => request.post<never, { token: string }>(`/material/${album}/photos/token`, { path });
 export const materialPhotoUrl = (album: Album, path: string, token: string) =>
   `/api/v1/material/${album}/photos/stream?path=${encodeURIComponent(path)}&token=${token}`;
+/** 一次拿一批照片的访问凭证 {路径: token}（原来一张一个请求） */
+export const getMaterialPhotoTokens = (album: Album, paths: string[]) =>
+  request.post<never, Record<string, string>>(`/material/${album}/photos/tokens`, { paths });
+/** 缩略图地址：后端缩到长边 w 像素再给（网格里用，原图留给放大看） */
+export const thumbUrl = (url: string, w = 360) => (url ? `${url}&w=${w}` : url);
 
 /** 皮肤照片评级：S0 正常 / S1 轻度 / S2 中重度 / unsure 看不清 */
 export type SkinGrade = "S0" | "S1" | "S2" | "unsure";
