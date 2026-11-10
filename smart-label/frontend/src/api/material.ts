@@ -24,3 +24,15 @@ export const listPhotoRatings = (album: Album) => request.get<never, PhotoRating
 /** grade 给 null = 撤销我对这只狗的评级 */
 export const putPhotoRating = (album: Album, body: { folder: string; dog_folder: string; grade: SkinGrade | null; note?: string | null }) =>
   request.put<never, { grade: SkinGrade | null; note: string | null }>(`/material/${album}/ratings`, body);
+
+/** 单张照片拍摄不合格的标记（模糊 / 太暗 / 没拍到皮肤…），汇总给狗场用 */
+export type FlagReason = "blurry" | "dark" | "no_skin" | "blocked" | "far" | "other";
+export interface PhotoFlag {
+  folder: string; dog_folder: string; filename: string; reason: FlagReason; reason_text: string;
+  note: string | null; user_name: string; updated_at: string | null;
+}
+export const listPhotoFlags = (album: Album) =>
+  request.get<never, { reasons: Record<FlagReason, string>; flags: PhotoFlag[] }>(`/material/${album}/flags`);
+/** reason 给 null = 取消这张的标记 */
+export const putPhotoFlag = (album: Album, body: { folder: string; dog_folder: string; filename: string; reason: FlagReason | null; note?: string | null }) =>
+  request.put<never, { reason: FlagReason | null }>(`/material/${album}/flags`, body);
