@@ -148,7 +148,11 @@ export function useResizableColumns(storageKey: string) {
     // 不补的话：表格最小宽度是容器的 100%，而每列都写死了宽度，多出来的空间会
     // 按比例摊回到所有列上——于是把某一列拖窄，省下来的宽度立刻又被均摊回去，
     // 看起来就是"拖不动"。有这么一列兜着，缩窄才真的缩得下去。
-    return [...sized, { key: "__slack__", title: "", render: () => null }] as ColumnsType<T>;
+    // 钉在右边的列（fixed: "right"）必须排在最后：空列插在它们前面
+    const slack = { key: "__slack__", title: "", render: () => null };
+    const firstRight = sized.findIndex((c) => (c as { fixed?: unknown }).fixed === "right");
+    if (firstRight < 0) return [...sized, slack] as ColumnsType<T>;
+    return [...sized.slice(0, firstRight), slack, ...sized.slice(firstRight)] as ColumnsType<T>;
   };
 
   return { components, tableLayout, applyResize, reset, hasCustom: Object.keys(widths).length > 0 };
