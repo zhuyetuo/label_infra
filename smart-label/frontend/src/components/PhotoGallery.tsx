@@ -248,7 +248,8 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
       {problemAlert}
       {rating && (
         <div style={{ marginBottom: 8 }}>
-          <FlagSummaryButton flags={(flagData?.flags ?? []).filter((f) => allPhotos.some((p) => p.folder === f.folder))}
+          <FlagSummaryButton album={album} onChanged={() => refetchFlags()}
+            flags={(flagData?.flags ?? []).filter((f) => allPhotos.some((p) => p.folder === f.folder))}
             urlOf={(f) => { const ph = allPhotos.find((p) => p.folder === f.folder && p.dog === f.dog_folder && p.filename === f.filename); return ph ? urls[ph.rel_path] : undefined; }} />
           <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
             哪张拍得不行（模糊、太暗、没拍到皮肤…），点照片右上角的小旗标出来；汇总里一键复制发给狗场
