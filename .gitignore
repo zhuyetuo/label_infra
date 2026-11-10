@@ -223,3 +223,6 @@ logs/
 # 但保留目录结构占位文件
 !data/imu/.gitkeep
 .vite/
+
+# 照片缩略图 / 评级标准 PPT 转出来的 PDF 缓存（后端运行时生成）
+thumb-cache/

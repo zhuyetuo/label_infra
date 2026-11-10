@@ -13,6 +13,7 @@ from app.api.v1 import (
     llm_providers,
     labels,
     material,
+    standards,
     media,
     daily_stats,
     model_eval,
@@ -63,4 +64,6 @@ api_router.include_router(tooth.stream_router)
 api_router.include_router(skin.router)
 api_router.include_router(material.router)
 api_router.include_router(material.stream_router)
+api_router.include_router(standards.router)
+api_router.include_router(standards.stream_router)
 api_router.include_router(vision.router)
