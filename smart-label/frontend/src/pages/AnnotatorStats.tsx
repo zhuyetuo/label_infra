@@ -67,29 +67,32 @@ export default function AnnotatorStats() {
   });
   const subs = data?.submissions ?? [];
   const decisions = data?.candidate_decisions ?? [];
+  const ratings = data?.photo_ratings ?? [];
 
   const users = useMemo(() => {
     const m = new Map<number, string>();
     for (const r of subs) if (r.user_id != null) m.set(r.user_id, r.user_name ?? String(r.user_id));
     for (const r of decisions) if (r.user_id != null) m.set(r.user_id, r.user_name ?? String(r.user_id));
+    for (const r of ratings) m.set(r.user_id, r.user_name);
     return [...m.entries()].map(([value, label]) => ({ value, label }));
-  }, [subs, decisions]);
+  }, [subs, decisions, ratings]);
 
   const shown = useMemo(() => subs.filter((r) => !userId || r.user_id === userId), [subs, userId]);
   const shownDec = useMemo(() => decisions.filter((r) => !userId || r.user_id === userId), [decisions, userId]);
+  const shownRate = useMemo(() => ratings.filter((r) => !userId || r.user_id === userId), [ratings, userId]);
 
   // 标注员 × 天 的汇总（提交按提交时间归天，候选按判定时间归天）
   const daily = useMemo(() => {
     type Row = {
       key: string; day: string; user: string; tasks: number; items: number; scratch: number;
-      decisions: number; video: number; work: number; first: string | null; last: string | null;
+      decisions: number; ratings: number; video: number; work: number; first: string | null; last: string | null;
     };
     const m = new Map<string, Row>();
     const get = (d: string, user: string): Row => {
       const key = `${d}|${user}`;
       let cur = m.get(key);
       if (!cur) {
-        cur = { key, day: d, user, tasks: 0, items: 0, scratch: 0, decisions: 0, video: 0, work: 0, first: null, last: null };
+        cur = { key, day: d, user, tasks: 0, items: 0, scratch: 0, decisions: 0, ratings: 0, video: 0, work: 0, first: null, last: null };
         m.set(key, cur);
       }
       return cur;
@@ -112,8 +115,16 @@ export default function AnnotatorStats() {
       if (!cur.first || r.decided_at < cur.first) cur.first = r.decided_at;
       if (!cur.last || r.decided_at > cur.last) cur.last = r.decided_at;
     }
+    // 看皮肤照片评级：按评级时间归天
+    for (const r of shownRate) {
+      if (!r.rated_at) continue;
+      const cur = get(r.rated_at.slice(0, 10), r.user_name);
+      cur.ratings += 1;
+      if (!cur.first || r.rated_at < cur.first) cur.first = r.rated_at;
+      if (!cur.last || r.rated_at > cur.last) cur.last = r.rated_at;
+    }
     return [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.user.localeCompare(b.user));
-  }, [shown, shownDec]);
+  }, [shown, shownDec, shownRate]);
 
   // 选中的那一天，每小时交了几个任务 / 判了几条候选（按标注员分行）
   const hourly = useMemo(() => {
@@ -250,6 +261,7 @@ export default function AnnotatorStats() {
             { title: "片段", dataIndex: "items", width: 70 },
             { title: <Tooltip title="交掉的任务里抓挠类片段合计">抓挠片段</Tooltip>, dataIndex: "scratch", width: 90 },
             { title: <Tooltip title="判掉的「疑似片段」条数">判定候选</Tooltip>, dataIndex: "decisions", width: 90, sorter: (a, b) => a.decisions - b.decisions },
+            { title: <Tooltip title="皮肤评估里看照片给狗评级：评了几只狗（一只狗一天一次）">看图评级</Tooltip>, dataIndex: "ratings", width: 90, sorter: (a, b) => a.ratings - b.ratings },
             {
               title: <Tooltip title="交掉的这些任务对应的视频总时长">视频时长</Tooltip>,
               dataIndex: "video", width: 110, render: (s: number) => formatDuration(s),

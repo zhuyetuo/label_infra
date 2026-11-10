@@ -33,9 +33,15 @@ export interface CandidateDecisionRow {
   project_name: string;
 }
 
+/** 看皮肤照片评级：给一只狗那一次评一档算一条（改评级会覆盖，时间是最后一次） */
+export interface PhotoRatingRow {
+  rated_at: string | null; grade: string; folder: string; dog_folder: string;
+  user_id: number; user_name: string;
+}
 export interface AnnotatorWork {
   submissions: AnnotatorWorkRow[];
   candidate_decisions: CandidateDecisionRow[];
+  photo_ratings?: PhotoRatingRow[];
 }
 
 /** 每个项目的完成度：任务交了几个、抓挠片段还有几段没确认、疑似还有几条没判 */
@@ -115,6 +121,9 @@ export interface EffDay {
   cands: number;
   /** 交了几个任务 */
   submits: number;
+  /** 看皮肤照片：评了几只狗（一只狗一次算一条）、标了几张照片的拍摄问题 */
+  photo_ratings?: number;
+  photo_flags?: number;
   /** 动过几个任务 */
   tasks: number;
   /** 第一次 / 最后一次动手，HH:MM 本地时间 */
@@ -123,7 +132,8 @@ export interface EffDay {
   /** 片段按大类各几段 */
   categories: Record<string, number>;
   /** 这天动了哪些项目，各做了多少（有效工时按"间隔归后一个动作"分到项目上），工时多的在前 */
-  projects: { project: string; segments: number; cands: number; submits: number; work_seconds: number; tasks: number }[];
+  projects: { project: string; segments: number; cands: number; submits: number; work_seconds: number; tasks: number;
+    photo_ratings?: number; photo_flags?: number }[];
 }
 export interface EffUser {
   user_id: number;

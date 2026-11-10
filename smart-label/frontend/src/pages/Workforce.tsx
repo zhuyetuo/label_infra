@@ -278,6 +278,14 @@ export default function Workforce() {
             },
             { title: "判疑似", dataIndex: "cands", width: 80, sorter: (a: DayRow, b: DayRow) => a.cands - b.cands },
             { title: "交任务", dataIndex: "submits", width: 80 },
+            {
+              title: <Tooltip title="看皮肤照片评级：评了几只狗（一只狗一天算一次）；括号里是标了拍摄问题的照片张数">看图评级</Tooltip>,
+              width: 90,
+              sorter: (a: DayRow, b: DayRow) => (a.photo_ratings ?? 0) - (b.photo_ratings ?? 0),
+              render: (_, r: DayRow) => (r.photo_ratings || r.photo_flags ? (
+                <span><b>{r.photo_ratings ?? 0}</b>{r.photo_flags ? <span style={{ color: "#888" }}>（标 {r.photo_flags}）</span> : null}</span>
+              ) : <span style={{ color: "#888" }}>-</span>),
+            },
             { title: "动过的任务", dataIndex: "tasks", width: 90 },
             {
               title: <Tooltip title="（确认片段 + 判疑似）÷ 有效工时">每小时确认</Tooltip>,
@@ -300,8 +308,9 @@ export default function Workforce() {
                         <b>{fmtHours(p.work_seconds)}</b>
                         <span style={{ color: "#888" }}>
                           {" "}
-                          · 片段 {p.segments} · 疑似 {p.cands}
-                          {p.submits ? ` · 交 ${p.submits}` : ""}
+                          {p.photo_ratings || p.photo_flags
+                            ? `· 评级 ${p.photo_ratings ?? 0} 只${p.photo_flags ? ` · 标拍摄问题 ${p.photo_flags} 张` : ""}`
+                            : <>· 片段 {p.segments} · 疑似 {p.cands}{p.submits ? ` · 交 ${p.submits}` : ""}</>}
                         </span>
                       </span>
                     </Tooltip>
@@ -342,7 +351,10 @@ export default function Workforce() {
                 <Table.Summary.Cell index={6}>
                   <b>{sum("submits")}</b>
                 </Table.Summary.Cell>
-                <Table.Summary.Cell index={7} colSpan={4} />
+                <Table.Summary.Cell index={7}>
+                  <b>{rows.reduce((n, r) => n + (r.photo_ratings ?? 0), 0)}</b>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={8} colSpan={4} />
               </Table.Summary.Row>
             ) : null;
           }}

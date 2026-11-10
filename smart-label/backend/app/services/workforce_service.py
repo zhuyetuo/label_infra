@@ -38,6 +38,10 @@ from app.services.annotator_work_service import SCRATCH_PREFIX, local_offset, ut
 GAP_MAX = 10 * 60          # 相邻动作隔了 10 分钟以上，当作人离开了，这段不算工时
 CAND_CATEGORY = "疑似片段"
 SUBMIT_CATEGORY = "提交任务"
+# 看皮肤照片：给一只狗那一次评一档（S0/S1/S2/看不清）、给单张照片标拍摄问题。不挂在任务上
+PHOTO_RATE_CATEGORY = "皮肤照片评级"
+PHOTO_FLAG_CATEGORY = "照片拍摄问题"
+PHOTO_PROJECT = "皮肤照片评级"
 
 
 def _category(label_name: str) -> str:
@@ -74,6 +78,20 @@ async def _events(db: AsyncSession, lo: datetime, hi: datetime) -> list[tuple[in
         .where(Task.assigned_to.is_not(None), AnnotationRecord.submitted_at.is_not(None),
                AnnotationRecord.submitted_at >= lo - off, AnnotationRecord.submitted_at < hi - off))).all()
     ev += [(u, utc_to_local(t), SUBMIT_CATEGORY, tid) for u, t, tid in rows]
+    # 皮肤照片评级 / 标拍摄问题：updated_at 是数据库本地时间（func.now()），跟 touched_at 一样不用换算。
+    # 一只狗一个人只留一条（改评级会覆盖），所以按最后一次动手的时间算
+    from app.models.photo_flag import PhotoFlag
+    from app.models.skin_photo_rating import SkinPhotoRating
+    rows = (await db.execute(
+        select(SkinPhotoRating.user_id, func.coalesce(SkinPhotoRating.updated_at, SkinPhotoRating.created_at))
+        .where(func.coalesce(SkinPhotoRating.updated_at, SkinPhotoRating.created_at) >= lo,
+               func.coalesce(SkinPhotoRating.updated_at, SkinPhotoRating.created_at) < hi))).all()
+    ev += [(u, t, PHOTO_RATE_CATEGORY, None) for u, t in rows if t is not None]
+    rows = (await db.execute(
+        select(PhotoFlag.user_id, func.coalesce(PhotoFlag.updated_at, PhotoFlag.created_at))
+        .where(func.coalesce(PhotoFlag.updated_at, PhotoFlag.created_at) >= lo,
+               func.coalesce(PhotoFlag.updated_at, PhotoFlag.created_at) < hi))).all()
+    ev += [(u, t, PHOTO_FLAG_CATEGORY, None) for u, t in rows if t is not None]
     ev.sort(key=lambda e: (e[0], e[1]))
     return ev
 
@@ -104,31 +122,45 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
         u = per_user.setdefault(uid, {"user_id": uid, "user_name": names.get(uid, str(uid)),
                                       "categories": defaultdict(lambda: {"n": 0, "gaps": []}),
                                       "days": defaultdict(lambda: {"actions": 0, "work_seconds": 0.0, "segments": 0,
-                                                                   "cands": 0, "submits": 0, "first": None,
+                                                                   "cands": 0, "submits": 0, "photo_ratings": 0,
+                                                                   "photo_flags": 0, "first": None,
                                                                    "last": None, "cats": defaultdict(int),
                                                                    "tasks": set(),
                                                                    "projects": defaultdict(lambda: {
                                                                        "segments": 0, "cands": 0, "submits": 0,
+                                                                       "photo_ratings": 0, "photo_flags": 0,
                                                                        "work_seconds": 0.0, "tasks": set()})})})
         c = u["categories"][cat]
         c["n"] += 1
         d = u["days"][t.date().isoformat()]
         d["actions"] += 1
         # 这一天确认了多少：片段（确认 / 改 / 新加，按最后一次动手算，同一段不重复）、判了几条疑似、交了几个任务
+        photo = cat in (PHOTO_RATE_CATEGORY, PHOTO_FLAG_CATEGORY)
         if cat == CAND_CATEGORY:
             d["cands"] += 1
         elif cat == SUBMIT_CATEGORY:
             d["submits"] += 1
+        elif cat == PHOTO_RATE_CATEGORY:
+            d["photo_ratings"] += 1
+        elif cat == PHOTO_FLAG_CATEGORY:
+            d["photo_flags"] += 1
         else:
             d["segments"] += 1
             d["cats"][cat] += 1
-        d["tasks"].add(_tid)
-        pj = d["projects"][task_proj.get(_tid, "?")]
-        pj["tasks"].add(_tid)
+        if not photo:
+            d["tasks"].add(_tid)
+        # 看照片不挂任务：单独算一个「项目」，工时一样按间隔归过来
+        pj = d["projects"][PHOTO_PROJECT if photo else task_proj.get(_tid, "?")]
+        if not photo:
+            pj["tasks"].add(_tid)
         if cat == CAND_CATEGORY:
             pj["cands"] += 1
         elif cat == SUBMIT_CATEGORY:
             pj["submits"] += 1
+        elif cat == PHOTO_RATE_CATEGORY:
+            pj["photo_ratings"] += 1
+        elif cat == PHOTO_FLAG_CATEGORY:
+            pj["photo_flags"] += 1
         else:
             pj["segments"] += 1
         d["first"] = d["first"] or t
@@ -149,6 +181,7 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
                 for k, v in sorted(u["categories"].items(), key=lambda kv: -kv[1]["n"])]
         days = [{"day": k, "actions": v["actions"], "work_seconds": int(v["work_seconds"]),
                  "segments": v["segments"], "cands": v["cands"], "submits": v["submits"],
+                 "photo_ratings": v["photo_ratings"], "photo_flags": v["photo_flags"],
                  "tasks": len(v["tasks"]),
                  # 第一次 / 最后一次动手（本地时间），中间离开超过 10 分钟的不算进有效工时
                  "first": v["first"].strftime("%H:%M") if v["first"] else None,
@@ -157,6 +190,7 @@ async def efficiency(db: AsyncSession, date_from: date, date_to: date) -> list[d
                  # 这天动了哪些项目：各自确认片段 / 判疑似 / 交任务 / 有效工时 / 动过几个任务，工时多的在前
                  "projects": sorted(
                      [{"project": pn, "segments": x["segments"], "cands": x["cands"], "submits": x["submits"],
+                       "photo_ratings": x["photo_ratings"], "photo_flags": x["photo_flags"],
                        "work_seconds": int(x["work_seconds"]), "tasks": len(x["tasks"])}
                       for pn, x in v["projects"].items()],
                      key=lambda x: -x["work_seconds"])}
