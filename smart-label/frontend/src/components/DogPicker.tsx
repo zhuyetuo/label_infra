@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Checkbox, Popover, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listDogs } from "@/api/dogs";
 import { pickSampleDog } from "@/api/samples";
 
@@ -20,6 +20,7 @@ export default function DogPicker({ sampleId, label, canEdit, onChanged }: {
   const [open, setOpen] = useState(false);
   const [sameDay, setSameDay] = useState(true);
   const [saving, setSaving] = useState<number | "none" | null>(null);
+  const qc = useQueryClient();
   const { data: dogs, isLoading } = useQuery({ queryKey: ["dogs"], queryFn: listDogs, enabled: open && canEdit, staleTime: 60_000 });
   const studio = (dogs ?? []).filter((d) => (d.site ?? "").includes("影棚") && d.name);
   const current = (label ?? "").replace(/（.*）$/, "");
@@ -29,6 +30,9 @@ export default function DogPicker({ sampleId, label, canEdit, onChanged }: {
     try {
       const r = await pickSampleDog(sampleId, dogId, sameDay);
       onChanged(r.dog_label);
+      // 同一天这个设备号的样本是一起改的：项目页 / 任务页列表里其它几段也要跟着换狗名，
+      // 不然只有刚打开的这一段变了、其它段还是旧狗（列表是早先拉的，没人让它重拉）
+      for (const key of [["tasks"], ["tasks-lite"], ["samples"], ["skin-tracking"]]) qc.invalidateQueries({ queryKey: key });
       message.success(`${dogId ? `改成 ${r.dog_label}` : "已清掉，按设备号猜"}（${r.updated} 份样本）`);
       setOpen(false);
     } catch (e) {
