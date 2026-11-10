@@ -11,7 +11,7 @@ import PhotoGallery from "@/components/PhotoGallery";
 import SkinAccuracy from "@/components/SkinAccuracy";
 import { MlResults, MlSimulate, MlTraining } from "@/components/SkinMl";
 import { MlFeatureTable } from "@/components/SkinMlExplain";
-import { SkinStandardHelp } from "@/components/SkinStandard";
+import { STANDARD_W, SkinStandardHelp, useSkinStandard } from "@/components/SkinStandard";
 import DeviceTimeline from "@/components/DeviceTimeline";
 import DogMetaFilter, { dogMetaText, dogOptions, matchDogMeta } from "@/components/DogMetaFilter";
 import { CExplain, DeltaExplain, EXPLAIN_TOOLTIP, SExplain, ScratchExplain } from "@/components/ScoreExplain";
@@ -85,8 +85,10 @@ export default function Skin() {
 }
 
 function SkinPhotosOnly() {
+  // 评级标准在右边打开时，照片让出右边那块，不被盖住
+  const standardOpen = useSkinStandard((st) => st.open);
   return (
-    <div>
+    <div style={standardOpen ? { marginRight: `calc(${STANDARD_W} - 8px)` } : undefined}>
       <Space style={{ marginBottom: 12 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>皮肤照片</Typography.Title>
         <SkinStandardHelp text="评级标准（兽医版，带图）" />
@@ -810,6 +812,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
   const pickWidth = useResizableColumns("skin-pick-widths");
 
   const [photoFor, setPhotoFor] = useState<TrackingRow | null>(null);
+  const standardOpen = useSkinStandard((s) => s.open);
   const trackQc = useQueryClient();
   // 只记 (日期, 狗) 这个 key，行数据每次从最新查询结果里取——存整行的话，
   // 标完回来这份是打开弹窗那一刻的快照，改了什么都看不见，非刷新页面不可
@@ -1725,7 +1728,9 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         // 在弹窗里评过级，关掉时把跟踪表刷一下，「照片评级」那一列跟着变
         onCancel={() => { setPhotoFor(null); trackQc.invalidateQueries({ queryKey: ["skin-tracking"] }); }}
         footer={null}
-        width={1100}
+        // 评级标准在右边打开时，照片弹窗让到左边，一边看标准一边评
+        width={standardOpen ? `calc(100vw - ${STANDARD_W} - 32px)` : 1100}
+        style={standardOpen ? { margin: "0 0 0 16px", top: 20, maxWidth: "none" } : undefined}
       >
         {photoFor && (
           <PhotoGallery

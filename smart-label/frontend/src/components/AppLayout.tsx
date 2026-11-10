@@ -1,4 +1,5 @@
 import { getLabelReview } from "@/api/tasks";
+import { SkinStandardDrawer } from "@/components/SkinStandard";
 import { useEffect } from "react";
 import { Badge, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
 import { useThemeStore } from "@/stores/themeStore";
@@ -140,6 +141,7 @@ export default function AppLayout() {
         <Content style={{ padding: 24, overflow: "auto" }}>
           <Outlet />
         </Content>
+        <SkinStandardDrawer />
       </Layout>
     </Layout>
   );
