@@ -16,6 +16,7 @@ from collections import deque
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,29 @@ router = APIRouter(
     prefix="/system", tags=["system"],
     dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))],
 )
+
+
+
+
+def _admin_by_token(credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False))) -> None:
+    """系统状态这一个接口只看 token 里的角色，不查数据库。
+
+    平时所有接口都要先按 token 去库里取当前用户。数据库卡死 / 连接池被占满时，这一步就卡住——
+    连「系统监控」页都打不开，偏偏那时候最需要看。token 是签过名的，里面的角色改不了；
+    代价只是：刚被降级的人在 token 过期前（几十分钟）还能看这一页的数字，不能改任何东西"""
+    from app.core.security import decode_token
+    try:
+        payload = decode_token(credentials.credentials) if credentials else None
+    except Exception:  # noqa: BLE001
+        payload = None
+    if not payload or payload.get("type") != "access":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录")
+    if payload.get("role") not in ("admin", "super_admin", "viewer"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "权限不足")
+
+
+# 单独一个 router：不挂上面那个要查库的角色校验
+status_router = APIRouter(prefix="/system", tags=["system"], dependencies=[Depends(_admin_by_token)])
 
 LOG_FILES = ("api.log", "access.log", "scheduler.log")
 _svc_cache: tuple[float, list[dict]] | None = None
@@ -102,7 +126,7 @@ async def _gpu() -> dict:
             "why": d.get("why")}
 
 
-@router.get("/status")
+@status_router.get("/status")
 async def get_status():
     # CPU 占用：隔 0.3 秒采两次 /proc/stat
     a = _cpu_times()
@@ -142,6 +166,9 @@ async def get_status():
     perf._hit_rate(dbinfo)
     dbinfo["history"] = perf.db_history()
     web = perf.web_summary()
+    # 卡在哪：后端现在手上还没返回的请求（超过 1 秒的），按等了多久排
+    web["inflight"] = perf.inflight_list(1.0)
+    web["inflight_total"] = len(perf.INFLIGHT)
 
     # 依赖服务 1 分钟探一次就够：页面 5 秒刷一次，每次都探的话 httpx 往日志里每 5 秒打两行
     global _svc_cache

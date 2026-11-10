@@ -49,11 +49,14 @@ export default function System() {
   const { token } = theme.useToken();
   const [auto, setAuto] = useState(true);
   const isSuper = useAuthStore((s) => s.userInfo?.role) === "super_admin";
-  const { data: st, isFetching, refetch } = useQuery({
+  const { data: st, isFetching, refetch, isError, errorUpdatedAt, dataUpdatedAt } = useQuery({
     queryKey: ["sys-status"],
     queryFn: sysStatus,
     refetchInterval: auto ? 5000 : false,
+    retry: false,
   });
+  // 最近一次拿状态失败了（后端整个没响应）：页面上的数字都是旧的，要说清楚
+  const statusDown = isError && errorUpdatedAt > dataUpdatedAt;
 
   const [file, setFile] = useState("api.log");
   const [lines, setLines] = useState(500);
@@ -99,6 +102,16 @@ export default function System() {
         <Button icon={<ReloadOutlined />} loading={isFetching || loadingLog} onClick={() => { refetch(); if (logOpen) refetchLog(); }}>刷新</Button>
       </Space>
 
+      {statusDown && (
+        <Alert type="error" showIcon style={{ marginBottom: 12 }}
+          message={`后端 20 秒没回应${st ? `（下面是 ${new Date(dataUpdatedAt).toLocaleTimeString()} 的旧数据）` : ""}`}
+          description={<div style={{ lineHeight: 1.8 }}>
+            这一页不查业务数据库，连它都打不开，说明后端整个被堵住了（多半是数据库锁住、或者某个请求把后端占死）。在服务器上：
+            <div><Typography.Text code copyable>cd ~/label_infra/smart-label/deploy && docker compose logs --since 10m api | grep -E "STUCK|SLOW" | tail -20</Typography.Text> 看卡在哪</div>
+            <div><Typography.Text code copyable>docker compose exec mysql mysql -uroot -p -e "SELECT * FROM sys.schema_table_lock_waits\G; SELECT * FROM information_schema.innodb_trx\G"</Typography.Text> 看谁锁着</div>
+            <div><Typography.Text code copyable>docker compose restart api</Typography.Text> 实在不行重启后端（另一个后端 api_b 会顶上，别人不受影响）</div>
+          </div>} />
+      )}
       <Row gutter={12}>
         <Col xs={24} md={6}>
           <Card size="small" title="CPU">
@@ -211,6 +224,15 @@ export default function System() {
                   </div>
                   <Spark title="一小时：每分钟请求 p95（ms）" pts={w.history.map((h) => h.p95 ?? 0)} warn={1000} bad={3000} />
                   <Spark title="一小时：每分钟事件循环被堵最长（ms）" pts={w.history.map((h) => h.lag_max)} warn={200} bad={1000} />
+                  {!!w.inflight?.length && (
+                    <Table size="small" rowKey={(r) => `${r.req}-${r.sec}`} pagination={false} style={{ marginTop: 8 }} dataSource={w.inflight.slice(0, 10)}
+                      title={() => <Typography.Text type={w.inflight![0].sec > 10 ? "danger" : "secondary"} style={{ fontSize: 12 }}>
+                        现在后端手上还没返回的请求（卡在哪）：共 {w.inflight_total} 个在处理</Typography.Text>}
+                      columns={[
+                        { title: "已等", dataIndex: "sec", width: 70, render: (v: number) => <span style={{ color: v > 10 ? token.colorError : undefined }}>{v}s</span> },
+                        { title: "请求", dataIndex: "req", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v}</Typography.Text> },
+                      ]} />
+                  )}
                   {w.slowest.length > 0 && (
                     <Table size="small" rowKey="route" pagination={false} style={{ marginTop: 8 }} dataSource={w.slowest.slice(0, 6)}
                       title={() => <Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 5 分钟最慢的接口</Typography.Text>}
@@ -255,7 +277,7 @@ export default function System() {
                     {stuck ? <Tag color="error">有查询在排队 / 等锁</Tag> : <Tag color="success">顺畅</Tag>}
                     {d.buffer_pool_bytes != null && (
                       <Typography.Text type={d.buffer_pool_bytes < 1024 ** 3 ? "danger" : "secondary"}>
-                        数据缓存 {gb(d.buffer_pool_bytes)}{d.buffer_pool_bytes < 1024 ** 3 ? "（太小：还是默认的 128MB，更新部署后会变成 8GB）" : ""}
+                        数据缓存 {gb(d.buffer_pool_bytes)}{d.buffer_pool_bytes < 1024 ** 3 ? "（太小：还是 MySQL 默认的 128MB。新配置要重启 MySQL 才生效：挑没人用的时候在 deploy 目录执行 bash up.sh --mysql，会断十几秒）" : ""}
                       </Typography.Text>
                     )}
                   </div>
@@ -275,6 +297,29 @@ export default function System() {
                   { title: "锁着的", dataIndex: "blocking", render: (v: string, r) => (
                     <Space size={4}><Typography.Text style={{ fontSize: 11, maxWidth: 200 }} ellipsis={{ tooltip: v }}>{v || "（空闲的长事务）"}</Typography.Text>
                       {isSuper && <KillBtn id={r.blocking_id} onDone={() => refetch()} />}</Space>) },
+                ]} />
+            )}
+            {!!st?.db.mdl_waits?.length && (
+              <Table size="small" rowKey={(r) => `${r.waiting_id}-${r.blocking_id}`} pagination={false} style={{ marginTop: 8 }} dataSource={st.db.mdl_waits}
+                title={() => <Typography.Text type="danger" style={{ fontSize: 12 }}>等表锁（改表结构卡住，后面用这张表的全在排队）：停掉「锁着的」那条就通了</Typography.Text>}
+                columns={[
+                  { title: "表", dataIndex: "table", width: 110 },
+                  { title: "等了", dataIndex: "sec", width: 60, render: (v: number) => `${v}s` },
+                  { title: "在等的", dataIndex: "waiting", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v}</Typography.Text> },
+                  { title: "锁着的", dataIndex: "blocking", render: (v: string, r) => (
+                    <Space size={4}><Typography.Text style={{ fontSize: 11, maxWidth: 200 }} ellipsis={{ tooltip: v }}>{v || "（没在跑语句的事务，开着没提交）"}</Typography.Text>
+                      {isSuper && <KillBtn id={r.blocking_id} onDone={() => refetch()} />}</Space>) },
+                ]} />
+            )}
+            {!!st?.db.long_trx?.length && (
+              <Table size="small" rowKey="id" pagination={false} style={{ marginTop: 8 }} dataSource={st.db.long_trx}
+                title={() => <Typography.Text type={st.db.long_trx!.some((t) => t.sec > 60) ? "danger" : "secondary"} style={{ fontSize: 12 }}>
+                  开着没提交的事务（超过 10 秒）：拿着锁不放的多半是它</Typography.Text>}
+                columns={[
+                  { title: "开了", dataIndex: "sec", width: 70, render: (v: number) => <span style={{ color: v > 60 ? token.colorError : undefined }}>{v}s</span> },
+                  { title: "锁了几行", dataIndex: "rows_locked", width: 80 },
+                  { title: "现在在跑", dataIndex: "sql", render: (v: string) => <Typography.Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v || "（空闲，没提交）"}</Typography.Text> },
+                  ...(isSuper ? [{ title: "", width: 70, render: (_: unknown, r: { id: number }) => <KillBtn id={r.id} onDone={() => refetch()} /> }] : []),
                 ]} />
             )}
             {!!st?.db.slow_queries?.length && (

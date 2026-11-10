@@ -19,6 +19,10 @@ export interface SysStatus {
     bp_hit?: number;
     pool?: { size: number; checked_out: number; overflow: number };
     lock_wait_list?: { sec: number; waiting: string | null; waiting_id: number; blocking: string | null; blocking_id: number }[];
+    /** 等表锁（元数据锁）：改表结构在等一个没结束的事务，后面用这张表的查询全排在它后面 */
+    mdl_waits?: { table: string; waiting_id: number; waiting: string | null; sec: number; blocking_id: number; blocking: string | null }[];
+    /** 开着超过 10 秒没提交的事务（拿着锁不放的多半是它） */
+    long_trx?: { id: number; sec: number; state: string; sql: string | null; rows_locked: number }[];
     /** 每 15 秒一个点，一小时 */
     history?: { ts: number; ok: boolean; ms?: number; running?: number; lock_waits?: number; n_slow?: number; error?: string;
       pool?: { size: number; checked_out: number; overflow: number } }[];
@@ -29,6 +33,9 @@ export interface SysStatus {
     slowest: { route: string; n: number; p95: number | null; max: number }[];
     loop_lag_now: number | null; loop_lag_max: number | null; loop_blocked_sec: number;
     history: { t: number; p95: number | null; n: number; lag_max: number }[];
+    /** 后端手上还没返回的请求（超过 1 秒的），等得最久的在前 */
+    inflight?: { sec: number; req: string }[];
+    inflight_total?: number;
   };
   services: { name: string; url: string; ok: boolean | null; ms: number | null; error: string | null }[];
   /** GPU 在视觉服务那台机器上：nvidia-smi 每张卡 + 视觉服务里每个模型常驻显存 */
@@ -42,7 +49,7 @@ export interface SysStatus {
   };
 }
 
-export const sysStatus = () => request.get<never, SysStatus>("/system/status", { timeout: 20000 } as never);
+export const sysStatus = () => request.get<never, SysStatus>("/system/status", { timeout: 20000, silent: true } as never);
 /** 终止一条卡住的查询（只给超级管理员） */
 export const sysKillQuery = (id: number) => request.post<never, { killed: number }>(`/system/db/kill/${id}`);
 

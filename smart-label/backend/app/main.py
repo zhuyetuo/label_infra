@@ -90,11 +90,15 @@ SLOW_MS = 3000
 
 @app.middleware("http")
 async def _log_slow(request: Request, call_next):
+    from app.core import perf
     t0 = time.perf_counter()
-    resp = await call_next(request)
+    rid = perf.inflight_start(request.method, request.url.path)
+    try:
+        resp = await call_next(request)
+    finally:
+        perf.inflight_end(rid)
     ms = (time.perf_counter() - t0) * 1000
     # 系统监控的「网页卡不卡」：按路由模板记（/tasks/{task_id} 而不是每个 id 一条）
-    from app.core import perf
     route = request.scope.get("route")
     perf.record_request(request.method, getattr(route, "path", request.url.path), ms, resp.status_code)
     if ms >= SLOW_MS:
