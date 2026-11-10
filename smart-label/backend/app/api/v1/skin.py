@@ -19,7 +19,7 @@ from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.sample import Sample
 from app.services.dog_name_service import imu_dog_map, imu_of
-from app.models.annotation import AnnotationRecord
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.skin_daily import SkinDailyStat
 from app.models.task import Task
 from app.models.skin import SkinRecord, SkinWeeklyRow
@@ -677,5 +677,39 @@ async def mark_scratch_checked(task_id: int, db: AsyncSession = Depends(get_db),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
     t.scratch_checked_by = user.id
     t.scratch_checked_at = _dt.datetime.now()
+    # 跟项目页的片段审核同步：复核完 = 这一段的抓挠片段审核通过（项目页「抓挠 未通过 / 未审」跟着少）。
+    # 只动还没结论的：退回的、标了待定的不动（那些还要人处理）
+    approved = await approve_scratch_items(db, t, user)
     await db.commit()
-    return ok({"task_id": task_id, "scratch_checked_at": t.scratch_checked_at.isoformat()})
+    return ok({"task_id": task_id, "scratch_checked_at": t.scratch_checked_at.isoformat(), "approved": approved})
+
+
+async def approve_scratch_items(db: AsyncSession, task: Task, user: User) -> int:
+    from sqlalchemy import update
+
+    from app.models.annotation import LabelItemSource
+    from app.models.label import LabelDefinition
+    from app.services import label_tree
+
+    roots = set((await db.execute(select(LabelDefinition.id).where(
+        LabelDefinition.project_id == task.project_id,
+        (LabelDefinition.display_name == "抓挠") | (LabelDefinition.code == "抓挠"),
+    ))).scalars().all())
+    if not roots:
+        return 0
+    ids = await label_tree.expand_ids(db, roots)
+    rec_ids = select(AnnotationRecord.id).where(AnnotationRecord.task_id == task.id,
+                                                AnnotationRecord.round_no == task.round_no)
+    base = (AnnotationLabelItem.annotation_record_id.in_(rec_ids), AnnotationLabelItem.label_id.in_(ids),
+            AnnotationLabelItem.seg_status.is_(None), AnnotationLabelItem.review_note.is_(None),
+            AnnotationLabelItem.uncertain.is_(False))
+    now = _dt.datetime.now()
+    # AI 给的、没改过的：复核过了就算人确认过（跟片段审核「通过」一样）
+    await db.execute(update(AnnotationLabelItem).where(
+        *base, AnnotationLabelItem.source_type == LabelItemSource.ai_generated, AnnotationLabelItem.is_modified.is_(False)
+    ).values(ai_confirmed=True).execution_options(synchronize_session=False))
+    r = await db.execute(update(AnnotationLabelItem).where(*base).values(
+        seg_status="approved", seg_reviewed_by=user.id, seg_reviewed_at=now,
+        seg_claimed_by=None, seg_claim_expires_at=None,
+    ).execution_options(synchronize_session=False))
+    return int(r.rowcount or 0)
