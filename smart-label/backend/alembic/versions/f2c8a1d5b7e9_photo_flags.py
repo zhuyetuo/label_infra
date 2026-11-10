@@ -14,6 +14,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # 表已经在了就跳过：上一次迁移建完表、还没来得及记版本号就断了，重跑时不能再建一次
+    if "photo_flags" in sa.inspect(op.get_bind()).get_table_names():
+        return
     op.create_table(
         "photo_flags",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),

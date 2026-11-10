@@ -26,7 +26,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    # 每个迁移单独一个事务、做完就记版本号：MySQL 的建表 / 改表会自动提交，几步放一个事务里时，
+    # 中途断了就会出现「表建好了、版本号没记」，重跑又去建同一张表报 already exists
+    context.configure(connection=connection, target_metadata=target_metadata, transaction_per_migration=True)
     with context.begin_transaction():
         context.run_migrations()
 
