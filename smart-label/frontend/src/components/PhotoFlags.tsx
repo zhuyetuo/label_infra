@@ -31,15 +31,31 @@ export function FlagButton({ album, folder, dog, filename, flag, onChanged, size
   album: Album; folder: string; dog: string; filename: string; flag?: PhotoFlag; onChanged: () => void; size?: "small" | "middle";
 }) {
   const save = async (reason: FlagReason | null) => {
+    // 记下改之前的样子，提示条上点「撤回」就还原成这样（标错了一点就回去）
+    const prev = flag ? { reason: flag.reason, note: flag.note } : null;
     await putPhotoFlag(album, { folder, dog_folder: dog, filename, reason });
-    message.success({ content: reason ? `${photoNo(filename)}：标为「${reasonMeta(reason)?.short}」` : `${photoNo(filename)}：已取消标记`, key: "flag", duration: 1 });
     onChanged();
+    const undo = async () => {
+      message.destroy("flag");
+      await putPhotoFlag(album, { folder, dog_folder: dog, filename, reason: prev?.reason ?? null, note: prev?.note ?? null });
+      onChanged();
+      message.success({ content: `${photoNo(filename)}：已撤回，还原成${prev ? `「${reasonMeta(prev.reason)?.short}」` : "没标记"}`, key: "flag", duration: 2 });
+    };
+    message.success({
+      key: "flag", duration: 5,
+      content: (
+        <span>
+          {reason ? `${photoNo(filename)}：标为「${reasonMeta(reason)?.short}」` : `${photoNo(filename)}：已撤回标记`}
+          <Button type="link" size="small" onClick={undo}>撤回</Button>
+        </span>
+      ),
+    });
   };
   return (
     <Dropdown trigger={["click"]} menu={{
       items: [
         ...FLAG_REASONS.map((r) => ({ key: r.value, label: <span>{flag?.reason === r.value ? "✓ " : ""}{r.short}</span> })),
-        ...(flag ? [{ type: "divider" as const }, { key: "__clear", label: <span style={{ color: "#999" }}>取消标记（拍得没问题）</span> }] : []),
+        ...(flag ? [{ type: "divider" as const }, { key: "__clear", label: <span style={{ color: "#ff4d4f" }}>↶ 撤回标记（标错了，这张没问题）</span> }] : []),
       ],
       onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); save(key === "__clear" ? null : (key as FlagReason)); },
     }}>
@@ -52,7 +68,9 @@ export function FlagButton({ album, folder, dog, filename, flag, onChanged, size
 }
 
 /** 汇总：按日期目录挑，生成一段发给狗场的话（第几张什么问题 + 下次怎么拍） */
-export function FlagSummary({ flags, urlOf }: { flags: PhotoFlag[]; urlOf: (f: PhotoFlag) => string | undefined }) {
+export function FlagSummary({ flags, urlOf, album, onChanged }: {
+  flags: PhotoFlag[]; urlOf: (f: PhotoFlag) => string | undefined; album?: Album; onChanged?: () => void;
+}) {
   const folders = useMemo(() => [...new Set(flags.map((f) => f.folder))].sort().reverse(), [flags]);
   const [folder, setFolder] = useState<string | undefined>(folders[0]);
   const cur = flags.filter((f) => !folder || f.folder === folder);
@@ -93,7 +111,12 @@ export function FlagSummary({ flags, urlOf }: { flags: PhotoFlag[]; urlOf: (f: P
                 <div style={{ width: 120, height: 90, borderRadius: 4, overflow: "hidden", border: "2px solid #ff4d4f", background: "var(--sl-fill2)" }}>
                   {urlOf(f) && <img src={urlOf(f)} alt={f.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                 </div>
-                <div style={{ fontSize: 12 }}>{photoNo(f.filename)} <Tag color="red" style={{ marginRight: 0 }}>{reasonMeta(f.reason)?.short}</Tag></div>
+                <div style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                  {photoNo(f.filename)} <Tag color="red" style={{ marginRight: 0 }}>{reasonMeta(f.reason)?.short}</Tag>
+                  {album && onChanged && (
+                    <FlagButton album={album} folder={f.folder} dog={f.dog_folder} filename={f.filename} flag={f} onChanged={onChanged} />
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -109,7 +132,9 @@ export function FlagSummary({ flags, urlOf }: { flags: PhotoFlag[]; urlOf: (f: P
 }
 
 /** 打开汇总的按钮 + 弹窗 */
-export function FlagSummaryButton({ flags, urlOf }: { flags: PhotoFlag[]; urlOf: (f: PhotoFlag) => string | undefined }) {
+export function FlagSummaryButton({ flags, urlOf, album, onChanged }: {
+  flags: PhotoFlag[]; urlOf: (f: PhotoFlag) => string | undefined; album?: Album; onChanged?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -117,7 +142,7 @@ export function FlagSummaryButton({ flags, urlOf }: { flags: PhotoFlag[]; urlOf:
         拍摄问题 {flags.length} 张 · 汇总给狗场
       </Button>
       <Modal open={open} onCancel={() => setOpen(false)} footer={null} width={900} title="拍摄问题汇总（发给狗场）" destroyOnClose>
-        <FlagSummary flags={flags} urlOf={urlOf} />
+        <FlagSummary flags={flags} urlOf={urlOf} album={album} onChanged={onChanged} />
       </Modal>
     </>
   );
