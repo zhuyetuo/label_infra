@@ -21,6 +21,7 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 
 import httpx
@@ -199,9 +200,44 @@ def clean_rel_path(rel_path: str) -> str:
     return "/".join(parts)
 
 
+_list_cache: dict[str, tuple[float, list[dict], list[dict]]] = {}
+LIST_TTL_S = 60
+
+
+def list_photos_cached(album: str = "oral") -> tuple[list[dict], list[dict]]:
+    """(相册目录树, 各来源扫描报告)，缓存 60 秒。
+
+    原来每打开一次照片弹窗都现扫：NAS 上上千张、每张还要 stat 一次取大小，主目录还扫两遍
+    （一遍列照片、一遍出报告）——在网络盘上要好几秒，弹窗一直转圈。新拍的照片最多晚一分钟出现。"""
+    hit = _list_cache.get(album)
+    now = time.monotonic()
+    if hit and now - hit[0] < LIST_TTL_S:
+        return hit[1], hit[2]
+    if hit:
+        # 过期了：先把旧的给出去，后台再扫一遍（下一次打开就是新的）——谁都不用干等扫 NAS
+        if album not in _refreshing:
+            _refreshing.add(album)
+            threading.Thread(target=_refresh_list, args=(album,), daemon=True).start()
+        return hit[1], hit[2]
+    return _refresh_list(album)
+
+
+_refreshing: set[str] = set()
+
+
+def _refresh_list(album: str) -> tuple[list[dict], list[dict]]:
+    try:
+        folders = list_photos(album)
+        report = scan_report(album)
+        _list_cache[album] = (time.monotonic(), folders, report)
+        return folders, report
+    finally:
+        _refreshing.discard(album)
+
+
 def list_photos(album: str = "oral") -> list[dict]:
     """扫相册两层目录（日期/狗），返回 [{folder, date, ok, dogs:[{name, photos:[{rel_path, filename, size_bytes}]}]}]，
-    日期倒序。几百张图几十个目录，每次现扫就行，不缓存。"""
+    日期倒序。要快就用 list_photos_cached（60 秒缓存）。"""
     root = album_root(album)
     # 主目录不在**不能**直接抛：狗场那批在另一棵树里，主目录没挂载/这个相册
     # 压根没有老素材时，抛出去等于把已经有的照片也一并藏了。两边都没有才算错。

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Checkbox, Collapse, Empty, Image, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { getMaterialPhotoToken, listMaterialPhotos, listPhotoFlags, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
+import { getMaterialPhotoToken, getMaterialPhotoTokens, listMaterialPhotos, thumbUrl, listPhotoFlags, listPhotoRatings, materialPhotoUrl, type Album, type MaterialPhoto } from "@/api/material";
 import SkinRatingBar, { SKIN_GRADES } from "@/components/SkinRatingBar";
 import { FlagButton, FlagSummaryButton, flagKey } from "@/components/PhotoFlags";
 import { useAuthStore } from "@/stores/authStore";
@@ -122,12 +122,19 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     if (!missing.length) return;
     let cancelled = false;
     (async () => {
-      for (let i = 0; i < missing.length; i += 8) {
-        const chunk = missing.slice(i, i + 8);
-        const tokens = await Promise.all(chunk.map((p) => getMaterialPhotoToken(album, p).catch(() => null)));
+      // 一批一个请求拿凭证（原来一张一个请求、8 个一组排队）；老后端没有批量接口时退回一张张拿
+      for (let i = 0; i < missing.length; i += 300) {
+        const chunk = missing.slice(i, i + 300);
+        let tokens: Record<string, string> = {};
+        try {
+          tokens = await getMaterialPhotoTokens(album, chunk);
+        } catch {
+          const got = await Promise.all(chunk.map((p) => getMaterialPhotoToken(album, p).catch(() => null)));
+          chunk.forEach((p, j) => { if (got[j]) tokens[p] = got[j]!.token; });
+        }
         if (cancelled) return;
         const next: Record<string, string> = {};
-        chunk.forEach((p, j) => { if (tokens[j]) next[p] = materialPhotoUrl(album, p, tokens[j]!.token); });
+        chunk.forEach((p) => { if (tokens[p]) next[p] = materialPhotoUrl(album, p, tokens[p]); });
         setUrls((prev) => ({ ...prev, ...next }));
       }
     })();
@@ -233,7 +240,7 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
             )}
             <div style={{ width: 160, height: 120, background: "var(--sl-fill2)", borderRadius: 4, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
               boxSizing: "border-box", border: rating && allPhotos[idx] && flagMap.has(flagKey(allPhotos[idx].folder, allPhotos[idx].dog, p.filename)) ? "3px solid #ff4d4f" : undefined }}>
-              {urls[p.rel_path] ? <img src={urls[p.rel_path]} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
+              {urls[p.rel_path] ? <img src={thumbUrl(urls[p.rel_path])} alt={p.filename} style={{ maxWidth: 160, maxHeight: 120, objectFit: "contain" }} loading="lazy" /> : <Spin size="small" />}
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: p.filename }}>{p.filename}</Typography.Text>
           </div>
@@ -250,7 +257,7 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
         <div style={{ marginBottom: 8 }}>
           <FlagSummaryButton album={album} onChanged={() => refetchFlags()}
             flags={(flagData?.flags ?? []).filter((f) => allPhotos.some((p) => p.folder === f.folder))}
-            urlOf={(f) => { const ph = allPhotos.find((p) => p.folder === f.folder && p.dog === f.dog_folder && p.filename === f.filename); return ph ? urls[ph.rel_path] : undefined; }} />
+            urlOf={(f) => { const ph = allPhotos.find((p) => p.folder === f.folder && p.dog === f.dog_folder && p.filename === f.filename); return ph && urls[ph.rel_path] ? thumbUrl(urls[ph.rel_path]) : undefined; }} />
           <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
             哪张拍得不行（模糊、太暗、没拍到皮肤…），点照片右上角的小旗标出来；汇总里一键复制发给狗场
           </Typography.Text>

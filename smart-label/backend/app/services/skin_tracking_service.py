@@ -135,7 +135,7 @@ def _scan_photos() -> list[tuple[str, str, int, str]]:
     from app.services import tooth_service
 
     try:
-        folders = tooth_service.list_photos("skin")
+        folders = tooth_service.list_photos_cached("skin")[0]
     except Exception:  # noqa: BLE001 —— NAS 没挂上就当没照片，别把整张表带崩
         return []
     out: list[tuple[str, str, int, str]] = []
