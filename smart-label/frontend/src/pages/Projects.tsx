@@ -190,6 +190,20 @@ export default function Projects() {
   });
 
   const [open, setOpen] = useState(false);
+  // 翻页记在这台电脑上：项目列表第几页、每页几条；每个项目的任务列表各自第几页。刷新回来还在原来那页
+  const [pager, setPagerState] = useState<{ current: number; pageSize: number; tasks: Record<number, { current: number; pageSize: number }> }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("projects-pager") || "null");
+      if (v && typeof v.current === "number") return { tasks: {}, ...v };
+    } catch { /* 读不到就从第一页开始 */ }
+    return { current: 1, pageSize: 10, tasks: {} };
+  });
+  const setPager = (patch: Partial<typeof pager>) =>
+    setPagerState((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem("projects-pager", JSON.stringify(next)); } catch { /* 存不了就算了 */ }
+      return next;
+    });
   // 一键去重：勾了几个项目就去重那几个，没勾就全部项目；一个一个跑，按钮上显示做到第几个
   const [dedupeSel, setDedupeSel] = useState<number[]>([]);
   const [dedupeRun, setDedupeRun] = useState<{ done: number; total: number } | null>(null);
@@ -1291,6 +1305,10 @@ export default function Projects() {
           getCheckboxProps: (p: Project) => ({ disabled: !p.is_active }),
           columnWidth: 36,
         } : undefined}
+        pagination={{
+          current: pager.current, pageSize: pager.pageSize, showSizeChanger: true,
+          onChange: (current, pageSize) => setPager({ current, pageSize }),
+        }}
         // 排序是人的看法，不是页面的初始状态——记住它，下次回来还按上次排的
         onChange={projectSort.onTableChange}
         expandable={{
@@ -1761,7 +1779,13 @@ export default function Projects() {
                 size="small"
                 rowKey="id"
                 dataSource={rows}
-                pagination={rows.length > 10 ? { pageSize: 10, showSizeChanger: true } : false}
+                pagination={(() => {
+                  const tp = pager.tasks[p.id] ?? { current: 1, pageSize: 10 };
+                  return rows.length > tp.pageSize || tp.pageSize !== 10 ? {
+                    current: tp.current, pageSize: tp.pageSize, showSizeChanger: true,
+                    onChange: (current: number, pageSize: number) => setPager({ tasks: { ...pager.tasks, [p.id]: { current, pageSize } } }),
+                  } : false;
+                })()}
                 // 只在升/降之间切，不要 antd 默认第三档"取消排序"（看着像乱序）
                 sortDirections={["ascend", "descend", "ascend"]}
                 locale={{
