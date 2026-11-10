@@ -944,7 +944,9 @@ export default function Projects() {
   const taskSort = usePersistedSort("project-tasks-sort");
   // 外层项目表自己的排序记忆。里层任务表早就有了，外层一直没接——
   // 排一次"按项目名（= 日期）降序"，换个页面回来又变回默认，每次都得重排
-  const projectSort = usePersistedSort("projects-sort");
+  // 换了个存储键：以前记住的排序（多半是按 ID）作废一次，大家都回到「项目名倒序 = 最新日期在前」；
+  // 之后自己再点别的排序照样记住
+  const projectSort = usePersistedSort("projects-sort-v2");
   // 列宽也让人自己拖：「片段」那列内容长短差得远，写死一个宽度总有一头不合适
   // v2：改成「片段列吃剩下的宽度、整表不用横向滚动」，以前拖宽记下来的列宽作废，不然还是会挤出滚动条
   const taskWidth = useResizableColumns("project-tasks-widths-v2");
@@ -2174,6 +2176,8 @@ export default function Projects() {
             // 项目名就是日期，按名字排 = 按日期排
             sorter: (a: Project, b: Project) => a.name.localeCompare(b.name),
             sortDirections: ["descend", "ascend", "descend"],
+            // 默认按项目名（= 日期）倒序：最新那天在最上面
+            defaultSortOrder: "descend" as const,
             // 说明挪到项目名的悬浮提示里，不单占一列。
             // 那一列 180px 装不下一句话，永远是「从 L…」这种截断，占着位置又
             // 什么都没说清楚；而说明本来就不是每行都要看的东西，需要时鼠标
