@@ -1037,10 +1037,13 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
         components={trackWidth.components}
         tableLayout={trackWidth.tableLayout}
         columns={trackWidth.applyResize<TrackingRow>(trackSort.applySort<TrackingRow>([
-          { title: "日期", dataIndex: "date", width: 104, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
+          // 日期、狗钉在左边，照片评级、操作钉在右边：右边开着评级标准、页面变窄时，中间的列左右滑，
+          // 这几列一直看得到（不然「去评级」「去填问答」被挤到看不见的地方）
+          { title: "日期", dataIndex: "date", width: 104, fixed: "left" as const, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },
           {
             title: "狗",
             width: 150,
+            fixed: "left" as const,
             // PM 那边的狗名是「品种-名字」，全写出来再加机位号就三行了。列表里
             // 只留名字（一眼能认），品种和机位号放 tooltip
             render: (_: unknown, r: TrackingRow) => {
@@ -1280,6 +1283,7 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             ),
             key: "photo_grade",
             width: 120,
+            fixed: "right" as const,
             sorter: (a: TrackingRow, b: TrackingRow) => (a.photo_grade ?? "").localeCompare(b.photo_grade ?? ""),
             render: (_: unknown, r: TrackingRow) => {
               if (!r.photo_count) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -1314,6 +1318,8 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
           },
           {
             title: "操作",
+            fixed: "right" as const,
+            width: 110,
             render: (_: unknown, r: TrackingRow) => {
               // 只有「需要问答」或者已经填过的才给入口
               if (!r.question_triggered && !r.has_answers) return <Typography.Text type="secondary">—</Typography.Text>;
