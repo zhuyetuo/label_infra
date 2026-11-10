@@ -1,3 +1,4 @@
+import { getLabelReview } from "@/api/tasks";
 import { useEffect } from "react";
 import { Badge, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
 import { useThemeStore } from "@/stores/themeStore";
@@ -67,6 +68,13 @@ export default function AppLayout() {
   }, [me, setUserInfo]);
 
   const returned = useReturnedSegments();
+  // 左边「项目」上标抓挠还有多少没通过 / 没审（管理员、审核员看）
+  const reviewer = userInfo?.role === "admin" || userInfo?.role === "super_admin" || userInfo?.role === "reviewer";
+  const { data: scratch } = useQuery({
+    queryKey: ["label-review", "抓挠"], queryFn: () => getLabelReview("抓挠"),
+    enabled: !!accessToken && reviewer, refetchInterval: 60_000, staleTime: 20_000,
+  });
+  const scratchNotPassed = scratch ? scratch.total.n - scratch.total.approved : 0;
 
   if (!accessToken) return <Navigate to="/login" replace />;
 
@@ -106,7 +114,19 @@ export default function AppLayout() {
               key: i.key,
               // 退回给我的片段：红色数字，有多少条没改好
               label:
-                i.key === "/segment-review" && returned.total > 0 ? (
+                i.key === "/projects" && scratch && scratchNotPassed > 0 ? (
+                  <Tooltip placement="right"
+                    title={`抓挠：未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段`}>
+                    <Space size={4}>
+                      {i.label}
+                      <span style={{ fontSize: 11, color: "#ff4d4f" }}>抓挠</span>
+                      <Badge count={scratchNotPassed} overflowCount={9999} size="small" />
+                      {scratch.total.unreviewed > 0 && (
+                        <Badge count={scratch.total.unreviewed} overflowCount={9999} size="small" color="#fa8c16" />
+                      )}
+                    </Space>
+                  </Tooltip>
+                ) : i.key === "/segment-review" && returned.total > 0 ? (
                   <Space size={6}>
                     {i.label}
                     <Badge count={returned.total} overflowCount={999} size="small" />

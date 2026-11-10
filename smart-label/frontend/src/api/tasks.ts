@@ -17,6 +17,12 @@ export interface ProjectProgress { segs: number; seg_pending: number; cands: num
 export const getTasksProgress = (mine = false) =>
   request.get<never, Record<string, ProjectProgress>>("/tasks/progress", { params: mine ? { mine: true } : undefined });
 
+/** 某个类别（默认抓挠，含子类）每个项目的片段审核进度：多少段、通过、退回、还没审 */
+export interface LabelReviewCounts { n: number; approved: number; returned: number; unreviewed: number }
+export const getLabelReview = (label = "抓挠") =>
+  request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts }>(
+    "/tasks/label-review", { params: { label }, silent: true } as object);
+
 export const listTasksByIds = (ids: number[]) =>
   request.get<never, Task[]>("/tasks", { params: { ids: ids.join(",") } });
 

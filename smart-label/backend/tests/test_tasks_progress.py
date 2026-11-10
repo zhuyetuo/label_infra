@@ -19,3 +19,24 @@ def test_progress_跟逐个任务加起来一样(db, run):
     mine_rows = [r for r in rows if r.get("assigned_to") == w.admin.id]
     if not mine_rows:
         assert str(w.p.id) not in mine
+
+
+def test_抓挠审核进度_按项目汇总_跟逐个任务加起来一样(db, run):
+    w = _world(db, run)
+    rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+    got = run(tasks_api.label_review_progress(label="抓挠", db=db, user=w.admin))["data"]
+    # 只算抓挠（含子类）：拿逐个任务的 label_counts 按名字挑出来加
+    from app.models.label import LabelDefinition
+    from sqlalchemy import select
+
+    names = {l.id: l.display_name for l in run(db.execute(select(LabelDefinition))).scalars().all()}
+    want = {"n": 0, "approved": 0, "returned": 0}
+    for r in rows:
+        for lid, c in r["label_counts"].items():
+            if names.get(int(lid), "").startswith("抓挠"):
+                for k in want:
+                    want[k] += c.get(k, 0)
+    p = got["projects"][str(w.p.id)]
+    assert {k: p[k] for k in want} == want and want["n"] > 0
+    assert p["unreviewed"] == want["n"] - want["approved"] - want["returned"]
+    assert got["total"]["n"] == want["n"]
