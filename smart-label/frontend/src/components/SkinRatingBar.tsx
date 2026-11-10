@@ -1,42 +1,24 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Radio, Space, Tag, Tooltip, Typography, message } from "antd";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import { SkinStandardHelp } from "@/components/SkinStandard";
 import { putPhotoRating, type PhotoRating, type SkinGrade } from "@/api/material";
 
 /** 档位跟产品的 S 档对齐（问卷 + IMU 算出来的 S0 / S1 / S2），照片评出来的能直接跟它对照 */
 export const SKIN_GRADES: { value: SkinGrade; label: string; color: string; desc: string }[] = [
   { value: "S0", label: "S0 正常", color: "green",
-    desc: "皮肤颜色正常（粉色 / 肤色），没有红斑、皮屑、抓痕、破溃；毛发完整、有光泽，没有秃毛" },
+    desc: "皮肤完整、粉红 / 肉色；没有秃毛，毛发光亮。允许一点点轻微泛红、少量干皮屑" },
   { value: "S1", label: "S1 轻度", color: "gold",
-    desc: "局部轻微发红或少量皮屑 / 抓痕；小范围（单处、硬币大小以内）毛发稀疏或秃毛；没有破溃、渗出、结痂" },
+    desc: "皮肤没破。成块皮屑、可擦掉的黑油脂、1–2 处小秃毛（≤2cm）、毛发油腻打结 / 小范围断裂；没有红旗" },
   { value: "S2", label: "S2 中重度", color: "red",
-    desc: "大面积或多处红斑、色素沉着、皮肤增厚（像大象皮）；多处或大片秃毛；有破溃、结痂、渗出、明显异味——任一项明显就判 S2" },
+    desc: "红旗任一项：皮肤鲜红；糜烂 / 渗液 / 结痂 / 脓疱 / 丘疹 / 裂隙；成片秃毛或直径 >3cm；毛发大部分干枯断裂" },
   { value: "unsure", label: "看不清", color: "default",
-    desc: "照片没拍到关键部位（耳后、腋下、腹部、爪子…）、太模糊或太暗，判断不了" },
+    desc: "模糊、遮挡、太暗，或没拍到关键部位（耳后、腋下、腹部、爪子…），不猜" },
 ];
 const gradeMeta = (g: SkinGrade) => SKIN_GRADES.find((x) => x.value === g)!;
 
-/** 档位说明：问号悬停就看到 */
+/** 档位说明：问号点开看兽医版完整标准（带图），见 SkinStandard.tsx */
 export function SkinGradeHelp() {
-  return (
-    <Tooltip
-      overlayStyle={{ maxWidth: 480 }}
-      title={
-        <div style={{ fontSize: 12, lineHeight: 1.7 }}>
-          <b>看这只狗这一次的全部照片，按最严重的部位定档：</b>
-          {SKIN_GRADES.map((g) => (
-            <div key={g.value} style={{ marginTop: 6 }}>
-              <Tag color={g.color}>{g.label}</Tag>
-              {g.desc}
-            </div>
-          ))}
-          <div style={{ marginTop: 6, opacity: 0.8 }}>拿不准在两档之间的，选重的那档，备注里写一句哪里拿不准。每个人各评各的、互相看不到；管理员能看到所有人的，用来对一致性</div>
-        </div>
-      }
-    >
-      <QuestionCircleOutlined style={{ color: "#888", cursor: "help" }} />
-    </Tooltip>
-  );
+  return <SkinStandardHelp />;
 }
 
 /**
