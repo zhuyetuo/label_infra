@@ -304,7 +304,7 @@ export default function SegmentReview() {
       <Table<SegItem>
         size="small"
         rowKey="id"
-        loading={isFetching}
+        loading={isFetching && !data}
         dataSource={rows}
         pagination={{ pageSize: 50, showSizeChanger: false }}
         locale={{

@@ -88,7 +88,7 @@ export function MlResults() {
       )}
 
       <Table
-        size="small" rowKey={(r) => `${r.date}-${r.imu}`} loading={isFetching} dataSource={rows}
+        size="small" rowKey={(r) => `${r.date}-${r.imu}`} loading={isFetching && !data} dataSource={rows}
         pagination={{ pageSize: 50, hideOnSinglePage: true }} scroll={{ x: "max-content" }}
         columns={[
           { title: "日期", dataIndex: "date", width: 110, sorter: (a: TrackingRow, b: TrackingRow) => a.date.localeCompare(b.date), defaultSortOrder: "descend" as const },

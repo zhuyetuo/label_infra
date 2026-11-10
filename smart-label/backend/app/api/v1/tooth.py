@@ -30,7 +30,11 @@ _CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/pn
 async def list_photos(db: AsyncSession = Depends(get_db)):
     """目录树 + 每张图最近一次检测结果（有的话）"""
     try:
-        tree = svc.list_photos()
+        # 扫 NAS 放线程里、用 60 秒缓存（原来每次打开都在事件循环里现扫，扫的时候整个后端卡住）。
+        # 下面要往每张图上挂检测结果，复制一份，别改坏缓存
+        import asyncio
+        import copy
+        tree = copy.deepcopy((await asyncio.to_thread(svc.list_photos_cached, "oral"))[0])
     except svc.ToothError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
     rows = (await db.execute(select(ToothPhotoResult))).scalars().all()

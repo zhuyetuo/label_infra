@@ -71,7 +71,10 @@ async def _lifespan(_app: FastAPI):
     await perf.stop()
 
 
-app = FastAPI(title="smart-label", version="0.1.0", lifespan=_lifespan)
+from app.core import fast_json  # noqa: E402
+
+fast_json.install()   # 接口返回值用 orjson 转 JSON（原来大列表光转 JSON 就要将近 1 秒，见 core/fast_json.py）
+app = FastAPI(title="smart-label", version="0.1.0", lifespan=_lifespan, default_response_class=fast_json.FastJSONResponse)
 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
