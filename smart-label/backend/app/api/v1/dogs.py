@@ -242,6 +242,9 @@ async def create_dog(body: DogCreate, db: AsyncSession = Depends(get_db)):
     if exists.scalar_one_or_none() is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "该编号已存在")
     dog = Dog(**body.model_dump())
+    # 建档时填的「皮肤」就是入档时的样子：入档皮肤没单独填就用它（以后皮肤变了，入档那份不跟着变）
+    if dog.intake_skin_level is None:
+        dog.intake_skin_level = dog.skin_level
     db.add(dog)
     await db.commit()
     await db.refresh(dog)

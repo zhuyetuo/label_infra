@@ -30,7 +30,10 @@ function DogCard({ dog }: { dog: Dog }) {
       {/* 最要紧的放最上面：这只狗是带着什么皮肤问题进来的 */}
       <div style={{ marginBottom: 8 }}>
         <Typography.Text strong>入档时皮肤：</Typography.Text>
-        {skin(dog.intake_skin_level)}
+        {dog.intake_skin_level ? skin(dog.intake_skin_level) : dog.skin_level ? (
+          // 入档时没单独记：先用档案上的「皮肤」，标一下
+          <>{skin(dog.skin_level)}<Typography.Text type="secondary" style={{ fontSize: 12 }}>（入档没单独记，按档案上的）</Typography.Text></>
+        ) : skin(null)}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>（{dog.created_at.slice(0, 10)} 入档）</Typography.Text>
         <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
           {dog.intake_skin_note || <Typography.Text type="secondary">没写说明，去「狗档案」补</Typography.Text>}
