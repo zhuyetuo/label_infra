@@ -1,5 +1,5 @@
 import { getLabelReview } from "@/api/tasks";
-import { SkinStandardDrawer } from "@/components/SkinStandard";
+import { SkinStandardDrawer, useStandardInset } from "@/components/SkinStandard";
 import { useEffect } from "react";
 import { Badge, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
 import { useThemeStore } from "@/stores/themeStore";
@@ -69,6 +69,7 @@ export default function AppLayout() {
   }, [me, setUserInfo]);
 
   const returned = useReturnedSegments();
+  const standardInset = useStandardInset();
   // 左边「项目」上标抓挠还有多少没通过 / 没审（管理员、审核员看）
   const reviewer = userInfo?.role === "admin" || userInfo?.role === "super_admin" || userInfo?.role === "reviewer";
   const { data: scratch } = useQuery({
@@ -138,7 +139,8 @@ export default function AppLayout() {
             }))}
           />
         </Sider>
-        <Content style={{ padding: 24, overflow: "auto" }}>
+        {/* 评级标准在右边开着时，整个页面往左让，不被盖住 */}
+        <Content style={{ padding: 24, overflow: "auto", marginRight: standardInset }}>
           <Outlet />
         </Content>
         <SkinStandardDrawer />

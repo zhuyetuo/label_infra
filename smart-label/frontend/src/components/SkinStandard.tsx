@@ -1,4 +1,4 @@
-import { Drawer, Image, Table, Tooltip, theme } from "antd";
+import { Button, Drawer, Image, Table, Tooltip, theme } from "antd";
 import { create } from "zustand";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 
@@ -143,14 +143,32 @@ export function SkinStandardContent() {
   );
 }
 
-/** 标准面板开没开：全局一份。开着时照片弹窗让到左边，一边看标准一边评 */
-export const useSkinStandard = create<{ open: boolean; setOpen: (v: boolean) => void }>((set) => ({
+/** 标准面板：开没开、多宽（拖左边那条边改宽窄，记在这台电脑上）。全局一份 */
+const W_KEY = "smart-label:skin-standard-w";
+const W_MIN = 360;
+const loadW = () => {
+  try {
+    const v = Number(localStorage.getItem(W_KEY));
+    if (v >= W_MIN) return v;
+  } catch { /* 用默认 */ }
+  return Math.min(Math.round(window.innerWidth * 0.42), 860);
+};
+export const useSkinStandard = create<{ open: boolean; width: number; setOpen: (v: boolean) => void; setWidth: (w: number) => void }>((set) => ({
   open: false,
+  width: loadW(),
   setOpen: (open) => set({ open }),
+  setWidth: (w) => {
+    const width = Math.round(Math.max(W_MIN, Math.min(w, window.innerWidth - 480)));
+    try { localStorage.setItem(W_KEY, String(width)); } catch { /* 存不了就算了 */ }
+    set({ width });
+  },
 }));
 
-/** 标准开着时，照片弹窗 / 页面要让出的右边宽度 */
-export const STANDARD_W = "min(46vw, 900px)";
+/** 标准开着时要让出的右边宽度（px）：页面内容、照片弹窗都按它往左让 */
+export function useStandardInset(): number {
+  const { open, width } = useSkinStandard();
+  return open ? width : 0;
+}
 
 /** 问号：点一下右边打开标准（再点收起）；不挡左边，照片照样能点、能评级 */
 export function SkinStandardHelp({ text }: { text?: string }) {
@@ -164,13 +182,44 @@ export function SkinStandardHelp({ text }: { text?: string }) {
   );
 }
 
-/** 右边的标准面板：不加遮罩、压在弹窗上面，放在 AppLayout 里全站一份 */
+/** 右边的标准面板：不加遮罩、压在弹窗上面，放在 AppLayout 里全站一份。
+ *  左边那条竖边可以拖宽拖窄；右上角「窄 / 中 / 宽」一键切 */
 export function SkinStandardDrawer() {
-  const { open, setOpen } = useSkinStandard();
+  const { open, setOpen, width, setWidth } = useSkinStandard();
+  const { token } = theme.useToken();
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const move = (ev: MouseEvent) => setWidth(window.innerWidth - ev.clientX);
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); document.body.style.cursor = ""; };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  const presets: [string, number][] = [["窄", 400], ["中", Math.round(window.innerWidth * 0.36)], ["宽", Math.round(window.innerWidth * 0.5)]];
   return (
-    <Drawer open={open} onClose={() => setOpen(false)} mask={false} placement="right" width={STANDARD_W} zIndex={1100}
-      title="皮肤照片评级标准（S0 / S1 / S2）" styles={{ body: { overflowX: "hidden", padding: "12px 16px" } }}>
+    <>
+    {open && (
+      <>
+        {/* 拖这条边改宽窄（双击回到中等宽度） */}
+        <Tooltip title="拖动改宽窄，双击恢复" placement="left">
+          <div onMouseDown={startDrag} onDoubleClick={() => setWidth(presets[1][1])}
+            style={{ position: "fixed", top: 0, bottom: 0, right: width - 3, width: 6, cursor: "col-resize", zIndex: 1200,
+                background: `linear-gradient(to right, transparent 2px, ${token.colorBorder} 2px, ${token.colorBorder} 4px, transparent 4px)` }} />
+        </Tooltip>
+      </>
+    )}
+    <Drawer open={open} onClose={() => setOpen(false)} mask={false} placement="right" width={width} zIndex={1100}
+      title="评级标准 S0 / S1 / S2"
+      extra={
+        <span style={{ display: "inline-flex", gap: 4 }}>
+          {presets.map(([t, w]) => (
+            <Button key={t} size="small" type={Math.abs(width - w) < 30 ? "primary" : "default"} onClick={() => setWidth(w)}>{t}</Button>
+          ))}
+        </span>
+      }
+      styles={{ body: { overflowX: "hidden", padding: "12px 16px", position: "relative" } }}>
       <SkinStandardContent />
     </Drawer>
+    </>
   );
 }
