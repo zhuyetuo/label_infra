@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Col, Image, Modal, Row, Steps, Table, Tag, Tooltip, Typography } from "antd";
+import { Col, Drawer, Image, Row, Steps, Table, Tag, Tooltip, Typography } from "antd";
+import { create } from "zustand";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 
 /**
@@ -54,13 +54,13 @@ export function SkinStandardContent() {
   return (
     <div style={{ fontSize: 13, lineHeight: 1.7 }}>
       {/* 三条原则：PPT 里「必须遵守」 */}
-      <Row gutter={12} style={{ marginBottom: 12 }}>
+      <Row gutter={12} style={{ marginBottom: 4, marginLeft: 0, marginRight: 0 }}>
         {[
           ["只分级，不诊断", "只判断皮肤状态到哪一档，不猜是什么病"],
           ["就高不就低", "拿不准、疑似红旗，按更严重的那档；宁可多送审，不能漏判"],
           ["看不清就选「看不清」", "模糊、遮挡、光线差、没拍到关键部位，不猜"],
         ].map(([t, d]) => (
-          <Col span={8} key={t}>
+          <Col xs={24} xl={8} key={t} style={{ marginBottom: 8 }}>
             <div style={{ border: "1px solid rgba(128,128,128,0.3)", borderRadius: 6, padding: "8px 10px", height: "100%" }}>
               <b>{t}</b>
               <div style={{ opacity: 0.75, fontSize: 12 }}>{d}</div>
@@ -70,7 +70,7 @@ export function SkinStandardContent() {
       </Row>
 
       <Typography.Title level={5} style={{ marginTop: 4 }}>拿到一只狗的照片，按这四步走</Typography.Title>
-      <Steps size="small" style={{ marginBottom: 16 }} items={[
+      <Steps size="small" direction="vertical" style={{ marginBottom: 8 }} items={[
         { title: "查质量", description: "清晰、光线足、没遮挡；不行就选「看不清」" },
         { title: "看信号", description: "逐项看皮肤颜色、皮损、秃毛、毛发（照片闻不到味道，体味不管）" },
         { title: "找红旗", description: "有没有 20 分信号，或者皮肤鲜红" },
@@ -97,7 +97,7 @@ export function SkinStandardContent() {
       ))}
 
       <Typography.Title level={5} style={{ marginTop: 12 }}>各项信号对应哪一档（括号里是评分表分值）</Typography.Title>
-      <Table size="small" pagination={false} rowKey="item" dataSource={SIGNALS} bordered
+      <Table size="small" pagination={false} rowKey="item" dataSource={SIGNALS} bordered tableLayout="fixed"
         columns={[
           { title: "看什么", dataIndex: "item", width: 130, render: (v: string) => <b>{v}</b> },
           { title: <Tag color="green">S0</Tag>, dataIndex: "s0" },
@@ -107,9 +107,9 @@ export function SkinStandardContent() {
       <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>任一项达到 20 分（或皮肤鲜红）就判 S2，其他项再轻也不往下拉。</div>
 
       <Typography.Title level={5} style={{ marginTop: 12 }}>这些错误不能犯</Typography.Title>
-      <Row gutter={[12, 4]}>
+      <Row gutter={[12, 4]} style={{ marginLeft: 0, marginRight: 0 }}>
         {["凭照片猜气味、猜病名", "看到鲜红 / 破损还往低判成 S1", "照片模糊、遮挡还硬判", "把 ≤5 分的轻微表现（一点点红、一点干皮屑）判成 S1"].map((t) => (
-          <Col span={12} key={t}><span style={{ color: "#ff4d4f", fontWeight: 600 }}>✕</span> {t}</Col>
+          <Col xs={24} xl={12} key={t}><span style={{ color: "#ff4d4f", fontWeight: 600 }}>✕</span> {t}</Col>
         ))}
       </Row>
       <div style={{ fontSize: 12, opacity: 0.6, marginTop: 12 }}>来源：兽医《犬只皮肤状态评估 · 标注员培训》Version 2026.11。拿不准在两档之间的选重的那档，备注写一句哪里拿不准。</div>
@@ -117,20 +117,34 @@ export function SkinStandardContent() {
   );
 }
 
-/** 问号：悬停看一句话，点开看完整标准（带图） */
+/** 标准面板开没开：全局一份。开着时照片弹窗让到左边，一边看标准一边评 */
+export const useSkinStandard = create<{ open: boolean; setOpen: (v: boolean) => void }>((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}));
+
+/** 标准开着时，照片弹窗 / 页面要让出的右边宽度 */
+export const STANDARD_W = "min(46vw, 900px)";
+
+/** 问号：点一下右边打开标准（再点收起）；不挡左边，照片照样能点、能评级 */
 export function SkinStandardHelp({ text }: { text?: string }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen } = useSkinStandard();
   return (
-    <>
-      <Tooltip title="皮肤评级标准（兽医版）：点开看图文说明">
-        <span onClick={(e) => { e.stopPropagation(); setOpen(true); }} style={{ cursor: "pointer", color: "#888" }}>
-          <QuestionCircleOutlined />{text && <span style={{ marginLeft: 4, fontSize: 12 }}>{text}</span>}
-        </span>
-      </Tooltip>
-      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width={980} title="皮肤照片评级标准（S0 / S1 / S2）"
-        styles={{ body: { maxHeight: "75vh", overflow: "auto" } }} destroyOnClose>
-        <div onClick={(e) => e.stopPropagation()}><SkinStandardContent /></div>
-      </Modal>
-    </>
+    <Tooltip title={open ? "收起评级标准" : "评级标准（兽医版）：在右边打开，一边看一边评"}>
+      <span onClick={(e) => { e.stopPropagation(); setOpen(!open); }} style={{ cursor: "pointer", color: open ? "#1677ff" : "#888" }}>
+        <QuestionCircleOutlined />{text && <span style={{ marginLeft: 4, fontSize: 12 }}>{text}</span>}
+      </span>
+    </Tooltip>
+  );
+}
+
+/** 右边的标准面板：不加遮罩、压在弹窗上面，放在 AppLayout 里全站一份 */
+export function SkinStandardDrawer() {
+  const { open, setOpen } = useSkinStandard();
+  return (
+    <Drawer open={open} onClose={() => setOpen(false)} mask={false} placement="right" width={STANDARD_W} zIndex={1100}
+      title="皮肤照片评级标准（S0 / S1 / S2）" styles={{ body: { overflowX: "hidden", padding: "12px 16px" } }}>
+      <SkinStandardContent />
+    </Drawer>
   );
 }
