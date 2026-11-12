@@ -10,6 +10,7 @@ class ProjectOut(BaseModel):
     name: str
     description: str | None
     is_active: bool
+    privacy_mask: bool = False
     created_by: int
     created_at: datetime
 

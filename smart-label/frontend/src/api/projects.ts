@@ -339,3 +339,20 @@ export const pauseVisionIndex = (id: number) =>
 
 export const resumeVisionIndex = (id: number) =>
   request.post<never, { resumed: boolean }>(`/projects/${id}/vision-index/resume`);
+
+// ── 隐私遮罩（只有超级管理员）──
+export interface PrivacyMaskStatus {
+  enabled: boolean;
+  available: boolean;
+  error: string | null;
+  service_error: string | null;
+  total: number; done: number; queued: number; running: number; failed: number; none: number;
+  running_items: { path: string; stage: string | null; progress: number | null }[];
+  failed_items: { path: string; error: string | null }[];
+}
+export const getPrivacyMask = (id: number) =>
+  request.get<never, PrivacyMaskStatus>(`/projects/${id}/privacy-mask`, { silent: true } as never);
+export const runPrivacyMask = (id: number, body: { force?: boolean; pad?: number; hold_s?: number }) =>
+  request.post<never, { queued: number; skipped: number; total: number }>(`/projects/${id}/privacy-mask/run`, body);
+export const togglePrivacyMask = (id: number, enabled: boolean) =>
+  request.put<never, { enabled: boolean }>(`/projects/${id}/privacy-mask`, { enabled });

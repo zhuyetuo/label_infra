@@ -698,3 +698,123 @@ async def delete_progress(user: User = Depends(get_current_user)):
     from app.services import project_delete
 
     return ok(list(project_delete.progress().values()))
+
+
+# ── 隐私遮罩（只有超级管理员）────────────────────────────────────────────
+#
+# 一键遮罩：把项目里所有样本的视频交给 vision_service 生成「狗框以外全黑」的版本。
+# 开关：开了之后除超级管理员外的人只拿得到遮罩版（services/privacy_mask.py 一道关）。
+# 处理一次就够，之后开开关关都不用重做；原视频变了（重新导入）才需要再处理。
+
+_SUPER = [Depends(require_role(UserRole.super_admin))]
+
+
+async def _project_video_paths(db: AsyncSession, project_id: int) -> list[str]:
+    from app.services import privacy_mask
+
+    rows = (await db.execute(
+        select(Sample).join(Task, Task.sample_id == Sample.id).where(Task.project_id == project_id).distinct()
+    )).scalars().all()
+    out: list[str] = []
+    for s in rows:
+        out.extend(privacy_mask.sample_video_paths(s))
+    return list(dict.fromkeys(out))
+
+
+async def _mask_counts(paths: list[str]) -> dict:
+    """各状态多少个。vision_service 连不上时，退回只看 NAS 上的 .json（只分得出好没好）"""
+    from app.services import privacy_mask
+
+    counts = {"total": len(paths), "done": 0, "queued": 0, "running": 0, "failed": 0, "none": 0}
+    running: list[dict] = []
+    failed: list[dict] = []
+    states: dict[str, dict] = {}
+    service_error = None
+    try:
+        for i in range(0, len(paths), 1000):
+            states.update(await vision_sam_client.privacy_mask_state(paths[i:i + 1000]))
+    except vision_sam_client.SamUnavailable as e:
+        service_error = str(e)
+        states = {}
+    for p in paths:
+        st = states.get(p) or {"state": "done" if privacy_mask.masked_ready(p) else "none"}
+        k = st.get("state", "none")
+        # 视觉服务说好了，平台这边也得读得到（同一个 NAS 挂载）才算数
+        if k == "done" and not privacy_mask.masked_ready(p):
+            k = "none"
+        counts[k if k in counts else "none"] += 1
+        if k == "running":
+            running.append({"path": p, "stage": st.get("stage"), "progress": st.get("progress")})
+        elif k == "failed" and len(failed) < 20:
+            failed.append({"path": p, "error": st.get("error")})
+    return {**counts, "running_items": running, "failed_items": failed, "service_error": service_error}
+
+
+@router.get("/{project_id}/privacy-mask", dependencies=_SUPER)
+async def privacy_mask_status(project_id: int, db: AsyncSession = Depends(get_db)):
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    paths = await _project_video_paths(db, project_id)
+    avail = await vision_sam_client.privacy_mask_available()
+    return ok({"enabled": bool(project.privacy_mask), "available": avail.get("available", False),
+               "error": avail.get("error"), **(await _mask_counts(paths))})
+
+
+class PrivacyMaskRunIn(BaseModel):
+    force: bool = False           # 已经做好的也重做（改了参数时用）
+    pad: float = Field(0.3, ge=0.0, le=2.0)
+    hold_s: float = Field(3.0, ge=0.0, le=60.0)
+
+
+@router.post("/{project_id}/privacy-mask/run", dependencies=_SUPER)
+async def privacy_mask_run(project_id: int, body: PrivacyMaskRunIn, db: AsyncSession = Depends(get_db),
+                           user: User = Depends(get_current_user)):
+    """一键遮罩：项目里所有视频排进 vision_service 的队列（已经做好的跳过）。"""
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    paths = await _project_video_paths(db, project_id)
+    if not paths:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个项目里没有视频")
+    queued = skipped = 0
+    try:
+        for i in range(0, len(paths), 1000):
+            r = await vision_sam_client.privacy_mask_submit(paths[i:i + 1000], force=body.force,
+                                                            pad=body.pad, hold_s=body.hold_s)
+            queued += int(r.get("queued", 0))
+            skipped += int(r.get("skipped", 0))
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    db.add(AuditLog(user_id=user.id, action="privacy_mask_run", target_type="project", target_id=project_id,
+                    detail=json.dumps({"queued": queued, "skipped": skipped, "force": body.force,
+                                       "pad": body.pad, "hold_s": body.hold_s}, ensure_ascii=False)))
+    await db.commit()
+    return ok({"queued": queued, "skipped": skipped, "total": len(paths)})
+
+
+class PrivacyMaskToggleIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/{project_id}/privacy-mask", dependencies=_SUPER)
+async def privacy_mask_toggle(project_id: int, body: PrivacyMaskToggleIn, db: AsyncSession = Depends(get_db),
+                              user: User = Depends(get_current_user)):
+    """开 / 关。开之前所有视频必须都处理好——不然开了以后标注员那几段直接看不了。"""
+    from app.services import privacy_mask
+
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    if body.enabled:
+        paths = await _project_video_paths(db, project_id)
+        missing = [p for p in paths if not privacy_mask.masked_ready(p)]
+        if missing:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"还有 {len(missing)} / {len(paths)} 个视频没处理好遮罩，先点「一键遮罩」等它做完再开")
+    project.privacy_mask = body.enabled
+    db.add(AuditLog(user_id=user.id, action="privacy_mask_on" if body.enabled else "privacy_mask_off",
+                    target_type="project", target_id=project_id, detail=None))
+    await db.commit()
+    privacy_mask.clear_cache()
+    return ok({"enabled": body.enabled})

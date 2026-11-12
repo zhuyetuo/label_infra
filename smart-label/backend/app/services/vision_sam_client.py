@@ -407,3 +407,32 @@ async def lowlight_seq(path: str, start_s: float, end_s: float, fps: float = 10.
         return {"available": True, **resp.json()}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}: {e}"}
+
+
+# ── 隐私遮罩（imu_train/vision_service/privacy_mask.py）────────────────────
+
+
+async def privacy_mask_available() -> dict:
+    if not enabled():
+        return {"available": False, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/privacy_mask/status"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        if resp.status_code == 404:
+            return {"available": False, "error": "视觉服务版本太旧，没有隐私遮罩（更新 imu_train 后重启 vision_service）"}
+        if resp.status_code != 200:
+            return {"available": False, "error": f"视觉服务返回 {resp.status_code}"}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"连不上视觉服务：{type(e).__name__}"}
+
+
+async def privacy_mask_submit(paths: list[str], force: bool = False, **params) -> dict:
+    """排队生成遮罩视频。参数见 vision_service 的 MaskParams（pad / hold_s / merge_s / every_sec / conf）"""
+    return await _post("/api/v1/privacy_mask/submit", {"paths": paths, "force": force, **params}, timeout=60)
+
+
+async def privacy_mask_state(paths: list[str]) -> dict[str, dict]:
+    """每个视频的状态：done / queued / running / failed / none"""
+    return (await _post("/api/v1/privacy_mask/state", {"paths": paths}, timeout=60)).get("items", {})
