@@ -1,4 +1,5 @@
 import { segDedupeProject } from "@/api/segReview";
+import PrivacyMaskPanel from "@/components/PrivacyMaskPanel";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
@@ -2200,6 +2201,11 @@ export default function Projects() {
                   <strong style={p.description ? { cursor: "help" } : undefined}>{p.name}</strong>
                 </Tooltip>
                 {!p.is_active && <Tag>已停用</Tag>}
+                {p.privacy_mask && (
+                  <Tooltip title="隐私遮罩开着：除超级管理员外，这个项目的视频只看得到狗框里的画面">
+                    <Tag color="green">🔒 遮罩</Tag>
+                  </Tooltip>
+                )}
                 {(returnedSegs.byProject[p.id] ?? 0) > 0 && (
                   <Tooltip title="审核退回给你、还没改好的片段。点一下去「退回的片段」逐条改">
                     <Badge
@@ -2628,6 +2634,7 @@ export default function Projects() {
                       <Button size="small" type="link">一键去重</Button>
                     </Tooltip>
                   </Popconfirm>
+                  {role === "super_admin" && <PrivacyMaskPanel project={p} onChanged={refresh} />}
                   <Tooltip title="按来源清点 / 整批删掉画面候选（一句话找画面、用这一张去扩）。不用为了清一轮试错去删项目">
                     <Button size="small" type="link" onClick={() => openPurge(p)}>
                       清理候选

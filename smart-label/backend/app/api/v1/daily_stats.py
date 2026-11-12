@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.core.deps import get_current_user
-from app.core.media_token import issue_media_token, verify_media_token
+from app.core.media_token import issue_media_token, media_token_variant, variant_for
 from app.models.cam_region import CamRegion
 from app.models.sample import Sample
 from app.models.user import User
@@ -141,7 +141,7 @@ async def put_regions(body: RegionsIn, db: AsyncSession = Depends(get_db)):
 @router.post("/rooms/frame-token")
 async def frame_token(sample_id: int = Query(...), user: User = Depends(get_current_user)):
     """<img> 带不了 Authorization：换个短期 token 拼进取帧地址里。"""
-    return ok({"token": issue_media_token(sample_id)})
+    return ok({"token": issue_media_token(sample_id, variant_for(user))})
 
 
 # <img> 带不上 Authorization 头，取帧走 token 校验，不能挂在要角色的 router 上
@@ -154,7 +154,8 @@ async def frame(sample_id: int = Query(...), slot: str = Query("cam1"), t: float
     """某份样本某一路某一秒的整帧（带狗框），给划区域用。"""
     from fastapi.responses import Response
 
-    if not verify_media_token(sample_id, token):
+    variant = media_token_variant(sample_id, token)
+    if variant is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token 无效或过期")
     sample = await db.get(Sample, sample_id)
     if sample is None:
@@ -162,6 +163,9 @@ async def frame(sample_id: int = Query(...), slot: str = Query("cam1"), t: float
     path = {"cam1": sample.video_cam1_path, "cam2": sample.video_cam2_path, "cam3": sample.video_cam3_path}.get(slot)
     if not path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"这份样本没有 {slot} 这一路")
+    from app.services import privacy_mask
+
+    path = await privacy_mask.pick_video(db, None, path, exempt_user=(variant == "s"))
     try:
         data = await vision_sam_client.embed_thumb(path, t, crop=False, max_side=1280)
     except vision_sam_client.SamUnavailable as e:

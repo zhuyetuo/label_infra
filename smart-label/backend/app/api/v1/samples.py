@@ -753,6 +753,10 @@ async def sample_lowlight(sample_id: int, cam: str = "cam1", t: float = 0.0,
     # 这一路要是跨 session 挂过来的（看全场那一路），它的第 0 秒跟样本时间轴
     # 差着一个偏移——不换算的话捞出来的是十几分钟之外的画面
     off = (sample.video_offsets_ms or {}).get(cam, 0) / 1000.0
+    # 隐私遮罩：开了的项目里，夜视也只能在遮罩版上做（时间轴跟原版一样）
+    from app.services import privacy_mask
+
+    path = await privacy_mask.pick_video(db, user, path)
     return ok(await vision_sam_client.lowlight(path, t - off, window_s=window_s, model=model))
 
 
@@ -776,5 +780,8 @@ async def sample_lowlight_seq(sample_id: int, cam: str = "cam1",
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"这个样本没有 {cam} 视频")
     off = (sample.video_offsets_ms or {}).get(cam, 0) / 1000.0
     end = min(end, start + 20.0)
+    from app.services import privacy_mask
+
+    path = await privacy_mask.pick_video(db, user, path)
     return ok(await vision_sam_client.lowlight_seq(path, start - off, end - off,
                                                    fps=fps, smooth=smooth))

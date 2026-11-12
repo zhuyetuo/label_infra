@@ -515,8 +515,12 @@ async def similar_preview(body: SimilarPreviewIn, db: AsyncSession = Depends(get
     path = vindex.video_path_of(sample, body.cam) if sample else None
     if not path:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"这个任务的样本没有 {body.cam} 视频")
+    # 隐私遮罩：检测 / 抠图都在遮罩版上做；返回的 path 还是原路径（缩略图接口自己再判断一次）
+    from app.services import privacy_mask
+
+    use = await privacy_mask.pick_video(db, user, path)
     try:
-        r = await vision_sam_client.embed_preview(path, max(0.0, body.t_s))
+        r = await vision_sam_client.embed_preview(use, max(0.0, body.t_s))
         r["path"] = path        # 前端拿它再请求这一帧的抠图 / 姿态大图（缩略图接口按 path 取）
         return ok(r)
     except vision_sam_client.SamUnavailable as e:
@@ -526,10 +530,10 @@ async def similar_preview(body: SimilarPreviewIn, db: AsyncSession = Depends(get
 @router.post("/similar/thumb-token")
 async def similar_thumb_token(task_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """<img> 带不了 Authorization 头：换一个短期 token 拼进缩略图地址里（跟视频流一个办法）。"""
-    from app.core.media_token import issue_media_token
+    from app.core.media_token import issue_media_token, variant_for
 
     task = await _visible_task(db, task_id, user)
-    return ok({"token": issue_media_token(task.id)})
+    return ok({"token": issue_media_token(task.id, variant_for(user))})
 
 
 class ThumbTokensIn(BaseModel):
@@ -544,15 +548,16 @@ async def similar_thumb_tokens(body: ThumbTokensIn, db: AsyncSession = Depends(g
     「大模型看视频找动作」筛选那一屏里，一屏的段横跨几十上百个任务，一个一个换 token
     就是几十上百个请求——光是发请求就比取图还慢。看不到的任务直接不给，不报错。
     """
-    from app.core.media_token import issue_media_token
+    from app.core.media_token import issue_media_token, variant_for
 
     out: dict[str, str] = {}
+    v = variant_for(user)
     for tid in dict.fromkeys(body.task_ids):
         try:
             task = await _visible_task(db, tid, user)
         except HTTPException:
             continue
-        out[str(task.id)] = issue_media_token(task.id)
+        out[str(task.id)] = issue_media_token(task.id, v)
     return ok({"tokens": out})
 
 
@@ -566,9 +571,10 @@ async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: boo
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "view 只能是 mask / raw / pose / box")
     from fastapi.responses import Response
 
-    from app.core.media_token import verify_media_token
+    from app.core.media_token import media_token_variant
 
-    if not verify_media_token(task_id, token):
+    variant = media_token_variant(task_id, token)
+    if variant is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "缩略图 token 无效或过期")
     task = await db.get(Task, task_id)
     if task is None:
@@ -579,6 +585,10 @@ async def similar_thumb(task_id: int, path: str, t: float, token: str, crop: boo
     ).limit(1))).scalar_one_or_none()
     if known is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "这个视频不是库里登记的样本视频")
+    # 隐私遮罩：开了的项目里只从遮罩版取帧（超级管理员的 token 除外）
+    from app.services import privacy_mask
+
+    path = await privacy_mask.pick_video(db, None, path, exempt_user=(variant == "s"))
     try:
         # max_side：样例大图要看得清（900），命中那排缩略图用默认 320
         data = await vision_sam_client.embed_thumb(path, max(0.0, t), crop=crop, view=view,

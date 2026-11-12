@@ -5,6 +5,8 @@ export interface Project {
   name: string;
   description: string | null;
   is_active: boolean;
+  /** 隐私遮罩开着：除超级管理员外只拿得到「狗框以外全黑」的视频 */
+  privacy_mask?: boolean;
   created_by: number;
   created_at: string;
 }

@@ -19,6 +19,9 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 隐私遮罩开着：除超级管理员外，这个项目里样本的视频一律只给「狗框以外全黑」的那一份
+    # （见 services/privacy_mask.py）。只有超级管理员能开关，而且要先一键遮罩处理完
+    privacy_mask: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
