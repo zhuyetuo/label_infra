@@ -436,3 +436,12 @@ async def privacy_mask_submit(paths: list[str], force: bool = False, **params) -
 async def privacy_mask_state(paths: list[str]) -> dict[str, dict]:
     """每个视频的状态：done / queued / running / failed / none"""
     return (await _post("/api/v1/privacy_mask/state", {"paths": paths}, timeout=60)).get("items", {})
+
+
+async def privacy_mask_control(action: str, paths: list[str] | None = None) -> dict:
+    """暂停 pause / 继续 resume / 停止 cancel（paths 不给 = 全停）"""
+    if action == "cancel":
+        return await _post("/api/v1/privacy_mask/cancel", {"paths": paths}, timeout=30)
+    if action not in ("pause", "resume"):
+        raise ValueError(action)
+    return await _post(f"/api/v1/privacy_mask/{action}", {}, timeout=10)
