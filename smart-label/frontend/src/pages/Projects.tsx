@@ -1884,11 +1884,8 @@ export default function Projects() {
                     render: (s: TaskStatus, task: Task) => (
                       <Space size={4} wrap>
                         <TaskStatusTag status={s} />
-                        {!!task.mark_count && (
-                          <Tooltip title={`${task.mark_count} 段打了 🔖 备忘（复合类别要拆 / 边界拿不准 / 画面跟 IMU 对不上…），留着以后处理。打开后在片段列表按「有备忘」筛`}>
-                            <Tag color="gold">🔖{task.mark_count}</Tag>
-                          </Tooltip>
-                        )}
+                        {/* 🔖 备忘不放在状态这一列：跟「待认领 / 已通过」挨着，容易被当成任务没做完。
+                            要找有备忘的任务用上面的「🔖 有备忘」筛选 */}
                         {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
                         {s === "PENDING_ASSIGN" && task.has_draft && (
                           <Tag color="gold">有草稿 {task.draft_item_count ?? ""}段</Tag>
