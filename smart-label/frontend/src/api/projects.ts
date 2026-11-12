@@ -359,7 +359,7 @@ export interface PrivacyMaskStatus {
 export const getPrivacyMask = (id: number, trialTaskId?: number | null) =>
   request.get<never, PrivacyMaskStatus>(`/projects/${id}/privacy-mask`,
     { silent: true, params: trialTaskId ? { trial_task_id: trialTaskId } : undefined } as never);
-export const runPrivacyMask = (id: number, body: { force?: boolean; pad?: number; hold_s?: number; task_ids?: number[] }) =>
+export const runPrivacyMask = (id: number, body: { force?: boolean; pad?: number; hold_s?: number; shape?: "seg" | "box"; task_ids?: number[] }) =>
   request.post<never, { queued: number; skipped: number; total: number }>(`/projects/${id}/privacy-mask/run`, body);
 export const togglePrivacyMask = (id: number, enabled: boolean) =>
   request.put<never, { enabled: boolean }>(`/projects/${id}/privacy-mask`, { enabled });

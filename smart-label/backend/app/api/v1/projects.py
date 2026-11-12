@@ -775,6 +775,7 @@ class PrivacyMaskRunIn(BaseModel):
     task_ids: list[int] | None = Field(None, max_length=50)
     pad: float = Field(0.3, ge=0.0, le=2.0)
     hold_s: float = Field(3.0, ge=0.0, le=60.0)
+    shape: str = Field("seg", pattern="^(seg|box)$")    # seg 贴着狗的轮廓（实例分割）/ box 方框
 
 
 @router.post("/{project_id}/privacy-mask/run", dependencies=_SUPER)
@@ -792,7 +793,7 @@ async def privacy_mask_run(project_id: int, body: PrivacyMaskRunIn, db: AsyncSes
     try:
         for i in range(0, len(paths), 1000):
             r = await vision_sam_client.privacy_mask_submit(paths[i:i + 1000], force=body.force,
-                                                            pad=body.pad, hold_s=body.hold_s,
+                                                            pad=body.pad, hold_s=body.hold_s, shape=body.shape,
                                                             front=bool(body.task_ids))
             queued += int(r.get("queued", 0))
             skipped += int(r.get("skipped", 0))
@@ -800,7 +801,7 @@ async def privacy_mask_run(project_id: int, body: PrivacyMaskRunIn, db: AsyncSes
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
     db.add(AuditLog(user_id=user.id, action="privacy_mask_run", target_type="project", target_id=project_id,
                     detail=json.dumps({"queued": queued, "skipped": skipped, "force": body.force, "task_ids": body.task_ids,
-                                       "pad": body.pad, "hold_s": body.hold_s}, ensure_ascii=False)))
+                                       "pad": body.pad, "hold_s": body.hold_s, "shape": body.shape}, ensure_ascii=False)))
     await db.commit()
     return ok({"queued": queued, "skipped": skipped, "total": len(paths)})
 
