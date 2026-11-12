@@ -7,6 +7,8 @@ export interface Project {
   is_active: boolean;
   /** 隐私遮罩开着：除超级管理员外只拿得到「狗框以外全黑」的视频 */
   privacy_mask?: boolean;
+  /** 最近一次「一键遮罩」的时间：做过遮罩（开关可能关着） */
+  privacy_mask_at?: string | null;
   created_by: number;
   created_at: string;
 }

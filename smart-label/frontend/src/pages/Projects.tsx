@@ -207,6 +207,14 @@ export default function Projects() {
     });
   // 一键去重：勾了几个项目就去重那几个，没勾就全部项目；一个一个跑，按钮上显示做到第几个
   const [dedupeSel, setDedupeSel] = useState<number[]>([]);
+  // 只看做过隐私遮罩的项目（开着的 + 做过但关着的）。记在这台电脑上
+  const [maskOnly, setMaskOnly] = useState(() => {
+    try { return localStorage.getItem("projects-mask-only") === "1"; } catch { return false; }
+  });
+  const toggleMaskOnly = () => setMaskOnly((v) => {
+    try { localStorage.setItem("projects-mask-only", v ? "0" : "1"); } catch { /* 隐私模式 */ }
+    return !v;
+  });
   const [dedupeRun, setDedupeRun] = useState<{ done: number; total: number } | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
@@ -1242,6 +1250,11 @@ export default function Projects() {
             新建项目
           </Button>
         )}
+        {(maskOnly || (data ?? []).some((p) => p.privacy_mask || p.privacy_mask_at)) && (
+          <Button type={maskOnly ? "primary" : "default"} ghost={maskOnly} onClick={toggleMaskOnly}>
+            🔒 只看有遮罩的（{(data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at).length}）
+          </Button>
+        )}
         {isAdmin && (() => {
           const targets = (data ?? []).filter((p) => p.is_active && (dedupeSel.length === 0 || dedupeSel.includes(p.id)));
           const runDedupe = async () => {
@@ -1303,7 +1316,7 @@ export default function Projects() {
         storageKey="projects"
         rowKey="id"
         loading={isLoading}
-        dataSource={data}
+        dataSource={maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data}
         rowSelection={isAdmin ? {
           selectedRowKeys: dedupeSel,
           onChange: (keys) => setDedupeSel(keys as number[]),
@@ -2201,11 +2214,15 @@ export default function Projects() {
                   <strong style={p.description ? { cursor: "help" } : undefined}>{p.name}</strong>
                 </Tooltip>
                 {!p.is_active && <Tag>已停用</Tag>}
-                {p.privacy_mask && (
-                  <Tooltip title="隐私遮罩开着：除超级管理员外，这个项目的视频只看得到狗框里的画面">
-                    <Tag color="green">🔒 遮罩</Tag>
+                {p.privacy_mask ? (
+                  <Tooltip title="隐私遮罩开着：除超级管理员外，这个项目的视频只看得到狗身上的画面">
+                    <Tag color="green">🔒 遮罩·开</Tag>
                   </Tooltip>
-                )}
+                ) : p.privacy_mask_at && role === "super_admin" ? (
+                  <Tooltip title={`做过遮罩（${dayjs(p.privacy_mask_at).format("MM-DD HH:mm")}），开关关着：大家还看原画面。右边「隐私遮罩」里打开`}>
+                    <Tag color="blue">🔒 遮罩·关</Tag>
+                  </Tooltip>
+                ) : null}
                 {(returnedSegs.byProject[p.id] ?? 0) > 0 && (
                   <Tooltip title="审核退回给你、还没改好的片段。点一下去「退回的片段」逐条改">
                     <Badge

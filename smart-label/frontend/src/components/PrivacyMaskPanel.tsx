@@ -48,6 +48,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
       try { localStorage.setItem(trialKey, String(trialId)); } catch { /* 隐私模式 */ }
       const r = await runPrivacyMask(project.id, { pad, hold_s: hold, shape, task_ids: [trialId], force: true });
       message.success(`任务 #${trialId} 的 ${r.queued} 路视频插到最前面了，做完勾上下面「我自己也看遮罩版」打开这个任务看效果`, 6);
+      void qc.invalidateQueries({ queryKey: ["projects"] });
       void refetch();
     } finally { setBusy(false); }
   };
@@ -69,6 +70,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
       const r = await runPrivacyMask(project.id, { force, pad, hold_s: hold, shape });
       message.success(`排进队列 ${r.queued} 个视频${r.skipped ? `，${r.skipped} 个已经做好 / 在排队，跳过` : ""}`);
       void refetch();
+      void qc.invalidateQueries({ queryKey: ["projects"] });   // 项目行上的「🔒 遮罩」标记
     } finally { setBusy(false); }
   };
 
