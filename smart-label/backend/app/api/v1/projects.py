@@ -706,7 +706,14 @@ async def delete_progress(user: User = Depends(get_current_user)):
 # 开关：开了之后除超级管理员外的人只拿得到遮罩版（services/privacy_mask.py 一道关）。
 # 处理一次就够，之后开开关关都不用重做；原视频变了（重新导入）才需要再处理。
 
-_SUPER = [Depends(require_role(UserRole.super_admin))]
+def _feature_on():
+    from app.core.config import settings
+
+    if not settings.privacy_mask_feature:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "隐私遮罩功能已下架")
+
+
+_SUPER = [Depends(require_role(UserRole.super_admin)), Depends(_feature_on)]
 
 
 async def _project_video_paths(db: AsyncSession, project_id: int, task_ids: list[int] | None = None) -> list[str]:

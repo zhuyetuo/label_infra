@@ -1,5 +1,6 @@
 import { segDedupeProject } from "@/api/segReview";
 import PrivacyMaskPanel from "@/components/PrivacyMaskPanel";
+import { PRIVACY_MASK } from "@/config/features";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
@@ -1250,7 +1251,7 @@ export default function Projects() {
             新建项目
           </Button>
         )}
-        {(maskOnly || (data ?? []).some((p) => p.privacy_mask || p.privacy_mask_at)) && (
+        {PRIVACY_MASK && (maskOnly || (data ?? []).some((p) => p.privacy_mask || p.privacy_mask_at)) && (
           <Button type={maskOnly ? "primary" : "default"} ghost={maskOnly} onClick={toggleMaskOnly}>
             🔒 只看有遮罩的（{(data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at).length}）
           </Button>
@@ -1316,7 +1317,7 @@ export default function Projects() {
         storageKey="projects"
         rowKey="id"
         loading={isLoading}
-        dataSource={maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data}
+        dataSource={PRIVACY_MASK && maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data}
         rowSelection={isAdmin ? {
           selectedRowKeys: dedupeSel,
           onChange: (keys) => setDedupeSel(keys as number[]),
@@ -2214,7 +2215,7 @@ export default function Projects() {
                   <strong style={p.description ? { cursor: "help" } : undefined}>{p.name}</strong>
                 </Tooltip>
                 {!p.is_active && <Tag>已停用</Tag>}
-                {p.privacy_mask ? (
+                {!PRIVACY_MASK ? null : p.privacy_mask ? (
                   <Tooltip title="隐私遮罩开着：除超级管理员外，这个项目的视频只看得到狗身上的画面">
                     <Tag color="green">🔒 遮罩·开</Tag>
                   </Tooltip>
@@ -2651,7 +2652,7 @@ export default function Projects() {
                       <Button size="small" type="link">一键去重</Button>
                     </Tooltip>
                   </Popconfirm>
-                  {role === "super_admin" && <PrivacyMaskPanel project={p} onChanged={refresh} />}
+                  {PRIVACY_MASK && role === "super_admin" && <PrivacyMaskPanel project={p} onChanged={refresh} />}
                   <Tooltip title="按来源清点 / 整批删掉画面候选（一句话找画面、用这一张去扩）。不用为了清一轮试错去删项目">
                     <Button size="small" type="link" onClick={() => openPurge(p)}>
                       清理候选

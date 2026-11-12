@@ -110,6 +110,10 @@ async def pick_video(db: AsyncSession, user: User | None, rel_path: str, *, exem
 
     exempt_user：接口本身拿不到 user（<img>/<video> 走 token 的那几个）时，由 token 里
     带的身份决定，从这里传进来。prefer_mask：超级管理员想看看遮罩效果。"""
+    from app.core.config import settings
+
+    if not settings.privacy_mask_feature:
+        return rel_path          # 功能下架：一律原版，不查库
     is_exempt = exempt(user) if exempt_user is None else exempt_user
     if is_exempt and not prefer_mask:
         return rel_path
