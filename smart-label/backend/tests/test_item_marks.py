@@ -58,3 +58,8 @@ def test_任务列表带标记段数(db, run):
     run(api.set_marks(w.items[1].id, api.MarksIn(marks=["av_mismatch", "compound"]), db=db, user=w.rev))
     rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
     assert {r["id"]: r for r in rows}[w.t.id]["mark_count"] == 2
+
+
+def test_看不清狗_也能打备忘():
+    from app.services import task_service
+    assert task_service.clean_marks("unclear,compound") == "compound,unclear"

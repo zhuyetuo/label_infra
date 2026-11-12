@@ -2432,7 +2432,7 @@ export default function Projects() {
                   // 🔖 备忘：全部通过了也可能还有几段留着以后处理（复合要拆、画面看不清…），不用展开就看得到
                   const mk = scratchReview?.marks?.[String(p.id)];
                   if (!mk || !mk.n) return null;
-                  const KIND: Record<string, string> = { compound: "复合要拆", boundary: "边界拿不准", av_mismatch: "画面≠IMU", other: "其它" };
+                  const KIND: Record<string, string> = { compound: "复合要拆", boundary: "边界拿不准", unclear: "看不清狗", av_mismatch: "画面≠IMU", other: "其它" };
                   const detail = Object.entries(mk.by_kind).map(([k, n]) => `${KIND[k] ?? k} ${n}`).join("、");
                   return (
                     <div style={{ marginTop: 4 }}>
