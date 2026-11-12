@@ -16,6 +16,8 @@ import type { Project } from "@/types";
 export default function PrivacyMaskPanel({ project, onChanged }: { project: Project; onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const [pad, setPad] = useState(0.3);
+  // 漏检时沿用之前的框多久：趴着不动的狗（白狗趴浅色沙发）常常连着十几秒检不到，可以放长
+  const [hold, setHold] = useState(3);
   const [busy, setBusy] = useState(false);
   // 先试水：只做这一个任务的视频（插到队列最前面），做完打开那个任务看遮得对不对
   const trialKey = `privacy-trial-${project.id}`;
@@ -42,7 +44,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
     setBusy(true);
     try {
       try { localStorage.setItem(trialKey, String(trialId)); } catch { /* 隐私模式 */ }
-      const r = await runPrivacyMask(project.id, { pad, task_ids: [trialId], force: true });
+      const r = await runPrivacyMask(project.id, { pad, hold_s: hold, task_ids: [trialId], force: true });
       message.success(`任务 #${trialId} 的 ${r.queued} 路视频插到最前面了，做完勾上下面「我自己也看遮罩版」打开这个任务看效果`, 6);
       void refetch();
     } finally { setBusy(false); }
@@ -62,7 +64,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
   const run = async (force: boolean) => {
     setBusy(true);
     try {
-      const r = await runPrivacyMask(project.id, { force, pad });
+      const r = await runPrivacyMask(project.id, { force, pad, hold_s: hold });
       message.success(`排进队列 ${r.queued} 个视频${r.skipped ? `，${r.skipped} 个已经做好 / 在排队，跳过` : ""}`);
       void refetch();
     } finally { setBusy(false); }
@@ -137,6 +139,9 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
           <span>框放大</span>
           <Select size="small" value={pad} onChange={setPad} style={{ width: 110 }}
             options={[{ value: 0.2, label: "20%" }, { value: 0.3, label: "30%（默认）" }, { value: 0.5, label: "50%" }]} />
+          <span>漏检沿用</span>
+          <Select size="small" value={hold} onChange={setHold} style={{ width: 110 }}
+            options={[{ value: 3, label: "3 秒（默认）" }, { value: 10, label: "10 秒" }, { value: 30, label: "30 秒" }]} />
           <Button type="primary" loading={busy} disabled={!st?.available} onClick={() => run(false)}>一键遮罩</Button>
           <Popconfirm title="已经做好的也全部重做？（改了框放大比例时用）" onConfirm={() => run(true)}>
             <Button size="small" disabled={!st?.available || busy}>全部重做</Button>
