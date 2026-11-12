@@ -18,6 +18,8 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
   const [pad, setPad] = useState(0.3);
   // 漏检时沿用之前的框多久：趴着不动的狗（白狗趴浅色沙发）常常连着十几秒检不到，可以放长
   const [hold, setHold] = useState(3);
+  // 形状：贴着狗的轮廓（实例分割，默认）/ 方框
+  const [shape, setShape] = useState<"seg" | "box">("seg");
   const [busy, setBusy] = useState(false);
   // 先试水：只做这一个任务的视频（插到队列最前面），做完打开那个任务看遮得对不对
   const trialKey = `privacy-trial-${project.id}`;
@@ -44,7 +46,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
     setBusy(true);
     try {
       try { localStorage.setItem(trialKey, String(trialId)); } catch { /* 隐私模式 */ }
-      const r = await runPrivacyMask(project.id, { pad, hold_s: hold, task_ids: [trialId], force: true });
+      const r = await runPrivacyMask(project.id, { pad, hold_s: hold, shape, task_ids: [trialId], force: true });
       message.success(`任务 #${trialId} 的 ${r.queued} 路视频插到最前面了，做完勾上下面「我自己也看遮罩版」打开这个任务看效果`, 6);
       void refetch();
     } finally { setBusy(false); }
@@ -64,7 +66,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
   const run = async (force: boolean) => {
     setBusy(true);
     try {
-      const r = await runPrivacyMask(project.id, { force, pad, hold_s: hold });
+      const r = await runPrivacyMask(project.id, { force, pad, hold_s: hold, shape });
       message.success(`排进队列 ${r.queued} 个视频${r.skipped ? `，${r.skipped} 个已经做好 / 在排队，跳过` : ""}`);
       void refetch();
     } finally { setBusy(false); }
@@ -90,7 +92,7 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
       <Modal open={open} onCancel={() => setOpen(false)} footer={null} width={560} destroyOnClose
         title={<span><LockOutlined /> 隐私遮罩 · {project.name}</span>}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          自动把狗框出来（框放大一圈），狗框以外全黑，另存一份视频。开了之后<b>除超级管理员外</b>的人只拿得到这一份
+          自动找出画面里的狗（贴着轮廓往外扩一圈，人不算），狗以外全黑，另存一份视频。开了之后<b>除超级管理员外</b>的人只拿得到这一份
           ——视频、夜视、缩略图都是，服务端强制。漏检时沿用上一次的框最多 3 秒，再找不到整帧全黑。
           处理一次就够，之后随时开关。
         </Typography.Paragraph>
@@ -136,7 +138,10 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
           )}
         </Space>
         <Space wrap style={{ margin: "8px 0 16px" }}>
-          <span>框放大</span>
+          <span>形状</span>
+          <Select size="small" value={shape} onChange={setShape} style={{ width: 150 }}
+            options={[{ value: "seg", label: "贴着狗（默认）" }, { value: "box", label: "方框" }]} />
+          <span>{shape === "seg" ? "外扩" : "框放大"}</span>
           <Select size="small" value={pad} onChange={setPad} style={{ width: 110 }}
             options={[{ value: 0.2, label: "20%" }, { value: 0.3, label: "30%（默认）" }, { value: 0.5, label: "50%" }]} />
           <span>漏检沿用</span>
