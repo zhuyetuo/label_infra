@@ -709,12 +709,13 @@ async def delete_progress(user: User = Depends(get_current_user)):
 _SUPER = [Depends(require_role(UserRole.super_admin))]
 
 
-async def _project_video_paths(db: AsyncSession, project_id: int) -> list[str]:
+async def _project_video_paths(db: AsyncSession, project_id: int, task_ids: list[int] | None = None) -> list[str]:
     from app.services import privacy_mask
 
-    rows = (await db.execute(
-        select(Sample).join(Task, Task.sample_id == Sample.id).where(Task.project_id == project_id).distinct()
-    )).scalars().all()
+    q = select(Sample).join(Task, Task.sample_id == Sample.id).where(Task.project_id == project_id)
+    if task_ids:
+        q = q.where(Task.id.in_(task_ids))
+    rows = (await db.execute(q.distinct())).scalars().all()
     out: list[str] = []
     for s in rows:
         out.extend(privacy_mask.sample_video_paths(s))
@@ -751,18 +752,27 @@ async def _mask_counts(paths: list[str]) -> dict:
 
 
 @router.get("/{project_id}/privacy-mask", dependencies=_SUPER)
-async def privacy_mask_status(project_id: int, db: AsyncSession = Depends(get_db)):
+async def privacy_mask_status(project_id: int, trial_task_id: int | None = None, db: AsyncSession = Depends(get_db)):
+    """trial_task_id：「先试这个任务」那一个任务的进度另外给一份"""
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
     paths = await _project_video_paths(db, project_id)
     avail = await vision_sam_client.privacy_mask_available()
+    trial = None
+    if trial_task_id:
+        tp = await _project_video_paths(db, project_id, [trial_task_id])
+        trial = {"task_id": trial_task_id, **(await _mask_counts(tp))} if tp else None
     return ok({"enabled": bool(project.privacy_mask), "available": avail.get("available", False),
-               "error": avail.get("error"), **(await _mask_counts(paths))})
+               "error": avail.get("error"), "workers": avail.get("workers"), "paused": bool(avail.get("paused")),
+               "trial": trial,
+               **(await _mask_counts(paths))})
 
 
 class PrivacyMaskRunIn(BaseModel):
     force: bool = False           # 已经做好的也重做（改了参数时用）
+    # 先试水：只做这几个任务的视频，而且插到队列最前面（做完开着「我也看遮罩版」去看效果）
+    task_ids: list[int] | None = Field(None, max_length=50)
     pad: float = Field(0.3, ge=0.0, le=2.0)
     hold_s: float = Field(3.0, ge=0.0, le=60.0)
 
@@ -774,23 +784,45 @@ async def privacy_mask_run(project_id: int, body: PrivacyMaskRunIn, db: AsyncSes
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
-    paths = await _project_video_paths(db, project_id)
+    paths = await _project_video_paths(db, project_id, body.task_ids)
     if not paths:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个项目里没有视频")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "这个项目里没有这个任务（任务 ID 对吗？）" if body.task_ids else "这个项目里没有视频")
     queued = skipped = 0
     try:
         for i in range(0, len(paths), 1000):
             r = await vision_sam_client.privacy_mask_submit(paths[i:i + 1000], force=body.force,
-                                                            pad=body.pad, hold_s=body.hold_s)
+                                                            pad=body.pad, hold_s=body.hold_s,
+                                                            front=bool(body.task_ids))
             queued += int(r.get("queued", 0))
             skipped += int(r.get("skipped", 0))
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
     db.add(AuditLog(user_id=user.id, action="privacy_mask_run", target_type="project", target_id=project_id,
-                    detail=json.dumps({"queued": queued, "skipped": skipped, "force": body.force,
+                    detail=json.dumps({"queued": queued, "skipped": skipped, "force": body.force, "task_ids": body.task_ids,
                                        "pad": body.pad, "hold_s": body.hold_s}, ensure_ascii=False)))
     await db.commit()
     return ok({"queued": queued, "skipped": skipped, "total": len(paths)})
+
+
+class PrivacyMaskControlIn(BaseModel):
+    action: str = Field(..., pattern="^(pause|resume|cancel)$")
+
+
+@router.post("/{project_id}/privacy-mask/control", dependencies=_SUPER)
+async def privacy_mask_control(project_id: int, body: PrivacyMaskControlIn, db: AsyncSession = Depends(get_db),
+                               user: User = Depends(get_current_user)):
+    """暂停 / 继续：整个遮罩队列（视觉服务那边只有一条队列）。停止：只停这个项目的视频
+    （排队的拿掉、正在做的中断，已经做好的不动）。"""
+    paths = await _project_video_paths(db, project_id) if body.action == "cancel" else None
+    try:
+        r = await vision_sam_client.privacy_mask_control(body.action, paths)
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    db.add(AuditLog(user_id=user.id, action=f"privacy_mask_{body.action}", target_type="project",
+                    target_id=project_id, detail=json.dumps(r, ensure_ascii=False)))
+    await db.commit()
+    return ok(r)
 
 
 class PrivacyMaskToggleIn(BaseModel):

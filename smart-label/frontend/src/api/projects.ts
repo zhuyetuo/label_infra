@@ -349,10 +349,19 @@ export interface PrivacyMaskStatus {
   total: number; done: number; queued: number; running: number; failed: number; none: number;
   running_items: { path: string; stage: string | null; progress: number | null }[];
   failed_items: { path: string; error: string | null }[];
+  /** 视觉服务同时做几路 */
+  workers?: number | null;
+  /** 整个遮罩队列暂停着 */
+  paused?: boolean;
+  /** 「先试这个任务」那一个任务的进度 */
+  trial?: (Omit<PrivacyMaskStatus, "enabled" | "available" | "error" | "trial" | "workers"> & { task_id: number }) | null;
 }
-export const getPrivacyMask = (id: number) =>
-  request.get<never, PrivacyMaskStatus>(`/projects/${id}/privacy-mask`, { silent: true } as never);
-export const runPrivacyMask = (id: number, body: { force?: boolean; pad?: number; hold_s?: number }) =>
+export const getPrivacyMask = (id: number, trialTaskId?: number | null) =>
+  request.get<never, PrivacyMaskStatus>(`/projects/${id}/privacy-mask`,
+    { silent: true, params: trialTaskId ? { trial_task_id: trialTaskId } : undefined } as never);
+export const runPrivacyMask = (id: number, body: { force?: boolean; pad?: number; hold_s?: number; task_ids?: number[] }) =>
   request.post<never, { queued: number; skipped: number; total: number }>(`/projects/${id}/privacy-mask/run`, body);
 export const togglePrivacyMask = (id: number, enabled: boolean) =>
   request.put<never, { enabled: boolean }>(`/projects/${id}/privacy-mask`, { enabled });
+export const controlPrivacyMask = (id: number, action: "pause" | "resume" | "cancel") =>
+  request.post<never, { paused?: boolean; removed?: number; stopping?: number }>(`/projects/${id}/privacy-mask/control`, { action });

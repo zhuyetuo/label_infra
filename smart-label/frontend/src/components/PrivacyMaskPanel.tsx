@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Checkbox, Modal, Popconfirm, Progress, Select, Space, Switch, Typography, message } from "antd";
+import { Alert, Button, Checkbox, InputNumber, Modal, Popconfirm, Progress, Select, Space, Switch, Typography, message } from "antd";
 import { LockOutlined } from "@ant-design/icons";
-import { getPrivacyMask, runPrivacyMask, togglePrivacyMask } from "@/api/projects";
+import { controlPrivacyMask, getPrivacyMask, runPrivacyMask, togglePrivacyMask } from "@/api/projects";
 import { PREVIEW_MASK_KEY } from "@/api/media";
 import type { Project } from "@/types";
 
@@ -17,13 +17,18 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
   const [open, setOpen] = useState(false);
   const [pad, setPad] = useState(0.3);
   const [busy, setBusy] = useState(false);
+  // 先试水：只做这一个任务的视频（插到队列最前面），做完打开那个任务看遮得对不对
+  const trialKey = `privacy-trial-${project.id}`;
+  const [trialId, setTrialId] = useState<number | null>(() => {
+    try { const v = Number(localStorage.getItem(trialKey)); return v > 0 ? v : null; } catch { return null; }
+  });
   const qc = useQueryClient();
   const [preview, setPreview] = useState(() => {
     try { return localStorage.getItem(PREVIEW_MASK_KEY) === "1"; } catch { return false; }
   });
   const { data: st, refetch } = useQuery({
-    queryKey: ["privacy-mask", project.id],
-    queryFn: () => getPrivacyMask(project.id),
+    queryKey: ["privacy-mask", project.id, trialId],
+    queryFn: () => getPrivacyMask(project.id, trialId),
     enabled: open,
     refetchInterval: (q) => (q.state.data && (q.state.data.queued > 0 || q.state.data.running > 0) ? 5000 : false),
   });
@@ -31,6 +36,28 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
 
   const allDone = !!st && st.total > 0 && st.done === st.total;
   const pct = st && st.total ? Math.floor((st.done / st.total) * 100) : 0;
+
+  const runTrial = async () => {
+    if (!trialId) return;
+    setBusy(true);
+    try {
+      try { localStorage.setItem(trialKey, String(trialId)); } catch { /* 隐私模式 */ }
+      const r = await runPrivacyMask(project.id, { pad, task_ids: [trialId], force: true });
+      message.success(`任务 #${trialId} 的 ${r.queued} 路视频插到最前面了，做完勾上下面「我自己也看遮罩版」打开这个任务看效果`, 6);
+      void refetch();
+    } finally { setBusy(false); }
+  };
+
+  const control = async (action: "pause" | "resume" | "cancel") => {
+    setBusy(true);
+    try {
+      const r = await controlPrivacyMask(project.id, action);
+      message.success(action === "pause" ? "已暂停：正在做的停在原地，排队的不开工（整个遮罩队列）"
+        : action === "resume" ? "继续做了"
+        : `已停止这个项目：拿掉排队的 ${r.removed ?? 0} 个、中断正在做的 ${r.stopping ?? 0} 个（已经做好的不动）`);
+      void refetch();
+    } finally { setBusy(false); }
+  };
 
   const run = async (force: boolean) => {
     setBusy(true);
@@ -77,6 +104,8 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
               {st.queued > 0 && <span>排队 {st.queued}</span>}
               {st.none > 0 && <span style={{ color: "#999" }}>没做 {st.none}</span>}
               {st.failed > 0 && <span style={{ color: "#ff4d4f" }}>失败 {st.failed}</span>}
+              {!!st.workers && <span style={{ color: "#999" }}>（同时做 {st.workers} 路）</span>}
+              {st.paused && <span style={{ color: "#faad14" }}>⏸ 已暂停</span>}
             </Space>
             {st.running_items.map((r) => (
               <div key={r.path} style={{ fontSize: 12, color: "#888" }}>
@@ -91,6 +120,19 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
             )}
           </>
         )}
+        <Space wrap style={{ margin: "8px 0 4px" }}>
+          <span>先试一个任务</span>
+          <InputNumber size="small" placeholder="任务 ID" value={trialId ?? undefined} min={1} controls={false}
+            style={{ width: 110 }} onChange={(v) => setTrialId(typeof v === "number" ? v : null)} />
+          <Button size="small" loading={busy} disabled={!st?.available || !trialId} onClick={runTrial}>只做这个任务（插队）</Button>
+          {st?.trial && (
+            <span style={{ fontSize: 12 }}>
+              #{st.trial.task_id}：{st.trial.done === st.trial.total
+                ? <span style={{ color: "#52c41a" }}>{st.trial.total} 路都做好了，可以去看了</span>
+                : <>做好 {st.trial.done}/{st.trial.total}{st.trial.running ? ` · 正在做 ${st.trial.running}` : ""}{st.trial.failed ? ` · 失败 ${st.trial.failed}` : ""}</>}
+            </span>
+          )}
+        </Space>
         <Space wrap style={{ margin: "8px 0 16px" }}>
           <span>框放大</span>
           <Select size="small" value={pad} onChange={setPad} style={{ width: 110 }}
@@ -98,6 +140,13 @@ export default function PrivacyMaskPanel({ project, onChanged }: { project: Proj
           <Button type="primary" loading={busy} disabled={!st?.available} onClick={() => run(false)}>一键遮罩</Button>
           <Popconfirm title="已经做好的也全部重做？（改了框放大比例时用）" onConfirm={() => run(true)}>
             <Button size="small" disabled={!st?.available || busy}>全部重做</Button>
+          </Popconfirm>
+          {st?.paused
+            ? <Button size="small" type="primary" ghost loading={busy} onClick={() => control("resume")}>继续</Button>
+            : <Button size="small" loading={busy} disabled={!st || (!st.queued && !st.running)}
+                title="整个遮罩队列暂停（所有项目）：正在做的停在原地，不丢进度" onClick={() => control("pause")}>暂停</Button>}
+          <Popconfirm title="停止这个项目的遮罩？排队的拿掉，正在做的中断（半成品删掉）；已经做好的不动" onConfirm={() => control("cancel")}>
+            <Button size="small" danger disabled={busy || !st || (!st.queued && !st.running)}>停止</Button>
           </Popconfirm>
         </Space>
         <div style={{ borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 12 }}>

@@ -203,3 +203,39 @@ def test_夜视和缩略图_也只从遮罩版取(db, run, nas, monkeypatch):
     root = _super(db, run)
     run(ds_api.frame(sample_id=sid, slot="cam1", t=1.0, token=issue_media_token(sid, variant_for(root)), db=db))
     assert seen == ["a.mp4"]
+
+
+def test_先试一个任务_只交这个任务的视频_插到最前(db, run, nas, monkeypatch):
+    from app.services import vision_sam_client as vsc
+
+    w = _world(db, run)
+    root = _super(db, run)
+    got = {}
+
+    async def fake_submit(paths, force=False, **kw):
+        got.update(paths=paths, **kw)
+        return {"queued": len(paths), "skipped": 0}
+
+    monkeypatch.setattr(vsc, "privacy_mask_submit", fake_submit)
+    r = run(projects_api.privacy_mask_run(w.p.id, projects_api.PrivacyMaskRunIn(task_ids=[w.t.id]), db=db, user=root))
+    assert r["data"]["queued"] == 1 and got["paths"] == ["a.mp4"] and got["front"] is True
+    with pytest.raises(HTTPException):
+        run(projects_api.privacy_mask_run(w.p.id, projects_api.PrivacyMaskRunIn(task_ids=[999999]), db=db, user=root))
+
+
+def test_停止只停这个项目的视频(db, run, nas, monkeypatch):
+    from app.services import vision_sam_client as vsc
+
+    w = _world(db, run)
+    root = _super(db, run)
+    got = {}
+
+    async def fake_ctl(action, paths=None):
+        got.update(action=action, paths=paths)
+        return {"removed": 1, "stopping": 0}
+
+    monkeypatch.setattr(vsc, "privacy_mask_control", fake_ctl)
+    run(projects_api.privacy_mask_control(w.p.id, projects_api.PrivacyMaskControlIn(action="cancel"), db=db, user=root))
+    assert got == {"action": "cancel", "paths": ["a.mp4"]}
+    run(projects_api.privacy_mask_control(w.p.id, projects_api.PrivacyMaskControlIn(action="pause"), db=db, user=root))
+    assert got == {"action": "pause", "paths": None}
