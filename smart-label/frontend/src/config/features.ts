@@ -21,3 +21,11 @@
  * 还要在 vision_service/.env 里写 LOWLIGHT_ENABLED=1 再 `./up.sh deploy -g`。
  */
 export const NIGHT_VISION = false;
+
+/**
+ * 隐私遮罩（项目上「🔒 隐私遮罩」一键把狗以外涂黑、开关、项目行上的遮罩标记）。
+ *
+ * **2026-11-12 下架。** 检测 / 分割不够准：趴着的白狗会漏、蹲着的人会被认成熊，没时间细调。
+ * 想再打开：改成 true，后端 .env 里 PRIVACY_MASK_FEATURE=1，重新部署。
+ */
+export const PRIVACY_MASK = false;

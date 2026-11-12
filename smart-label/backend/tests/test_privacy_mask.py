@@ -16,6 +16,12 @@ from app.services import privacy_mask as pm
 from tests.test_segment_review import _world
 
 
+@pytest.fixture(autouse=True)
+def feature_on(monkeypatch):
+    # 功能下架了（默认关）；这些用例测的是打开时的行为
+    monkeypatch.setattr(settings, "privacy_mask_feature", True)
+
+
 @pytest.fixture
 def nas(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "nas_root", str(tmp_path))
@@ -239,3 +245,14 @@ def test_停止只停这个项目的视频(db, run, nas, monkeypatch):
     assert got == {"action": "cancel", "paths": ["a.mp4"]}
     run(projects_api.privacy_mask_control(w.p.id, projects_api.PrivacyMaskControlIn(action="pause"), db=db, user=root))
     assert got == {"action": "pause", "paths": None}
+
+
+def test_功能下架时_一律原版_接口404(db, run, nas, monkeypatch):
+    w = _world(db, run)
+    w.p.privacy_mask = True
+    run(db.commit())
+    monkeypatch.setattr(settings, "privacy_mask_feature", False)
+    assert run(pm.pick_video(db, w.ann, "a.mp4")) == "a.mp4"
+    with pytest.raises(HTTPException) as e:
+        projects_api._feature_on()
+    assert e.value.status_code == 404

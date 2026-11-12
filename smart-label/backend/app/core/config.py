@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     #   2. 前端 src/config/features.ts 的 NIGHT_VISION 改成 true
     #   3. 算法机 vision_service/.env 里 LOWLIGHT_ENABLED=1
     night_vision_enabled: bool = False
+    # 隐私遮罩（项目上一键把狗以外涂黑，见 services/privacy_mask.py）。
+    # 2026-11-12 先下架：检测 / 分割不够准（漏狗、把人当熊），没时间细调。代码全留着。
+    # 关着时：项目上没有入口，视频一律给原版（不查库、不读遮罩文件），遮罩相关接口返回 404。
+    # 想再打开，两处一起：这里（或 .env 里 PRIVACY_MASK_FEATURE=1）+ 前端 src/config/features.ts 的 PRIVACY_MASK
+    privacy_mask_feature: bool = False
     # 建画面索引时几路视频一起送。
     #
     # 2026-09-21 量过之后从 3 → 6 → 12：建索引 93% 的时间在「解码+检测」，而那里面
