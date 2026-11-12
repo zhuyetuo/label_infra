@@ -145,6 +145,8 @@ export const MARK_KINDS = [
   { value: "av_mismatch", short: "画面≠IMU", label: "画面跟 IMU 对不上：可能戴错了 / 还没戴上 / 时间没对齐", color: "red" },
   { value: "other", short: "其它", label: "其它（写在备注里）", color: "default" },
 ] as const;
+/** 上一次备忘勾了哪些（存在这台电脑上），下一条默认就是它 */
+const LAST_MARKS_KEY = "segment-last-marks";
 export const marksOf = (i: { marks?: string | null }) => (i.marks ? i.marks.split(",").filter(Boolean) : []);
 
 /**
@@ -588,6 +590,10 @@ export default function SegmentPanel({
   };
   const canMark = !readOnly || !!onMarksRemote;
   const setMarks = (i: LabelItem, marks: string[], note: string | null) => {
+    // 记住这次勾的：下一条还没备忘的片段打开时默认就是它（连着几条都是「看不清」，不用每次重选）
+    if (marks.length) {
+      try { localStorage.setItem(LAST_MARKS_KEY, marks.join(",")); } catch { /* 隐私模式 */ }
+    }
     if (readOnly) void onMarksRemote?.(i, marks, note);
     else update([i.id], { marks: marks.join(","), mark_note: note ?? "" });
   };
@@ -595,7 +601,19 @@ export default function SegmentPanel({
   const [markFor, setMarkFor] = useState<LabelItem | null>(null);
   const [markSel, setMarkSel] = useState<string[]>([]);
   const [markNote, setMarkNote] = useState("");
-  const openMarks = (i: LabelItem) => { setMarkFor(i); setMarkSel(marksOf(i)); setMarkNote(i.mark_note ?? ""); };
+  const openMarks = (i: LabelItem) => {
+    setMarkFor(i);
+    // 已经有备忘的照原样；还没有的默认上一次的选择（备注不带，每段不一样）
+    let sel = marksOf(i);
+    if (!sel.length) {
+      try {
+        const known = new Set<string>(MARK_KINDS.map((k) => k.value));
+        sel = (localStorage.getItem(LAST_MARKS_KEY) ?? "").split(",").filter((x) => known.has(x));
+      } catch { sel = []; }
+    }
+    setMarkSel(sel);
+    setMarkNote(i.mark_note ?? "");
+  };
   // 换任务就重读一次，并把上一个任务的勾选清掉（片段 id 不一样，留着是错的）
   useEffect(() => {
     setRecent(recentLabels(projectKey));
