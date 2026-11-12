@@ -799,6 +799,7 @@ async def privacy_mask_run(project_id: int, body: PrivacyMaskRunIn, db: AsyncSes
             skipped += int(r.get("skipped", 0))
     except vision_sam_client.SamUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    project.privacy_mask_at = datetime.now()
     db.add(AuditLog(user_id=user.id, action="privacy_mask_run", target_type="project", target_id=project_id,
                     detail=json.dumps({"queued": queued, "skipped": skipped, "force": body.force, "task_ids": body.task_ids,
                                        "pad": body.pad, "hold_s": body.hold_s, "shape": body.shape}, ensure_ascii=False)))

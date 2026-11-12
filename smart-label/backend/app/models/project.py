@@ -22,6 +22,8 @@ class Project(Base):
     # 隐私遮罩开着：除超级管理员外，这个项目里样本的视频一律只给「狗框以外全黑」的那一份
     # （见 services/privacy_mask.py）。只有超级管理员能开关，而且要先一键遮罩处理完
     privacy_mask: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # 最近一次「一键遮罩」的时间：项目行上标出哪些项目做过遮罩（开关关着也看得出来）
+    privacy_mask_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
