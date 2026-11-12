@@ -12,6 +12,14 @@ from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
 CHUNK_SIZE = 1024 * 1024  # 1MB
+# 视频 / 音频每次 Range 最多回这么多，剩下的让浏览器接着要。
+#
+# 为什么：<video> 第一次请求是 `bytes=0-`（从头到尾），以前照单全收、把几百 MB 的整个文件
+# 顺着这一条连接一直往下推，推完之前这条连接一直占着。浏览器对同一个网站只开 6 条连接（HTTP/1.1），
+# 三路视频就占掉三条，再加上拖进度条时新开的请求，后面「保存起止」、系统监控这些接口全在浏览器里
+# 排队——人看着整个平台卡死，服务器日志里却一条慢请求都没有（2026-11-12）。
+# 每次只回 4MB：一条请求几十毫秒就结束、连接马上空出来，浏览器缓冲不够了自己会接着要下一段。
+MEDIA_RANGE_CAP = 4 * 1024 * 1024
 
 
 def _parse_range(range_header: str, file_size: int) -> tuple[int, int] | None:
@@ -63,6 +71,9 @@ async def stream_file(request: Request, path: str, content_type: str) -> Respons
                 headers={"Content-Range": f"bytes */{file_size}"},
             )
         start, end = parsed
+        if content_type.startswith(("video/", "audio/")):
+            # 规范允许回得比要的少（Content-Range 写清实际范围），播放器都认
+            end = min(end, start + MEDIA_RANGE_CAP - 1)
         headers = {
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
