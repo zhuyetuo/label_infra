@@ -20,7 +20,9 @@ export const getTasksProgress = (mine = false) =>
 /** 某个类别（默认抓挠，含子类）每个项目的片段审核进度：多少段、通过、退回、还没审 */
 export interface LabelReviewCounts { n: number; approved: number; returned: number; unreviewed: number }
 export const getLabelReview = (label = "抓挠") =>
-  request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts }>(
+  request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts;
+    /** 每个项目打了 🔖 备忘的段数（全部类别），by_kind 按种类拆：compound / boundary / av_mismatch / other */
+    marks?: Record<string, { n: number; by_kind: Record<string, number> }> }>(
     "/tasks/label-review", { params: { label }, silent: true } as object);
 
 export const listTasksByIds = (ids: number[]) =>

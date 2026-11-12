@@ -229,6 +229,8 @@ export default function Projects() {
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
     /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
     overlapOnly?: boolean; uncertainOnly?: boolean;
+    /** 只看有 🔖 备忘的任务（打了复合 / 边界 / 画面≠IMU…，留着以后处理的） */
+    marked?: boolean;
     /** 只看还有片段没审的（选了类别就只算那几类，含子类）：比如只看抓挠还没审的 */
     unreviewedOnly?: boolean;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
@@ -1401,6 +1403,7 @@ export default function Projects() {
                 .filter(([lid]) => !f.labels.length || f.labels.includes(Number(lid)))
                 .reduce((s2, [, c]) => s2 + (c.returned ?? 0), 0);
             const segReturnedTasks = all.filter((t) => segReturnedOf(t) > 0).length;
+            const markedTasks = all.filter((t) => (t.mark_count ?? 0) > 0).length;
             // 标了「待定」的段数（选了类别就只算那几类，含子类）
             const uncertainOf = (t: Task) =>
               Object.entries(t.label_counts ?? {})
@@ -1424,6 +1427,7 @@ export default function Projects() {
                 (!f.segReturned || segReturnedOf(t) > 0) &&
                 (!f.overlapOnly || overlapOf(t) > 0) &&
                 (!f.uncertainOnly || uncertainOf(t) > 0) &&
+                (!f.marked || (t.mark_count ?? 0) > 0) &&
                 (!f.unreviewedOnly || unreviewedOf(t) > 0) &&
                 (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
@@ -1447,12 +1451,13 @@ export default function Projects() {
               f.segReturned && "有退回待改",
               f.overlapOnly && "有重叠",
               f.uncertainOnly && "有待定",
+              f.marked && "有备忘",
               f.unreviewedOnly && "片段还没审",
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
               status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
-              noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null,
+              noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
             });
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
@@ -1611,6 +1616,13 @@ export default function Projects() {
                     </>
                   );
                 })()}
+                {(markedTasks > 0 || f.marked) && (
+                  <Tooltip title="片段上打了 🔖 备忘（复合类别要拆 / 边界拿不准 / 画面≠IMU…）的任务：通过了也照样列出来，留着以后处理">
+                    <Checkbox checked={!!f.marked} onChange={(e) => setFilter(p.id, { marked: e.target.checked })}>
+                      <span style={{ color: "#d48806" }}>🔖 有备忘 {markedTasks}</span>
+                    </Checkbox>
+                  </Tooltip>
+                )}
                 {(segReturnedTasks > 0 || f.segReturned) && (
                   <Tooltip title="片段一条条退回（标了有问题）、标注员还没改好的任务。选了类别就只算那几类">
                     <Checkbox checked={f.segReturned} onChange={(e) => setFilter(p.id, { segReturned: e.target.checked })}>
@@ -1858,8 +1870,8 @@ export default function Projects() {
                       <Space size={4} wrap>
                         <TaskStatusTag status={s} />
                         {!!task.mark_count && (
-                          <Tooltip title={`${task.mark_count} 段打了标记（复合类别 / 边界拿不准 / 画面跟 IMU 对不上…），打开后在片段列表按「有标记」筛`}>
-                            <Tag color="volcano">🚩{task.mark_count}</Tag>
+                          <Tooltip title={`${task.mark_count} 段打了 🔖 备忘（复合类别要拆 / 边界拿不准 / 画面跟 IMU 对不上…），留着以后处理。打开后在片段列表按「有备忘」筛`}>
+                            <Tag color="gold">🔖{task.mark_count}</Tag>
                           </Tooltip>
                         )}
                         {/* 之前有人标了一半又放弃了，草稿还在，接手的人不用从零开始 */}
@@ -2416,6 +2428,23 @@ export default function Projects() {
                     </Tag>
                   ))}
                 </Space>
+                {(() => {
+                  // 🔖 备忘：全部通过了也可能还有几段留着以后处理（复合要拆、画面看不清…），不用展开就看得到
+                  const mk = scratchReview?.marks?.[String(p.id)];
+                  if (!mk || !mk.n) return null;
+                  const KIND: Record<string, string> = { compound: "复合要拆", boundary: "边界拿不准", av_mismatch: "画面≠IMU", other: "其它" };
+                  const detail = Object.entries(mk.by_kind).map(([k, n]) => `${KIND[k] ?? k} ${n}`).join("、");
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <Tooltip title={`${mk.n} 段打了备忘：${detail}。点一下展开、只看有备忘的任务`}>
+                        <Tag color="gold" style={{ cursor: "pointer" }}
+                          onClick={(e) => { e.stopPropagation(); setFilter(p.id, { marked: true, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
+                          🔖 备忘 {mk.n}{detail ? `（${detail}）` : ""}
+                        </Tag>
+                      </Tooltip>
+                    </div>
+                  );
+                })()}
                 {(() => {
                   const sr = scratchReview?.projects[String(p.id)];
                   if (!sr || !sr.n) return null;
