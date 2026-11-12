@@ -18,6 +18,7 @@ type SourceFilter =
   | "mark"
   | "mark_compound"
   | "mark_boundary"
+  | "mark_unclear"
   | "mark_av_mismatch"
   | "mark_other"
   | "ai"
@@ -53,6 +54,7 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "mark", label: "🔖 有备忘（全部）" },
   { value: "mark_compound", label: "备忘 · 复合类别要拆" },
   { value: "mark_boundary", label: "备忘 · 边界拿不准" },
+  { value: "mark_unclear", label: "备忘 · 看不清狗" },
   { value: "mark_av_mismatch", label: "备忘 · 画面跟 IMU 对不上" },
   { value: "mark_other", label: "备忘 · 其它" },
   { value: "uncertain_no_view", label: "待定·没画面" },
@@ -139,6 +141,7 @@ function coverage(items: LabelItem[], durationMs: number | null) {
 export const MARK_KINDS = [
   { value: "compound", short: "复合", label: "复合类别：一段里混了好几个类别，要拆（切分费时间，先放着）", color: "purple" },
   { value: "boundary", short: "边界", label: "边界拿不准：在两个类别之间，很纠结", color: "gold" },
+  { value: "unclear", short: "看不清", label: "看不清狗：太暗 / 被挡住 / 跑出画面，回头再看（还进训练集；不想让它进训练集就用「待定」）", color: "cyan" },
   { value: "av_mismatch", short: "画面≠IMU", label: "画面跟 IMU 对不上：可能戴错了 / 还没戴上 / 时间没对齐", color: "red" },
   { value: "other", short: "其它", label: "其它（写在备注里）", color: "default" },
 ] as const;

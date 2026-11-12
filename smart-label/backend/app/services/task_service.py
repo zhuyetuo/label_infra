@@ -240,7 +240,7 @@ _BOUNDARY_EDITS_MAX = 30
 
 
 
-MARK_CODES = ("compound", "boundary", "av_mismatch", "other")
+MARK_CODES = ("compound", "boundary", "unclear", "av_mismatch", "other")
 
 
 def clean_marks(v: str | None) -> str | None:

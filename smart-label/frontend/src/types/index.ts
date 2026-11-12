@@ -123,7 +123,7 @@ export interface LabelItem {
   uncertain: boolean;
   /** 待定的哪一种：no_view = 画面里没拍到狗，ambiguous = 拍到了但看不准 */
   uncertain_reason: string | null;
-  /** 标记（逗号分开）：compound 复合类别 / boundary 边界拿不准 / av_mismatch 画面跟 IMU 对不上 / other 其它。只是记号，不影响导出 */
+  /** 标记（逗号分开）：compound 复合类别 / boundary 边界拿不准 / unclear 看不清狗 / av_mismatch 画面跟 IMU 对不上 / other 其它。只是记号，不影响导出 */
   marks?: string | null;
   mark_note?: string | null;
   /** 从哪条「疑似片段」候选确认上来的；有值才能「退回候选」重新判断 */
