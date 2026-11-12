@@ -634,7 +634,7 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
     )).scalars().all())
     if not root_ids:
-        return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}})
+        return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}, "marks": {}})
     label_ids = await label_tree.expand_ids(db, root_ids)
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
@@ -655,7 +655,23 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         projects[str(pid)] = r
         for k in total:
             total[k] += r[k]
-    return ok({"label": label, "projects": projects, "total": total})
+    # 🔖 备忘（片段上打的 marks：复合类别要拆 / 边界拿不准 / 画面≠IMU…）：所有类别都算，不只这个 label。
+    # 项目行不用展开就能看到「全部通过了，但还有 3 段留着以后处理」
+    mark_rows = await db.execute(
+        select(Task.project_id, AnnotationLabelItem.marks, func.count(AnnotationLabelItem.id))
+        .join(scope, scope.c.id == Task.id)
+        .join(AnnotationRecord, (AnnotationRecord.task_id == Task.id) & (AnnotationRecord.round_no == Task.round_no))
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .where(AnnotationLabelItem.marks.is_not(None), AnnotationLabelItem.marks != "")
+        .group_by(Task.project_id, AnnotationLabelItem.marks)
+    )
+    marks: dict[str, dict] = {}
+    for pid, m, n in mark_rows.all():
+        r = marks.setdefault(str(pid), {"n": 0, "by_kind": {}})
+        r["n"] += int(n)
+        for k in {x for x in (m or "").split(",") if x}:
+            r["by_kind"][k] = r["by_kind"].get(k, 0) + int(n)
+    return ok({"label": label, "projects": projects, "total": total, "marks": marks})
 
 
 @router.get("/{task_id}")

@@ -40,3 +40,23 @@ def test_抓挠审核进度_按项目汇总_跟逐个任务加起来一样(db, r
     assert {k: p[k] for k in want} == want and want["n"] > 0
     assert p["unreviewed"] == want["n"] - want["approved"] - want["returned"]
     assert got["total"]["n"] == want["n"]
+
+
+def test_项目行的备忘数_跟逐个任务的mark_count一样(db, run):
+    """项目行不用展开就能看到「还有几段打了 🔖 备忘」，按种类拆开。"""
+    from sqlalchemy import select
+    from app.models.annotation import AnnotationLabelItem
+
+    w = _world(db, run)
+    items = run(db.execute(select(AnnotationLabelItem))).scalars().all()
+    assert len(items) >= 2
+    items[0].marks = "compound"
+    items[1].marks = "compound,av_mismatch"
+    run(db.commit())
+    rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+    want = sum(r.get("mark_count") or 0 for r in rows)
+    got = run(tasks_api.label_review_progress(label="抓挠", db=db, user=w.admin))["data"]["marks"]
+    m = got.get(str(w.p.id), {"n": 0, "by_kind": {}})
+    assert m["n"] == want
+    if want == 2:
+        assert m["by_kind"] == {"compound": 2, "av_mismatch": 1}

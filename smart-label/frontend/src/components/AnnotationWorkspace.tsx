@@ -1209,7 +1209,7 @@ export default function AnnotationWorkspace({
   const marksRemote = async (it: LabelItem, marks: string[], note: string | null) => {
     const r = await segMarks(it.id, marks, note);
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, marks: r.marks, mark_note: r.mark_note } : x)));
-    message.success(r.marks ? "已标记" : "已清掉标记");
+    message.success(r.marks ? "已记备忘" : "已清掉备忘");
   };
   const relabelItem = async (it: LabelItem, labelId: number) => {
     if (taskId == null || labelId === it.label_id) return;

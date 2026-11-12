@@ -50,11 +50,11 @@ const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
   { value: "from_cand", label: "来自疑似片段" },
   { value: "human", label: "人工" },
   { value: "uncertain", label: "待定（全部）" },
-  { value: "mark", label: "有标记（全部）" },
-  { value: "mark_compound", label: "标记 · 复合类别" },
-  { value: "mark_boundary", label: "标记 · 边界拿不准" },
-  { value: "mark_av_mismatch", label: "标记 · 画面跟 IMU 对不上" },
-  { value: "mark_other", label: "标记 · 其它" },
+  { value: "mark", label: "🔖 有备忘（全部）" },
+  { value: "mark_compound", label: "备忘 · 复合类别要拆" },
+  { value: "mark_boundary", label: "备忘 · 边界拿不准" },
+  { value: "mark_av_mismatch", label: "备忘 · 画面跟 IMU 对不上" },
+  { value: "mark_other", label: "备忘 · 其它" },
   { value: "uncertain_no_view", label: "待定·没画面" },
   { value: "uncertain_ambiguous", label: "待定·看不清" },
   { value: "uncertain_needs_split", label: "待定·要细切" },
@@ -132,11 +132,12 @@ function coverage(items: LabelItem[], durationMs: number | null) {
 }
 
 /**
- * 标记：看的时候发现、但暂时没空处理的问题，过很久回来也能按标记找回来。可以打好几个。
- * 跟「待定」不是一回事——待定是「拿不准，不进训练集」，标记只是记号，不影响导出。
+ * 🔖 备忘：看的时候发现、但暂时没空处理的问题（复合要拆太费时间、边界拿不准…），过很久回来也能按备忘找回来。可以打好几个。
+ * 跟「待定」不是一回事——待定是「拿不准，不进训练集」，备忘只是记号，不影响导出。
+ * 跟「有问题」也不是一回事——有问题是审核退回给标注员改，备忘不退回、不挡「通过」：全部通过了照样可以留几段备忘以后处理。
  */
 export const MARK_KINDS = [
-  { value: "compound", short: "复合", label: "复合类别：一段里混了好几个类别，要拆", color: "purple" },
+  { value: "compound", short: "复合", label: "复合类别：一段里混了好几个类别，要拆（切分费时间，先放着）", color: "purple" },
   { value: "boundary", short: "边界", label: "边界拿不准：在两个类别之间，很纠结", color: "gold" },
   { value: "av_mismatch", short: "画面≠IMU", label: "画面跟 IMU 对不上：可能戴错了 / 还没戴上 / 时间没对齐", color: "red" },
   { value: "other", short: "其它", label: "其它（写在备注里）", color: "default" },
@@ -998,7 +999,7 @@ export default function SegmentPanel({
                   const k = MARK_KINDS.find((x) => x.value === m);
                   return k ? (
                     <Tooltip key={m} title={<>{k.label}{i.mark_note ? <><br />备注：{i.mark_note}</> : null}</>}>
-                      <Tag color={k.color} style={{ marginLeft: 4, cursor: canMark ? "pointer" : undefined }} onClick={() => canMark && openMarks(i)}>🚩{k.short}</Tag>
+                      <Tag color={k.color} style={{ marginLeft: 4, cursor: canMark ? "pointer" : undefined }} onClick={() => canMark && openMarks(i)}>🔖{k.short}</Tag>
                     </Tooltip>
                   ) : null;
                 })}
@@ -1153,7 +1154,7 @@ export default function SegmentPanel({
                 <div style={{ fontSize: 12, lineHeight: 1.7 }}>
                   <div><b>循环播放</b>：只循环播放这一段，反复看起止对不对</div>
                   <div><b>改成 X</b>：照你最近的习惯猜的（同一个原类别以前改成什么最多），点一下直接改；不对就点 ▾ 选别的</div>
-                  <div><b>🚩标记</b>：复合类别 / 边界拿不准 / 画面跟 IMU 对不上 / 其它，可以打好几个。只是记号，不影响导出，回头按「有标记」筛</div>
+                  <div><b>🔖备忘</b>：留着以后处理的——复合要拆 / 边界拿不准 / 画面跟 IMU 对不上 / 其它，可以打好几个。不退回、不挡通过、不影响导出，项目行上能看到有几段，回头按「有备忘」筛</div>
                   <div><b>通过</b>：起止、类别都没问题，片段审核通过（导出可以只要通过的）；AI 片段的「通过」= 确认 AI 预测正确</div>
                   <div><b>有问题</b>：标出这条哪里不对，退回时标注员只改这几条</div>
                   <div><b>待定</b>：拿不准，留着但不进训练集</div>
@@ -1201,8 +1202,9 @@ export default function SegmentPanel({
                   })()}
                   {canMark && (i.id > 0 || !readOnly) ? (
                     <>
-                      <Button size="small" type="link" style={{ color: i.marks ? "#d4380d" : undefined }} onClick={() => openMarks(i)}>
-                        🚩{i.marks ? marksOf(i).length : "标记"}
+                      <Button size="small" type="link" style={{ color: i.marks ? "#d48806" : undefined }} onClick={() => openMarks(i)}
+                        title="备忘：留着以后处理（不退回、不挡通过）。要标注员改的点「有问题」">
+                        🔖{i.marks ? marksOf(i).length : "备忘"}
                       </Button>
                     </>
                   ) : null}
@@ -1369,14 +1371,14 @@ export default function SegmentPanel({
 
       <Modal
         open={markFor != null}
-        title={markFor ? `标记这一段（${formatMs(markFor.start_time_ms)} ${nameOf(markFor.label_id)}）` : ""}
+        title={markFor ? `备忘这一段（${formatMs(markFor.start_time_ms)} ${nameOf(markFor.label_id)}）` : ""}
         okText="保存"
         onCancel={() => setMarkFor(null)}
         onOk={() => { if (markFor) setMarks(markFor, markSel, markNote.trim() || null); setMarkFor(null); }}
         footer={(_, { OkBtn, CancelBtn }) => (
           <>
             {markFor?.marks && (
-              <Button style={{ float: "left" }} onClick={() => { if (markFor) setMarks(markFor, [], null); setMarkFor(null); }}>清掉标记</Button>
+              <Button style={{ float: "left" }} onClick={() => { if (markFor) setMarks(markFor, [], null); setMarkFor(null); }}>清掉备忘</Button>
             )}
             <CancelBtn /><OkBtn />
           </>
