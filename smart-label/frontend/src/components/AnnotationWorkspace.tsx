@@ -61,7 +61,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segDedupe, segDelete, segEdit, segMarks, segSplit } from "@/api/segReview";
+import { segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -507,6 +507,14 @@ export default function AnnotationWorkspace({
       ? { ...x, seg_status: r.seg_status === "pending" ? null : r.seg_status, ...(okFlag ? { review_note: null, review_flag_by: null } : {}) }
       : x)));
     message.success(okFlag ? "这一条通过了" : "已撤销通过");
+  };
+  // 管理员复查：别人通过的这条有问题，退回给原来通过它的人重审
+  const handleSendBackReviewer = async (it: LabelItem, note: string | null) => {
+    await segSendBackReviewer(it.id, note ?? undefined);
+    setItems((prev) => prev.map((x) => (x.id === it.id
+      ? { ...x, seg_status: null, seg_reviewed_by: null, seg_reviewed_at: null, ...(note ? { mark_note: `复查退回：${note}` } : {}) }
+      : x)));
+    message.success(`已退回给原来通过它的人重审${note ? `（${note}）` : ""}，在他的待审里`);
   };
   const handleCandReviewNote = async (c: AiCandidate, note: string | null) => {
     const saved = await setCandidateReviewNote(c.id, note);
@@ -2021,6 +2029,7 @@ export default function AnnotationWorkspace({
         initialFilterLabels={initialSegmentFilter}
         onReviewNote={canFlag || !readOnly ? handleReviewNote : undefined}
         onSegApprove={canFlag ? handleSegApprove : undefined}
+        onSendBackReviewer={role === "admin" || role === "super_admin" ? handleSendBackReviewer : undefined}
         // 只看模式也能改类别（审核员 / 管理员，直接落库）、打标记（任务的标注员也行，后端会拦别人的）
         onRelabelRemote={readOnly && canFlag && !segReview ? relabelItem : undefined}
         onMarksRemote={readOnly && taskId != null ? marksRemote : undefined}

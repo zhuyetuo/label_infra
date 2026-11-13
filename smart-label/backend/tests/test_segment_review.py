@@ -308,3 +308,29 @@ def test_整个项目一键去重(db, run):
     # 再跑一次：没东西可去
     r = run(api.dedupe_project(api.DedupeProjectIn(project_id=w.p.id), db, w.rev))["data"]
     assert r["tasks_changed"] == 0 and r["merged"] == 0
+
+
+def test_管理员不受别人领着限制_能退回给原来通过的人(db, run):
+    from app.models.user import User, UserRole
+
+    w = _world(db, run)
+    it = w.items[0]
+    run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.rev))
+    # 别人领着也能改、能通过
+    it.seg_claimed_by, it.seg_claim_expires_at = w.rev2.id, api._now() + api.timedelta(days=1)
+    run(db.commit())
+    run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.admin))
+    it.seg_claimed_by, it.seg_claim_expires_at = w.rev2.id, api._now() + api.timedelta(days=1)
+    run(db.commit())
+    with pytest.raises(HTTPException):          # 审核员照旧被挡
+        run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.rev))
+    # 退回给通过它的人（现在是 admin 通过的 → 退回给 admin 自己；换成 rev 通过再试）
+    it.seg_claimed_by = None
+    run(db.commit())
+    run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.rev))
+    with pytest.raises(HTTPException):
+        run(api.send_back_to_reviewer(it.id, api.SendBackIn(), db, w.rev))
+    r = run(api.send_back_to_reviewer(it.id, api.SendBackIn(note="起止不准"), db, w.admin))
+    assert r["data"]["sent_to"] == w.rev.id
+    run(db.refresh(it))
+    assert it.seg_status is None and it.seg_claimed_by == w.rev.id and "起止不准" in (it.mark_note or "")

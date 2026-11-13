@@ -66,6 +66,10 @@ export const segRelease = (ids?: number[]) =>
 export const segDecide = (id: number, decision: "approved" | "returned" | "pending", note?: string) =>
   request.post<never, { id: number; seg_status: SegStatus }>(`/segments/${id}/decide`, { decision, note: note ?? null });
 
+/** 复查发现别人通过的这条有问题：撤销通过、领给原来通过它的人重审（管理员） */
+export const segSendBackReviewer = (id: number, note?: string) =>
+  request.post<never, { id: number; sent_to: number; seg_status: SegStatus }>(`/segments/${id}/send-back-reviewer`, { note: note ?? null });
+
 export const segEdit = (id: number, body: { start_time_ms: number; end_time_ms: number; label_id?: number | null }) =>
   request.put<never, { id: number; start_time_ms: number; end_time_ms: number; label_id: number; seg_status: SegStatus }>(
     `/segments/${id}`, body);

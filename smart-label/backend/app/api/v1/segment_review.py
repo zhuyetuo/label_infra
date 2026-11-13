@@ -303,6 +303,9 @@ async def _load(db: AsyncSession, item_id: int, user: User) -> tuple[AnnotationL
 
 
 def _check_not_taken(it: AnnotationLabelItem, user: User) -> None:
+    # 管理员 / 超级管理员不受「别人领着」限制：复查别人审过的、直接改直接通过（领着的人那边会重新拉到）
+    if user.role in (UserRole.admin, UserRole.super_admin):
+        return
     if it.seg_claimed_by and it.seg_claimed_by != user.id and it.seg_claim_expires_at and it.seg_claim_expires_at >= _now():
         raise HTTPException(status.HTTP_409_CONFLICT, "这条被别人领去审了")
 
@@ -355,6 +358,36 @@ class EditIn(BaseModel):
     start_time_ms: int = Field(..., ge=0)
     end_time_ms: int = Field(..., ge=0)
     label_id: int | None = None
+
+
+class SendBackIn(BaseModel):
+    note: str | None = Field(None, max_length=300)
+
+
+@router.post("/{item_id}/send-back-reviewer")
+async def send_back_to_reviewer(item_id: int, body: SendBackIn, db: AsyncSession = Depends(get_db),
+                                user: User = Depends(get_current_user)):
+    """复查发现别人「通过」的这条有问题：撤销通过、领给原来通过它的人（3 天），让他自己重审。
+    只有管理员 / 超级管理员能做。note 写进备忘备注，他打开就能看到为什么退回。"""
+
+    if user.role not in (UserRole.admin, UserRole.super_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有管理员能退回别人通过的片段")
+    it, _task = await _load(db, item_id, user)
+    if it.seg_status != "approved" or not it.seg_reviewed_by:
+        raise HTTPException(status.HTTP_409_CONFLICT, "这条不是审核通过的，没有可以退回的人")
+    who = it.seg_reviewed_by
+    now = _now()
+    it.seg_status = None
+    it.seg_reviewed_by = it.seg_reviewed_at = None
+    it.seg_claimed_by, it.seg_claim_expires_at = who, now + timedelta(days=3)
+    if it.pool_state == "in":
+        it.pool_state = None
+    note = (body.note or "").strip()
+    if note:
+        it.mark_note = f"复查退回：{note}"[:300]
+    it.touched_at, it.touched_by = now, user.id
+    await db.commit()
+    return ok({"id": it.id, "sent_to": who, "seg_status": "pending"})
 
 
 @router.put("/{item_id}")
