@@ -84,7 +84,8 @@ def _touched():
 
 def _status_cond(s: str):
     if s == "pending":
-        return AnnotationLabelItem.seg_status.is_(None)
+        # 打了 🔖 备忘的「先放着」，不进待审队列（清掉备忘就回来）
+        return AnnotationLabelItem.seg_status.is_(None) & AnnotationLabelItem.marks.is_(None)
     return AnnotationLabelItem.seg_status == s
 
 

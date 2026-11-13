@@ -453,14 +453,15 @@ export default function SegmentPanel({
         if (manualMode && !filterLabels.length && filterSource === "all" && st) return false;
         if (filterSource === "ai" && !st) return false;
         if (filterSource === "human" && st) return false;
-        if (filterSource === "ai_pending" && st !== "pending") return false;
+        // 打了备忘的「先放着」：不算 AI 待确认、也不算还没审（项目页的数字也是这么算的），要看就选「有备忘」
+        if (filterSource === "ai_pending" && (st !== "pending" || i.marks)) return false;
         if (filterSource === "ai_confirmed" && st !== "confirmed") return false;
         if (filterSource === "ai_modified" && st !== "modified") return false;
         if (filterSource === "ai_relabeled" && !(st === "modified" && i.ai_label_id != null && i.ai_label_id !== i.label_id)) return false;
         if (filterSource === "from_cand" && !i.cand_label_name) return false;
         if (filterSource === "flagged" && !i.review_note) return false;
         if (filterSource === "seg_approved" && i.seg_status !== "approved") return false;
-        if (filterSource === "seg_unreviewed" && (i.seg_status === "approved" || i.review_note)) return false;
+        if (filterSource === "seg_unreviewed" && (i.seg_status === "approved" || i.review_note || i.marks)) return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
         if (filterSource === "uncertain_ambiguous" && i.uncertain_reason !== "ambiguous") return false;
