@@ -1262,14 +1262,49 @@ export default function AnnotationWorkspace({
     if (taskId != null) getDraft(taskId).then((d) => setItems(d.items)).catch(() => { /* 对齐失败就用本地这份，下次打开会重拉 */ });
   };
 
+  // 管理员 / 审核员在只读任务里改起止，后端直接算「通过」（改过的就是认可的版本）。
+  // 可能手滑拖错了：提示里给两个后悔药——「撤回」= 起止和审核状态都还原；「只撤销通过」= 起止留着、回到待审
+  const savedWithUndo = (prev: LabelItem | undefined, r: { start_time_ms: number; end_time_ms: number; label_id: number; seg_status: string }) => {
+    if (!prev) return message.success("起止已保存");
+    const key = `undo-${prev.id}`;
+    const wasApproved = prev.seg_status === "approved";
+    const nowApproved = r.seg_status === "approved";
+    const undo = async () => {
+      message.destroy(key);
+      const back = await segEdit(prev.id, { start_time_ms: prev.start_time_ms, end_time_ms: prev.end_time_ms });
+      let st = back.seg_status;
+      if (!wasApproved && st === "approved") st = (await segDecide(prev.id, "pending")).seg_status;
+      savedLocally(prev.id, { ...back, seg_status: st });
+      showRange({ startMs: prev.start_time_ms, endMs: prev.end_time_ms });
+      message.success("已撤回：起止和审核状态都还原了");
+    };
+    const unapprove = async () => {
+      message.destroy(key);
+      const d = await segDecide(prev.id, "pending");
+      savedLocally(prev.id, { ...r, seg_status: d.seg_status });
+      message.success("起止留着，这一条回到待审");
+    };
+    message.success({
+      key, duration: 8,
+      content: (
+        <span>
+          起止已保存{nowApproved && !wasApproved ? "，并自动算「通过」" : ""}
+          <Button size="small" type="link" onClick={undo}>撤回</Button>
+          {nowApproved && !wasApproved && <Button size="small" type="link" onClick={unapprove}>只撤销通过</Button>}
+        </span>
+      ),
+    });
+  };
+
   const adjustFromWaveInner = async (target: AdjustTarget, startMs: number, endMs: number) => {
     // 审核员 / 管理员看只读的任务（已提交的、别人的）：直接改这一条，走片段接口，
     // 不用为了调个起止去认领整个任务
     if (readOnly && canFlag && !segReview && target.kind === "item" && taskId != null) {
+      const prev = items.find((x) => x.id === target.id);
       const r = await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
       savedLocally(target.id, r);
       showRange({ startMs, endMs });
-      message.success("起止已保存");
+      savedWithUndo(prev, r);
       return;
     }
     if (segReview && target.kind === "item" && target.id === segReview.itemId && taskId != null) {
@@ -1282,10 +1317,11 @@ export default function AnnotationWorkspace({
     }
     if (segReview && target.kind === "item" && inGroup(target.id) && taskId != null) {
       // 拆出来的其它几段：直接走片段接口
+      const prev = items.find((x) => x.id === target.id);
       const r = await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
       savedLocally(target.id, r);
       showRange({ startMs, endMs });
-      message.success("起止已保存");
+      savedWithUndo(prev, r);
       return;
     }
     await adjustBoundary(target, startMs, endMs);
