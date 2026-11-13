@@ -34,13 +34,14 @@ def _floats(v: str | None) -> list[float] | None:
 def _qfilter(project_ids: str | None = None, dog_ids: str | None = None, task_ids: str | None = None,
              date_from: date | None = None, date_to: date | None = None, sample_hz: str | None = None,
              min_sec: float | None = None, label_names: str | None = None,
-             reviewer_ids: str | None = None) -> data_pool.PoolFilter:
+             reviewer_ids: str | None = None, reviewed_from: date | None = None,
+             reviewed_to: date | None = None) -> data_pool.PoolFilter:
     """GET 的筛选参数：多个值逗号分隔"""
     return data_pool.PoolFilter(
         project_ids=_ids(project_ids), dog_ids=_ids(dog_ids), task_ids=_ids(task_ids),
         date_from=date_from, date_to=date_to, sample_hz=_floats(sample_hz), min_sec=min_sec,
         label_names=[x for x in label_names.split(",") if x.strip()] if label_names else None,
-        reviewer_ids=_ids(reviewer_ids))
+        reviewer_ids=_ids(reviewer_ids), reviewed_from=reviewed_from, reviewed_to=reviewed_to)
 
 
 @router.get("/summary")
@@ -72,6 +73,8 @@ class PoolFilterIn(BaseModel):
     min_sec: float | None = None
     label_names: list[str] | None = None
     reviewer_ids: list[int] | None = None
+    reviewed_from: date | None = None
+    reviewed_to: date | None = None
 
     def to_filter(self) -> data_pool.PoolFilter:
         return data_pool.PoolFilter(**self.model_dump(include=set(data_pool.PoolFilter.__dataclass_fields__)))

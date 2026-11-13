@@ -83,7 +83,7 @@ export interface Task {
   /** 打了标记的段数（当前轮） */
   mark_count?: number;
   /** 当前轮各类别段数 {label_id: {n, ai_pending}}，ai_pending = AI 给的还没人确认/改过的（只有列表接口会算） */
-  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number; uncertain?: number; /** 打了备忘、还没通过也没退回（先放着，不算还没审） */ marked?: number; /** 通过的分别是谁通过的 {用户id: 段数} */ approved_by?: Record<string, number> }>;
+  label_counts?: Record<number, { n: number; ai_pending: number; approved?: number; returned?: number; max_ms?: number; ms?: number; pool?: number; uncertain?: number; /** 打了备忘、还没通过也没退回（先放着，不算还没审） */ marked?: number; /** 通过的分别是谁通过的 {用户id: 段数} */ approved_by?: Record<string, number>; /** 通过的最早 / 最晚审核时间 "YYYY-MM-DD HH:mm" */ approved_first?: string; approved_last?: string }>;
   /** 「疑似片段」候选：不在片段里，label_counts 统计不到，单独两个数（只有列表接口会算） */
   cand_count?: number;
   /** 同一轨上有重叠的片段数（同类重复 / 父子 / 类别冲突；只有列表接口会算） */
@@ -148,6 +148,8 @@ export interface LabelItem {
   /** 片段审核：空 = 还没审 / approved = 通过 / returned = 退回（原因在 review_note） */
   seg_status?: "approved" | "returned" | null;
   seg_reviewed_by?: number | null;
+  /** 什么时候审的（ISO） */
+  seg_reviewed_at?: string | null;
 }
 
 export interface BoundaryEdit {

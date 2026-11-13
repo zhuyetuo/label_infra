@@ -121,6 +121,8 @@ class LabelItemOut(LabelItemIn):
     # 片段审核：None = 待审 / approved = 通过 / returned = 退回（原因在 review_note）
     seg_status: str | None = None
     seg_reviewed_by: int | None = None
+    # 什么时候审的（通过 / 退回）
+    seg_reviewed_at: datetime | None = None
 
     @field_validator("boundary_edits", mode="before")
     @classmethod

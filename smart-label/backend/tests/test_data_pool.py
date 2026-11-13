@@ -206,3 +206,20 @@ def test_按审核人筛_撤销某人的通过_退回给他重审(db, run):
     it = w.items[1]
     assert it.seg_status is None and it.seg_reviewed_by is None and it.seg_claimed_by == w.rev2.id
     assert _ids_in_pool(run, db) == [w.items[0].id], "撤销的出池，别人通过的不动"
+
+
+def test_按审核时间段筛(db, run):
+    from datetime import date, datetime, timedelta
+
+    w = _world(db, run)
+    run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    run(seg_api.decide(w.items[1].id, seg_api.DecideIn(decision="approved"), db, w.rev2))
+    w.items[0].seg_reviewed_at = datetime.now() - timedelta(days=5)
+    run(db.commit())
+    today = date.today()
+    items = run(data_pool.list_items(db, data_pool.PoolFilter(reviewed_from=today, reviewed_to=today)))["items"]
+    assert [x["id"] for x in items] == [w.items[1].id] and items[0]["reviewed_at"]
+    from app.api.v1 import tasks as tasks_api
+    r = run(tasks_api.approvals_in_range(project_id=w.p.id, date_from=today - timedelta(days=6),
+                                         date_to=today - timedelta(days=4), db=db, user=w.admin))["data"]
+    assert r == {str(w.t.id): {"n": 1, "by_label": {str(w.child.id): 1}}}

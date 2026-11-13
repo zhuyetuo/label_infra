@@ -7,7 +7,7 @@
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, case, delete, func, insert, literal, or_, select
@@ -415,7 +415,8 @@ async def list_tasks(
     if task_ids:
         rows = await db.execute(
             select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.seg_reviewed_by,
-                   func.count(AnnotationLabelItem.id))
+                   func.count(AnnotationLabelItem.id), func.min(AnnotationLabelItem.seg_reviewed_at),
+                   func.max(AnnotationLabelItem.seg_reviewed_at))
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
             .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
@@ -423,10 +424,15 @@ async def list_tasks(
                    AnnotationLabelItem.review_note.is_(None), AnnotationLabelItem.seg_reviewed_by.is_not(None))
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.seg_reviewed_by)
         )
-        for task_id, label_id, uid, n in rows.all():
+        for task_id, label_id, uid, n, t_min, t_max in rows.all():
             c = label_counts.get(task_id, {}).get(label_id)
             if c is not None:
                 c.setdefault("approved_by", {})[str(uid)] = int(n)
+                # 这一类通过的最早 / 最晚是什么时候审的（项目页显示、按审核时间段粗筛）
+                for k, v, pick in (("approved_first", t_min, min), ("approved_last", t_max, max)):
+                    if v is not None:
+                        iso = v.isoformat(sep=" ", timespec="minutes")
+                        c[k] = pick(c[k], iso) if c.get(k) else iso
     _lap("labels")
     # 有重叠的片段数（同一轨上互相压着的：同类重复 / 父子 / 类别冲突）。项目页每行标个
     # 「重叠 N」，点进去只看这些——不然重复、矛盾的段只能一个个任务点开去找
@@ -648,6 +654,35 @@ async def tasks_progress(mine: bool = False, db: AsyncSession = Depends(get_db),
         r = row(pid)
         r["cands"], r["cand_pending"] = int(n), int(n_pending or 0)
     return ok({str(k): v for k, v in out.items()})
+
+
+@router.get("/approvals-in-range")
+async def approvals_in_range(project_id: int, date_from: date | None = None, date_to: date | None = None,
+                             reviewer_id: int | None = None, db: AsyncSession = Depends(get_db),
+                             user: User = Depends(get_current_user)):
+    """某个项目里，在这个时间段内审核通过的片段（可再限定是谁通过的）：{task_id: {n, by_label: {label_id: n}}}。
+    项目页「按审核时间筛」用——要精确到每一段的审核时间，列表接口里那个最早 / 最晚只能粗筛。"""
+    from datetime import datetime as _dt, time as _time, timedelta as _td
+
+    scope = apply_task_scope(select(Task.id).where(Task.project_id == project_id), user).subquery()
+    q = (select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, func.count(AnnotationLabelItem.id))
+         .join(Task, Task.id == AnnotationRecord.task_id)
+         .join(scope, scope.c.id == Task.id)
+         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+         .where(AnnotationRecord.round_no == Task.round_no, AnnotationLabelItem.seg_status == "approved",
+                AnnotationLabelItem.review_note.is_(None)))
+    if date_from is not None:
+        q = q.where(AnnotationLabelItem.seg_reviewed_at >= _dt.combine(date_from, _time.min))
+    if date_to is not None:
+        q = q.where(AnnotationLabelItem.seg_reviewed_at < _dt.combine(date_to, _time.min) + _td(days=1))
+    if reviewer_id is not None:
+        q = q.where(AnnotationLabelItem.seg_reviewed_by == reviewer_id)
+    out: dict[str, dict] = {}
+    for task_id, label_id, n in (await db.execute(q.group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id))).all():
+        r = out.setdefault(str(task_id), {"n": 0, "by_label": {}})
+        r["n"] += int(n)
+        r["by_label"][str(label_id)] = int(n)
+    return ok(out)
 
 
 @router.get("/label-review")
