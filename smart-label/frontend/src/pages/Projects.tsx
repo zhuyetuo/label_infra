@@ -2587,7 +2587,10 @@ export default function Projects() {
                             )}
                           </Space>
                         ) : (
-                          <Tag color="green">抓挠 {sr.n} 段全部通过</Tag>
+                          <Tag color="green" style={{ cursor: "pointer" }}
+                            onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id), unreviewedOnly: false, segReturned: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
+                            抓挠 {sr.n} 段全部通过
+                          </Tag>
                         )}
                       </Tooltip>
                     </div>

@@ -223,6 +223,8 @@ interface Props {
   reviewNoteClearOnly?: boolean;
   /** 片段级「通过」（审核员 / 管理员）。ok = false 是撤销通过。给了才显示按钮 */
   onSegApprove?: (item: LabelItem, ok: boolean) => void;
+  /** 管理员复查：别人通过的这条有问题，退回给原来通过它的人重审（note = 为什么） */
+  onSendBackReviewer?: (item: LabelItem, note: string | null) => void;
   /** 只看模式下改类别（直接落库）。不给就只能在编辑模式改 */
   onRelabelRemote?: (item: LabelItem, labelId: number) => void | Promise<void>;
   /** 只看模式下打标记（直接落库）。编辑模式走 onUpdate 跟着草稿存 */
@@ -273,6 +275,7 @@ export default function SegmentPanel({
   persistKey,
   onReviewNote,
   onSegApprove,
+  onSendBackReviewer,
   reviewNoteClearOnly,
   initialFlaggedOnly,
   controlsPortalTarget,
@@ -1244,6 +1247,18 @@ export default function SegmentPanel({
                       <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onSegApprove(i, false)}>
                         撤销通过
                       </Button>
+                      {onSendBackReviewer && i.seg_reviewed_by != null && (
+                        <Dropdown
+                          menu={{
+                            items: [...REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__none", label: "不写原因，直接退回" }],
+                            onClick: ({ key }) => onSendBackReviewer(i, key === "__none" ? null : key),
+                          }}
+                        >
+                          <Button size="small" type="link" danger title="撤销通过，领给原来通过它的人重审（原因写进这条的备忘备注）">
+                            退回给通过人 <DownOutlined style={{ fontSize: 10 }} />
+                          </Button>
+                        </Dropdown>
+                      )}
                     </>
                   ) : (
                     <>
