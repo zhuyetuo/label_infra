@@ -19,6 +19,11 @@ export const getTasksProgress = (mine = false) =>
 
 /** 某个类别（默认抓挠，含子类）每个项目的片段审核进度：多少段、通过、退回、还没审 */
 export interface LabelReviewCounts { n: number; approved: number; returned: number; unreviewed: number; marked?: number }
+/** 某项目在这个审核时间段内（可限定是谁）通过的片段：{task_id: {n, by_label}} */
+export const getApprovalsInRange = (projectId: number, from?: string | null, to?: string | null, reviewerId?: number | null) =>
+  request.get<never, Record<string, { n: number; by_label: Record<string, number> }>>("/tasks/approvals-in-range", {
+    params: { project_id: projectId, date_from: from || undefined, date_to: to || undefined, reviewer_id: reviewerId || undefined },
+  });
 export const getLabelReview = (label = "抓挠") =>
   request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts;
     /** 每个项目打了 🔖 备忘的段数（全部类别），by_kind 按种类拆：compound / boundary / av_mismatch / other */

@@ -12,6 +12,7 @@ import {
   Button,
   Checkbox,
   Collapse,
+  DatePicker,
   Form,
   Input,
   InputNumber,
@@ -63,6 +64,7 @@ import {
   deleteTask,
   deleteTasksBatch,
   editAgain,
+  getApprovalsInRange,
   getLabelReview,
   listTasksByIds,
   listTasksLite,
@@ -243,6 +245,9 @@ export default function Projects() {
     marked?: boolean;
     /** 只看某个人审核通过的（几个人一起审时挑出来复查） */
     reviewer?: number | null;
+    /** 审核时间段（YYYY-MM-DD，含两头）：只看这段时间里审核通过过片段的任务 */
+    reviewedFrom?: string | null;
+    reviewedTo?: string | null;
     /** 只看还有片段没审的（选了类别就只算那几类，含子类）：比如只看抓挠还没审的 */
     unreviewedOnly?: boolean;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
@@ -303,6 +308,24 @@ export default function Projects() {
     status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
     ...(taskFilters[projectId] as Partial<TaskFilter> | undefined),
   });
+  // 按审核时间段筛：每段的审核时间要精确算，单独问一次后端（展开着、设了时间段的项目才问）
+  const rangeQs = useQueries({
+    queries: expandedKeys.map((pid) => {
+      const f = filterOf(pid);
+      const on = !!(f.reviewedFrom || f.reviewedTo);
+      return {
+        queryKey: ["approvals-in-range", pid, f.reviewedFrom ?? null, f.reviewedTo ?? null, f.reviewer ?? null],
+        queryFn: () => getApprovalsInRange(pid, f.reviewedFrom, f.reviewedTo, f.reviewer),
+        enabled: on,
+        staleTime: 30_000,
+      };
+    }),
+  });
+  const rangeOf = (pid: number) => {
+    const f = filterOf(pid);
+    if (!(f.reviewedFrom || f.reviewedTo)) return null;
+    return rangeQs[expandedKeys.indexOf(pid)]?.data ?? {};
+  };
   const projLabelNames = (projectId: number, ids: number[]) =>
     ids.map((id) => labelsOf(projectId).find((l) => l.id === id)?.display_name).filter((x): x is string => !!x);
   const minMsOf = (projectId: number) => {
@@ -1443,6 +1466,8 @@ export default function Projects() {
               return m;
             })();
             const userName = (uid: number) => users?.find((u) => u.id === uid)?.display_name ?? `#${uid}`;
+            // 审核时间段：这段时间里审核通过的（叠加「谁审核通过的」）
+            const inRange = rangeOf(p.id);
             // 标了「待定」的段数（选了类别就只算那几类，含子类）
             const uncertainOf = (t: Task) =>
               Object.entries(t.label_counts ?? {})
@@ -1468,6 +1493,7 @@ export default function Projects() {
                 (!f.uncertainOnly || uncertainOf(t) > 0) &&
                 (!f.marked || (t.mark_count ?? 0) > 0) &&
                 (!f.reviewer || approvedByOf(t, f.reviewer) > 0) &&
+                (!inRange || (inRange[String(t.id)]?.n ?? 0) > 0) &&
                 (!f.unreviewedOnly || unreviewedOf(t) > 0) &&
                 (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
@@ -1493,13 +1519,14 @@ export default function Projects() {
               f.uncertainOnly && "有待定",
               f.marked && "有备忘",
               !!f.reviewer && `${userName(f.reviewer)} 通过的`,
+              !!(f.reviewedFrom || f.reviewedTo) && `审核时间 ${f.reviewedFrom ?? "…"} ~ ${f.reviewedTo ?? "…"}`,
               f.unreviewedOnly && "片段还没审",
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
               status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
               noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
-              reviewer: null,
+              reviewer: null, reviewedFrom: null, reviewedTo: null,
             });
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
@@ -1665,6 +1692,18 @@ export default function Projects() {
                       onChange={(v) => setFilter(p.id, { reviewer: (v as number | undefined) ?? null })}
                       options={[...reviewerStats.entries()].sort((a, b) => b[1].segs - a[1].segs)
                         .map(([u, x]) => ({ value: u, label: `${userName(u)} 通过的（${x.tasks} 任务 · ${x.segs} 段）` }))} />
+                  </Tooltip>
+                )}
+                {isAdmin && (
+                  <Tooltip title="只看这段时间里审核通过过片段的任务（按每一段的审核时间算；可以跟「谁审核通过的」一起用）。片段那一列会多一个「✓这段时间 N」">
+                    <DatePicker.RangePicker size="small" allowEmpty={[true, true]} placeholder={["审核从", "审核到"]}
+                      value={[f.reviewedFrom ? dayjs(f.reviewedFrom) : null, f.reviewedTo ? dayjs(f.reviewedTo) : null]}
+                      onChange={(v) => setFilter(p.id, { reviewedFrom: v?.[0]?.format("YYYY-MM-DD") ?? null, reviewedTo: v?.[1]?.format("YYYY-MM-DD") ?? null })}
+                      presets={[
+                        { label: "今天", value: [dayjs(), dayjs()] },
+                        { label: "昨天", value: [dayjs().subtract(1, "day"), dayjs().subtract(1, "day")] },
+                        { label: "最近 7 天", value: [dayjs().subtract(6, "day"), dayjs()] },
+                      ]} style={{ width: 230 }} />
                   </Tooltip>
                 )}
                 {(markedTasks > 0 || f.marked) && (
@@ -1990,13 +2029,16 @@ export default function Projects() {
                               const c = lc[l.id];
                               const ok = c.approved ?? 0, ret = c.returned ?? 0, mk = c.marked ?? 0;
                               const byWho = Object.entries(c.approved_by ?? {}).map(([u, n]) => `${userName(Number(u))} ${n}`).join("、");
-                              const mine = f.reviewer ? c.approved_by?.[String(f.reviewer)] ?? 0 : 0;
+                              const mine = f.reviewer && !inRange ? c.approved_by?.[String(f.reviewer)] ?? 0 : 0;
+                              const inRangeN = inRange ? inRange[String(task.id)]?.by_label?.[String(l.id)] ?? 0 : 0;
+                              const when = c.approved_first ? (c.approved_first.slice(0, 10) === (c.approved_last ?? "").slice(0, 10)
+                                ? `${c.approved_first.slice(5)}~${(c.approved_last ?? "").slice(11)}` : `${c.approved_first.slice(5)} ~ ${(c.approved_last ?? "").slice(5)}`) : "";
                               // 打了备忘的「先放着」，不算还没审；只有勾了「有备忘」筛选才单独露出来
                               const todo = Math.max(0, c.n - ok - ret - mk);
                               return (
                                 <Tooltip
                                   key={l.id}
-                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}${byWho ? `（${byWho}）` : ""}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${mk ? `、备忘先放着 ${mk}` : ""}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
+                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}${byWho ? `（${byWho}）` : ""}${when ? `，审核于 ${when}` : ""}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${mk ? `、备忘先放着 ${mk}` : ""}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
                                   <Space size={0} style={{ cursor: "pointer" }}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}
@@ -2014,6 +2056,9 @@ export default function Projects() {
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "flagged" })}>退回·待标注员改 {ret}</Tag>}
                                     {todo > 0 && <Tag style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_unreviewed" })}>还没审 {todo}</Tag>}
+                                    {inRangeN > 0 && <Tag color="green" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: f.reviewer ? `seg_approved_by_${f.reviewer}` : "seg_approved" })}>
+                                      ✓{f.reviewer ? `${userName(f.reviewer)} ` : ""}这段时间 {inRangeN}</Tag>}
                                     {mine > 0 && <Tag color="green" style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: `seg_approved_by_${f.reviewer}` })}>✓{userName(f.reviewer!)} {mine}</Tag>}
                                     {f.marked && mk > 0 && <Tag color="gold" style={{ marginRight: 2 }}

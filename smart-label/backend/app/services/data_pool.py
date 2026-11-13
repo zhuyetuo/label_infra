@@ -67,10 +67,14 @@ class PoolFilter:
     label_names: list[str] | None = None
     # 谁审核通过的（片段审核的 seg_reviewed_by）。手动加入池子的没有审核人，选了审核人就不含它们
     reviewer_ids: list[int] | None = None
+    # 审核时间段（片段审核通过的时间，按天，含两头）。手动加入的没有审核时间，选了就不含它们
+    reviewed_from: date | None = None
+    reviewed_to: date | None = None
 
     def any(self) -> bool:
         return bool(self.project_ids or self.dog_ids or self.task_ids or self.label_names or self.reviewer_ids
-                    or self.date_from is not None or self.date_to is not None)
+                    or self.date_from is not None or self.date_to is not None
+                    or self.reviewed_from is not None or self.reviewed_to is not None)
 
 
 _DUR = AnnotationLabelItem.end_time_ms - AnnotationLabelItem.start_time_ms
@@ -121,6 +125,14 @@ async def _query(db: AsyncSession, f: PoolFilter):
         q = q.where(it.label_id.in_(ids or {-1}))
     if f.reviewer_ids:
         q = q.where(it.seg_status == "approved", it.seg_reviewed_by.in_(f.reviewer_ids))
+    if f.reviewed_from is not None or f.reviewed_to is not None:
+        from datetime import time, timedelta
+
+        q = q.where(it.seg_status == "approved")
+        if f.reviewed_from is not None:
+            q = q.where(it.seg_reviewed_at >= datetime.combine(f.reviewed_from, time.min))
+        if f.reviewed_to is not None:
+            q = q.where(it.seg_reviewed_at < datetime.combine(f.reviewed_to, time.min) + timedelta(days=1))
     return q
 
 
@@ -330,6 +342,8 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         # 谁审核通过的（手动加入的没有）
         "reviewed_by": x.seg_reviewed_by if x.seg_status == "approved" else None,
         "reviewed_by_name": users.get(x.seg_reviewed_by) if x.seg_status == "approved" and x.seg_reviewed_by else None,
+        "reviewed_at": (x.seg_reviewed_at.isoformat(sep=" ", timespec="minutes")
+                        if x.seg_status == "approved" and x.seg_reviewed_at else None),
         # 什么时候进的池（手动加入的时间 / 审核通过的时间）
         "entered_at": _entered(x),
     } for x, t, smp in rows]}

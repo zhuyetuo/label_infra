@@ -39,6 +39,9 @@ export interface PoolFilter {
   label_names?: string[];
   /** 谁审核通过的 */
   reviewer_ids?: number[];
+  /** 审核时间段（YYYY-MM-DD，含两头） */
+  reviewed_from?: string | null;
+  reviewed_to?: string | null;
 }
 
 const toParams = (f: PoolFilter) => ({
@@ -51,6 +54,8 @@ const toParams = (f: PoolFilter) => ({
   min_sec: f.min_sec || undefined,
   label_names: f.label_names?.join(",") || undefined,
   reviewer_ids: f.reviewer_ids?.join(",") || undefined,
+  reviewed_from: f.reviewed_from || undefined,
+  reviewed_to: f.reviewed_to || undefined,
 });
 
 export const poolSummary = (f: PoolFilter) =>
@@ -76,6 +81,8 @@ export interface PoolItem {
   /** 谁审核通过的（手动加入的没有） */
   reviewed_by?: number | null;
   reviewed_by_name?: string | null;
+  /** 什么时候审核通过的 "YYYY-MM-DD HH:mm" */
+  reviewed_at?: string | null;
 }
 export type PoolSort = "long" | "short" | "new" | "time" | "recent";
 

@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
@@ -1096,8 +1097,8 @@ export default function SegmentPanel({
                 </Tooltip>
               ) : null;
               const okTag = i.seg_status === "approved" ? (
-                <Tooltip title="片段审核通过：起止、类别都确认过。导出训练集选「只要片段审核通过的」就只要这些">
-                  <Tag color="success">✓ 已通过</Tag>
+                <Tooltip title={`片段审核通过：起止、类别都确认过${i.seg_reviewed_at ? `（${dayjs(i.seg_reviewed_at).format("YYYY-MM-DD HH:mm")} 审的）` : ""}。导出训练集选「只要片段审核通过的」就只要这些`}>
+                  <Tag color="success">✓ 已通过{i.seg_reviewed_at ? ` ${dayjs(i.seg_reviewed_at).format("MM-DD HH:mm")}` : ""}</Tag>
                 </Tooltip>
               ) : null;
               const flagTag = i.review_note ? (

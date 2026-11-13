@@ -52,6 +52,8 @@ export default function DataPoolPanel({
   const [pickLabels, setPickLabels] = useState<string[]>([]);
   // 谁审核通过的：几个人一起审时，挑出某个人通过的看一遍，不对就整批退回给他重审
   const [reviewerIds, setReviewerIds] = useState<number[]>([]);
+  // 审核时间段（按每一段审核通过的时间）
+  const [revRange, setRevRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const isAdmin = role === "admin" || role === "super_admin";
   const [chartsOpen, setChartsOpen] = useState(() => {
     try { return localStorage.getItem("smart-label:pool-charts-open") !== "0"; } catch { return true; }
@@ -67,14 +69,16 @@ export default function DataPoolPanel({
       min_sec: minSec || null,
       label_names: pickLabels.length ? pickLabels : undefined,
       reviewer_ids: reviewerIds.length ? reviewerIds : undefined,
+      reviewed_from: revRange?.[0]?.format("YYYY-MM-DD") ?? null,
+      reviewed_to: revRange?.[1]?.format("YYYY-MM-DD") ?? null,
     }),
-    [projectIds, dogIds, range, hzs, minSec, pickLabels, reviewerIds],
+    [projectIds, dogIds, range, hzs, minSec, pickLabels, reviewerIds, revRange],
   );
   // 类别下拉的选项不能跟着类别筛选变（选了一个别的就没了）：统计另拉一份不带类别的
   const noLabel = useMemo(() => ({ ...filters, label_names: undefined }), [filters]);
   const anyFilter = !!(
     filters.project_ids || filters.dog_ids || filters.date_from || filters.date_to || filters.label_names
-    || filters.reviewer_ids
+    || filters.reviewer_ids || filters.reviewed_from || filters.reviewed_to
   );
 
   // 每个下拉只列「在别的条件下池里还有」的：按项目下拉就去掉项目这一条再统计一次，
@@ -302,6 +306,19 @@ export default function DataPoolPanel({
           optionFilterProp="label"
           options={reviewerOptions}
         />
+        <Tooltip title="审核时间段：按每一段审核通过的时间筛（手动加入池子的没有审核时间，选了就不含它们）">
+          <DatePicker.RangePicker
+            allowEmpty={[true, true]}
+            placeholder={["审核从", "审核到"]}
+            value={revRange as [Dayjs, Dayjs] | null}
+            onChange={(v) => setRevRange(v as [Dayjs | null, Dayjs | null] | null)}
+            presets={[
+              { label: "今天", value: [dayjs(), dayjs()] },
+              { label: "昨天", value: [dayjs().subtract(1, "day"), dayjs().subtract(1, "day")] },
+              { label: "最近 7 天", value: [dayjs().subtract(6, "day"), dayjs()] },
+            ]}
+          />
+        </Tooltip>
         <Tooltip title="只要不短于这么多秒的片段。长片段往往更干净">
           <InputNumber min={0} step={5} value={minSec} onChange={(v) => setMinSec(v ?? null)} placeholder="片段" addonAfter="秒以上" style={{ width: 140 }} />
         </Tooltip>
@@ -454,6 +471,12 @@ export default function DataPoolPanel({
             dataIndex: "via",
             width: 80,
             render: (v: string) => (v === "manual" ? <Tag color="blue">手动</Tag> : <Tag color="green">审核</Tag>),
+          },
+          {
+            title: "审核时间",
+            dataIndex: "reviewed_at",
+            width: 110,
+            render: (v: string | null | undefined) => v ? v.slice(5) : "-",
           },
           {
             title: "审核人",
