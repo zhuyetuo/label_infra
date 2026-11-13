@@ -334,3 +334,23 @@ def test_管理员不受别人领着限制_能退回给原来通过的人(db, ru
     assert r["data"]["sent_to"] == w.rev.id
     run(db.refresh(it))
     assert it.seg_status is None and it.seg_claimed_by == w.rev.id and "起止不准" in (it.mark_note or "")
+
+
+def test_查看里直接新建片段_审核员管理员可以_标注员不行(db, run):
+    w = _world(db, run)
+    body = api.CreateIn(task_id=w.t.id, label_id=w.child.id, start_time_ms=70000, end_time_ms=72500)
+    with pytest.raises(HTTPException) as e:
+        run(api.create(body, db, w.ann))
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        run(api.create(api.CreateIn(task_id=w.t.id, label_id=999999, start_time_ms=0, end_time_ms=1000), db, w.admin))
+    assert e.value.status_code == 422
+    with pytest.raises(HTTPException):
+        run(api.create(api.CreateIn(task_id=w.t.id, label_id=w.child.id, start_time_ms=1000, end_time_ms=1050), db, w.admin))
+    r = run(api.create(body, db, w.admin))["data"]
+    it = run(db.get(AnnotationLabelItem, r["id"]))
+    assert it.annotation_record_id == w.rec.id and it.source_type == LabelItemSource.human_added
+    assert it.seg_status == "approved" and it.seg_reviewed_by == w.admin.id and it.created_by == w.admin.id
+    run(api.create(body, db, w.rev))
+    n = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.start_time_ms == 70000))).scalars().all()
+    assert len(n) == 2

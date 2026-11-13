@@ -19,7 +19,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table, theme as antdTheme
 } from "antd";
-import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -61,7 +61,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
+import { segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -491,6 +491,10 @@ export default function AnnotationWorkspace({
   // 不清的话循环会跟着带回来
   // 审核时按片段标「有问题」：管理员 / 审核员能标能清；标注员只能在自己正在改的任务里清掉
   const canFlag = role === "admin" || role === "super_admin" || role === "reviewer";
+  // 查看标注（只读）里补片段：审核员 / 管理员点「＋ 新建片段」打开标签条，标出来直接落库，不用认领
+  const roCreateAllowed = !!readOnly && canFlag && !segReview && taskId != null;
+  const [roCreate, setRoCreate] = useState(false);
+  const canCreate = !readOnly || (roCreateAllowed && roCreate);
   const flaggedCount = items.filter((it) => it.review_note).length + candidates.filter((c) => c.review_note).length;
   const handleReviewNote = async (it: LabelItem, note: string | null) => {
     if (taskId == null) return;
@@ -817,6 +821,22 @@ export default function AnnotationWorkspace({
   );
 
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
+    if (readOnly) {
+      if (!roCreateAllowed || taskId == null) return;
+      void (async () => {
+        try {
+          await segCreate({
+            task_id: taskId, label_id: forLabel,
+            start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)),
+          });
+          setItems((await getDraft(taskId)).items);
+          message.success({ content: "已新建并保存（算通过）", key: "ro-create" });
+        } catch {
+          /* request 拦截器已经弹了错误 */
+        }
+      })();
+      return;
+    }
     setItems((prev) => [
       ...prev,
       {
@@ -1753,7 +1773,7 @@ export default function AnnotationWorkspace({
         splitAtPlayheadRef.current();
         return;
       }
-      if (readOnly) return;
+      if (!canCreate) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         // 取消选中 -> 回到拖动平移模式；正在边播边标的也一起取消
@@ -1779,7 +1799,7 @@ export default function AnnotationWorkspace({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [taskId, readOnly, labelRows, !!segReview, canFlag]);
+  }, [taskId, readOnly, labelRows, !!segReview, canFlag, canCreate]);
 
   // ── 下面四个面板 ─────────────────────────────────────────────────────
   // 每个面板一个 Collapse，按 panelOrder 的顺序摆，panelHidden 里的不摆。
@@ -1925,8 +1945,8 @@ export default function AnnotationWorkspace({
               timeAxisOnlyLast={chartExpanded}
               key={chartExpanded ? "expanded" : "single"}
               segments={segments}
-              activeColor={readOnly || labelId == null ? null : colorOf(labelId)}
-              onCreateSegment={readOnly ? undefined : handleCreateFromChart}
+              activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
+              onCreateSegment={canCreate ? handleCreateFromChart : undefined}
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
               onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
@@ -2059,7 +2079,7 @@ export default function AnnotationWorkspace({
           setCandidates(await listCandidates(taskId));
           message.success("已退回候选，可以重新判断");
         }}
-        onCreate={readOnly ? undefined : appendItem}
+        onCreate={canCreate ? appendItem : undefined}
         // 夜视默认关着，见 config/features.ts：不传这个回调，按钮就不渲染
         onLowlight={NIGHT_VISION ? (a, b) => setLowlightAt([a, b]) : undefined}
         initialFilterLabels={initialSegmentFilter}
@@ -2750,8 +2770,22 @@ export default function AnnotationWorkspace({
           )
         )}
 
-        {!readOnly && (
+        {roCreateAllowed && !roCreate && (
+          <div style={{ margin: "8px 0" }}>
+            <Tooltip title="不用认领：选标签后用「标起点 / 标终点」或在波形上拖，标出来的直接存库、算你通过">
+              <Button size="small" icon={<PlusOutlined />} onClick={() => setRoCreate(true)}>新建片段</Button>
+            </Tooltip>
+          </div>
+        )}
+        {canCreate && (
           <div style={{ margin: "12px 0", padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
+            {readOnly && (
+              <div style={{ fontSize: 12, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                <Typography.Text type="warning">查看模式下新建：每标一段直接存库、算你通过（不用认领）</Typography.Text>
+                <Button size="small" type="link" style={{ padding: 0 }}
+                  onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>收起</Button>
+              </div>
+            )}
             <Space wrap size={6} style={{ marginBottom: 8 }}>
               {labelRows.map((row, r) => (
                 <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -2826,7 +2860,7 @@ export default function AnnotationWorkspace({
                   </Tooltip>
                 </span>
               )}
-              {hasCsv && sampleId != null && labels.length > 0 && (
+              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
                 /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
                    换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */
                 <Popconfirm
@@ -2848,7 +2882,7 @@ export default function AnnotationWorkspace({
               )}
               {/* 原来是 Radio.Group（按钮条）。加上端侧模型之后它**不支持分组**，
                   线上和端侧会混在一排看不出区别；选项也从 3 个变成 5 个。换成 Select。 */}
-              {hasCsv && sampleId != null && labels.length > 0 && (
+              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
                 <Tooltip title={hintOf(prelabelMode)}>
                   <Select
                     size="small"
@@ -2859,10 +2893,10 @@ export default function AnnotationWorkspace({
                   />
                 </Tooltip>
               )}
-              {hasCsv && sampleId != null && labels.length > 0 && <InferModeHelp />}
+              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && <InferModeHelp />}
               {/* 项目页批量跑过之后，这些片段到底出自哪个模型完全看不出来；换了
                   模型重跑更是。把结果 JSON 里记的版本/模型/时间摆出来 */}
-              {aiInfo?.exists && (
+              {!readOnly && aiInfo?.exists && (
                 <Tooltip
                   title={
                     <div style={{ whiteSpace: "normal" }}>
