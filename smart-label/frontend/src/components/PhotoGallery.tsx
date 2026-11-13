@@ -34,6 +34,20 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
   const isMine = (folder: string, dogName: string) => mineDone.has(`${folder}\u0000${dogName}`);
   const [onlyTodo, setOnlyTodo] = useState(false);
   const [onlyDiff, setOnlyDiff] = useState(false);
+  // 按评的档筛：S0 / S1 / S2 / 看不清 / 还没人评；可以只看某个人评的（管理员才看得到别人的）
+  const [gradeF, setGradeF] = useState<string[]>([]);
+  const [raterF, setRaterF] = useState<number | undefined>(undefined);
+  const gradeMatch = (folder: string, dogName: string) => {
+    if (!gradeF.length) return true;
+    const rs = ratingsOf(folder, dogName).filter((r) => raterF == null || r.user_id === raterF);
+    if (!rs.length) return gradeF.includes("none");
+    return rs.some((r) => gradeF.includes(r.grade));
+  };
+  const raters = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of ratings ?? []) m.set(r.user_id, r.user_name);
+    return [...m.entries()].map(([value, label]) => ({ value, label }));
+  }, [ratings]);
   // 几个人评的档不一样（看不清不算）
   const isDiff = (folder: string, dogName: string) =>
     new Set(ratingsOf(folder, dogName).map((r) => r.grade).filter((g) => g !== "unsure")).size > 1;
@@ -59,11 +73,11 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     const folders = base
       // 按解析出来的日期比：狗场那几棵树的目录名开头是树名，按前 10 个字符比永远对不上
       .filter((f) => !wantDate || f.date === wantDate)
-      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => (!wantDog || d.name === wantDog) && !(onlyTodo && isMine(f.folder, d.name)) && !(onlyDiff && !isDiff(f.folder, d.name))) }))
+      .map((f) => ({ ...f, dogs: f.dogs.filter((d) => (!wantDog || d.name === wantDog) && !(onlyTodo && isMine(f.folder, d.name)) && !(onlyDiff && !isDiff(f.folder, d.name)) && gradeMatch(f.folder, d.name)) }))
       .filter((f) => f.dogs.length > 0);
     return { ...raw, folders };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, onlyDiff, mineDone, ratings]);
+  }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, onlyDiff, mineDone, ratings, gradeF, raterF]);
   // 管理员：当前来源里每个评级人评了多少、各档几次、跟别人不一致几次
   const raterStats = useMemo(() => {
     if (!isAdmin || !rating) return null;
@@ -197,6 +211,14 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
         )}
         {rating && isAdmin && (
           <Checkbox checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)}>只看评得不一样的</Checkbox>
+        )}
+        {rating && (
+          <Select mode="multiple" allowClear placeholder="评的档（全部）" style={{ minWidth: 170 }} value={gradeF} onChange={setGradeF}
+            options={[{ value: "S0", label: "S0 正常" }, { value: "S1", label: "S1 轻度" }, { value: "S2", label: "S2 中重度" },
+              { value: "unsure", label: "看不清" }, { value: "none", label: "还没人评" }]} />
+        )}
+        {rating && isAdmin && raters.length > 1 && (
+          <Select allowClear placeholder="谁评的（任何人）" style={{ width: 150 }} value={raterF} onChange={setRaterF} options={raters} />
         )}
       </Space>
       {raterStats && (

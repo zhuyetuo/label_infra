@@ -181,6 +181,8 @@ export interface TrackingRow {
     used_questionnaire?: boolean; model_b?: string | null; reason?: string } | null;
   /** 场地全称 / 几号单间（影棚没分房间）/ 狗档案上的品种、体型 */
   site_name?: string | null; room?: string | null; breed?: string | null; size?: string | null;
+  /** 狗档案 id、是不是「重点护理」 */
+  dog_id?: number | null; care_focus?: boolean;
   /** 一只狗两个项圈合成一行时是「IMU1+IMU2」 */
   imu: string;
   dog_name: string;

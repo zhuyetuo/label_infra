@@ -1,7 +1,7 @@
 from datetime import date as _date
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, String, func
+from sqlalchemy import Boolean, BigInteger, Date, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -43,5 +43,7 @@ class Dog(Base):
     # 匹配照片时任一别名对上就算同一只
     aliases: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="别名，逗号分隔")
     remark: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 重点护理：皮肤跟踪重点盯的几只（每日跟踪 / 趋势图 / 照片可以只看它们）
+    care_focus: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

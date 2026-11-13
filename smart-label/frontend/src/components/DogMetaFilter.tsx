@@ -1,4 +1,4 @@
-import { Select } from "antd";
+import { Checkbox, Select } from "antd";
 
 /** 皮肤跟踪表 / 项目联动每行带的「场地 · 房间 · 品种」（后端按狗档案 + 采集布局补的） */
 export interface DogMetaRow {
@@ -6,12 +6,15 @@ export interface DogMetaRow {
   site_name?: string | null;
   room?: string | null;
   breed?: string | null;
+  care_focus?: boolean;
 }
 
 export interface DogMetaValue {
   sites?: string[];
   rooms?: string[];
   breeds?: string[];
+  /** 只看「重点护理」的狗（狗档案上标的） */
+  focusOnly?: boolean;
 }
 
 /** 房间要带上场地才唯一（两个狗场都有「1号单间」） */
@@ -21,6 +24,7 @@ export function matchDogMeta(r: DogMetaRow, v: DogMetaValue): boolean {
   if (v.sites?.length && !v.sites.includes(r.site_name ?? "未知场地")) return false;
   if (v.rooms?.length && !v.rooms.includes(roomKey(r) ?? "")) return false;
   if (v.breeds?.length && !v.breeds.includes(r.breed ?? "未登记品种")) return false;
+  if (v.focusOnly && !r.care_focus) return false;
   return true;
 }
 
@@ -64,6 +68,11 @@ export default function DogMetaFilter({ rows, value, onChange }: {
       )}
       <Select {...common} placeholder="全部品种" style={{ width: 150 }} value={value.breeds ?? []}
         onChange={(v) => onChange({ breeds: v })} options={breeds.map((s) => ({ value: s, label: s }))} />
+      {(rows.some((r) => r.care_focus) || value.focusOnly) && (
+        <Checkbox checked={!!value.focusOnly} onChange={(e) => onChange({ focusOnly: e.target.checked })}>
+          ⭐ 只看重点护理（{new Set(rows.filter((r) => r.care_focus).map((r) => r.dog_name)).size}）
+        </Checkbox>
+      )}
     </>
   );
 }
