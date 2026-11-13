@@ -33,12 +33,14 @@ def _floats(v: str | None) -> list[float] | None:
 
 def _qfilter(project_ids: str | None = None, dog_ids: str | None = None, task_ids: str | None = None,
              date_from: date | None = None, date_to: date | None = None, sample_hz: str | None = None,
-             min_sec: float | None = None, label_names: str | None = None) -> data_pool.PoolFilter:
+             min_sec: float | None = None, label_names: str | None = None,
+             reviewer_ids: str | None = None) -> data_pool.PoolFilter:
     """GET 的筛选参数：多个值逗号分隔"""
     return data_pool.PoolFilter(
         project_ids=_ids(project_ids), dog_ids=_ids(dog_ids), task_ids=_ids(task_ids),
         date_from=date_from, date_to=date_to, sample_hz=_floats(sample_hz), min_sec=min_sec,
-        label_names=[x for x in label_names.split(",") if x.strip()] if label_names else None)
+        label_names=[x for x in label_names.split(",") if x.strip()] if label_names else None,
+        reviewer_ids=_ids(reviewer_ids))
 
 
 @router.get("/summary")
@@ -69,6 +71,7 @@ class PoolFilterIn(BaseModel):
     sample_hz: list[float] | None = None
     min_sec: float | None = None
     label_names: list[str] | None = None
+    reviewer_ids: list[int] | None = None
 
     def to_filter(self) -> data_pool.PoolFilter:
         return data_pool.PoolFilter(**self.model_dump(include=set(data_pool.PoolFilter.__dataclass_fields__)))
@@ -95,6 +98,31 @@ async def post_add(body: PoolAddIn, db: AsyncSession = Depends(get_db), user: Us
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
     return ok({"added": n})
+
+
+class RevertIn(PoolFilterIn):
+    item_ids: list[int] | None = None
+    send_back: bool = True      # 领给原来通过它的人，让他自己重审
+
+
+@router.post("/revert-approvals")
+async def post_revert(body: RevertIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """撤销审核通过（怀疑某人审得不对，整批退回重审）。只有管理员能做"""
+    import json
+
+    from app.models.audit_log import AuditLog
+
+    if user.role not in (UserRole.admin, UserRole.super_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有管理员能撤销别人的审核通过")
+    f = body.to_filter()
+    if not (body.item_ids or f.reviewer_ids):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "要先选审核人或勾选片段，别一下子把所有人的通过都撤了")
+    n = await data_pool.revert_approvals(db, f, body.item_ids, user.id, body.send_back)
+    db.add(AuditLog(user_id=user.id, action="segment.revert_approvals", target_type="data_pool", target_id=None,
+                    detail=json.dumps({"n": n, "reviewer_ids": f.reviewer_ids, "item_ids": (body.item_ids or [])[:200],
+                                       "send_back": body.send_back}, ensure_ascii=False)))
+    await db.commit()
+    return ok({"reverted": n})
 
 
 @router.post("/remove")

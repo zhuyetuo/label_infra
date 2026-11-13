@@ -241,6 +241,8 @@ export default function Projects() {
     overlapOnly?: boolean; uncertainOnly?: boolean;
     /** 只看有 🔖 备忘的任务（打了复合 / 边界 / 画面≠IMU…，留着以后处理的） */
     marked?: boolean;
+    /** 只看某个人审核通过的（几个人一起审时挑出来复查） */
+    reviewer?: number | null;
     /** 只看还有片段没审的（选了类别就只算那几类，含子类）：比如只看抓挠还没审的 */
     unreviewedOnly?: boolean;
     /** 选了类别时：只看这几类里最长一段 ≥ 这么多秒的任务（挑长片段进数据池） */
@@ -1419,6 +1421,28 @@ export default function Projects() {
                 .reduce((s2, [, c]) => s2 + (c.returned ?? 0), 0);
             const segReturnedTasks = all.filter((t) => segReturnedOf(t) > 0).length;
             const markedTasks = all.filter((t) => (t.mark_count ?? 0) > 0).length;
+            // 谁审核通过的（选了类别就只算那几类）
+            const approvedByOf = (t: Task, uid: number) =>
+              Object.entries(t.label_counts ?? {})
+                .filter(([lid]) => !f.labels.length || wantLabelIds.has(Number(lid)))
+                .reduce((s2, [, c]) => s2 + (c.approved_by?.[String(uid)] ?? 0), 0);
+            const reviewerStats = (() => {
+              const m = new Map<number, { tasks: number; segs: number }>();
+              for (const t of all) {
+                const per = new Map<number, number>();
+                for (const [lid, c] of Object.entries(t.label_counts ?? {})) {
+                  if (f.labels.length && !wantLabelIds.has(Number(lid))) continue;
+                  for (const [u, n] of Object.entries(c.approved_by ?? {})) per.set(Number(u), (per.get(Number(u)) ?? 0) + n);
+                }
+                for (const [u, n] of per) {
+                  const x = m.get(u) ?? { tasks: 0, segs: 0 };
+                  x.tasks += 1; x.segs += n;
+                  m.set(u, x);
+                }
+              }
+              return m;
+            })();
+            const userName = (uid: number) => users?.find((u) => u.id === uid)?.display_name ?? `#${uid}`;
             // 标了「待定」的段数（选了类别就只算那几类，含子类）
             const uncertainOf = (t: Task) =>
               Object.entries(t.label_counts ?? {})
@@ -1443,6 +1467,7 @@ export default function Projects() {
                 (!f.overlapOnly || overlapOf(t) > 0) &&
                 (!f.uncertainOnly || uncertainOf(t) > 0) &&
                 (!f.marked || (t.mark_count ?? 0) > 0) &&
+                (!f.reviewer || approvedByOf(t, f.reviewer) > 0) &&
                 (!f.unreviewedOnly || unreviewedOf(t) > 0) &&
                 (!minMs || focusDur(t).max >= minMs) &&
                 matchStatus(t) &&
@@ -1467,12 +1492,14 @@ export default function Projects() {
               f.overlapOnly && "有重叠",
               f.uncertainOnly && "有待定",
               f.marked && "有备忘",
+              !!f.reviewer && `${userName(f.reviewer)} 通过的`,
               f.unreviewedOnly && "片段还没审",
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
               status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
               noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
+              reviewer: null,
             });
             // 项目级各类别汇总：多少段、分布在多少个任务里、多少段还是 AI 待确认——点一下就按这个类别筛
             const projLabels = labelsOf(p.id);
@@ -1631,6 +1658,15 @@ export default function Projects() {
                     </>
                   );
                 })()}
+                {isAdmin && (reviewerStats.size > 0 || !!f.reviewer) && (
+                  <Tooltip title="几个人一起审时，只看某个人审核通过的任务（选了类别就只算那几类）。片段那一列会多一个「✓某某 N」，点开就是他通过的那几段；不对的点「撤销通过」或「有问题」">
+                    <Select size="small" allowClear placeholder="谁审核通过的" style={{ minWidth: 170 }}
+                      value={f.reviewer ?? undefined}
+                      onChange={(v) => setFilter(p.id, { reviewer: (v as number | undefined) ?? null })}
+                      options={[...reviewerStats.entries()].sort((a, b) => b[1].segs - a[1].segs)
+                        .map(([u, x]) => ({ value: u, label: `${userName(u)} 通过的（${x.tasks} 任务 · ${x.segs} 段）` }))} />
+                  </Tooltip>
+                )}
                 {(markedTasks > 0 || f.marked) && (
                   <Tooltip title="片段上打了 🔖 备忘（复合类别要拆 / 边界拿不准 / 画面≠IMU…）的任务：通过了也照样列出来，留着以后处理">
                     <Checkbox checked={!!f.marked} onChange={(e) => setFilter(p.id, { marked: e.target.checked })}>
@@ -1953,12 +1989,14 @@ export default function Projects() {
                           {entries.map((l) => {
                               const c = lc[l.id];
                               const ok = c.approved ?? 0, ret = c.returned ?? 0, mk = c.marked ?? 0;
+                              const byWho = Object.entries(c.approved_by ?? {}).map(([u, n]) => `${userName(Number(u))} ${n}`).join("、");
+                              const mine = f.reviewer ? c.approved_by?.[String(f.reviewer)] ?? 0 : 0;
                               // 打了备忘的「先放着」，不算还没审；只有勾了「有备忘」筛选才单独露出来
                               const todo = Math.max(0, c.n - ok - ret - mk);
                               return (
                                 <Tooltip
                                   key={l.id}
-                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${mk ? `、备忘先放着 ${mk}` : ""}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
+                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}${byWho ? `（${byWho}）` : ""}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${mk ? `、备忘先放着 ${mk}` : ""}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
                                   <Space size={0} style={{ cursor: "pointer" }}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}
@@ -1976,6 +2014,8 @@ export default function Projects() {
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "flagged" })}>退回·待标注员改 {ret}</Tag>}
                                     {todo > 0 && <Tag style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_unreviewed" })}>还没审 {todo}</Tag>}
+                                    {mine > 0 && <Tag color="green" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: `seg_approved_by_${f.reviewer}` })}>✓{userName(f.reviewer!)} {mine}</Tag>}
                                     {f.marked && mk > 0 && <Tag color="gold" style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "mark" })}>🔖备忘 {mk}</Tag>}
                                     {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}

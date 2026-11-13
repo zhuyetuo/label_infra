@@ -65,9 +65,11 @@ class PoolFilter:
     min_sec: float | None = None
     # 类别名（含细类，各项目同名的都算）
     label_names: list[str] | None = None
+    # 谁审核通过的（片段审核的 seg_reviewed_by）。手动加入池子的没有审核人，选了审核人就不含它们
+    reviewer_ids: list[int] | None = None
 
     def any(self) -> bool:
-        return bool(self.project_ids or self.dog_ids or self.task_ids or self.label_names
+        return bool(self.project_ids or self.dog_ids or self.task_ids or self.label_names or self.reviewer_ids
                     or self.date_from is not None or self.date_to is not None)
 
 
@@ -117,6 +119,8 @@ async def _query(db: AsyncSession, f: PoolFilter):
     if f.label_names:
         ids = await _label_ids_under(db, f.label_names)
         q = q.where(it.label_id.in_(ids or {-1}))
+    if f.reviewer_ids:
+        q = q.where(it.seg_status == "approved", it.seg_reviewed_by.in_(f.reviewer_ids))
     return q
 
 
@@ -130,6 +134,7 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
     labels = {l.id: l for l in (await db.execute(select(LabelDefinition))).scalars().all()}
     projects = {p.id: p.name for p in (await db.execute(select(Project))).scalars().all()}
     dogs = {d.id: (d.name or d.dog_code) for d in (await db.execute(select(Dog))).scalars().all()}
+    users = await _user_names(db)
 
     def root_name(lid: int) -> str:
         cur, seen = labels.get(lid), set()
@@ -152,7 +157,7 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
     # 按名字合（各项目各一套标签、id 不同，名字相同就是一类）
     tree: dict[str, list] = {}   # 名字 → [段数, 秒, 上级名字]
     # 项目 / 狗按 (id, 名字) 记：筛选下拉要拿 id；日期按样本的采集日（筛选下拉只列池里有的）
-    by = {k: defaultdict(lambda: [0, 0.0]) for k in ("label", "root", "project", "dog", "hz", "date")}
+    by = {k: defaultdict(lambda: [0, 0.0]) for k in ("label", "root", "project", "dog", "hz", "date", "reviewer")}
     n = n_manual = 0
     sec_total = 0.0
     for it, task, smp in rows:
@@ -172,7 +177,11 @@ async def summary(db: AsyncSession, f: PoolFilter) -> dict:
                        ("project", (task.project_id, projects.get(task.project_id, f"#{task.project_id}"))),
                        ("dog", (smp.dog_id, dogs.get(smp.dog_id, "未关联")) if smp.dog_id else (None, "未关联")),
                        ("hz", f"{nominal_hz(hz)}Hz"),
-                       ("date", smp.session_date.isoformat() if smp.session_date else "未知日期")):
+                       ("date", smp.session_date.isoformat() if smp.session_date else "未知日期"),
+                       # 谁审核通过的：手动加入池子的单独一档
+                       ("reviewer", (it.seg_reviewed_by, users.get(it.seg_reviewed_by, f"#{it.seg_reviewed_by}"))
+                        if it.pool_state != "in" and it.seg_status == "approved" and it.seg_reviewed_by
+                        else (None, "手动加入"))):
             by[k][key][0] += 1
             by[k][key][1] += sec
 
@@ -235,6 +244,41 @@ async def _label_ids_under(db: AsyncSession, names: list[str]) -> set[int]:
     return out
 
 
+async def _user_names(db: AsyncSession) -> dict[int, str]:
+    from app.models.user import User
+
+    return {u.id: (u.display_name or u.username) for u in (await db.execute(select(User))).scalars().all()}
+
+
+async def revert_approvals(db: AsyncSession, f: PoolFilter, item_ids: list[int] | None, by_user_id: int,
+                           send_back: bool = True) -> int:
+    """撤销「审核通过」：怀疑某个人审得不对，把他通过的整批（或勾选的几条）退回去重审。
+
+    - 片段回到「还没审」，出池（数据池只认审核通过的；手动加入池子的不动）
+    - send_back：直接领给原来通过它的那个人（3 天），他的待审里就是这些，让他自己重看一遍
+    返回撤销的条数。只动审核通过进池的那些，必须带审核人 / 片段之类的条件。"""
+    from datetime import datetime, timedelta
+
+    it = AnnotationLabelItem
+    q = (await _query(db, f)).where(it.seg_status == "approved", in_pool_cond())
+    if item_ids:
+        q = q.where(it.id.in_(item_ids))
+    items = [row[0] for row in (await db.execute(q)).all() if row[0].pool_state != "in"]
+    now = datetime.now()
+    for x in items:
+        who = x.seg_reviewed_by
+        x.seg_status = None
+        x.seg_reviewed_by = x.seg_reviewed_at = None
+        x.touched_at, x.touched_by = now, by_user_id
+        if send_back and who:
+            x.seg_claimed_by, x.seg_claim_expires_at = who, now + timedelta(days=3)
+        else:
+            x.seg_claimed_by = x.seg_claim_expires_at = None
+    if items:
+        await db.commit()
+    return len(items)
+
+
 async def remove(db: AsyncSession, f: PoolFilter, item_ids: list[int] | None = None) -> int:
     """手动移出（标成 out）。给了 item_ids 就只动这几条（再叠加条件），否则按条件整批。返回移出的条数"""
     q = (await _query(db, f)).where(in_pool_cond())
@@ -267,6 +311,7 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
     dog_ids = {smp.dog_id for _, _, smp in rows if smp.dog_id}
     dogs = ({d.id: (d.name or d.dog_code) for d in (await db.execute(select(Dog).where(Dog.id.in_(dog_ids)))).scalars()}
             if dog_ids else {})
+    users = await _user_names(db)
     return {"total": int(total), "items": [{
         "id": x.id,
         "task_id": t.id,
@@ -282,6 +327,9 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         "end_time_ms": x.end_time_ms,
         # manual = 手动加入的；approved = 片段审核通过进来的
         "via": "manual" if x.pool_state == "in" else "approved",
+        # 谁审核通过的（手动加入的没有）
+        "reviewed_by": x.seg_reviewed_by if x.seg_status == "approved" else None,
+        "reviewed_by_name": users.get(x.seg_reviewed_by) if x.seg_status == "approved" and x.seg_reviewed_by else None,
         # 什么时候进的池（手动加入的时间 / 审核通过的时间）
         "entered_at": _entered(x),
     } for x, t, smp in rows]}
