@@ -6,6 +6,8 @@ import SkinRatingBar, { SKIN_GRADES } from "@/components/SkinRatingBar";
 import { FlagButton, FlagSummaryButton, flagKey } from "@/components/PhotoFlags";
 import { useAuthStore } from "@/stores/authStore";
 import { getSavedText, saveText } from "@/utils/persistedSize";
+import { TrendChart } from "@/components/TrackingCharts";
+import type { TrackingRow } from "@/api/skin";
 
 // 素材库相册只读浏览：按 日期目录 > 狗 折叠，缩略图网格，点开大图（antd Image 预览，
 // 同一只狗同一天的照片可以左右翻）。皮肤评估页的「皮肤照片」用；牙齿识别页有自己带
@@ -78,6 +80,36 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
     return { ...raw, folders };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raw, inSource, filterDate, filterDog, dog, pinned, onlyTodo, onlyDiff, mineDone, ratings, gradeF, raterF]);
+  // 评级趋势：一只狗一条线，横轴是照片日期，纵轴 S0 / S1 / S2。
+  // 选了「谁评的」就只画那个人的；没选：兽医评过的以兽医为准，没有就取几个人里最多的那个档（一样多取重的）
+  const trendRows = useMemo(() => {
+    if (!rating) return [];
+    const order = ["S0", "S1", "S2"];
+    const pick = (rs: { grade: string }[]) => {
+      const n = new Map<string, number>();
+      for (const r of rs) if (order.includes(r.grade)) n.set(r.grade, (n.get(r.grade) ?? 0) + 1);
+      let best: string | null = null;
+      for (const g of order) if ((n.get(g) ?? 0) > 0 && (best == null || (n.get(g) ?? 0) >= (n.get(best) ?? 0))) best = g;
+      return best;
+    };
+    const wantDog = filterDog ?? (pinned ? undefined : dog);
+    const out: TrackingRow[] = [];
+    for (const f of inSource) {
+      if (!f.date) continue;
+      for (const d of f.dogs) {
+        if (wantDog && d.name !== wantDog) continue;
+        let rs = ratingsOf(f.folder, d.name);
+        if (raterF != null) rs = rs.filter((r) => r.user_id === raterF);
+        const vet = rs.filter((r) => r.is_vet);
+        const g = pick(vet.length ? vet : rs);
+        if (g) out.push({ date: f.date, dog_name: d.name, photo_grade: g, photo_grade_vet: null } as unknown as TrackingRow);
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rating, inSource, ratings, raterF, dog, filterDog, pinned]);
+  const [trendOpen, setTrendOpen] = useState(() => getSavedText("smart-label:photos-trend-open", "1") === "1");
+
   // 管理员：当前来源里每个评级人评了多少、各档几次、跟别人不一致几次
   const raterStats = useMemo(() => {
     if (!isAdmin || !rating) return null;
@@ -221,6 +253,31 @@ export default function PhotoGallery({ album, hint, filterDate, filterDog, ratin
           <Select allowClear placeholder="谁评的（任何人）" style={{ width: 150 }} value={raterF} onChange={setRaterF} options={raters} />
         )}
       </Space>
+      {rating && trendRows.length > 0 && (
+        <Collapse
+          size="small"
+          style={{ marginBottom: 12 }}
+          activeKey={trendOpen ? ["t"] : []}
+          onChange={(k) => {
+            const open = (Array.isArray(k) ? k : [k]).includes("t");
+            setTrendOpen(open);
+            saveText("smart-label:photos-trend-open", open ? "1" : "0");
+          }}
+          items={[{
+            key: "t",
+            label: `📈 评级趋势（按照片评的档，${new Set(trendRows.map((r) => r.dog_name)).size} 只狗）`,
+            children: (
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  一只狗一条线。{raterF != null ? "只画选中的那个人评的。" : "兽医评过的以兽医为准，没有就取几个人里最多的档（一样多取重的）。"}
+                  看不清 / 没评的那天空着。上面选了狗就只画那一只
+                </Typography.Text>
+                <TrendChart rows={trendRows} metric="photo" height={240} />
+              </div>
+            ),
+          }]}
+        />
+      )}
       {raterStats && (
         <div style={{ marginBottom: 12 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

@@ -24,6 +24,8 @@ export type SkinGrade = "S0" | "S1" | "S2" | "unsure";
 export interface PhotoRating {
   folder: string; dog_folder: string; user_id: number; user_name: string; user_role: string;
   grade: SkinGrade; note: string | null; updated_at: string | null;
+  /** 评级人是不是兽医（趋势图里兽医评过的以兽医为准） */
+  is_vet?: boolean;
 }
 export const listPhotoRatings = (album: Album) => request.get<never, PhotoRating[]>(`/material/${album}/ratings`);
 /** grade 给 null = 撤销我对这只狗的评级 */
