@@ -100,3 +100,7 @@ export const deleteDogPhoto = (dogId: number, filename: string) =>
 /** <img>/<video> 带不了 Authorization 头，所以走 URL 里的签名 token；后端支持 Range，视频能拖进度条 */
 export const dogPhotoUrl = (dogId: number, filename: string, token: string) =>
   `/api/v1/dogs/${dogId}/photos/${encodeURIComponent(filename)}/stream?token=${token}`;
+
+/** 标 / 取消「重点护理」（皮肤跟踪重点盯的几只；管理员） */
+export const setDogCareFocus = (id: number, on: boolean) =>
+  request.put<never, { id: number; care_focus: boolean }>(`/dogs/${id}/care-focus`, { on });

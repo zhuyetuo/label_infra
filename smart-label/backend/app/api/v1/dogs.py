@@ -8,6 +8,7 @@ import asyncio
 import os
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy import BigInteger, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -249,6 +250,21 @@ async def create_dog(body: DogCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(dog)
     return ok(DogOut.model_validate(dog).model_dump())
+
+
+class CareFocusIn(BaseModel):
+    on: bool
+
+
+@router.put("/{dog_id}/care-focus", dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))])
+async def set_care_focus(dog_id: int, body: CareFocusIn, db: AsyncSession = Depends(get_db)):
+    """标 / 取消「重点护理」（皮肤跟踪重点盯的几只）"""
+    dog = await db.get(Dog, dog_id)
+    if dog is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "狗不存在")
+    dog.care_focus = body.on
+    await db.commit()
+    return ok({"id": dog.id, "care_focus": dog.care_focus})
 
 
 @router.patch("/{dog_id}", dependencies=[Depends(require_feature("dogs_edit"))])

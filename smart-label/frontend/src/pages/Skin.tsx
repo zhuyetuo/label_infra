@@ -7,6 +7,7 @@ import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/authStore";
+import { setDogCareFocus } from "@/api/dogs";
 import PhotoGallery from "@/components/PhotoGallery";
 import SkinAccuracy from "@/components/SkinAccuracy";
 import { MlResults, MlSimulate, MlTraining } from "@/components/SkinMl";
@@ -501,6 +502,7 @@ function ChartsTab() {
               {m.value === "count" && "虚线是基线（这只狗别的日子的中位数），C 值里的「变化幅度」就是跟它比出来的"}
               {m.value === "c" && "0–30 是 C0，30–50 是 C1，50 以上是 C2；红旗信号会直接判 C2"}
               {m.value === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值"}
+              {m.value === "photo" && "看皮肤照片评的档（兽医评过的以兽医为准，没有就取几个人的共识）；看不清 / 没评的那天空着"}
             </Typography.Text>
             <TrendChart rows={rows} metric={m.value} height={220} />
           </div>
@@ -1055,6 +1057,21 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
                       <span style={{ whiteSpace: "nowrap" }}>{short}</span>
                     </Tooltip>
                   </DogInfoPopover>
+                  {/* 重点护理：管理员点星标 / 取消；别人只看得到星 */}
+                  {(r.care_focus || ((role === "admin" || role === "super_admin") && r.dog_id)) && (
+                    <Tooltip title={r.care_focus ? "重点护理（点一下取消）" : "标成重点护理：上面勾「只看重点护理」就只剩这几只"}>
+                      <span
+                        style={{ marginLeft: 4, cursor: role === "admin" || role === "super_admin" ? "pointer" : undefined, color: r.care_focus ? "#faad14" : "#666" }}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!(role === "admin" || role === "super_admin") || !r.dog_id) return;
+                          await setDogCareFocus(r.dog_id, !r.care_focus);
+                          message.success(r.care_focus ? `${short} 取消重点护理` : `${short} 标成重点护理`);
+                          void trackQc.invalidateQueries({ queryKey: ["skin-tracking"] });
+                        }}
+                      >{r.care_focus ? "★" : "☆"}</span>
+                    </Tooltip>
+                  )}
                   {dogMetaText(r) && (
                     <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{dogMetaText(r)}</div>
                   )}

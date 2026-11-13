@@ -19,6 +19,7 @@ class DogOut(BaseModel):
     intake_skin_note: str | None = None
     birth_date: date | None
     remark: str | None
+    care_focus: bool = False
     created_at: datetime
     # 下面几个是算出来/查出来的，不是 dogs 表上的列
     age_text: str | None = None

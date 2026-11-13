@@ -270,12 +270,13 @@ def dog_label(sample_code: str | None, mapping: dict[str, str],
 async def dog_profiles(db) -> dict[tuple[str | None, str], dict]:
     """(场地键, 狗名) → {breed, size}；另存一份 (None, 狗名) 给认不出场地的行兜底"""
     out: dict[tuple[str | None, str], dict] = {}
-    for name, site, breed, size in (await db.execute(select(Dog.name, Dog.site, Dog.breed, Dog.size))).all():
+    for dog_id, name, site, breed, size, focus in (await db.execute(
+            select(Dog.id, Dog.name, Dog.site, Dog.breed, Dog.size, Dog.care_focus))).all():
         n = (name or "").strip()
         if not n:
             continue
         sk = site_layout.site_key_of_name(site)
-        info = {"breed": breed, "size": size, "site": sk}
+        info = {"breed": breed, "size": size, "site": sk, "dog_id": dog_id, "care_focus": bool(focus)}
         out[(sk, n)] = info
         out.setdefault((None, n), info)
     return out
@@ -297,4 +298,6 @@ def dog_meta(profiles: dict, site_key: str | None, imu: str | None, dog_name: st
         "room": room,
         "breed": p.get("breed"),
         "size": p.get("size"),
+        "dog_id": p.get("dog_id"),
+        "care_focus": bool(p.get("care_focus")),
     }

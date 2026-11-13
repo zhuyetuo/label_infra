@@ -21,12 +21,15 @@ const SERIES_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#00
 // 档位是状态，不是分类，用固定的状态色，且始终带文字标签，不靠颜色单独表意
 const TIER_COLOR: Record<string, string> = { C0: "#0ca30c", C1: "#fab219", C2: "#d03b3b" };
 
-type Metric = "count" | "c" | "s";
+type Metric = "count" | "c" | "s" | "photo";
 const METRICS: { label: string; value: Metric; unit: string }[] = [
   { label: "抓挠次数", value: "count", unit: "次" },
   { label: "C 值", value: "c", unit: "" },
   { label: "S 总分", value: "s", unit: "" },
+  // 看皮肤照片评的档（兽医评过的以兽医为准，没有就取几个人的共识）：S0=0 / S1=1 / S2=2，看不清 / 没评的空着
+  { label: "照片评级", value: "photo", unit: "" },
 ];
+const PHOTO_NUM: Record<string, number> = { S0: 0, S1: 1, S2: 2 };
 
 function isDark(): boolean {
   const attr = document.documentElement.getAttribute("data-theme");
@@ -43,6 +46,10 @@ const dayLabel = (sec: number) => {
 const valueOf = (r: TrackingRow, m: Metric): number | null => {
   if (m === "count") return (r.stats?.event_count as number | undefined) ?? null;
   if (m === "c") return r.c_value;
+  if (m === "photo") {
+    const g = r.photo_grade_vet ?? r.photo_grade;
+    return g != null && g in PHOTO_NUM ? PHOTO_NUM[g] : null;
+  }
   return r.s_with_q?.total ?? r.s_no_q?.total ?? null;
 };
 
@@ -129,7 +136,10 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
             incrs: [1, 2, 7, 14, 30].map((d) => d * 86400),
             values: (_u: uPlot, splits: number[]) => splits.map(dayLabel),
           },
-          { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
+          metric === "photo"
+            ? { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke },
+                incrs: [1], values: (_u: uPlot, splits: number[]) => splits.map((v) => (Number.isInteger(v) && v >= 0 && v <= 2 ? `S${v}` : "")) }
+            : { stroke: axisStroke, grid: { stroke: gridStroke, width: 1 }, ticks: { stroke: gridStroke } },
         ],
         series: [
           { label: "日期", value: (_u: uPlot, v: number | null) => (v == null ? "--" : dayLabel(v)) },
