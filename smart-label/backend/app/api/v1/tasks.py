@@ -411,6 +411,22 @@ async def list_tasks(
                 "marked": int(n_mk or 0),
             }
 
+    # 各类别审核通过的分别是谁通过的：几个人一起审时，项目页要能挑出某个人通过的去复查
+    if task_ids:
+        rows = await db.execute(
+            select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.seg_reviewed_by,
+                   func.count(AnnotationLabelItem.id))
+            .join(Task, Task.id == AnnotationRecord.task_id)
+            .join(scope, scope.c.id == Task.id)
+            .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+            .where(AnnotationRecord.round_no == Task.round_no, AnnotationLabelItem.seg_status == "approved",
+                   AnnotationLabelItem.review_note.is_(None), AnnotationLabelItem.seg_reviewed_by.is_not(None))
+            .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.seg_reviewed_by)
+        )
+        for task_id, label_id, uid, n in rows.all():
+            c = label_counts.get(task_id, {}).get(label_id)
+            if c is not None:
+                c.setdefault("approved_by", {})[str(uid)] = int(n)
     _lap("labels")
     # 有重叠的片段数（同一轨上互相压着的：同类重复 / 父子 / 类别冲突）。项目页每行标个
     # 「重叠 N」，点进去只看这些——不然重复、矛盾的段只能一个个任务点开去找

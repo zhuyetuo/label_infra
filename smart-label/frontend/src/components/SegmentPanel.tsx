@@ -30,6 +30,8 @@ type SourceFilter =
   | "flagged"
   | "seg_approved"
   | "seg_unreviewed"
+  /** 某个人审核通过的（项目页按「谁审核通过的」点进来） */
+  | `seg_approved_by_${number}`
   | "human"
   | "uncertain"
   | "uncertain_no_view"
@@ -461,6 +463,8 @@ export default function SegmentPanel({
         if (filterSource === "from_cand" && !i.cand_label_name) return false;
         if (filterSource === "flagged" && !i.review_note) return false;
         if (filterSource === "seg_approved" && i.seg_status !== "approved") return false;
+        if (filterSource.startsWith("seg_approved_by_")
+          && !(i.seg_status === "approved" && String(i.seg_reviewed_by) === filterSource.slice("seg_approved_by_".length))) return false;
         if (filterSource === "seg_unreviewed" && (i.seg_status === "approved" || i.review_note || i.marks)) return false;
         if (filterSource === "uncertain" && !i.uncertain) return false;
         if (filterSource === "uncertain_no_view" && i.uncertain_reason !== "no_view") return false;
@@ -673,7 +677,9 @@ export default function SegmentPanel({
             );
           }}
         />
-        <Select size="small" style={{ width: 120 }} value={filterSource} onChange={setFilterSource} options={SOURCE_OPTIONS} />
+        <Select size="small" style={{ width: 120 }} value={filterSource} onChange={setFilterSource}
+          options={filterSource.startsWith("seg_approved_by_")
+            ? [...SOURCE_OPTIONS, { value: filterSource, label: "审核：指定的人通过的" }] : SOURCE_OPTIONS} />
         <Space size={4}>
           <span style={{ fontSize: 12, color: "#666" }}>置信度</span>
           <InputNumber size="small" min={0} max={100} placeholder="最低%" style={{ width: 80 }} value={minConf} onChange={setMinConf} />

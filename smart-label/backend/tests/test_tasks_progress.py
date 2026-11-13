@@ -80,3 +80,15 @@ def test_打了备忘的不算还没审(db, run):
     rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
     c = rows[0]["label_counts"][str(w.child.id)] if str(w.child.id) in rows[0]["label_counts"] else rows[0]["label_counts"][w.child.id]
     assert c["marked"] == 1
+
+
+def test_每类通过的分别是谁(db, run):
+    from app.api.v1 import segment_review as seg_api
+
+    w = _world(db, run)
+    run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    run(seg_api.decide(w.items[1].id, seg_api.DecideIn(decision="approved"), db, w.rev2))
+    rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+    lc = rows[0]["label_counts"]
+    c = lc.get(w.child.id) or lc.get(str(w.child.id))
+    assert c["approved_by"] == {str(w.rev.id): 1, str(w.rev2.id): 1}

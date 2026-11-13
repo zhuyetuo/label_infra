@@ -183,3 +183,26 @@ def test_数据盘点_训练记录用过的才算已用上(db, run, monkeypatch,
     assert b2["used"]["n"] == 1 and b2["used"]["seconds"] == 2.8      # 同一份数据集被引用两次只算一次
     assert b2["human"]["n"] == 1                                         # 用过的那段不再算进「还没审核」
     assert inv2["datasets"][0]["n"] == 1 and inv2["totals"]["used"]["n"] == 1
+
+
+def test_按审核人筛_撤销某人的通过_退回给他重审(db, run):
+    """实习生升了管理员，跟我一起审；怀疑他审过的有问题——要能挑出他通过的，整批退回给他重看。"""
+    w = _world(db, run)
+    run(seg_api.decide(w.items[0].id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    run(seg_api.decide(w.items[1].id, seg_api.DecideIn(decision="approved"), db, w.rev2))
+    s = run(data_pool.summary(db, data_pool.PoolFilter()))
+    names = {x["name"]: x["n"] for x in s["by_reviewer"]}
+    assert names == {w.rev.display_name: 1, w.rev2.display_name: 1}
+    items = run(data_pool.list_items(db, data_pool.PoolFilter(reviewer_ids=[w.rev2.id])))["items"]
+    assert [x["id"] for x in items] == [w.items[1].id] and items[0]["reviewed_by_name"] == w.rev2.display_name
+
+    with pytest.raises(HTTPException):          # 审核员不能撤别人的
+        run(pool_api.post_revert(pool_api.RevertIn(reviewer_ids=[w.rev2.id]), db, w.rev))
+    with pytest.raises(HTTPException):          # 不给条件不让撤
+        run(pool_api.post_revert(pool_api.RevertIn(), db, w.admin))
+    r = run(pool_api.post_revert(pool_api.RevertIn(reviewer_ids=[w.rev2.id]), db, w.admin))
+    assert r["data"]["reverted"] == 1
+    run(db.refresh(w.items[1]))
+    it = w.items[1]
+    assert it.seg_status is None and it.seg_reviewed_by is None and it.seg_claimed_by == w.rev2.id
+    assert _ids_in_pool(run, db) == [w.items[0].id], "撤销的出池，别人通过的不动"

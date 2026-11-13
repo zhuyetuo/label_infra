@@ -11,7 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
 import { listDogs } from "@/api/dogs";
 import {
-  poolItems, poolRemove, poolSummary, type PoolBucket, type PoolFilter, type PoolItem, type PoolSort,
+  poolItems, poolRemove, poolRevertApprovals, poolSummary, type PoolBucket, type PoolFilter, type PoolItem, type PoolSort,
 } from "@/api/dataPool";
 import { exportDataset, type TrainDataset } from "@/api/training";
 import { useAuthStore } from "@/stores/authStore";
@@ -50,6 +50,9 @@ export default function DataPoolPanel({
   // 只要不短于这么多秒的片段：长片段往往更干净，先拿它们训
   const [minSec, setMinSec] = useState<number | null>(null);
   const [pickLabels, setPickLabels] = useState<string[]>([]);
+  // 谁审核通过的：几个人一起审时，挑出某个人通过的看一遍，不对就整批退回给他重审
+  const [reviewerIds, setReviewerIds] = useState<number[]>([]);
+  const isAdmin = role === "admin" || role === "super_admin";
   const [chartsOpen, setChartsOpen] = useState(() => {
     try { return localStorage.getItem("smart-label:pool-charts-open") !== "0"; } catch { return true; }
   });
@@ -63,13 +66,15 @@ export default function DataPoolPanel({
       sample_hz: hzs.length ? hzs : undefined,
       min_sec: minSec || null,
       label_names: pickLabels.length ? pickLabels : undefined,
+      reviewer_ids: reviewerIds.length ? reviewerIds : undefined,
     }),
-    [projectIds, dogIds, range, hzs, minSec, pickLabels],
+    [projectIds, dogIds, range, hzs, minSec, pickLabels, reviewerIds],
   );
   // 类别下拉的选项不能跟着类别筛选变（选了一个别的就没了）：统计另拉一份不带类别的
   const noLabel = useMemo(() => ({ ...filters, label_names: undefined }), [filters]);
   const anyFilter = !!(
     filters.project_ids || filters.dog_ids || filters.date_from || filters.date_to || filters.label_names
+    || filters.reviewer_ids
   );
 
   // 每个下拉只列「在别的条件下池里还有」的：按项目下拉就去掉项目这一条再统计一次，
@@ -78,6 +83,12 @@ export default function DataPoolPanel({
   const { data: sumNoProject } = useQuery({ queryKey: ["data-pool", "summary", facet({ project_ids: undefined })], queryFn: () => poolSummary(facet({ project_ids: undefined })) });
   const { data: sumNoDog } = useQuery({ queryKey: ["data-pool", "summary", facet({ dog_ids: undefined })], queryFn: () => poolSummary(facet({ dog_ids: undefined })) });
   const { data: sumNoDate } = useQuery({ queryKey: ["data-pool", "summary", facet({ date_from: null, date_to: null })], queryFn: () => poolSummary(facet({ date_from: null, date_to: null })) });
+  const { data: sumNoReviewer } = useQuery({ queryKey: ["data-pool", "summary", facet({ reviewer_ids: undefined })], queryFn: () => poolSummary(facet({ reviewer_ids: undefined })) });
+  const reviewerOptions = useMemo(() => {
+    const have = (sumNoReviewer?.by_reviewer ?? []).filter((b) => b.id != null);
+    const keep = reviewerIds.filter((id) => !have.some((b) => b.id === id)).map((id) => ({ value: id, label: `#${id}（0 段）` }));
+    return [...have.map((b) => ({ value: b.id as number, label: `${b.name} 通过的（${b.n} 段）` })), ...keep];
+  }, [sumNoReviewer, reviewerIds]);
   const { data: sumNoHz } = useQuery({ queryKey: ["data-pool", "summary", facet({ sample_hz: undefined })], queryFn: () => poolSummary(facet({ sample_hz: undefined })) });
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
@@ -127,6 +138,16 @@ export default function DataPoolPanel({
     qc.invalidateQueries({ queryKey: ["tasks"] });
   };
   const [busy, setBusy] = useState(false);
+  const revert = async (body: Parameters<typeof poolRevertApprovals>[0]) => {
+    setBusy(true);
+    try {
+      const r = await poolRevertApprovals({ send_back: true, ...body });
+      message.success(`撤销了 ${r.reverted} 段的审核通过：出池、回到还没审，已经领给原来通过它的人（他的待审里就是这些，3 天）`, 6);
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
   const remove = async (body: Parameters<typeof poolRemove>[0]) => {
     setBusy(true);
     try {
@@ -271,6 +292,16 @@ export default function DataPoolPanel({
           onChange={(v) => setHzs(v as number[])}
           options={hzOptions}
         />
+        <Select
+          mode="multiple"
+          allowClear
+          placeholder="谁审核通过的"
+          style={{ minWidth: 180 }}
+          value={reviewerIds}
+          onChange={setReviewerIds}
+          optionFilterProp="label"
+          options={reviewerOptions}
+        />
         <Tooltip title="只要不短于这么多秒的片段。长片段往往更干净">
           <InputNumber min={0} step={5} value={minSec} onChange={(v) => setMinSec(v ?? null)} placeholder="片段" addonAfter="秒以上" style={{ width: 140 }} />
         </Tooltip>
@@ -347,6 +378,28 @@ export default function DataPoolPanel({
                 <Button danger type="dashed" disabled={!anyFilter} loading={busy}>按筛选全部移出</Button>
               </Tooltip>
             </Popconfirm>
+            {isAdmin && (
+              <>
+                <Popconfirm
+                  title={`撤销选中 ${picked.length} 段的审核通过？`}
+                  description={<div style={{ maxWidth: 360 }}>出池、回到「还没审」，领给原来通过它的人重看（他的待审里就是这些）。手动加入池子的不受影响</div>}
+                  disabled={!picked.length}
+                  onConfirm={() => revert({ item_ids: picked })}
+                >
+                  <Button disabled={!picked.length} loading={busy}>撤销通过·退回重审{picked.length ? ` ${picked.length}` : ""}</Button>
+                </Popconfirm>
+                <Popconfirm
+                  title={`把「${reviewerOptions.filter((o) => reviewerIds.includes(o.value)).map((o) => o.label.split(" ")[0]).join("、")}」通过的、当前筛选下的 ${sum?.n ?? 0} 段全部撤销？`}
+                  description={<div style={{ maxWidth: 360 }}>出池、回到「还没审」，领给他重审。先用上面的类别 / 项目 / 日期缩小范围更稳</div>}
+                  disabled={!reviewerIds.length}
+                  onConfirm={() => revert(filters)}
+                >
+                  <Tooltip title={reviewerIds.length ? "" : "先在上面「谁审核通过的」选人"}>
+                    <Button type="dashed" disabled={!reviewerIds.length} loading={busy}>按筛选全部撤销通过</Button>
+                  </Tooltip>
+                </Popconfirm>
+              </>
+            )}
           </>
         )}
       </Space>
@@ -401,6 +454,14 @@ export default function DataPoolPanel({
             dataIndex: "via",
             width: 80,
             render: (v: string) => (v === "manual" ? <Tag color="blue">手动</Tag> : <Tag color="green">审核</Tag>),
+          },
+          {
+            title: "审核人",
+            dataIndex: "reviewed_by_name",
+            width: 90,
+            render: (v: string | null | undefined, r) => v
+              ? <Typography.Link onClick={() => r.reviewed_by && setReviewerIds([r.reviewed_by])}>{v}</Typography.Link>
+              : "-",
           },
           {
             title: "进池时间",

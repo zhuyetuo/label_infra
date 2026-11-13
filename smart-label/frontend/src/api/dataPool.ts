@@ -21,6 +21,8 @@ export interface PoolSummary {
   by_hz: PoolBucket[];
   /** 按采集日（YYYY-MM-DD） */
   by_date?: PoolBucket[];
+  /** 谁审核通过的（id = 用户；手动加入的是 id=null「手动加入」） */
+  by_reviewer?: PoolBucket[];
   /** 类别层级：每个节点含它底下全部细类的段数 / 时长；parent = 上一级的名字（根是 null） */
   tree?: (PoolBucket & { parent: string | null })[];
 }
@@ -35,6 +37,8 @@ export interface PoolFilter {
   min_sec?: number | null;
   /** 类别名（含细类） */
   label_names?: string[];
+  /** 谁审核通过的 */
+  reviewer_ids?: number[];
 }
 
 const toParams = (f: PoolFilter) => ({
@@ -46,6 +50,7 @@ const toParams = (f: PoolFilter) => ({
   sample_hz: f.sample_hz?.join(",") || undefined,
   min_sec: f.min_sec || undefined,
   label_names: f.label_names?.join(",") || undefined,
+  reviewer_ids: f.reviewer_ids?.join(",") || undefined,
 });
 
 export const poolSummary = (f: PoolFilter) =>
@@ -68,6 +73,9 @@ export interface PoolItem {
   via: "manual" | "approved";
   /** 进池时间（手动加入的时间 / 审核通过的时间），"YYYY-MM-DD HH:mm" */
   entered_at?: string | null;
+  /** 谁审核通过的（手动加入的没有） */
+  reviewed_by?: number | null;
+  reviewed_by_name?: string | null;
 }
 export type PoolSort = "long" | "short" | "new" | "time" | "recent";
 
@@ -81,6 +89,9 @@ export const poolItems = (f: PoolFilter, sort: PoolSort, page: number, pageSize:
 export const poolAdd = (body: PoolFilter & { source: "reviewed" | "approved_tasks" | "submitted" | "all" }) =>
   request.post<never, { added: number }>("/data-pool/add", body);
 
+/** 撤销审核通过（怀疑某人审得不对）：片段回到还没审、出池；send_back = 领给原来通过的人让他重看 */
+export const poolRevertApprovals = (body: PoolFilter & { item_ids?: number[]; send_back?: boolean }) =>
+  request.post<never, { reverted: number }>("/data-pool/revert-approvals", body);
 export const poolRemove = (body: PoolFilter & { item_ids?: number[] }) =>
   request.post<never, { removed: number }>("/data-pool/remove", body);
 
