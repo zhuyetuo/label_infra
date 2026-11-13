@@ -168,6 +168,9 @@ export default function ImuChart({
   // 坐标轴文字 / 网格跟着明亮 / 暗黑走（uPlot 默认是黑字，暗黑底上看不见）
   const { token } = theme.useToken();
   const axisStroke = token.colorTextSecondary, gridStroke = token.colorBorderSecondary;
+  // 播放线 / 时间标签的颜色：写死黑色的话暗黑底上几乎看不见。放在 ref 里，切主题不用重建图
+  const inkRef = useRef({ line: token.colorText, halo: token.colorBgContainer });
+  inkRef.current = { line: token.colorText, halo: token.colorBgContainer };
   const containerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const plotRefs = useRef<(uPlot | null)[]>([]);
   const durationRef = useRef<number>(0);
@@ -360,7 +363,7 @@ export default function ImuChart({
             ),
             wheelZoomPlugin(),
             segmentHighlightPlugin(segmentsRef, highlightRef, annotateRef, () => startEpochRef.current, getFullRange),
-            playheadPlugin(playheadState, i === 0, playheadHoverRef),
+            playheadPlugin(playheadState, i === 0, playheadHoverRef, inkRef),
           ],
         };
 
@@ -427,7 +430,7 @@ export default function ImuChart({
         </div>
       ))}
       {rangeCaption && (
-        <div style={{ fontSize: 12, color: "#555", textAlign: "right", paddingRight: 8 }}>{rangeCaption}</div>
+        <div style={{ fontSize: 12, color: token.colorTextSecondary, textAlign: "right", paddingRight: 8 }}>{rangeCaption}</div>
       )}
     </div>
   );
@@ -511,6 +514,12 @@ function segmentBandPlugin(
             if (annotateRef.current.onSplit && sm != null && sm > hseg.start_time_ms && sm < hseg.end_time_ms) {
               // 按着 Alt：在鼠标处画剪刀线，点下去就从这里拆开
               const sx = toX(sm);
+              ctx.strokeStyle = "rgba(255,255,255,.9)";
+              ctx.lineWidth = 4 * dpr;
+              ctx.beginPath();
+              ctx.moveTo(sx, st);
+              ctx.lineTo(sx, st + sh);
+              ctx.stroke();
               ctx.strokeStyle = "#000";
               ctx.lineWidth = 2 * dpr;
               ctx.setLineDash([4 * dpr, 3 * dpr]);
@@ -676,12 +685,14 @@ function segmentBandPlugin(
 function playheadPlugin(
   stateRef: { current: number | null },
   showLabel: boolean,
-  hoverRef: { current: boolean }
+  hoverRef: { current: boolean },
+  inkRef: { current: { line: string; halo: string } }
 ) {
   return {
     hooks: {
       draw: (u: uPlot) => {
         if (stateRef.current == null) return;
+        const ink = inkRef.current;
         const x = u.valToPos(stateRef.current, "x", true);
         if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
         const hovered = hoverRef.current;
@@ -689,7 +700,14 @@ function playheadPlugin(
         ctx.save();
         // 鼠标移到可拖拽范围内时线变色变粗、顶端加一个手柄圆点，一眼就能看出
         // "这条线能拖"，不用先按下去试才知道
-        ctx.strokeStyle = hovered ? "#1677ff" : "#000000";
+        // 先画一圈底色描边再画线：明亮 / 暗黑、压在红色波形上都看得清
+        ctx.strokeStyle = ink.halo;
+        ctx.lineWidth = (hovered ? 4 : 3) + 4;
+        ctx.beginPath();
+        ctx.moveTo(x, u.bbox.top);
+        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+        ctx.stroke();
+        ctx.strokeStyle = hovered ? "#1677ff" : ink.line;
         ctx.lineWidth = hovered ? 4 : 3;
         ctx.beginPath();
         ctx.moveTo(x, u.bbox.top);
@@ -709,9 +727,11 @@ function playheadPlugin(
           const textWidth = ctx.measureText(label).width;
           const nearRightEdge = x + 6 + textWidth > u.bbox.left + u.bbox.width;
           const labelX = nearRightEdge ? x - 6 - textWidth : x + 6;
-          ctx.fillStyle = "#000000";
+          ctx.fillStyle = ink.halo;
+          ctx.fillRect(labelX - 3, u.bbox.top + 1, textWidth + 6, 16);
+          ctx.fillStyle = ink.line;
           ctx.textBaseline = "top";
-          ctx.fillText(label, labelX, u.bbox.top + 2);
+          ctx.fillText(label, labelX, u.bbox.top + 3);
         }
         ctx.restore();
       },
