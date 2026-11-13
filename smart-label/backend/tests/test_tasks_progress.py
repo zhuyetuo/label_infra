@@ -60,3 +60,23 @@ def test_项目行的备忘数_跟逐个任务的mark_count一样(db, run):
     assert m["n"] == want
     if want == 2:
         assert m["by_kind"] == {"compound": 2, "av_mismatch": 1}
+
+
+def test_打了备忘的不算还没审(db, run):
+    """项目页写着「还没审 2」，点进去两条都是备忘——白跑一趟（2026-11-13）。备忘 = 先放着，单独数。"""
+    from sqlalchemy import select
+    from app.models.annotation import AnnotationLabelItem
+
+    w = _world(db, run)
+    before = run(tasks_api.label_review_progress(label="抓挠", db=db, user=w.admin))["data"]["projects"][str(w.p.id)]
+    it = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.label_id == w.child.id,
+                                                          AnnotationLabelItem.seg_status.is_(None),
+                                                          AnnotationLabelItem.review_note.is_(None)))).scalars().first()
+    assert it is not None
+    it.marks = "unclear"
+    run(db.commit())
+    after = run(tasks_api.label_review_progress(label="抓挠", db=db, user=w.admin))["data"]["projects"][str(w.p.id)]
+    assert after["unreviewed"] == before["unreviewed"] - 1 and after["marked"] == before.get("marked", 0) + 1
+    rows = run(tasks_api.list_tasks(project_id=w.p.id, db=db, user=w.admin))["data"]
+    c = rows[0]["label_counts"][str(w.child.id)] if str(w.child.id) in rows[0]["label_counts"] else rows[0]["label_counts"][w.child.id]
+    assert c["marked"] == 1

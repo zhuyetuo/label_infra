@@ -1428,7 +1428,7 @@ export default function Projects() {
             const unreviewedOf = (t: Task) =>
               Object.entries(t.label_counts ?? {})
                 .filter(([lid]) => !f.labels.length || wantLabelIds.has(Number(lid)))
-                .reduce((s2, [, c]) => s2 + Math.max(0, c.n - (c.approved ?? 0) - (c.returned ?? 0)), 0);
+                .reduce((s2, [, c]) => s2 + Math.max(0, c.n - (c.approved ?? 0) - (c.returned ?? 0) - (c.marked ?? 0)), 0);
             const unreviewedTasks = all.filter((t) => unreviewedOf(t) > 0).length;
             const unreviewedSegs = all.reduce((s2, t) => s2 + unreviewedOf(t), 0);
             const overlapTasks = all.filter((t) => overlapOf(t) > 0).length;
@@ -1952,12 +1952,13 @@ export default function Projects() {
                           )}
                           {entries.map((l) => {
                               const c = lc[l.id];
-                              const ok = c.approved ?? 0, ret = c.returned ?? 0;
-                              const todo = Math.max(0, c.n - ok - ret);
+                              const ok = c.approved ?? 0, ret = c.returned ?? 0, mk = c.marked ?? 0;
+                              // 打了备忘的「先放着」，不算还没审；只有勾了「有备忘」筛选才单独露出来
+                              const todo = Math.max(0, c.n - ok - ret - mk);
                               return (
                                 <Tooltip
                                   key={l.id}
-                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
+                                  title={`${l.display_name} ${c.n} 段：通过 ${ok}、退回给标注员还没改好 ${ret}、你还没审 ${todo}${mk ? `、备忘先放着 ${mk}` : ""}${c.ai_pending ? `；其中 ${c.ai_pending} 段 AI 待确认` : ""}`}
                                 >
                                   <Space size={0} style={{ cursor: "pointer" }}>
                                     <Tag color={l.color ?? undefined} style={{ marginRight: 2 }}
@@ -1975,6 +1976,8 @@ export default function Projects() {
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "flagged" })}>退回·待标注员改 {ret}</Tag>}
                                     {todo > 0 && <Tag style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "seg_unreviewed" })}>还没审 {todo}</Tag>}
+                                    {f.marked && mk > 0 && <Tag color="gold" style={{ marginRight: 2 }}
+                                      onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "mark" })}>🔖备忘 {mk}</Tag>}
                                     {c.ai_pending > 0 && <Tag color="orange" style={{ marginRight: 2 }}
                                       onClick={() => pickOpen(task, p.id, { labels: [l.id], source: "ai_pending" })}>AI待确认 {c.ai_pending}</Tag>}
                                   </Space>
@@ -2469,7 +2472,8 @@ export default function Projects() {
                 {(() => {
                   const sr = scratchReview?.projects[String(p.id)];
                   if (!sr || !sr.n) return null;
-                  const notPassed = sr.n - sr.approved;
+                  // 打了备忘的「先放着」，不算没通过（项目行上的 🔖 备忘单独列）
+                  const notPassed = sr.n - sr.approved - (sr.marked ?? 0);
                   // 点一下：展开这个项目，只看抓挠还没审的任务
                   // 还有没审的就看没审的；全审过了、只剩退回的，就看退回待改的
                   const open = (e: React.MouseEvent, unreviewed: boolean) => {
@@ -2481,7 +2485,7 @@ export default function Projects() {
                   };
                   return (
                     <div style={{ marginTop: 4 }}>
-                      <Tooltip title={`抓挠（含细类）共 ${sr.n} 段：通过 ${sr.approved}、退回待改 ${sr.returned}、还没审 ${sr.unreviewed}。点一下展开、只看抓挠还没审的任务`}>
+                      <Tooltip title={`抓挠（含细类）共 ${sr.n} 段：通过 ${sr.approved}、退回待改 ${sr.returned}、还没审 ${sr.unreviewed}${sr.marked ? `、备忘先放着 ${sr.marked}` : ""}。点一下展开、只看抓挠还没审的任务`}>
                         {notPassed > 0 ? (
                           <Space size={4} wrap>
                             <Tag color="red" style={{ cursor: "pointer" }} onClick={(e) => open(e, true)}>

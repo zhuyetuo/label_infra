@@ -276,6 +276,15 @@ async def delete_tasks_batch(body: TaskIdsRequest, db: AsyncSession = Depends(ge
     return ok({"count": n})
 
 
+def _parked_cond():
+    """打了 🔖 备忘、还没通过也没退回的片段：「先放着、以后处理」。不算「还没审」，也不催 AI 确认——
+    不然项目页写着「还没审 2」，点进去一看两条都是备忘，白跑一趟（2026-11-13）。
+    想看这些，用「有备忘」筛选。清掉备忘就回到「还没审」。"""
+    return (AnnotationLabelItem.marks.is_not(None)
+            & ((AnnotationLabelItem.seg_status.is_(None)) | (AnnotationLabelItem.seg_status == "pending"))
+            & AnnotationLabelItem.review_note.is_(None))
+
+
 @router.get("")
 async def list_tasks(
     project_id: int | None = None, ids: str | None = None, lite: bool = False,
@@ -354,7 +363,9 @@ async def list_tasks(
                 & (AnnotationLabelItem.ai_confirmed.is_(False))
                 & (AnnotationLabelItem.is_modified.is_(False))
                 # 标了「待定」的已经处理过了（人看了，拿不准），不该再催着确认
-                & (AnnotationLabelItem.uncertain.is_(False)),
+                & (AnnotationLabelItem.uncertain.is_(False))
+                # 打了 🔖 备忘的是「先放着」，也不催
+                & AnnotationLabelItem.marks.is_(None),
                 1,
             ),
             else_=0,
@@ -382,6 +393,8 @@ async def list_tasks(
                 func.min(AnnotationRecord.id),
                 # 标了「待定」的（没画面 / 看不清 / 要细切）：项目页要能一眼挑出来
                 func.sum(case((AnnotationLabelItem.uncertain.is_(True), 1), else_=0)),
+                # 打了 🔖 备忘、还没通过也没退回的：「先放着」，不算「还没审」（不然点进去一看全是备忘，白跑一趟）
+                func.sum(case((_parked_cond(), 1), else_=0)),
             )
             .join(Task, Task.id == AnnotationRecord.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -389,12 +402,13 @@ async def list_tasks(
             .where(AnnotationRecord.round_no == Task.round_no)
             .group_by(AnnotationRecord.task_id, AnnotationLabelItem.label_id)
         )
-        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot, s_start, s_id, rec_id, n_unc in rows.all():
+        for task_id, label_id, n, n_pending, n_ok, n_ret, n_pool, mx, tot, s_start, s_id, rec_id, n_unc, n_mk in rows.all():
             seg_sig.setdefault(task_id, []).append((rec_id, label_id, int(n), int(s_start or 0), int(tot or 0), int(s_id or 0)))
             label_counts.setdefault(task_id, {})[label_id] = {
                 "n": int(n), "ai_pending": int(n_pending or 0),
                 "approved": int(n_ok or 0), "returned": int(n_ret or 0), "pool": int(n_pool or 0),
                 "max_ms": int(mx or 0), "ms": int(tot or 0), "uncertain": int(n_unc or 0),
+                "marked": int(n_mk or 0),
             }
 
     _lap("labels")
@@ -634,13 +648,15 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
     )).scalars().all())
     if not root_ids:
-        return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}, "marks": {}})
+        return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
+                   "marks": {}})
     label_ids = await label_tree.expand_ids(db, root_ids)
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
     ret_c = case(((AnnotationLabelItem.seg_status == "returned") | AnnotationLabelItem.review_note.is_not(None), 1), else_=0)
     rows = await db.execute(
-        select(Task.project_id, func.count(AnnotationLabelItem.id), func.sum(ok_c), func.sum(ret_c))
+        select(Task.project_id, func.count(AnnotationLabelItem.id), func.sum(ok_c), func.sum(ret_c),
+               func.sum(case((_parked_cond(), 1), else_=0)))
         .join(scope, scope.c.id == Task.id)
         .join(AnnotationRecord, (AnnotationRecord.task_id == Task.id) & (AnnotationRecord.round_no == Task.round_no))
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
@@ -648,10 +664,12 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         .group_by(Task.project_id)
     )
     projects: dict[str, dict[str, int]] = {}
-    total = {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0}
-    for pid, n, n_ok, n_ret in rows.all():
-        n, n_ok, n_ret = int(n), int(n_ok or 0), int(n_ret or 0)
-        r = {"n": n, "approved": n_ok, "returned": n_ret, "unreviewed": max(0, n - n_ok - n_ret)}
+    total = {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0}
+    for pid, n, n_ok, n_ret, n_mk in rows.all():
+        n, n_ok, n_ret, n_mk = int(n), int(n_ok or 0), int(n_ret or 0), int(n_mk or 0)
+        # 打了备忘、还没通过也没退回的「先放着」，不算还没审
+        r = {"n": n, "approved": n_ok, "returned": n_ret, "marked": n_mk,
+             "unreviewed": max(0, n - n_ok - n_ret - n_mk)}
         projects[str(pid)] = r
         for k in total:
             total[k] += r[k]
