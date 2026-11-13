@@ -672,6 +672,59 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User) -> dict:
     return {"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)}
 
 
+class CreateIn(BaseModel):
+    task_id: int
+    label_id: int
+    start_time_ms: int = Field(..., ge=0)
+    end_time_ms: int = Field(..., ge=0)
+
+
+@router.post("/create")
+async def create(body: CreateIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """审核员 / 管理员在「查看标注」（只读）里直接补一段，不用认领整个任务。
+
+    直接落进当前这一轮的记录；跟「直接改」一样，亲手标的就算认可的版本——直接通过。
+    标注员正开着这个任务也不怕：touched_by 是别人、touched_at 在他拉草稿之后，
+    他下次存草稿不会把这条当成「前端没有」删掉（save_draft 的 loaded_at）。"""
+    from app.services.task_service import _get_or_create_record
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能在查看里直接新建片段，标注员请先认领任务")
+    if body.end_time_ms - body.start_time_ms < 100:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "结束要比开始晚至少 0.1 秒")
+    q = (select(Task).join(Project, Project.id == Task.project_id)
+         .where(Task.id == body.task_id, Project.is_active.is_(True)))
+    task = (await db.execute(exclude_sensitive(q, user))).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在，或者你看不到")
+    exists = (await db.execute(select(LabelDefinition.id).where(
+        LabelDefinition.id == body.label_id, LabelDefinition.project_id == task.project_id))).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "这个项目里没有这个标签")
+    rec = await _get_or_create_record(db, task)
+    now = _now()
+    it = AnnotationLabelItem(
+        annotation_record_id=rec.id,
+        label_id=body.label_id,
+        start_time_ms=body.start_time_ms,
+        end_time_ms=body.end_time_ms,
+        source_type=LabelItemSource.human_added,
+        is_modified=False,
+        ai_confirmed=False,
+        uncertain=False,
+        created_by=user.id,
+        touched_at=now,
+        touched_by=user.id,
+        seg_status="approved",
+        seg_reviewed_by=user.id,
+        seg_reviewed_at=now,
+    )
+    db.add(it)
+    await db.commit()
+    return ok({"id": it.id, "start_time_ms": it.start_time_ms, "end_time_ms": it.end_time_ms,
+               "label_id": it.label_id, "seg_status": "approved"})
+
+
 @router.post("/{item_id}/split")
 async def split(item_id: int, body: SplitIn, db: AsyncSession = Depends(get_db),
                 user: User = Depends(get_current_user)):
