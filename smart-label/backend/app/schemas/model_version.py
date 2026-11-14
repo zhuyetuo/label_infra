@@ -73,6 +73,8 @@ class DatasetSpecIn(BaseModel):
     class_scale: dict[str, float] | None = None
     # v2：不用重力绝对大小那几维特征（跟各个项圈的加速度计校准有关，模型会认项圈不认动作）
     drop_gravity_level: bool = False
+    # v2：静止/休息 和 活动 按动作强度分（4 秒内加速度模长标准差低于这个值 g 算静止）；None = 按人标的
+    still_motion_g: float | None = None
 
 
 class TrainSubmitIn(BaseModel):

@@ -261,6 +261,8 @@ export const submitTrain = (body: {
     class_scale?: Record<string, number> | null;
     /** v2：不用重力绝对大小那几维特征（跟各个项圈的校准有关） */
     drop_gravity_level?: boolean;
+    /** v2：静止 / 活动按动作强度分的阈值（g）；不填 = 按人标的 */
+    still_motion_g?: number | null;
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
     /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */

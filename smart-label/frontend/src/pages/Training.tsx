@@ -111,6 +111,7 @@ type TrainOpts = {
   fineLabels?: string[] | null;
   classScale?: Record<string, number>;
   dropGravityLevel?: boolean;
+  stillMotionG?: number | null;
   extraDs?: string[];
   extraHz?: Record<string, number>;
   /** 新版流程：一起训练的每份数据集里不用的类别 */
@@ -303,6 +304,8 @@ export default function Training() {
   const [classScale, setClassScale] = useState<Record<string, number>>(V2_DEFAULT_SCALE);
   // 不用重力绝对大小（imu_train train_v2 的 drop_gravity_level）
   const [dropGravityLevel, setDropGravityLevel] = useState(false);
+  // 静止 / 活动按动作强度分（imu_train train_v2 的 still_motion_g）：null = 按人标的
+  const [stillMotionG, setStillMotionG] = useState<number | null>(null);
   /** 打开新版流程时把相关参数摆到实验定下来的那套 */
   const useV2Defaults = () => {
     setModelType("rf");
@@ -683,6 +686,7 @@ export default function Training() {
       setFineLabels(base.fineLabels ?? null);
       setClassScale(base.classScale ?? V2_DEFAULT_SCALE);
       setDropGravityLevel(base.dropGravityLevel ?? false);
+      setStillMotionG(base.stillMotionG ?? null);
       if (typeof base.edgeSize === "boolean") setEdgeSize(base.edgeSize);
       setEdgeTrees(base.edgeTrees ?? null);
       setEdgeDepth(base.edgeDepth ?? null);
@@ -748,7 +752,7 @@ export default function Training() {
           clean: true,
           ...(pipelineV2
             ? { pipeline: "v2", fine_labels: fineEffective, class_scale: classScale, drop_gravity_level: dropGravityLevel,
-                axes, channel_mode: "inv", rot_aug: 0 }
+                still_motion_g: stillMotionG, axes, channel_mode: "inv", rot_aug: 0 }
             : {}),
         },
         model_type: modelType,
@@ -758,7 +762,7 @@ export default function Training() {
       saveRemapHabits(Object.fromEntries(trainCats.filter((c) => c.name in remapEdits).map((c) => [c.name, remapEdits[c.name]])));
       saveTrainOpts(trainFor.name, {
         modelType, sourceHz, hz, axes, orientFree, shortLabels: shortLabels ?? undefined, edgeSize, skipSyn, extraDs, extraHz, extraExclude, edgeTrees, edgeDepth, edgeFilters, balance,
-        windowS, strideS, labelMode, modelParams, pipelineV2, fineLabels, classScale, dropGravityLevel,
+        windowS, strideS, labelMode, modelParams, pipelineV2, fineLabels, classScale, dropGravityLevel, stillMotionG,
         // 只存这次数据里真有的类别，别把历史上别的数据集的类别名越攒越多
         remapEdits: Object.fromEntries(trainCats.map((c) => [c.name, remapEdits[c.name] ?? ""])),
       });
@@ -818,6 +822,7 @@ export default function Training() {
     setFineLabels(Array.isArray(sp.fine_labels) ? (sp.fine_labels as string[]) : null);
     setClassScale((sp.class_scale as Record<string, number> | undefined) ?? V2_DEFAULT_SCALE);
     setDropGravityLevel(sp.drop_gravity_level === true);
+    setStillMotionG(typeof sp.still_motion_g === "number" ? sp.still_motion_g : null);
     const alive = new Set((datasets ?? []).map((x) => x.name));
     const extras = ((sp.extra_datasets as { date: string; source_hz?: number | null; exclude_classes?: string[] }[] | undefined) ?? [])
       .filter((e) => alive.has(e.date) && e.date !== ds.name);
@@ -2097,6 +2102,17 @@ export default function Training() {
                         <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>不用重力绝对大小（去掉项圈校准差异）</span>
                       </Checkbox>
                     </Tooltip>
+                  </Space>
+                  <Space wrap size={[8, 4]}>
+                    <Tooltip title="静止/休息 和 活动 按「身体动没动」分，不按人看视频的感觉分：4 秒窗口里加速度模长的标准差低于阈值算静止，否则算活动。只改标成这两类本身的窗口，进食 / 饮水 / 舔等细类不动。项圈上看，人标的站着不动的「活动」和「静止」是同一种信号，不改的话这两类怎么训都分不开。#29 上 0.005g：主数据集窗口准确率 0.84 → 0.95（150 棵 / 深 18）">
+                      <Checkbox checked={stillMotionG != null} onChange={(e) => setStillMotionG(e.target.checked ? 0.005 : null)}>
+                        <span style={{ borderBottom: "1px dashed #666", fontSize: 13 }}>静止 / 活动按动作强度分</span>
+                      </Checkbox>
+                    </Tooltip>
+                    {stillMotionG != null && (
+                      <InputNumber size="small" min={0.001} max={0.05} step={0.001} style={{ width: 170 }} addonBefore="阈值 g"
+                        value={stillMotionG} onChange={(v) => setStillMotionG(v ?? 0.005)} />
+                    )}
                   </Space>
                 </div>
               )}
