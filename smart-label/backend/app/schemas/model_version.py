@@ -71,6 +71,8 @@ class DatasetSpecIn(BaseModel):
     pipeline: str | None = None
     fine_labels: list[str] | None = None
     class_scale: dict[str, float] | None = None
+    # v2：不用重力绝对大小那几维特征（跟各个项圈的加速度计校准有关，模型会认项圈不认动作）
+    drop_gravity_level: bool = False
 
 
 class TrainSubmitIn(BaseModel):
