@@ -53,7 +53,7 @@ const STATUS_META: Record<ModelVersion["status"], { color: string; label: string
 };
 
 const MODEL_TYPES = ["rf", "cnn", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
-const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", cnn: "cnn（1D-CNN）" };
+const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", cnn: "cnn（1D-CNN）", xgb: "xgb（XGBoost，端侧推荐）" };
 
 /**
  * 这一段到底是什么类别——取**叶子**（抓挠-躯干），不是根（抓挠）。
@@ -2120,11 +2120,18 @@ export default function Training() {
             <Space>
               <Typography.Text>模型类型</Typography.Text>
               <Select
-                style={{ width: 140 }}
-                disabled={pipelineV2}
+                style={{ width: 200 }}
                 value={modelType}
-                onChange={setModelType}
-                options={MODEL_TYPES.map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
+                onChange={(v: string) => {
+                  setModelType(v);
+                  // 新版流程的端侧规格跟着模型走：XGBoost 50 轮 × 深 6（端侧紧凑编码深度最多 6），随机森林 20 棵 × 深 8
+                  if (pipelineV2 && edgeSize) {
+                    if (v === "xgb") { setEdgeTrees(50); setEdgeDepth(6); }
+                    else if (v === "rf") { setEdgeTrees(20); setEdgeDepth(8); }
+                  }
+                }}
+                // 新版流程（train_v2）只训随机森林和 XGBoost
+                options={(pipelineV2 ? ["rf", "xgb"] : MODEL_TYPES).map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
               />
               <Typography.Text>标签</Typography.Text>
               <Input style={{ width: 160 }} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="可选" />
