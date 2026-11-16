@@ -8,7 +8,7 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { dogPhotoUrl, listDogPhotos } from "@/api/dogs";
 import DogPhotos from "@/components/DogPhotos";
 import {
-  listCamSessions, resetCamMap, saveCamBatch, type CamCheckSegment,
+  listCamSessions, resetCamMap, saveCamBatch, type CamCheckSample, type CamCheckSegment,
 } from "@/api/camMap";
 
 /** 文件名里那串开机时刻 → 给人看的时间 */
@@ -58,11 +58,12 @@ function CamThumb({ mediaId }: { mediaId: number | null }) {
   );
 }
 
-/** 一路画面旁边挂的狗：小头像 + IMU/狗名，点开看狗档案里的照片，方便对着画面认狗 */
-function DogChip({ dogId, name, imu, room }: {
+/** 一路画面旁边挂的狗：小头像 + IMU/狗名，点开看狗档案里的照片，方便对着画面认狗。
+ *  同一间的两只 IMU 是一对（同一只狗），合并成一个标签只挂一张照片：IMU9/10 */
+function DogChip({ dogId, name, imus, room }: {
   dogId: number | null;
   name: string | null;
-  imu: number | null;
+  imus: number[];
   room: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,7 +75,7 @@ function DogChip({ dogId, name, imu, room }: {
     staleTime: 5 * 60_000,
   });
   const photo = (data ?? []).find((p) => p.kind === "image");
-  const label = imu != null ? `IMU${imu}` : name ?? "";
+  const label = imus.length ? `IMU${imus.join("/")}` : name ?? "";
 
   return (
     <>
@@ -149,12 +150,25 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
     return new Set(v).size !== v.length;
   }, [map]);
 
-  // 每路画面旁边显示挂在这路上的狗：同一间的两只 IMU 会并列，一眼看出谁对的是哪路画面
+  // 每路画面旁边显示挂在这路上的狗：同一间的两只 IMU 是一对，合成一个标签；
+  // 按房间归组（配对 IMU 必然同房间），组内 IMU 升序排，组之间也按最小 IMU 号排
   const dogsByCam = useMemo(() => {
-    const m = new Map<number, typeof segment.samples>();
+    const m = new Map<number, { key: string; samples: CamCheckSample[] }[]>();
     for (const s of segment.samples) {
       if (s.cam == null) continue;
-      m.set(s.cam, [...(m.get(s.cam) ?? []), s]);
+      const key = s.room != null ? `room${s.room}` : `sample${s.id}`;
+      const list = m.get(s.cam) ?? [];
+      const g = list.find((x) => x.key === key);
+      if (g) g.samples.push(s);
+      else list.push({ key, samples: [s] });
+      m.set(s.cam, list);
+    }
+    for (const list of m.values()) {
+      list.sort((a, b) => {
+        const ia = Math.min(...a.samples.map((s) => s.imu ?? 999));
+        const ib = Math.min(...b.samples.map((s) => s.imu ?? 999));
+        return ia - ib;
+      });
     }
     return m;
   }, [segment]);
@@ -258,15 +272,22 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
             <CamThumb mediaId={c.media_id} />
             <div style={{ marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
               <Typography.Text strong>录制 cam{c.recorded_cam}</Typography.Text>
-              {(dogsByCam.get(c.recorded_cam) ?? []).map((s) => (
-                <DogChip
-                  key={s.id}
-                  dogId={s.dog_id}
-                  name={s.dog_name}
-                  imu={s.imu}
-                  room={roomLabel(s.room)}
-                />
-              ))}
+              {(dogsByCam.get(c.recorded_cam) ?? []).map((g) => {
+                const withDog = g.samples.find((s) => s.dog_id != null) ?? g.samples[0];
+                const imus = g.samples
+                  .map((s) => s.imu)
+                  .filter((v): v is number => v != null)
+                  .sort((a, b) => a - b);
+                return (
+                  <DogChip
+                    key={g.key}
+                    dogId={withDog.dog_id}
+                    name={withDog.dog_name}
+                    imus={imus}
+                    room={roomLabel(withDog.room)}
+                  />
+                );
+              })}
               <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: "auto" }}>
                 挂在 {c.samples} 份样本
               </Typography.Text>
