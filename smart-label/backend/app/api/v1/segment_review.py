@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -44,6 +44,12 @@ CLAIM_HOURS = 24
 
 def _now() -> datetime:
     return datetime.now()
+
+
+def _decided_at() -> datetime:
+    """ai_candidates.decided_at 这一列按 UTC 存（跟工作台里的决定、提交时间一致），
+    读的时候统一 +本地时差。别的 DATETIME 列（touched_at 等）是库本地时间，别混用。"""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _is_reviewer(user: User) -> bool:
@@ -486,7 +492,7 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db), user: Us
         cand = await db.get(AiCandidate, it.from_candidate_id)
         if cand is not None and cand.status == CandidateStatus.confirmed:
             cand.status = CandidateStatus.rejected
-            cand.decided_by, cand.decided_at = user.id, _now()
+            cand.decided_by, cand.decided_at = user.id, _decided_at()
     await db.delete(it)
     await db.commit()
     return ok({"id": item_id, "deleted": True})
@@ -667,7 +673,7 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User) -> dict:
         cand = await db.get(AiCandidate, cid)
         if cand is not None and cand.status == CandidateStatus.confirmed:
             cand.status = CandidateStatus.rejected
-            cand.decided_by, cand.decided_at = user.id, now
+            cand.decided_by, cand.decided_at = user.id, _decided_at()
     await db.flush()
     return {"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)}
 

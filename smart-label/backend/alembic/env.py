@@ -46,6 +46,10 @@ async def run_migrations_online() -> None:
         if connection.dialect.name == "mysql":
             await connection.exec_driver_sql("SET SESSION lock_wait_timeout = 15")
         await connection.run_sync(do_run_migrations)
+        # MySQL 的 DDL 是隐式提交的，但「记版本号」那条 UPDATE 落在连接自己的隐式事务里，
+        # 不显式提交的话连接一关就回滚——现象是表已经改好、alembic_version 永远停在旧
+        # revision，每次部署都把已经跑过的迁移再跑一遍。这里补一次提交把它落盘。
+        await connection.commit()
     await connectable.dispose()
 
 
