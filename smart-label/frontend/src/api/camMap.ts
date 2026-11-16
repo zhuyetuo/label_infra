@@ -11,6 +11,7 @@ export interface CamCheckCam {
   path: string;
   samples: number;
   media_id: number | null;
+  room_options: CamCheckRoom[];
 }
 
 export interface CamCheckSlot {

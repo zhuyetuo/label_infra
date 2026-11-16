@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Card, Checkbox, Col, Empty, Popconfirm, Row, Select, Space, Spin, Tag, Typography, message,
+  Alert, Button, Card, Checkbox, Col, Empty, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Typography, message,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
@@ -184,9 +184,9 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
               size="small"
               style={{ width: "100%", marginTop: 4 }}
               value={map[c.recorded_cam] ?? c.real_cam}
-              options={session.rooms.map((r) => ({ value: r.value, label: r.label }))}
+              options={c.room_options}
               onChange={(v) => pick(c.recorded_cam, v)}
-              disabled={session.rooms.length === 0}
+              disabled={c.room_options.length <= 1}
             />
             <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: c.path }}>
               {c.path.split("/").pop()}
@@ -223,6 +223,12 @@ export default function CamCheck() {
   const dates = data?.dates ?? [];
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
+  // 一次只渲染一段：一天几十段、每段好几个视频，全铺出来会卡
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [date, site, data?.date]);
+  const current = sessions[Math.min(page, sessions.length) - 1];
+  const pageCount = sessions.length;
+
   // ── 整日批量：一天 24 场一条条点太费时间 ──
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchMap, setBatchMap] = useState<Record<number, number>>({});
@@ -239,18 +245,19 @@ export default function CamCheck() {
     [sessions]
   );
 
+  // 每个录制机位能用哪些房间：cam1~3 只配 1~3 号间，cam4~6 只配 4~6 号间
+  const batchRooms = useMemo(() => {
+    const m = new Map<number, { value: number; label: string }[]>();
+    for (const s of sessions)
+      for (const c of s.cams) if (!m.has(c.recorded_cam)) m.set(c.recorded_cam, c.room_options);
+    return m;
+  }, [sessions]);
+
   useEffect(() => {
     const init: Record<number, number> = {};
     for (const c of allRecorded) init[c] = c;
     setBatchMap(init);
   }, [allRecorded]);
-
-  const roomOptions = useMemo(() => {
-    const m = new Map<number, string>();
-    for (const s of sessions)
-      for (const r of s.rooms) if (!m.has(r.value)) m.set(r.value, r.label);
-    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([value, label]) => ({ value, label }));
-  }, [sessions]);
 
   const batchDuplicated = useMemo(() => {
     const v = Object.values(batchMap);
@@ -367,9 +374,9 @@ export default function CamCheck() {
                   size="small"
                   style={{ width: "100%", marginTop: 4 }}
                   value={batchMap[c] ?? c}
-                  options={roomOptions}
+                  options={batchRooms.get(c) ?? []}
                   onChange={(v) => batchPick(c, v)}
-                  disabled={roomOptions.length === 0}
+                  disabled={(batchRooms.get(c) ?? []).length <= 1}
                 />
               </Col>
             ))}
@@ -381,22 +388,35 @@ export default function CamCheck() {
         {sessions.length === 0 && !isLoading ? (
           <Empty description="这一天没有需要核对的场次" />
         ) : (
-          sessions.map((s) => (
-            <SessionCard
-              key={s.session_key}
-              session={s}
-              onChanged={() => refetch()}
-              checked={selected.has(s.session_key)}
-              onCheck={(v) =>
-                setSelected((prev) => {
-                  const next = new Set(prev);
-                  if (v) next.add(s.session_key);
-                  else next.delete(s.session_key);
-                  return next;
-                })
-              }
-            />
-          ))
+          <>
+            {current && (
+              <SessionCard
+                key={current.session_key}
+                session={current}
+                onChanged={() => refetch()}
+                checked={selected.has(current.session_key)}
+                onCheck={(v) =>
+                  setSelected((prev) => {
+                    const next = new Set(prev);
+                    if (v) next.add(current.session_key);
+                    else next.delete(current.session_key);
+                    return next;
+                  })
+                }
+              />
+            )}
+            <Space style={{ width: "100%", justifyContent: "center", marginTop: 8 }}>
+              <Pagination
+                size="small"
+                current={Math.min(page, Math.max(pageCount, 1))}
+                pageSize={1}
+                total={pageCount}
+                showSizeChanger={false}
+                onChange={setPage}
+                showTotal={(t, range) => `第 ${range[0]} / ${t} 段`}
+              />
+            </Space>
+          </>
         )}
       </Spin>
     </div>

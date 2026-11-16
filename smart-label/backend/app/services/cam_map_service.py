@@ -67,6 +67,9 @@ def allowed_real_cams(site: str | None) -> set[int]:
 
 
 def _room_label(site: str | None, cam: int) -> str:
+    allowed = allowed_real_cams(site)
+    if allowed and cam not in allowed:
+        return f"cam{cam}（户外/公共）"
     lay_key = site_layout.SITE_KEYS.get((site or "").lower()) or (site if site in site_layout.LAYOUT else None)
     lay = site_layout.LAYOUT.get(lay_key or "")
     if lay and cam in lay["public_cams"]:
@@ -81,6 +84,29 @@ def _room_label(site: str | None, cam: int) -> str:
 
 def room_options(site: str | None) -> list[dict]:
     return [{"value": c, "label": _room_label(site, c)} for c in sorted(allowed_real_cams(site))]
+
+
+def cam_room_choices(site: str | None, cam: int | None) -> set[int]:
+    """这一路摄像头**可能**拍的是哪一间。
+
+    两台采集机各管三间：1 号机 cam1~3（1~3 号间），2 号机 cam4~6（4~6 号间）。
+    USB 重插只会打乱同一台机器内部的顺序，不可能把 1 号机的画面变成 4 号间，
+    所以只允许在同组三个房间里换。公共区机位（狗场 cam7）固定不动；
+    本地布局里没有的机位（博朗旺户外 cam7~9）也只能保持自己。
+    """
+    allowed = allowed_real_cams(site)
+    if cam is None:
+        return allowed
+    if not allowed:
+        return set()
+    if cam not in allowed:
+        return {cam}
+    if cam <= 6:
+        lo = (cam - 1) // 3 * 3 + 1
+        same = {c for c in allowed if lo <= c <= lo + 2}
+        return same or {cam}
+    pubs = {c for c in allowed if c > 6}
+    return pubs or {cam}
 
 
 def _session_videos(samples: list[Sample], session_key: str) -> dict[int, str]:
@@ -240,11 +266,13 @@ async def _validate_and_apply(
         raise ValueError("机位号必须是整数") from None
     videos = _session_videos(samples, session_key)
     mapping = {recorded: mapping.get(recorded, recorded) for recorded in videos}
-    allowed = allowed_real_cams(site)
-    if allowed:
-        bad = sorted(set(mapping.values()) - allowed)
-        if bad:
-            raise ValueError(f"机位号 {bad} 不属于这个场地（只能是 {sorted(allowed)}）")
+    if allowed_real_cams(site):
+        for recorded, real in mapping.items():
+            choices = cam_room_choices(site, recorded)
+            if real not in choices:
+                raise ValueError(
+                    f"cam{recorded} 只能对应 {'、'.join(str(c) for c in sorted(choices))} 号间"
+                )
     if len(set(mapping.values())) != len(mapping):
         raise ValueError("两路摄像头不能对应同一个房间")
     result = _apply_slots(db, samples, session_key, mapping, mark_corrected=True)
@@ -343,6 +371,11 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
                     "recorded_cam": recorded,
                     "real_cam": mapping.get(recorded, recorded),
                     "path": videos[recorded],
+                    # 下拉只给同组三个房间，避免把 1 号机的画面挂到 4 号间
+                    "room_options": [
+                        {"value": c, "label": _room_label(s_site, c)}
+                        for c in sorted(cam_room_choices(s_site, recorded))
+                    ],
                     "samples": sum(
                         1 for s in samples
                         if any(getattr(s, f"video_{slot}_path") == videos[recorded] for slot in _SLOTS)

@@ -111,8 +111,33 @@ def test_两路摄像头不能对应同一个房间(db, run, setup):
 
 
 def test_不属于这个场地的机位号不接受(db, run, setup):
-    with pytest.raises(ValueError, match="不属于这个场地"):
+    with pytest.raises(ValueError, match="只能对应"):
         run(svc.save_mapping(db, SESSION, {"1": 9, "2": 2, "3": 3}, None))
+
+
+def test_不能跨机器把画面挂到另一台的房间(db, run, setup):
+    _u, *_ = setup
+    _mk(db, _u, 15, 4)  # 2 号机的 4 号间画面，也在本场
+    run(db.commit())
+    # 1 号机只拍 1~3 号间，不可能拍出 4 号间
+    with pytest.raises(ValueError, match="cam1 只能对应 1、2、3"):
+        run(svc.save_mapping(db, SESSION, {"1": 4, "2": 2, "3": 3, "4": 4}, None))
+    # 2 号机也一样
+    with pytest.raises(ValueError, match="cam4 只能对应 4、5、6"):
+        run(svc.save_mapping(db, SESSION, {"1": 1, "2": 2, "3": 3, "4": 1}, None))
+
+
+def test_公共区机位只能保持自己(db, run, setup):
+    _u, a, *_ = setup
+    a.video_cam2_path = f"{DAY}/{SESSION}_cam7_raw.mp4"
+    run(db.commit())
+    with pytest.raises(ValueError, match="cam7 只能对应 7"):
+        run(svc.save_mapping(db, SESSION, {"1": 1, "2": 2, "3": 3, "7": 1}, None))
+    # 每路下拉只给同组的房间
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    cams = {c["recorded_cam"]: c for c in out["sessions"][0]["cams"]}
+    assert {r["value"] for r in cams[1]["room_options"]} == {1, 2, 3}
+    assert {r["value"] for r in cams[7]["room_options"]} == {7}
 
 
 def test_恢复默认后按文件名算回去(db, run, setup):
@@ -187,15 +212,16 @@ def test_批量把一套对照应用到一天多场(db, run, setup):
 
 def test_批量某场校验不过其他场照常改(db, run, setup):
     _u, a, *_ = setup
-    # 博朗旺一场：它没有公共区，mapping 里 cam1→7 对它是非法的；
-    # 狗场那一场 7 = 天花板，合法
-    _mk(db, _u, 9, 1, day=DAY_BLW, session=SESSION_BLW)
+    # 博朗旺这一场有户外 cam7：mapping 里 7→1 对它是非法的；狗场那一场没有 cam7，
+    # 这个键会被丢掉，照常改成
+    b = _mk(db, _u, 9, 4, day=DAY_BLW, session=SESSION_BLW)
+    b.video_cam2_path = f"{DAY_BLW}/{SESSION_BLW}_cam7_raw.mp4"
     run(db.commit())
-    res = run(svc.save_batch(db, "2026-09-20", {"1": 7, "2": 2, "3": 3}, [SESSION, SESSION_BLW], None))
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "3": 3, "7": 1}, [SESSION, SESSION_BLW], None))
     assert [f["session_key"] for f in res["failed"]] == [SESSION_BLW]
     assert [r["session_key"] for r in res["results"]] == [SESSION]
     run(db.refresh(a))
-    assert a.video_cams == {"cam1": 7}
+    assert a.video_cams == {"cam1": 1}
 
 
 def test_批量一个都没选中的场会拒绝(db, run, setup):
