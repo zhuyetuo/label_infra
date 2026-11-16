@@ -18,13 +18,18 @@ from app.services import site_layout
 
 DAY = "data_raw/2026_9_20_gouchang"
 SESSION = "multicam_20260920_000016301"
+# 同一天的另外两场：博朗旺一场、影棚一场
+SESSION_BLW = "multicam_20260920_010016301"
+SESSION_YP = "multicam_20260920_020016301"
+DAY_BLW = "data_raw/2026_9_20_bolangwang"
+DAY_YP = "data_raw/2026_9_20_yingpeng"
 
 
-def _mk(db, u, imu, cam, *, code=None, extra=None):
+def _mk(db, u, imu, cam, *, code=None, extra=None, day=DAY, session=SESSION):
     s = Sample(
-        sample_code=code or f"{SESSION}_imu{imu}",
-        video_cam1_path=f"{DAY}/{SESSION}_cam{cam}_imu{imu}_raw.mp4",
-        imu_csv_path=f"{DAY}/{SESSION}_cam{cam}_imu{imu}_raw.csv",
+        sample_code=code or f"{session}_imu{imu}",
+        video_cam1_path=f"{day}/{session}_cam{cam}_imu{imu}_raw.mp4",
+        imu_csv_path=f"{day}/{session}_cam{cam}_imu{imu}_raw.csv",
         session_date=date(2026, 9, 20),
         created_by=u.id,
     )
@@ -120,3 +125,79 @@ def test_恢复默认后按文件名算回去(db, run, setup):
 
     out = run(svc.list_sessions(db, "2026-09-20"))
     assert not out["sessions"][0]["corrected"]
+
+
+def test_影棚全是公共区不出现(db, run, setup):
+    _u, *_ = setup
+    _mk(db, _u, 1, 1, day=DAY_YP, session=SESSION_YP)
+    run(db.commit())
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    assert out["sessions"], out
+    assert all(s["site"] != "yingpeng" for s in out["sessions"])
+    # 场地下拉里也没有影棚
+    assert {s["key"] for s in out["sites"]} == {"gouchang", "bolangwang"}
+
+
+def test_按场地筛只看选中的场地(db, run, setup):
+    _u, *_ = setup
+    _mk(db, _u, 9, 1, day=DAY_BLW, session=SESSION_BLW)
+    run(db.commit())
+    out = run(svc.list_sessions(db, "2026-09-20", site="bolangwang"))
+    assert out["sessions"] and all(s["site"] == "bolangwang" for s in out["sessions"])
+    # 不筛时两个场地都在
+    out_all = run(svc.list_sessions(db, "2026-09-20"))
+    assert {s["site"] for s in out_all["sessions"]} == {"gouchang", "bolangwang"}
+
+
+def test_只有影棚数据的日期不进日期列表(db, run, setup):
+    _u, *_ = setup
+    s = _mk(db, _u, 1, 1, day="data_raw/2026_9_21_yingpeng", session=SESSION_YP)
+    s.session_date = date(2026, 9, 21)
+    run(db.commit())
+    out = run(svc.list_sessions(db, None))
+    assert out["date"] == "2026-09-20"
+    assert "2026-09-21" not in out["dates"]
+
+
+def test_拿影棚当筛选条件直接拒绝(db, run, setup):
+    with pytest.raises(ValueError, match="公共区"):
+        run(svc.list_sessions(db, "2026-09-20", site="yingpeng"))
+
+
+def test_批量把一套对照应用到一天多场(db, run, setup):
+    _u, a, *_ = setup
+    _mk(db, _u, 9, 1, session=SESSION_BLW)
+    _mk(db, _u, 11, 2, session=SESSION_BLW)
+    run(db.commit())
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "3": 3}, [SESSION, SESSION_BLW], None))
+    assert res["updated"] == 5
+    assert res["failed"] == []
+    assert [r["session_key"] for r in res["results"]] == [SESSION, SESSION_BLW]
+
+    # 第一场照旧按人工结果挂
+    run(db.refresh(a))
+    assert a.video_cam1_path.endswith("_cam2_imu11_raw.mp4")
+    assert a.video_cams == {"cam1": 1}
+    # 第二场也一起改了：imu9 住 1 号间，1 号间的画面在 cam2 文件里
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    assert all(s["corrected"] for s in out["sessions"])
+    sess_b = next(s for s in out["sessions"] if s["session_key"] == SESSION_BLW)
+    assert {c["recorded_cam"]: c["real_cam"] for c in sess_b["cams"]} == {1: 2, 2: 1}
+
+
+def test_批量某场校验不过其他场照常改(db, run, setup):
+    _u, a, *_ = setup
+    # 博朗旺一场：它没有公共区，mapping 里 cam1→7 对它是非法的；
+    # 狗场那一场 7 = 天花板，合法
+    _mk(db, _u, 9, 1, day=DAY_BLW, session=SESSION_BLW)
+    run(db.commit())
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 7, "2": 2, "3": 3}, [SESSION, SESSION_BLW], None))
+    assert [f["session_key"] for f in res["failed"]] == [SESSION_BLW]
+    assert [r["session_key"] for r in res["results"]] == [SESSION]
+    run(db.refresh(a))
+    assert a.video_cams == {"cam1": 7}
+
+
+def test_批量一个都没选中的场会拒绝(db, run, setup):
+    with pytest.raises(ValueError, match="没有可核对"):
+        run(svc.save_batch(db, "2026-09-20", {"1": 2}, ["multicam_20260920_999999999"], None))

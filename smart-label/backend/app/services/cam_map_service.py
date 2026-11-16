@@ -216,8 +216,51 @@ async def _upsert(db: AsyncSession, session_key: str, site: str | None,
     row.updated_by = user_id
 
 
-async def list_sessions(db: AsyncSession, date: str | None = None) -> dict:
-    """一天里每一场录制的机位情况。不给日期就用最近有样本的那一天。"""
+def _site_options() -> list[dict]:
+    """场地下拉：有单间的场地才需要核对。影棚全是公共区，不出现在这里。"""
+    return [
+        {"key": k, "name": v["name"], "active": v["active"]}
+        for k, v in site_layout.SITES.items()
+        if site_layout.has_private_rooms(k)
+    ]
+
+
+async def _validate_and_apply(
+    db: AsyncSession,
+    samples: list[Sample],
+    session_key: str,
+    site: str | None,
+    mapping: dict,
+    user_id: int | None,
+) -> dict:
+    """一场的「校验 + 重挂 + 记下人工结果」。不 commit——批量时几场一起提交。"""
+    try:
+        mapping = {int(k): int(v) for k, v in mapping.items()}
+    except (TypeError, ValueError):
+        raise ValueError("机位号必须是整数") from None
+    videos = _session_videos(samples, session_key)
+    mapping = {recorded: mapping.get(recorded, recorded) for recorded in videos}
+    allowed = allowed_real_cams(site)
+    if allowed:
+        bad = sorted(set(mapping.values()) - allowed)
+        if bad:
+            raise ValueError(f"机位号 {bad} 不属于这个场地（只能是 {sorted(allowed)}）")
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("两路摄像头不能对应同一个房间")
+    result = _apply_slots(db, samples, session_key, mapping, mark_corrected=True)
+    await _upsert(db, session_key, site, mapping, user_id)
+    return {"mapping": {str(k): v for k, v in mapping.items()}, **result}
+
+
+async def list_sessions(db: AsyncSession, date: str | None = None, site: str | None = None) -> dict:
+    """一天里每一场录制的机位情况。不给日期就用最近有可核对样本的那一天。
+
+    site：布局键（bolangwang / gouchang），只看这个场地；不给就全部。
+    影棚全是公共区没有单间，哪一路都不属于哪间，永远不出现在这个页面上。
+    """
+    if site is not None and not site_layout.has_private_rooms(site):
+        raise ValueError(f"{site} 没有单间（全是公共区），不需要机位核对")
+
     dates = (
         await db.execute(
             select(Sample.session_date)
@@ -227,11 +270,29 @@ async def list_sessions(db: AsyncSession, date: str | None = None) -> dict:
             .limit(90)
         )
     ).scalars().all()
+
+    # 每个日期有哪些场地：场地名只写在日期目录（day_dir）里，得看路径才知道。
+    # 取两列全量（一天几百条、90 天万把条），管理页一次请求可以接受
+    date_sites: dict[str, set[str]] = defaultdict(set)
+    if dates:
+        for d, path in (
+            await db.execute(
+                select(Sample.session_date, Sample.video_cam1_path).where(Sample.session_date.in_(dates))
+            )
+        ).all():
+            s = site_layout.site_of(os.path.dirname(path or ""))
+            if site_layout.has_private_rooms(s):
+                date_sites[d.isoformat()].add(s)
+
     date_strs = [d.isoformat() for d in dates]
+    # 只有影棚数据的日期不用出现：点进去也全是空的
+    date_strs = [ds for ds in date_strs if date_sites.get(ds)]
+    if site:
+        date_strs = [ds for ds in date_strs if site in date_sites.get(ds, set())]
     if date is None and date_strs:
         date = date_strs[0]
     if date is None:
-        return {"dates": [], "date": None, "sessions": []}
+        return {"dates": date_strs, "date": None, "sites": _site_options(), "sessions": []}
 
     rows = (
         await db.execute(
@@ -260,19 +321,23 @@ async def list_sessions(db: AsyncSession, date: str | None = None) -> dict:
 
     sessions: list[dict] = []
     for (day_dir, session_key), samples in sorted(groups.items(), key=lambda kv: kv[0][1]):
-        site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+        s_site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+        if not site_layout.has_private_rooms(s_site):
+            continue  # 影棚：全公共区，没有「哪路拍哪间」的问题
+        if site and s_site != site:
+            continue
         videos = _session_videos(samples, session_key)
         mapping = mapping_of(samples, session_key)
         corrected = bool(maps.get(session_key)) or any(s.video_cams for s in samples)
-        site_name = site_layout.SITES.get(site_layout.SITE_KEYS.get(site or "", site or ""), {}).get("name", site or "")
+        site_name = site_layout.SITES.get(s_site, {}).get("name", s_site)
         sessions.append({
             "session_key": session_key,
             "date": date,
             "day_dir": day_dir,
-            "site": site,
+            "site": s_site,
             "site_name": site_name,
             "corrected": corrected,
-            "rooms": room_options(site),
+            "rooms": room_options(s_site),
             "cams": [
                 {
                     "recorded_cam": recorded,
@@ -292,8 +357,7 @@ async def list_sessions(db: AsyncSession, date: str | None = None) -> dict:
                     "imu": site_layout.imu_of(s.sample_code),
                     "dog_name": dog_names.get(s.dog_id or 0),
                     "room": (
-                        (site_layout.LAYOUT.get(
-                            site_layout.SITE_KEYS.get(site or "", site or ""), {}).get("imu", {})
+                        (site_layout.LAYOUT.get(s_site, {}).get("imu", {})
                          .get(site_layout.imu_of(s.sample_code)) or (None, None))[0]
                     ),
                     "slots": [
@@ -323,7 +387,7 @@ async def list_sessions(db: AsyncSession, date: str | None = None) -> dict:
         for c in sess["cams"]:
             c["media_id"] = media_ids.get(c["path"])
 
-    return {"dates": date_strs, "date": date, "sessions": sessions}
+    return {"dates": date_strs, "date": date, "sites": _site_options(), "sessions": sessions}
 
 
 async def save_mapping(db: AsyncSession, session_key: str, mapping: dict[int, int],
@@ -336,20 +400,50 @@ async def save_mapping(db: AsyncSession, session_key: str, mapping: dict[int, in
         raise ValueError("这一场没有样本")
     day_dir = os.path.dirname(samples[0].video_cam1_path or "")
     site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
-    videos = _session_videos(samples, session_key)
-    mapping = {int(k): int(v) for k, v in mapping.items()}
-    mapping = {recorded: mapping.get(recorded, recorded) for recorded in videos}
-    allowed = allowed_real_cams(site)
-    if allowed:
-        bad = sorted(set(mapping.values()) - allowed)
-        if bad:
-            raise ValueError(f"机位号 {bad} 不属于这个场地（只能是 {sorted(allowed)}）")
-    if len(set(mapping.values())) != len(mapping):
-        raise ValueError("两路摄像头不能对应同一个房间")
-    result = _apply_slots(db, samples, session_key, mapping, mark_corrected=True)
-    await _upsert(db, session_key, site, mapping, user_id)
+    result = await _validate_and_apply(db, samples, session_key, site, mapping, user_id)
     await db.commit()
-    return {"session_key": session_key, "mapping": {str(k): v for k, v in mapping.items()}, **result}
+    return {"session_key": session_key, **result}
+
+
+async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: list[str],
+                     user_id: int | None) -> dict:
+    """把同一套「录制机位 → 真实房间」一次应用到一天里选中的多场。
+
+    一天 24 场一条条点太费时间；摄像头上午插错了，勾上午那几场一次改完。
+    每场只取自己有的机位（1 号机 3 路、2 号机 3 路，各取各的）；
+    某一场校验不过（比如机位号不属于这个场地）不影响其他场。
+    """
+    rows = (
+        await db.execute(
+            select(Sample).where(Sample.session_date == date_cls.fromisoformat(date)).order_by(Sample.sample_code)
+        )
+    ).scalars().all()
+    groups: dict[tuple[str, str], list[Sample]] = defaultdict(list)
+    for s in rows:
+        groups[(os.path.dirname(s.video_cam1_path or ""), session_key_of(s.sample_code))].append(s)
+
+    wanted = set(session_keys)
+    results: list[dict] = []
+    failed: list[dict] = []
+    for (day_dir, session_key), samples in sorted(groups.items(), key=lambda kv: kv[0][1]):
+        if session_key not in wanted:
+            continue
+        site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+        if not site_layout.has_private_rooms(site):
+            continue
+        try:
+            r = await _validate_and_apply(db, samples, session_key, site, mapping, user_id)
+            results.append({
+                "session_key": session_key,
+                "updated": r["updated"],
+                "missing_rooms": r["missing_rooms"],
+            })
+        except ValueError as exc:
+            failed.append({"session_key": session_key, "error": str(exc)})
+    if not results and not failed:
+        raise ValueError("选中的场次里没有可核对的样本")
+    await db.commit()
+    return {"updated": sum(r["updated"] for r in results), "results": results, "failed": failed}
 
 
 async def reset_mapping(db: AsyncSession, session_key: str) -> dict:

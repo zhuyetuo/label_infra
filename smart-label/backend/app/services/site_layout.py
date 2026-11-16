@@ -41,6 +41,13 @@ SITE_KEYS = {
 }
 
 
+def has_private_rooms(key: str | None) -> bool:
+    """这个场地有没有「一间一狗」的单间。影棚没有——三路全是公共区，
+    不存在「哪一路拍的是哪间」的问题，机位核对整个跳过它。"""
+    lay = LAYOUT.get(key or "")
+    return bool(lay) and any(r is not None for r, _ in lay["imu"].values())
+
+
 def site_key_of_name(name: str | None) -> str | None:
     """狗档案「场所」那一列（全称 / 老短名 / 别名都认）→ 布局键。认不出 None。"""
     n = (name or "").strip()

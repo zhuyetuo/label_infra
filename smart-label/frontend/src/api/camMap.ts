@@ -40,14 +40,45 @@ export interface CamCheckSession {
   samples: CamCheckSample[];
 }
 
+export interface CamCheckSite {
+  key: string;
+  name: string;
+  active: boolean;
+}
+
 export interface CamCheckOut {
   dates: string[];
   date: string | null;
+  sites: CamCheckSite[];
   sessions: CamCheckSession[];
 }
 
-export const listCamSessions = (date?: string) =>
-  request.get<never, CamCheckOut>("/cam-map/sessions", { params: date ? { date } : undefined });
+export interface CamMapBatchResult {
+  session_key: string;
+  updated: number;
+  missing_rooms: number[];
+}
+
+export interface CamMapBatchOut {
+  updated: number;
+  results: CamMapBatchResult[];
+  failed: { session_key: string; error: string }[];
+}
+
+export const listCamSessions = (date?: string, site?: string) =>
+  request.get<never, CamCheckOut>("/cam-map/sessions", {
+    params: {
+      ...(date ? { date } : {}),
+      ...(site ? { site } : {}),
+    },
+  });
+
+export const saveCamBatch = (date: string, mapping: Record<string, number>, sessionKeys: string[]) =>
+  request.put<never, CamMapBatchOut>("/cam-map/batch", {
+    date,
+    mapping,
+    session_keys: sessionKeys,
+  });
 
 export const saveCamMap = (sessionKey: string, mapping: Record<string, number>) =>
   request.put<never, { updated: number; missing_rooms: number[] }>(
