@@ -330,7 +330,7 @@ async def pick_dog(sample_id: int, body: SampleDogPick, db: AsyncSession = Depen
     label = dog_name_service.dog_label_of(
         sample.sample_code, (dog.name or "").strip() if dog else None,
         await dog_name_service.imu_dog_map(), await dog_name_service.site_imu_dog_map(), sample.video_cam1_path)
-    return ok({"updated": len(ids), "dog_label": label})
+    return ok({"updated": len(ids), "dog_label": label, "dog_id": body.dog_id})
 
 
 @router.post("/batch-delete")

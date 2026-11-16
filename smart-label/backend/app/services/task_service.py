@@ -15,7 +15,15 @@ from app.models.annotation import (
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus, TaskType
-from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map, site_imu_dog_map
+from app.services.dog_name_service import (
+    dog_index,
+    dog_label_of,
+    dog_names_by_id,
+    dog_profiles,
+    imu_dog_map,
+    sample_dog_id,
+    site_imu_dog_map,
+)
 from app.models.user import User, UserRole
 from app.services.task_scope import exclude_sensitive
 from app.schemas.task import LabelItemIn
@@ -55,12 +63,16 @@ async def sample_brief(db: AsyncSession, tasks) -> dict[int, dict]:
     mapping = await imu_dog_map()
     site_map = await site_imu_dog_map()
     names = await dog_names_by_id(db, {r[4] for r in rows if r[4] is not None})
+    # 狗档案 id：工作台标题上挂档案头像，对着画面认狗 / 核对 IMU 是不是挂错了
+    idx = await dog_index(db)
+    profiles = await dog_profiles(db)
     return {
         sid: {
             "sample_code": code,
             "video_duration_sec": dur,
             "imu_row_count": rows_n,
             "dog_label": dog_label_of(code, names.get(dog_id), mapping, site_map, cam1),
+            "dog_id": await sample_dog_id(db, code, dog_id, cam1, idx=idx, profiles=profiles),
         }
         for sid, code, dur, rows_n, dog_id, cam1 in rows
     }

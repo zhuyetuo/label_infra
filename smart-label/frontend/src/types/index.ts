@@ -104,6 +104,8 @@ export interface Task {
   imu_row_count?: number | null;
   /** 这条样本是哪只狗的：「小满（IMU4）」。画面里同时有四只狗，不写清楚没法确认 */
   dog_label?: string | null;
+  /** 对应狗档案的 id：工作台标题挂档案头像，对着画面认狗 / 核对 IMU 有没有挂错 */
+  dog_id?: number | null;
   assigned_to_name?: string | null;
   assigned_to_role?: UserRole | null;
   /** 超时收回前指派给谁、什么时候收回的（重新认领 / 指派后清空） */

@@ -259,4 +259,5 @@ export const getLowlightSeq = (
 
 /** 工作台标题上「换狗」：dog_id 传 null = 不指定（回到按设备号猜）；same_day = 同一天同一个设备号一起改 */
 export const pickSampleDog = (sampleId: number, dogId: number | null, sameDay = true) =>
-  request.patch<never, { updated: number; dog_label: string | null }>(`/samples/${sampleId}/dog-pick`, { dog_id: dogId, same_day: sameDay });
+  request.patch<never, { updated: number; dog_label: string | null; dog_id: number | null }>(
+    `/samples/${sampleId}/dog-pick`, { dog_id: dogId, same_day: sameDay });

@@ -40,7 +40,15 @@ from app.schemas.task import (
 from app.services.ai_prelabel_service import start_project_prelabel
 from app.services.review_service import ReviewConflictError, reopen_task
 from app.services.task_scope import apply_task_scope
-from app.services.dog_name_service import dog_label_of, dog_names_by_id, imu_dog_map, site_imu_dog_map
+from app.services.dog_name_service import (
+    dog_index,
+    dog_label_of,
+    dog_names_by_id,
+    dog_profiles,
+    imu_dog_map,
+    sample_dog_id,
+    site_imu_dog_map,
+)
 from app.services.task_service import (
     TaskConflictError,
     claim_all_in_project,
@@ -559,12 +567,16 @@ async def list_tasks(
     site_map = await site_imu_dog_map()
     _brief_rows = brief_rows.all()
     dog_names = await dog_names_by_id(db, {r[4] for r in _brief_rows if r[4] is not None})
+    # 狗档案 id：工作台标题挂档案头像用（对着画面认狗、核对 IMU 有没有挂错）
+    dog_idx = await dog_index(db)
+    dog_profiles_map = await dog_profiles(db)
     briefs = {
         sid: {
             "sample_code": code,
             "video_duration_sec": dur,
             "imu_row_count": rows_n,
             "dog_label": dog_label_of(code, dog_names.get(dog_id), dog_map, site_map, cam1),
+            "dog_id": await sample_dog_id(db, code, dog_id, cam1, idx=dog_idx, profiles=dog_profiles_map),
         }
         for sid, code, dur, rows_n, dog_id, cam1 in _brief_rows
     }

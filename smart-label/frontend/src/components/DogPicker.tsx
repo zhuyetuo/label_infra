@@ -15,7 +15,7 @@ export default function DogPicker({ sampleId, label, canEdit, onChanged }: {
   sampleId: number;
   label: string | null | undefined;
   canEdit: boolean;
-  onChanged: (label: string | null) => void;
+  onChanged: (label: string | null, dogId: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [sameDay, setSameDay] = useState(true);
@@ -29,7 +29,7 @@ export default function DogPicker({ sampleId, label, canEdit, onChanged }: {
     setSaving(dogId ?? "none");
     try {
       const r = await pickSampleDog(sampleId, dogId, sameDay);
-      onChanged(r.dog_label);
+      onChanged(r.dog_label, r.dog_id);
       // 同一天这个设备号的样本是一起改的：项目页 / 任务页列表里其它几段也要跟着换狗名，
       // 不然只有刚打开的这一段变了、其它段还是旧狗（列表是早先拉的，没人让它重拉）
       for (const key of [["tasks"], ["tasks-lite"], ["samples"], ["skin-tracking"]]) qc.invalidateQueries({ queryKey: key });

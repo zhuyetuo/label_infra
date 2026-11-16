@@ -265,6 +265,32 @@ def dog_label(sample_code: str | None, mapping: dict[str, str],
     return f"{name}（{imu}）" if name else imu
 
 
+async def sample_dog_id(db, sample_code: str | None, dog_id: int | None,
+                        path: str | None = None, *, idx=None, profiles=None) -> int | None:
+    """样本对应哪只狗的档案 id（工作台标题上挂档案头像用）。
+
+    samples.dog_id 优先——人关联过的最准。老样本大多没关联（采集端那时还没往
+    文件名里带狗编号），就按狗档案的设备号登记（场地 + IMU）先猜出名字，再拿
+    (场地, 名字) 查档案反回 id；猜不出名字、或名字只在远端对照表里而本地档案
+    没有这只狗，就没有 id，界面不挂头像而已，不影响别的。
+
+    idx / profiles 可以由调用方一次查好传进来——任务列表一次几百行，不能每行
+    都把 dogs 表查两遍。
+    """
+    if dog_id is not None or not sample_code:
+        return dog_id
+    imu = imu_of(sample_code)
+    if imu is None:
+        return None
+    idx = idx or await dog_index(db)
+    profiles = profiles or await dog_profiles(db)
+    site = site_layout.site_of(sample_code, path)
+    name = idx.name(imu, site)
+    if not name:
+        return None
+    return (profiles.get((site, name)) or profiles.get((None, name)) or {}).get("dog_id")
+
+
 # ── 跟踪表 / 项目联动每行补「场地 · 房间 · 品种」：光一个狗名分不清是哪只 ─────────────
 
 async def dog_profiles(db) -> dict[tuple[str | None, str], dict]:
