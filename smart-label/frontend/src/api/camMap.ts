@@ -47,11 +47,18 @@ export interface CamCheckSite {
   active: boolean;
 }
 
+export interface CamCheckSegment extends CamCheckSession {
+  segment_key: string;
+  /** 这一段包含的 session（两台机器各一个），应用时分别下发 */
+  session_keys: string[];
+}
+
 export interface CamCheckOut {
   dates: string[];
   date: string | null;
   sites: CamCheckSite[];
   sessions: CamCheckSession[];
+  segments: CamCheckSegment[];
 }
 
 export interface CamMapBatchResult {

@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 from collections import defaultdict
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,13 @@ from app.services import site_layout
 
 _IMU_SUFFIX = re.compile(r"_imu\d+$")
 
+_START_RE = re.compile(r"_(\d{8})_(\d{2})(\d{2})(\d{2})(\d{3})")
+
 _SLOTS = ("cam1", "cam2", "cam3")
+
+# 两台采集机是各自整点开录的，开机时刻会差几十毫秒到几秒；
+# 同一时间段的两个 session 按开机时刻配对，超过这个间隔就不算同一段
+_PAIR_WINDOW_SEC = 180
 
 
 def session_key_of(sample_code: str | None) -> str:
@@ -280,6 +286,78 @@ async def _validate_and_apply(
     return {"mapping": {str(k): v for k, v in mapping.items()}, **result}
 
 
+def _session_start(key: str) -> datetime | None:
+    m = _START_RE.search(key)
+    if not m:
+        return None
+    d, hh, mm, ss, ms = m.groups()
+    return datetime.strptime(f"{d}{hh}{mm}{ss}", "%Y%m%d%H%M%S").replace(microsecond=int(ms) * 1000)
+
+
+def _machine_of(cams: list[int]) -> int:
+    """1 = 1 号机（cam1~3，管 1~3 号间），2 = 2 号机（cam4~6，管 4~6 号间）。"""
+    groups = {1 if c <= 3 else 2 for c in cams if 1 <= c <= 6}
+    return groups.pop() if len(groups) == 1 else 0
+
+
+def _pair_segments(sessions: list[dict]) -> list[dict]:
+    """把同一天同一场地、开机时刻挨着的两个 session 合成一段。
+
+    看画面核对时必须两台机器的 6 路一起看——只给 3 路看不出「另一台错位了」。
+    但两个 session 的机位对照是各自存的，所以段里带上 session_keys，
+    应用时按各自机位分别下发。
+    """
+    out: list[dict] = []
+    by_site: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for s in sessions:
+        by_site[(s["date"], s["site"])].append(s)
+
+    for (date, site), group in by_site.items():
+        ordered = sorted(group, key=lambda x: (_session_start(x["session_key"]) or datetime.min, x["session_key"]))
+        buckets: list[dict] = []
+        for s in ordered:
+            st = _session_start(s["session_key"])
+            machine = _machine_of([c["recorded_cam"] for c in s["cams"]])
+            target = None
+            for b in buckets:
+                if len(b["sessions"]) >= 2:
+                    continue
+                if machine and machine in b["machines"]:
+                    continue
+                if st and b["start"] and abs((st - b["start"]).total_seconds()) > _PAIR_WINDOW_SEC:
+                    continue
+                target = b
+                break
+            if target is None:
+                target = {"sessions": [], "machines": set(), "start": st}
+                buckets.append(target)
+            target["sessions"].append(s)
+            target["machines"].add(machine)
+
+        for b in buckets:
+            members = b["sessions"]
+            cams: dict[int, dict] = {}
+            for s in members:
+                for c in s["cams"]:
+                    cams.setdefault(c["recorded_cam"], c)
+            first = members[0]
+            out.append({
+                "segment_key": first["session_key"],
+                "session_key": first["session_key"],
+                "session_keys": [s["session_key"] for s in members],
+                "date": date,
+                "site": site,
+                "site_name": first["site_name"],
+                "corrected": all(s["corrected"] for s in members),
+                "rooms": first["rooms"],
+                "cams": [cams[k] for k in sorted(cams)],
+                "samples": [x for s in members for x in s["samples"]],
+            })
+
+    out.sort(key=lambda x: (_session_start(x["segment_key"]) or datetime.min, x["segment_key"]))
+    return out
+
+
 async def list_sessions(db: AsyncSession, date: str | None = None, site: str | None = None) -> dict:
     """一天里每一场录制的机位情况。不给日期就用最近有可核对样本的那一天。
 
@@ -320,7 +398,7 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
     if date is None and date_strs:
         date = date_strs[0]
     if date is None:
-        return {"dates": date_strs, "date": None, "sites": _site_options(), "sessions": []}
+        return {"dates": date_strs, "date": None, "sites": _site_options(), "sessions": [], "segments": []}
 
     rows = (
         await db.execute(
@@ -420,7 +498,14 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
         for c in sess["cams"]:
             c["media_id"] = media_ids.get(c["path"])
 
-    return {"dates": date_strs, "date": date, "sites": _site_options(), "sessions": sessions}
+    return {
+        "dates": date_strs,
+        "date": date,
+        "sites": _site_options(),
+        "sessions": sessions,
+        # 两台机器的同时间段合成一段，一次看 6 路画面
+        "segments": _pair_segments(sessions),
+    }
 
 
 async def save_mapping(db: AsyncSession, session_key: str, mapping: dict[int, int],

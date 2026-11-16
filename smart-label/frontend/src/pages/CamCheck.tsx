@@ -5,7 +5,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import {
-  listCamSessions, resetCamMap, saveCamBatch, saveCamMap, type CamCheckSession,
+  listCamSessions, resetCamMap, saveCamBatch, type CamCheckSegment,
 } from "@/api/camMap";
 
 /** 文件名里那串开机时刻 → 给人看的时间 */
@@ -55,8 +55,8 @@ function CamThumb({ mediaId }: { mediaId: number | null }) {
   );
 }
 
-function SessionCard({ session, onChanged, checked, onCheck }: {
-  session: CamCheckSession;
+function SegmentCard({ segment, onChanged, checked, onCheck }: {
+  segment: CamCheckSegment;
   onChanged: () => void;
   checked: boolean;
   onCheck: (v: boolean) => void;
@@ -66,13 +66,13 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
 
   useEffect(() => {
     const init: Record<number, number> = {};
-    for (const c of session.cams) init[c.recorded_cam] = c.real_cam;
+    for (const c of segment.cams) init[c.recorded_cam] = c.real_cam;
     setMap(init);
-  }, [session]);
+  }, [segment]);
 
   const changed = useMemo(
-    () => session.cams.some((c) => map[c.recorded_cam] !== c.real_cam),
-    [session, map]
+    () => segment.cams.some((c) => map[c.recorded_cam] !== c.real_cam),
+    [segment, map]
   );
   const duplicated = useMemo(() => {
     const v = Object.values(map);
@@ -93,9 +93,10 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
   const apply = async () => {
     setSaving(true);
     try {
-      const res = await saveCamMap(session.session_key, Object.fromEntries(Object.entries(map)));
-      if (res.missing_rooms?.length) {
-        message.warning(`已保存，但这几个房间没找到对应画面：${res.missing_rooms.join("、")}`);
+      const res = await saveCamBatch(segment.date, Object.fromEntries(Object.entries(map)), segment.session_keys);
+      const missing = res.results.flatMap((r) => r.missing_rooms);
+      if (missing.length) {
+        message.warning(`已保存，但这几个房间没找到对应画面：${missing.join("、")}`);
       } else {
         message.success(`已纠正 ${res.updated} 份样本的画面`);
       }
@@ -110,7 +111,7 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
   const reset = async () => {
     setSaving(true);
     try {
-      await resetCamMap(session.session_key);
+      await Promise.all(segment.session_keys.map((k) => resetCamMap(k)));
       message.success("已恢复按采集端文件名算");
       onChanged();
     } catch (e) {
@@ -121,7 +122,7 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
   };
 
   const roomLabel = (v: number | null) =>
-    session.rooms.find((r) => r.value === v)?.label ?? (v == null ? "未知" : `cam${v}`);
+    segment.rooms.find((r) => r.value === v)?.label ?? (v == null ? "未知" : `cam${v}`);
 
   return (
     <Card
@@ -130,23 +131,23 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
       title={
         <Space wrap>
           <Checkbox checked={checked} onChange={(e) => onCheck(e.target.checked)} />
-          <Typography.Text strong>{sessionTime(session.session_key)}</Typography.Text>
-          <Tag>{session.site_name || session.site || "未知场地"}</Tag>
+          <Typography.Text strong>{sessionTime(segment.segment_key)}</Typography.Text>
+          <Tag>{segment.site_name || segment.site || "未知场地"}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {session.cams.length} 路画面 · {session.samples.length} 份样本
+            {segment.cams.length} 路画面 · {segment.samples.length} 份样本
           </Typography.Text>
-          {session.corrected && <Tag color="green">已人工纠正</Tag>}
+          {segment.corrected && <Tag color="green">已人工纠正</Tag>}
         </Space>
       }
       extra={
         <Space>
           <Popconfirm
             title="恢复成按采集端文件名算？"
-            description="这一场的人工纠正会清掉，样本画面按文件名里的 camN 重挂"
+            description="这一段的人工纠正会清掉，样本画面按文件名里的 camN 重挂"
             onConfirm={reset}
             disabled={saving}
           >
-            <Button size="small" disabled={saving || !session.corrected}>恢复默认</Button>
+            <Button size="small" disabled={saving || !segment.corrected}>恢复默认</Button>
           </Popconfirm>
           <Button
             size="small"
@@ -164,15 +165,15 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="看画面里是哪一间，再把「实际房间」选对。两台采集机的场次是分开的，各改各的"
+        message="两台采集机各 3 路，同屏对比看哪台错位了。只会在同一台机器的 3 路之间调整（cam1~3 对 1~3 号间，cam4~6 对 4~6 号间）"
       />
       {duplicated && (
         <Alert type="error" showIcon style={{ marginBottom: 12 }}
                message="两路画面选了同一个房间，先改开再保存" />
       )}
       <Row gutter={[12, 12]}>
-        {session.cams.map((c) => (
-          <Col key={c.recorded_cam} xs={24} sm={12} md={8} lg={6}>
+        {segment.cams.map((c) => (
+          <Col key={c.recorded_cam} xs={24} sm={12} md={8}>
             <CamThumb mediaId={c.media_id} />
             <Space style={{ marginTop: 6, width: "100%", justifyContent: "space-between" }}>
               <Typography.Text strong>录制 cam{c.recorded_cam}</Typography.Text>
@@ -194,9 +195,9 @@ function SessionCard({ session, onChanged, checked, onCheck }: {
           </Col>
         ))}
       </Row>
-      {session.samples.length > 0 && (
+      {segment.samples.length > 0 && (
         <Space wrap style={{ marginTop: 12 }}>
-          {session.samples.map((s) => (
+          {segment.samples.map((s) => (
             <Tag key={s.id}>
               {s.imu != null ? `IMU${s.imu}` : s.sample_code}
               {s.dog_name ? ` ${s.dog_name}` : ""} → {roomLabel(s.room)}
@@ -221,37 +222,38 @@ export default function CamCheck() {
   }, [date, data?.date]);
 
   const dates = data?.dates ?? [];
-  const sessions = useMemo(() => data?.sessions ?? [], [data]);
+  // 一段 = 两台机器同一时间段的两个 session 合起来，一次看 6 路
+  const segments = useMemo(() => data?.segments ?? [], [data]);
 
-  // 一次只渲染一段：一天几十段、每段好几个视频，全铺出来会卡
+  // 一次只渲染一段：一天几十段、每段 6 个视频，全铺出来会卡
   const [page, setPage] = useState(1);
   useEffect(() => setPage(1), [date, site, data?.date]);
-  const current = sessions[Math.min(page, sessions.length) - 1];
-  const pageCount = sessions.length;
+  const current = segments[Math.min(page, segments.length) - 1];
+  const pageCount = segments.length;
 
-  // ── 整日批量：一天 24 场一条条点太费时间 ──
+  // ── 整日批量：一天 24 段一条条点太费时间 ──
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchMap, setBatchMap] = useState<Record<number, number>>({});
   const [batchSaving, setBatchSaving] = useState(false);
 
   useEffect(() => {
-    // 默认勾上还没人工纠正的场：已纠正的多半是对的，批量时别顺手盖掉
-    setSelected(new Set(sessions.filter((s) => !s.corrected).map((s) => s.session_key)));
-  }, [sessions]);
+    // 默认勾上还没人工纠正的段：已纠正的多半是对的，批量时别顺手盖掉
+    setSelected(new Set(segments.filter((s) => !s.corrected).map((s) => s.segment_key)));
+  }, [segments]);
 
-  // 当天所有场次出现过的录制机位并集，批量对照按它编辑
+  // 当天所有段出现过的录制机位并集，批量对照按它编辑
   const allRecorded = useMemo(
-    () => [...new Set(sessions.flatMap((s) => s.cams.map((c) => c.recorded_cam)))].sort((a, b) => a - b),
-    [sessions]
+    () => [...new Set(segments.flatMap((s) => s.cams.map((c) => c.recorded_cam)))].sort((a, b) => a - b),
+    [segments]
   );
 
   // 每个录制机位能用哪些房间：cam1~3 只配 1~3 号间，cam4~6 只配 4~6 号间
   const batchRooms = useMemo(() => {
     const m = new Map<number, { value: number; label: string }[]>();
-    for (const s of sessions)
+    for (const s of segments)
       for (const c of s.cams) if (!m.has(c.recorded_cam)) m.set(c.recorded_cam, c.room_options);
     return m;
-  }, [sessions]);
+  }, [segments]);
 
   useEffect(() => {
     const init: Record<number, number> = {};
@@ -277,19 +279,20 @@ export default function CamCheck() {
 
   const applyBatch = async () => {
     if (!data?.date) return;
+    const keys = segments.filter((s) => selected.has(s.segment_key)).flatMap((s) => s.session_keys);
     setBatchSaving(true);
     try {
       const res = await saveCamBatch(
         data.date,
         Object.fromEntries(Object.entries(batchMap)),
-        [...selected]
+        keys
       );
       if (res.failed.length) {
         message.warning(
           `成了 ${res.results.length} 场；${res.failed.length} 场没改成：${res.failed.map((f) => f.error).join("；")}`
         );
       } else {
-        message.success(`已把 ${res.results.length} 场一起纠正，共 ${res.updated} 份样本`);
+        message.success(`已把 ${selected.size} 段一起纠正，共 ${res.updated} 份样本`);
       }
       refetch();
     } catch (e) {
@@ -331,7 +334,7 @@ export default function CamCheck() {
         </Space>
       </Card>
 
-      {sessions.length > 0 && (
+      {segments.length > 0 && (
         <Card
           size="small"
           style={{ marginBottom: 16 }}
@@ -339,14 +342,14 @@ export default function CamCheck() {
             <Space wrap>
               <Typography.Text strong>整日批量</Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                改一套对照，勾选下面要应用的场次一次改完。默认勾上还没纠正的；
-                上午插错就只勾上午的场，下午对的别勾
+                改一套对照，勾选下面要应用的段一次改完。默认勾上还没纠正的；
+                上午插错就只勾上午的段，下午对的别勾
               </Typography.Text>
             </Space>
           }
           extra={
             <Space>
-              <Button size="small" onClick={() => setSelected(new Set(sessions.map((s) => s.session_key)))}>
+              <Button size="small" onClick={() => setSelected(new Set(segments.map((s) => s.segment_key)))}>
                 全选
               </Button>
               <Button size="small" onClick={() => setSelected(new Set())}>清空</Button>
@@ -357,7 +360,7 @@ export default function CamCheck() {
                 disabled={selected.size === 0 || batchDuplicated}
                 onClick={applyBatch}
               >
-                应用到选中场次（{selected.size}）
+                应用到选中段（{selected.size}）
               </Button>
             </Space>
           }
@@ -385,21 +388,21 @@ export default function CamCheck() {
       )}
 
       <Spin spinning={isLoading}>
-        {sessions.length === 0 && !isLoading ? (
+        {segments.length === 0 && !isLoading ? (
           <Empty description="这一天没有需要核对的场次" />
         ) : (
           <>
             {current && (
-              <SessionCard
-                key={current.session_key}
-                session={current}
+              <SegmentCard
+                key={current.segment_key}
+                segment={current}
                 onChanged={() => refetch()}
-                checked={selected.has(current.session_key)}
+                checked={selected.has(current.segment_key)}
                 onCheck={(v) =>
                   setSelected((prev) => {
                     const next = new Set(prev);
-                    if (v) next.add(current.session_key);
-                    else next.delete(current.session_key);
+                    if (v) next.add(current.segment_key);
+                    else next.delete(current.segment_key);
                     return next;
                   })
                 }

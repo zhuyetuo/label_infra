@@ -189,6 +189,56 @@ def test_拿影棚当筛选条件直接拒绝(db, run, setup):
         run(svc.list_sessions(db, "2026-09-20", site="yingpeng"))
 
 
+def test_两台机器同一时间段合成一段看6路(db, run, setup):
+    _u, *_ = setup
+    peer = "multicam_20260920_000016350"
+    _mk(db, _u, 15, 4, session=peer)
+    _mk(db, _u, 17, 5, session=peer)
+    _mk(db, _u, 19, 6, session=peer)
+    run(db.commit())
+
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    assert len(out["segments"]) == 1
+    seg = out["segments"][0]
+    assert seg["session_keys"] == [SESSION, peer]
+    assert [c["recorded_cam"] for c in seg["cams"]] == [1, 2, 3, 4, 5, 6]
+    assert len(seg["samples"]) == 6
+    assert not seg["corrected"]
+
+
+def test_开机时刻差太远不硬凑成一段(db, run, setup):
+    _u, *_ = setup
+    later = "multicam_20260920_001000000"  # 00:10:00，离 00:00:16 差了近 10 分钟
+    _mk(db, _u, 15, 4, session=later)
+    run(db.commit())
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    assert len(out["segments"]) == 2
+    assert [len(s["cams"]) for s in out["segments"]] == [3, 1]
+
+
+def test_一段里两台机器分别按自己的机位应用(db, run, setup):
+    _u, a, *_ = setup
+    peer = "multicam_20260920_000016350"
+    b = _mk(db, _u, 15, 4, session=peer)
+    _mk(db, _u, 17, 5, session=peer)
+    _mk(db, _u, 19, 6, session=peer)
+    run(db.commit())
+
+    # 1 号机 1/2 间对调，2 号机 4/5 间对调
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "4": 5, "5": 4}, [SESSION, peer], None))
+    assert res["failed"] == []
+    assert res["updated"] == 6
+    run(db.refresh(a))
+    run(db.refresh(b))
+    assert a.video_cam1_path.endswith("_cam2_imu11_raw.mp4")   # imu9 住 1 号间
+    assert b.video_cam1_path.endswith("_cam5_imu17_raw.mp4")   # imu15 住 4 号间
+
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    seg = out["segments"][0]
+    assert seg["corrected"]
+    assert {c["recorded_cam"]: c["real_cam"] for c in seg["cams"]} == {1: 2, 2: 1, 3: 3, 4: 5, 5: 4, 6: 6}
+
+
 def test_批量把一套对照应用到一天多场(db, run, setup):
     _u, a, *_ = setup
     _mk(db, _u, 9, 1, session=SESSION_BLW)
