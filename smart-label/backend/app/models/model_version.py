@@ -35,11 +35,12 @@ class ModelVersion(Base):
     status: Mapped[ModelTrainStatus] = mapped_column(Enum(ModelTrainStatus), nullable=False, default=ModelTrainStatus.queued)
 
     model_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    dataset_spec: Mapped[str] = mapped_column(Text, nullable=False, comment="JSON字符串，提交训练时的date/extra_date等参数")
+    dataset_spec: Mapped[str] = mapped_column(Text(length=16777215), nullable=False, comment="JSON字符串，提交训练时的date/extra_date等参数")
 
     model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    metrics: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON字符串，训练脚本产出的指标")
+    # MEDIUMTEXT：数据池全部训一次，指标 + 训练集统计 + 待复核片段就 100KB 出头，超过 TEXT 的 64KB
+    metrics: Mapped[str | None] = mapped_column(Text(length=16777215), nullable=True, comment="JSON字符串，训练脚本产出的指标")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 启用了才出现在项目的「版本」下拉里。训练一次多一版，全自动上架的话
     # 训个几十版下拉就没法用了——效果好的才手动启用
