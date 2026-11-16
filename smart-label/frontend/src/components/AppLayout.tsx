@@ -21,9 +21,15 @@ const ALL_ITEMS = [
   { key: "/reviews", label: "审核", roles: ["super_admin", "admin", "reviewer"] },
   // 片段审核在「审核」页里（第二个标签页）；标注员进不了审核页，单独给一个入口看退回给自己的片段
   { key: "/segment-review", label: "退回的片段", roles: ["annotator"] },
-  { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
-  // 摄像头重插后文件名里的机位号可能对不上房间；看画面人工纠正这一场的对照
-  { key: "/cam-check", label: "机位核对", roles: ["super_admin", "admin"] },
+  // 样本和机位核对都是「这批数据长什么样」的管理操作，收在一个菜单下
+  {
+    key: "samples", label: "样本", roles: ["super_admin", "admin"],
+    children: [
+      { key: "/samples", label: "样本列表" },
+      // 摄像头重插后文件名里的机位号可能对不上房间；看画面人工纠正这一场的对照
+      { key: "/cam-check", label: "机位核对" },
+    ],
+  },
   // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
   // 两个标签页：牙齿检测（要「牙齿识别」权限）+ 口腔实例分割（原「视觉标注」，标注员 / 审核员也能进）
@@ -40,7 +46,13 @@ const ALL_ITEMS = [
   // 用这台电脑的蓝牙直接连 IMU（自制项圈 / WitMotion）看波形、采样率、行为
   { key: "/device-debug", label: "设备调试", roles: ["super_admin", "admin"] },
   { key: "/system", label: "系统监控", roles: ["super_admin", "admin"] },
-] as { key: string; label: string; roles: string[]; feature?: string }[];
+] as {
+  key: string;
+  label: string;
+  roles: string[];
+  feature?: string;
+  children?: { key: string; label: string }[];
+}[];
 
 /** 右上角：明亮 / 暗黑 切换，记在本机 */
 function ThemeSwitch() {
@@ -116,9 +128,11 @@ export default function AppLayout() {
             mode="inline"
             style={{ height: "100%" }}
             selectedKeys={[location.pathname]}
+            defaultOpenKeys={["samples"]}
             onClick={(e) => navigate(e.key)}
             items={items.map((i) => ({
               key: i.key,
+              ...(i.children ? { children: i.children } : {}),
               // 退回给我的片段：红色数字，有多少条没改好
               label:
                 i.key === "/projects" && scratch && scratchNotPassed > 0 ? (
