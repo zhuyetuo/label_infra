@@ -24,7 +24,7 @@ from app.models.dog import Dog
 from app.models.media_file import MediaFile
 from app.models.sample import Sample
 from app.models.session_cam_map import SessionCamMap
-from app.services import site_layout
+from app.services import dog_name_service, site_layout
 
 _IMU_SUFFIX = re.compile(r"_imu\d+$")
 
@@ -60,6 +60,23 @@ def _real_cam(sample: Sample, slot: str, path: str | None) -> int | None:
         except (TypeError, ValueError):
             pass
     return site_layout.parse_cam_imu(path)[0]
+
+
+def _room_and_cam(sample: Sample, site: str | None) -> tuple[int | None, int | None]:
+    """这只狗的样本：(自己那间是几号间, 那间画面录在哪个录制机位)。
+
+    界面上要让人一眼看出「IMU11 这只狗对应哪一路画面」，只看房间号不够——
+    画面列是按录制机位排的，所以还得给出它实际挂在哪个 camN 上。
+    """
+    imu = site_layout.imu_of(sample.sample_code)
+    room = (site_layout.LAYOUT.get(site or "", {}).get("imu", {}).get(imu) or (None, None))[0]
+    if room is None:
+        return None, None
+    for slot in _SLOTS:
+        path = getattr(sample, f"video_{slot}_path")
+        if path and _real_cam(sample, slot, path) == room:
+            return room, site_layout.parse_cam_imu(path)[0]
+    return room, None
 
 
 def allowed_real_cams(site: str | None) -> set[int]:
@@ -440,6 +457,10 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
     if dog_ids:
         got = (await db.execute(select(Dog.id, Dog.name).where(Dog.id.in_(dog_ids)))).all()
         dog_names = {did: name for did, name in got if name}
+    # 老样本大多没关联 dog_id（那时候采集端文件名里还没带狗编号），
+    # 按「场地 + IMU」查狗档案补上名字和 dog_id，界面上才能显示照片让人认狗
+    dog_idx = await dog_name_service.dog_index(db)
+    profiles = await dog_name_service.dog_profiles(db)
 
     maps = {
         m.session_key: m
@@ -461,6 +482,34 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
         mapping = mapping_of(samples, session_key)
         corrected = bool(maps.get(session_key)) or any(s.video_cams for s in samples)
         site_name = site_layout.SITES.get(s_site, {}).get("name", s_site)
+        sample_items = []
+        for s in samples:
+            room, cam = _room_and_cam(s, s_site)
+            imu = site_layout.imu_of(s.sample_code)
+            dog_id = s.dog_id
+            dog_name = dog_names.get(dog_id or 0)
+            if dog_name is None and imu is not None:
+                dog_name = dog_idx.name(f"IMU{imu}", s_site)
+                dog_id = dog_id or (profiles.get((s_site, dog_name or "")) or {}).get("dog_id")
+            sample_items.append({
+                "id": s.id,
+                "sample_code": s.sample_code,
+                "imu": imu,
+                "dog_id": dog_id,
+                "dog_name": dog_name,
+                "room": room,
+                # 这只狗自己的画面录在哪个录制机位（界面上跟「录制 camN」列对上）
+                "cam": cam,
+                "slots": [
+                    {
+                        "slot": slot,
+                        "path": getattr(s, f"video_{slot}_path"),
+                        "real_cam": _real_cam(s, slot, getattr(s, f"video_{slot}_path")),
+                    }
+                    for slot in _SLOTS
+                    if getattr(s, f"video_{slot}_path")
+                ],
+            })
         sessions.append({
             "session_key": session_key,
             "date": date,
@@ -486,28 +535,7 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
                 }
                 for recorded in sorted(mapping)
             ],
-            "samples": [
-                {
-                    "id": s.id,
-                    "sample_code": s.sample_code,
-                    "imu": site_layout.imu_of(s.sample_code),
-                    "dog_name": dog_names.get(s.dog_id or 0),
-                    "room": (
-                        (site_layout.LAYOUT.get(s_site, {}).get("imu", {})
-                         .get(site_layout.imu_of(s.sample_code)) or (None, None))[0]
-                    ),
-                    "slots": [
-                        {
-                            "slot": slot,
-                            "path": getattr(s, f"video_{slot}_path"),
-                            "real_cam": _real_cam(s, slot, getattr(s, f"video_{slot}_path")),
-                        }
-                        for slot in _SLOTS
-                        if getattr(s, f"video_{slot}_path")
-                    ],
-                }
-                for s in samples
-            ],
+            "samples": sample_items,
         })
 
     all_paths = [c["path"] for sess in sessions for c in sess["cams"]]

@@ -274,6 +274,30 @@ def test_批量某场校验不过其他场照常改(db, run, setup):
     assert a.video_cams == {"cam1": 1}
 
 
+def test_样本带出自己那路的录制机位(db, run, setup):
+    _u, *_ = setup
+    run(svc.save_mapping(db, SESSION, {"1": 2, "2": 1, "3": 3}, None))
+
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    got = {s["imu"]: s["cam"] for s in out["sessions"][0]["samples"]}
+    # 界面要给「IMU11 → 录制 camN」，跟上面并排的画面列对上
+    assert got == {9: 2, 11: 1, 13: 3}
+
+
+def test_老样本没关联狗编号也按场地和imu对上狗档案(db, run, setup):
+    _u, *_ = setup
+    from app.models.dog import Dog
+
+    db.add(Dog(dog_code="12", name="小七", imu="IMU11,IMU12", site="深圳雷诺狗场"))
+    run(db.commit())
+
+    out = run(svc.list_sessions(db, "2026-09-20"))
+    got = {s["imu"]: (s["dog_name"], s["dog_id"]) for s in out["sessions"][0]["samples"]}
+    assert got[11][0] == "小七"
+    assert got[11][1] is not None  # 有 dog_id 前端才能取照片
+    assert got[9][0] is None
+
+
 def test_批量一个都没选中的场会拒绝(db, run, setup):
     with pytest.raises(ValueError, match="没有可核对"):
         run(svc.save_batch(db, "2026-09-20", {"1": 2}, ["multicam_20260920_999999999"], None))

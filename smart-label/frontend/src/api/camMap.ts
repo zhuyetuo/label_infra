@@ -24,8 +24,11 @@ export interface CamCheckSample {
   id: number;
   sample_code: string;
   imu: number | null;
+  dog_id: number | null;
   dog_name: string | null;
   room: number | null;
+  /** 自己那间的画面录在哪个录制机位（对应界面上的「录制 camN」列） */
+  cam: number | null;
   slots: CamCheckSlot[];
 }
 

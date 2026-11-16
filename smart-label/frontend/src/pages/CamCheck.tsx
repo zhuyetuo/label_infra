@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Button, Card, Checkbox, Col, Empty, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Typography, message,
+  Alert, Button, Card, Checkbox, Col, Empty, Modal, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip,
+  Typography, message,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
+import { dogPhotoUrl, listDogPhotos } from "@/api/dogs";
+import DogPhotos from "@/components/DogPhotos";
 import {
   listCamSessions, resetCamMap, saveCamBatch, type CamCheckSegment,
 } from "@/api/camMap";
@@ -52,6 +55,56 @@ function CamThumb({ mediaId }: { mediaId: number | null }) {
       }}
       style={{ width: "100%", aspectRatio: "16 / 9", objectFit: "cover", background: "#111", borderRadius: 4 }}
     />
+  );
+}
+
+/** 狗档案里的照片缩略图：点开能看这只狗的全部照片/视频，方便对着笼子里的画面认狗 */
+function DogThumb({ dogId, name }: { dogId: number | null; name: string | null }) {
+  const [open, setOpen] = useState(false);
+  const { data } = useQuery({
+    queryKey: ["dog-photos", dogId],
+    queryFn: () => listDogPhotos(dogId!),
+    enabled: dogId != null,
+    // 认狗用的图不会变，切段时别反复去 NAS 列目录
+    staleTime: 5 * 60_000,
+  });
+  const photo = (data ?? []).find((p) => p.kind === "image");
+
+  if (dogId == null) return null;
+  return (
+    <>
+      <Tooltip title={photo ? `${name ?? "这只狗"}的照片，点开看` : "狗档案里还没有照片"}>
+        <div
+          onClick={() => setOpen(true)}
+          style={{
+            width: 40, height: 40, flex: "0 0 40px", borderRadius: 4, overflow: "hidden",
+            background: "var(--sl-fill2, #f5f5f5)", cursor: "pointer",
+            display: "grid", placeItems: "center",
+          }}
+        >
+          {photo ? (
+            <img
+              src={dogPhotoUrl(dogId, photo.filename, photo.token)}
+              alt={name ?? ""}
+              loading="lazy"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          ) : (
+            <span style={{ fontSize: 10, color: "#999" }}>无图</span>
+          )}
+        </div>
+      </Tooltip>
+      <Modal
+        open={open}
+        title={name ? `${name} 的照片` : "狗档案照片"}
+        footer={null}
+        width={880}
+        destroyOnClose
+        onCancel={() => setOpen(false)}
+      >
+        {open && <DogPhotos dogId={dogId} readOnly />}
+      </Modal>
+    </>
   );
 }
 
@@ -197,14 +250,31 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
         ))}
       </Row>
       {segment.samples.length > 0 && (
-        <Space wrap style={{ marginTop: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
           {segment.samples.map((s) => (
-            <Tag key={s.id}>
-              {s.imu != null ? `IMU${s.imu}` : s.sample_code}
-              {s.dog_name ? ` ${s.dog_name}` : ""} → {roomLabel(s.room)}
-            </Tag>
+            <div
+              key={s.id}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "4px 10px 4px 4px", border: "1px solid #f0f0f0", borderRadius: 6,
+              }}
+            >
+              <DogThumb dogId={s.dog_id} name={s.dog_name} />
+              <div style={{ lineHeight: 1.35 }}>
+                <Typography.Text strong style={{ fontSize: 12 }}>
+                  {s.imu != null ? `IMU${s.imu}` : s.sample_code}
+                  {s.dog_name ? ` ${s.dog_name}` : ""}
+                </Typography.Text>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {/* 画面列按「录制 camN」排，这里直接写出它对应哪一路，跟上面并排看 */}
+                    {s.cam != null ? `→ 录制 cam${s.cam} · ` : ""}{roomLabel(s.room)}
+                  </Typography.Text>
+                </div>
+              </div>
+            </div>
           ))}
-        </Space>
+        </div>
       )}
     </Card>
   );
