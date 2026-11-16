@@ -277,3 +277,50 @@ def test_批量某场校验不过其他场照常改(db, run, setup):
 def test_批量一个都没选中的场会拒绝(db, run, setup):
     with pytest.raises(ValueError, match="没有可核对"):
         run(svc.save_batch(db, "2026-09-20", {"1": 2}, ["multicam_20260920_999999999"], None))
+
+
+# 11 号间那两只 IMU（11/12）没录在同一场：imu11 在 00:00 那场，imu12 单独在 00:30 那场
+SESSION_SPLIT = "multicam_20260920_003016301"
+
+
+def test_配对imu单独出现的未纠正场次跟着一起改(db, run, setup):
+    _u, *_ = setup
+    split = _mk(db, _u, 12, 1, session=SESSION_SPLIT)
+    run(db.commit())
+
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "3": 3}, [SESSION], None))
+    assert [r["session_key"] for r in res["results"]] == [SESSION]
+    assert [r["session_key"] for r in res["extra"]] == [SESSION_SPLIT]
+    assert res["extra"][0]["imus"] == [12]
+    assert res["updated"] == 4
+
+    run(db.refresh(split))
+    # imu12 住 2 号间，2 号间的画面录在 cam1 那个文件里
+    assert split.video_cams == {"cam1": 2}
+    assert split.video_cam1_path.endswith("_cam1_imu12_raw.mp4")
+
+
+def test_已人工纠正的配对分离场次不被连带覆盖(db, run, setup):
+    _u, *_ = setup
+    split = _mk(db, _u, 12, 1, session=SESSION_SPLIT)
+    run(db.commit())
+    # 这一场人已经看过画面确认过了（录的就是 2 号间）
+    run(svc.save_mapping(db, SESSION_SPLIT, {"1": 2}, None))
+
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "3": 3}, [SESSION], None))
+    assert res["extra"] == []
+    run(db.refresh(split))
+    assert split.video_cams == {"cam1": 2}
+
+
+def test_配对imu在同一场的段不被连带改(db, run, setup):
+    _u, *_ = setup
+    # 11 和 12 在同一场录，没有「配对分开」这回事，不跟着改
+    other = _mk(db, _u, 12, 1, session=SESSION_SPLIT)
+    _mk(db, _u, 11, 2, session=SESSION_SPLIT)
+    run(db.commit())
+
+    res = run(svc.save_batch(db, "2026-09-20", {"1": 2, "2": 1, "3": 3}, [SESSION], None))
+    assert res["extra"] == []
+    run(db.refresh(other))
+    assert other.video_cams is None

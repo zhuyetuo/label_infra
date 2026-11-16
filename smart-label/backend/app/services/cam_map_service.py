@@ -92,6 +92,31 @@ def room_options(site: str | None) -> list[dict]:
     return [{"value": c, "label": _room_label(site, c)} for c in sorted(allowed_real_cams(site))]
 
 
+def _imu_set(samples: list[Sample]) -> set[int]:
+    """这一场录到了哪几只 IMU。"""
+    out: set[int] = set()
+    for s in samples:
+        imu = site_layout.imu_of(s.sample_code)
+        if imu is not None:
+            out.add(imu)
+    return out
+
+
+def _paired_imu(lay: dict, imu: int) -> int | None:
+    """同一间里轮换的另一只 IMU。
+
+    一间一狗配两只 IMU（一只在狗身上、一只充电），两只接的是同一路摄像头，
+    录出来的画面必然一样；两只分在相邻两场录的时候，错位情况也一样。
+    """
+    room = (lay["imu"].get(imu) or (None, None))[0]
+    if room is None:
+        return None
+    for other, (r, _code) in lay["imu"].items():
+        if other != imu and r == room:
+            return other
+    return None
+
+
 def cam_room_choices(site: str | None, cam: int | None) -> set[int]:
     """这一路摄像头**可能**拍的是哪一间。
 
@@ -530,6 +555,10 @@ async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: l
     一天 24 场一条条点太费时间；摄像头上午插错了，勾上午那几场一次改完。
     每场只取自己有的机位（1 号机 3 路、2 号机 3 路，各取各的）；
     某一场校验不过（比如机位号不属于这个场地）不影响其他场。
+
+    同一个房间的两只 IMU 是分开录的，常常一只在这一场、另一只在相邻那一场。
+    选中段纠正后，同一天同一场地里那些「只录到配对其中一只」的场次也按同一套
+    对照一起改——不然那几小时还是错画面，人还得再手动找一遍。
     """
     rows = (
         await db.execute(
@@ -543,6 +572,8 @@ async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: l
     wanted = set(session_keys)
     results: list[dict] = []
     failed: list[dict] = []
+    # 这一天每个场地实际生效的对照：段里有几场（两台机器）时要把两边的机位合起来
+    site_mappings: dict[str, dict[int, int]] = defaultdict(dict)
     for (day_dir, session_key), samples in sorted(groups.items(), key=lambda kv: kv[0][1]):
         if session_key not in wanted:
             continue
@@ -551,6 +582,7 @@ async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: l
             continue
         try:
             r = await _validate_and_apply(db, samples, session_key, site, mapping, user_id)
+            site_mappings[site].update({int(k): int(v) for k, v in r["mapping"].items()})
             results.append({
                 "session_key": session_key,
                 "updated": r["updated"],
@@ -560,8 +592,64 @@ async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: l
             failed.append({"session_key": session_key, "error": str(exc)})
     if not results and not failed:
         raise ValueError("选中的场次里没有可核对的样本")
+
+    extra: list[dict] = []
+    if site_mappings:
+        # 选中场次里出现过哪些 IMU：只有「配对那只在选中段里、这只单独在别的段里」
+        # 才有依据套用同一套对照
+        selected_imus: dict[str, set[int]] = defaultdict(set)
+        for (day_dir, session_key), samples in groups.items():
+            if session_key not in wanted:
+                continue
+            site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+            if site in site_mappings:
+                selected_imus[site].update(_imu_set(samples))
+        corrected = set(
+            (
+                await db.execute(
+                    select(SessionCamMap.session_key).where(
+                        SessionCamMap.session_key.in_([k for _d, k in groups])
+                    )
+                )
+            ).scalars().all()
+        )
+        for (day_dir, session_key), samples in sorted(groups.items(), key=lambda kv: kv[0][1]):
+            if session_key in wanted:
+                continue
+            site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+            if site not in site_mappings or not site_layout.has_private_rooms(site):
+                continue
+            # 人工确认过的场次不动：那可能是另一套错位
+            if session_key in corrected or any(s.video_cams for s in samples):
+                continue
+            lay = site_layout.LAYOUT.get(site) or {}
+            imus = _imu_set(samples)
+            split = [
+                imu for imu in sorted(imus)
+                if (partner := _paired_imu(lay, imu)) is not None
+                and partner not in imus
+                and partner in selected_imus.get(site, set())
+            ]
+            if not split:
+                continue
+            try:
+                r = await _validate_and_apply(db, samples, session_key, site, site_mappings[site], user_id)
+            except ValueError as exc:
+                failed.append({"session_key": session_key, "error": str(exc)})
+                continue
+            extra.append({
+                "session_key": session_key,
+                "updated": r["updated"],
+                "missing_rooms": r["missing_rooms"],
+                "imus": split,
+            })
     await db.commit()
-    return {"updated": sum(r["updated"] for r in results), "results": results, "failed": failed}
+    return {
+        "updated": sum(r["updated"] for r in results) + sum(r["updated"] for r in extra),
+        "results": results,
+        "extra": extra,
+        "failed": failed,
+    }
 
 
 async def reset_mapping(db: AsyncSession, session_key: str) -> dict:

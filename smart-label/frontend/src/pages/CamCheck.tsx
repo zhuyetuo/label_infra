@@ -95,10 +95,11 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
     try {
       const res = await saveCamBatch(segment.date, Object.fromEntries(Object.entries(map)), segment.session_keys);
       const missing = res.results.flatMap((r) => r.missing_rooms);
+      const pair = res.extra.length ? `；另外把配对 IMU 单独出现的 ${res.extra.length} 场一起改了` : "";
       if (missing.length) {
-        message.warning(`已保存，但这几个房间没找到对应画面：${missing.join("、")}`);
+        message.warning(`已保存，但这几个房间没找到对应画面：${missing.join("、")}${pair}`);
       } else {
-        message.success(`已纠正 ${res.updated} 份样本的画面`);
+        message.success(`已纠正 ${res.updated} 份样本的画面${pair}`);
       }
       onChanged();
     } catch (e) {
@@ -287,12 +288,13 @@ export default function CamCheck() {
         Object.fromEntries(Object.entries(batchMap)),
         keys
       );
+      const pair = res.extra.length ? `；另外把配对 IMU 单独出现的 ${res.extra.length} 场一起改了` : "";
       if (res.failed.length) {
         message.warning(
-          `成了 ${res.results.length} 场；${res.failed.length} 场没改成：${res.failed.map((f) => f.error).join("；")}`
+          `成了 ${res.results.length} 场；${res.failed.length} 场没改成：${res.failed.map((f) => f.error).join("；")}${pair}`
         );
       } else {
-        message.success(`已把 ${selected.size} 段一起纠正，共 ${res.updated} 份样本`);
+        message.success(`已把 ${selected.size} 段一起纠正，共 ${res.updated} 份样本${pair}`);
       }
       refetch();
     } catch (e) {

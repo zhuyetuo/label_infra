@@ -67,9 +67,15 @@ export interface CamMapBatchResult {
   missing_rooms: number[];
 }
 
+/** 配对 IMU 分开录的场次：跟着选中段一起改的那些 */
+export interface CamMapBatchExtra extends CamMapBatchResult {
+  imus: number[];
+}
+
 export interface CamMapBatchOut {
   updated: number;
   results: CamMapBatchResult[];
+  extra: CamMapBatchExtra[];
   failed: { session_key: string; error: string }[];
 }
 
