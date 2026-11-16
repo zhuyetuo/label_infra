@@ -53,7 +53,7 @@ const STATUS_META: Record<ModelVersion["status"], { color: string; label: string
 };
 
 const MODEL_TYPES = ["rf", "cnn", "xgb", "lgbm", "catboost", "extratrees", "histgb"];
-const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", cnn: "cnn（1D-CNN）", xgb: "xgb（XGBoost，端侧推荐）" };
+const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", cnn: "cnn（1D-CNN，端侧推荐）", xgb: "xgb（XGBoost）" };
 
 /**
  * 这一段到底是什么类别——取**叶子**（抓挠-躯干），不是根（抓挠）。
@@ -2130,8 +2130,8 @@ export default function Training() {
                     else if (v === "rf") { setEdgeTrees(20); setEdgeDepth(8); }
                   }
                 }}
-                // 新版流程（train_v2）只训随机森林和 XGBoost
-                options={(pipelineV2 ? ["rf", "xgb"] : MODEL_TYPES).map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
+                // 新版流程（train_v2）只训随机森林、XGBoost 和端侧 1D-CNN（int8，带动作门）
+                options={(pipelineV2 ? ["rf", "xgb", "cnn"] : MODEL_TYPES).map((m) => ({ value: m, label: MODEL_TYPE_LABEL[m] ?? m }))}
               />
               <Typography.Text>标签</Typography.Text>
               <Input style={{ width: 160 }} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="可选" />
