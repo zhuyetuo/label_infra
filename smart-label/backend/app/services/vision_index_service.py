@@ -209,7 +209,8 @@ def usable_cams(sample: Sample) -> list[str]:
         path = video_path_of(sample, c)
         if not path:
             continue
-        kind = site_layout.classify(path, sample.sample_code, day_dir_of(sample))
+        kind = site_layout.classify(path, sample.sample_code, day_dir_of(sample),
+                                    real_cam=(sample.video_cams or {}).get(c))
         if kind == "public" and site_layout.site_of(sample.sample_code, day_dir_of(sample), path) in ("gouchang", "bolangwang"):
             continue        # 一间一狗的场地，别人家的 / 公共区那一路：不用
         out.append(c)
@@ -219,7 +220,8 @@ def usable_cams(sample: Sample) -> list[str]:
 def is_multi_dog(sample: Sample, cam: str) -> bool:
     """这一路画面里可能有别的狗（影棚 / 公共区）。"""
     path = video_path_of(sample, cam)
-    return site_layout.classify(path, sample.sample_code, day_dir_of(sample)) == "public"
+    return site_layout.classify(path, sample.sample_code, day_dir_of(sample),
+                                real_cam=(sample.video_cams or {}).get(cam)) == "public"
 
 
 async def project_videos(db: AsyncSession, project_id: int | None, cam: str,
@@ -480,7 +482,9 @@ async def find_similar(db: AsyncSession, task: Task | None, params: SimilarParam
             if slot:
                 _media_of[path] = (s_.id, slot)
         if s_ is not None:
-            kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_))
+            slot = next((c for c in ("cam1", "cam2", "cam3") if video_path_of(s_, c) == path), None)
+            kind = site_layout.classify(path, s_.sample_code, day_dir_of(s_),
+                                        real_cam=(s_.video_cams or {}).get(slot))
             _multi_of[t.id] = _multi_of.get(t.id, False) or kind == "public"
     # 有哪些「场地·机位」可挑，各有几路：**不管这次筛没筛，都按全量算**，
     # 不然筛过一次之后下拉里就只剩选中的那一个，人再也切不回去

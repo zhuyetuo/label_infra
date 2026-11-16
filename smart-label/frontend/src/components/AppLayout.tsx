@@ -22,6 +22,8 @@ const ALL_ITEMS = [
   // 片段审核在「审核」页里（第二个标签页）；标注员进不了审核页，单独给一个入口看退回给自己的片段
   { key: "/segment-review", label: "退回的片段", roles: ["annotator"] },
   { key: "/samples", label: "样本", roles: ["super_admin", "admin"] },
+  // 摄像头重插后文件名里的机位号可能对不上房间；看画面人工纠正这一场的对照
+  { key: "/cam-check", label: "机位核对", roles: ["super_admin", "admin"] },
   // feature：不是这几个角色的账号，单独开了这项功能也能看到（账号管理里勾）
   { key: "/dogs", label: "狗档案", roles: ["super_admin", "admin"], feature: "dogs_view" },
   // 两个标签页：牙齿检测（要「牙齿识别」权限）+ 口腔实例分割（原「视觉标注」，标注员 / 审核员也能进）

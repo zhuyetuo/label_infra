@@ -536,8 +536,12 @@ async def _repair_sample_cam_paths(
         stored = (sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path)
         info = candidates[sample.sample_code]
         # 跨 session 挂上来的那几路（看全场的 cam7）不参与重算：它按定义就不在
-        # 本 session 的 cam_paths 里，不钉住的话每次扫描都会被当成"多出来的"清掉
+        # 本 session 的 cam_paths 里，不钉住的话每次扫描都会被当成"多出来的"清掉。
+        # 人工在「机位核对」页改过的整场同理——那是人看着画面确认的，扫描不能拿
+        # 文件名再算一遍把它盖回去
         pinned = {int(k[-1]) for k in (sample.video_offsets_ms or {}) if k.startswith("cam") and k[-1].isdigit()}
+        if sample.video_cams:
+            pinned |= {1, 2, 3}
         plan = _plan_cam_path_fix(stored, info["cam_paths"], on_disk,
                                   exact=bool(info.get("paired")), pinned=pinned)
         changed: list[str] = []

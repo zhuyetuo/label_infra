@@ -15,6 +15,8 @@ class SampleOut(BaseModel):
     video_cam1_path: str
     video_cam2_path: str | None
     video_cam3_path: str | None
+    # 人工核对过的真实机位：{"cam1": 2}。空 = 按文件名判
+    video_cams: dict | None = None
     imu_csv_path: str
     ai_label_path: str | None
     video_duration_sec: int | None

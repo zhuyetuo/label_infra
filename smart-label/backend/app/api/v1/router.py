@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    cam_map,
     device_debug,
     system,
     auth,
@@ -44,6 +45,7 @@ api_router.include_router(label_templates.router)
 api_router.include_router(llm_providers.router)
 api_router.include_router(samples.router)
 api_router.include_router(samples.scoped_router)
+api_router.include_router(cam_map.router)
 api_router.include_router(tasks.router)
 api_router.include_router(candidates.router)
 api_router.include_router(reviews.router)

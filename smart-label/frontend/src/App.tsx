@@ -17,6 +17,7 @@ import Workforce from "@/pages/Workforce";
 import Skin from "@/pages/Skin";
 import Vision from "@/pages/Vision";
 import DeviceDebug from "@/pages/DeviceDebug";
+import CamCheck from "@/pages/CamCheck";
 import Training from "@/pages/Training";
 import { SegmentReviewEntry } from "@/pages/SegmentReview";
 
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/workforce" element={<Workforce />} />
         {/* 视觉标注挪进了「牙齿识别 → 口腔实例分割」；这个地址留着（带口腔 / 皮肤切换），菜单里不再列 */}
         <Route path="/vision" element={<Vision />} />
+        <Route path="/cam-check" element={<CamCheck />} />
         <Route path="/device-debug" element={<DeviceDebug />} />
         <Route path="/training" element={<Training />} />
         <Route path="/users" element={<Users />} />

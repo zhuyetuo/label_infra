@@ -502,7 +502,8 @@ async def project_cam_slots(project_id: int, db: AsyncSession = Depends(get_db),
             n += 1
             _key, label = vindex.scope_of(path, vindex.day_dir_of(s_))
             cams[label] = cams.get(label, 0) + 1
-            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_)) == "public":
+            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_),
+                                           real_cam=(s_.video_cams or {}).get(slot)) == "public":
                 public += 1
             else:
                 own += 1
@@ -522,7 +523,8 @@ async def project_cam_slots(project_id: int, db: AsyncSession = Depends(get_db),
             key, label = vindex.scope_of(path, vindex.day_dir_of(s_))
             e = flat.setdefault(key, {"key": key, "label": label, "videos": 0, "public": 0})
             e["videos"] += 1
-            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_)) == "public":
+            if vindex.site_layout.classify(path, s_.sample_code, vindex.day_dir_of(s_),
+                                           real_cam=(s_.video_cams or {}).get(slot)) == "public":
                 e["public"] += 1
     return ok({"slots": out, "samples": len(rows),
                "scopes": sorted(flat.values(), key=lambda x: x["key"])})

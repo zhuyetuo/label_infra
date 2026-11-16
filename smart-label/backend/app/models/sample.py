@@ -42,6 +42,11 @@ class Sample(Base):
     # 而 cam7 一台俯拍看的是全部六间，挂给另一台那三间时必须带上这个差值，
     # 否则那一路上每一条标注都差几秒，而且错得看不出来
     video_offsets_ms: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 人工核对过的机位：{"cam1": 2, "cam2": 7} = 这一路文件录下来的机位号其实拍的是 2 号间 / 天花板。
+    # 摄像头重插后采集端 CAMERAS 的第二列没跟上时，文件名里的 camN 跟真实房间就对不上；
+    # 人看画面确认后在「机位核对」页改一次，这里记真实机位号，classify 不再按文件名猜。
+    # 空 = 没人工核对过，按文件名判（老行为不变）
+    video_cams: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     imu_csv_path: Mapped[str] = mapped_column(String(500), nullable=False)
     ai_label_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

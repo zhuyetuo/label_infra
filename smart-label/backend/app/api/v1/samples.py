@@ -571,7 +571,10 @@ def _video_note(sample: Sample, cam_paths: list[str | None], by_path: dict) -> s
     # 压根没登记的是哪几路。**分开说**：公共区那一路是跨 session 挂上来的，
     # 有专门的「公共区补挂」；自己单间那一路没有就是采集时没录上，重扫一百遍
     # 也变不出来。混成一句话的话，人会照着错的那条去白忙一趟
-    have = {c for c, _imu in (_sl.parse_cam_imu(p) for p in listed) if c}
+    if sample.video_cams:
+        have = {int(v) for v in sample.video_cams.values() if str(v).lstrip("-").isdigit()}
+    else:
+        have = {c for c, _imu in (_sl.parse_cam_imu(p) for p in listed) if c}
     gap = sorted(want - have)
     public = set(_sl.LAYOUT[_sl.SITE_KEYS.get(site, site)]["public_cams"])
     if gap and set(gap) <= public and site == "gouchang":

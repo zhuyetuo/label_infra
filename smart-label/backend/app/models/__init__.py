@@ -20,6 +20,7 @@ from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample
 from app.models.sample_vision_scan import SampleVisionScan
+from app.models.session_cam_map import SessionCamMap
 from app.models.skin import SkinRecord, SkinWeeklyRow
 from app.models.skin_daily import SkinDailyStat
 from app.models.skin_photo_rating import SkinPhotoRating
@@ -41,6 +42,7 @@ __all__ = [
     "Dog",
     "Sample",
     "SampleVisionScan",
+    "SessionCamMap",
     "Task",
     "LabelDefinition",
     "LabelTemplate",

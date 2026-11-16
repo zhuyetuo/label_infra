@@ -151,15 +151,25 @@ def imu_of(sample_code: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def classify(video_path: str | None, sample_code: str | None, day_dir: str | None = None) -> str:
+def classify(video_path: str | None, sample_code: str | None, day_dir: str | None = None,
+             real_cam: int | None = None) -> str:
     """这一路视频对这只狗（样本的 IMU）来说是什么：
 
         own      它自己单间的摄像头，画面里只有它 → 能直接对上 IMU
         public   公共区 / 多狗同场 → 画面里那只不一定是它
         unknown  认不出场地或摄像头号（老数据、别的场地）→ 按 own 处理，别把老数据挡掉
+
+    real_cam：人工核对过的真实机位号（samples.video_cams）。摄像头重插后文件名里
+    的 camN 可能已经不是那个房间了，这时按真实机位判，不按文件名。
     """
     site = site_of(sample_code, day_dir, video_path)
     cam, _ = parse_cam_imu(video_path)
+    if real_cam is not None:
+        # JSON 里的值可能是 "1"；跟 LAYOUT 里的 int 比之前先转过来
+        try:
+            cam = int(real_cam)
+        except (TypeError, ValueError):
+            pass
     imu = imu_of(sample_code)
     if site is None or cam is None:
         return "unknown"
