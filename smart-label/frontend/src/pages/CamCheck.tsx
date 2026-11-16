@@ -58,8 +58,13 @@ function CamThumb({ mediaId }: { mediaId: number | null }) {
   );
 }
 
-/** 狗档案里的照片缩略图：点开能看这只狗的全部照片/视频，方便对着笼子里的画面认狗 */
-function DogThumb({ dogId, name }: { dogId: number | null; name: string | null }) {
+/** 一路画面旁边挂的狗：小头像 + IMU/狗名，点开看狗档案里的照片，方便对着画面认狗 */
+function DogChip({ dogId, name, imu, room }: {
+  dogId: number | null;
+  name: string | null;
+  imu: number | null;
+  room: string;
+}) {
   const [open, setOpen] = useState(false);
   const { data } = useQuery({
     queryKey: ["dog-photos", dogId],
@@ -69,41 +74,53 @@ function DogThumb({ dogId, name }: { dogId: number | null; name: string | null }
     staleTime: 5 * 60_000,
   });
   const photo = (data ?? []).find((p) => p.kind === "image");
+  const label = imu != null ? `IMU${imu}` : name ?? "";
 
-  if (dogId == null) return null;
   return (
     <>
-      <Tooltip title={photo ? `${name ?? "这只狗"}的照片，点开看` : "狗档案里还没有照片"}>
+      <Tooltip title={`${label}${name ? ` ${name}` : ""} · ${room}${photo ? "，点开看照片" : "，狗档案里还没有照片"}`}>
         <div
-          onClick={() => setOpen(true)}
+          onClick={() => dogId != null && setOpen(true)}
           style={{
-            width: 40, height: 40, flex: "0 0 40px", borderRadius: 4, overflow: "hidden",
-            background: "var(--sl-fill2, #f5f5f5)", cursor: "pointer",
-            display: "grid", placeItems: "center",
+            display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "100%",
+            padding: "1px 6px 1px 1px", border: "1px solid #f0f0f0", borderRadius: 12,
+            background: "var(--sl-fill2, #fafafa)", cursor: dogId != null ? "pointer" : "default",
           }}
         >
-          {photo ? (
-            <img
-              src={dogPhotoUrl(dogId, photo.filename, photo.token)}
-              alt={name ?? ""}
-              loading="lazy"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-          ) : (
-            <span style={{ fontSize: 10, color: "#999" }}>无图</span>
-          )}
+          <div
+            style={{
+              width: 20, height: 20, flex: "0 0 20px", borderRadius: "50%", overflow: "hidden",
+              background: "#eee", display: "grid", placeItems: "center",
+            }}
+          >
+            {photo ? (
+              <img
+                src={dogPhotoUrl(dogId!, photo.filename, photo.token)}
+                alt={name ?? ""}
+                loading="lazy"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            ) : (
+              <span style={{ fontSize: 9, color: "#999" }}>?</span>
+            )}
+          </div>
+          <span style={{ fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {label}{name ? ` ${name}` : ""}
+          </span>
         </div>
       </Tooltip>
-      <Modal
-        open={open}
-        title={name ? `${name} 的照片` : "狗档案照片"}
-        footer={null}
-        width={880}
-        destroyOnClose
-        onCancel={() => setOpen(false)}
-      >
-        {open && <DogPhotos dogId={dogId} readOnly />}
-      </Modal>
+      {dogId != null && (
+        <Modal
+          open={open}
+          title={name ? `${name} 的照片` : "狗档案照片"}
+          footer={null}
+          width={880}
+          destroyOnClose
+          onCancel={() => setOpen(false)}
+        >
+          {open && <DogPhotos dogId={dogId} readOnly />}
+        </Modal>
+      )}
     </>
   );
 }
@@ -131,6 +148,16 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
     const v = Object.values(map);
     return new Set(v).size !== v.length;
   }, [map]);
+
+  // 每路画面旁边显示挂在这路上的狗：同一间的两只 IMU 会并列，一眼看出谁对的是哪路画面
+  const dogsByCam = useMemo(() => {
+    const m = new Map<number, typeof segment.samples>();
+    for (const s of segment.samples) {
+      if (s.cam == null) continue;
+      m.set(s.cam, [...(m.get(s.cam) ?? []), s]);
+    }
+    return m;
+  }, [segment]);
 
   /** 改一路时如果那个房间已经被另一路占着，两路对调——摄像头插反基本都是成对对调 */
   const pick = (recorded: number, real: number) => {
@@ -229,12 +256,21 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
         {segment.cams.map((c) => (
           <Col key={c.recorded_cam} xs={24} sm={12} md={8}>
             <CamThumb mediaId={c.media_id} />
-            <Space style={{ marginTop: 6, width: "100%", justifyContent: "space-between" }}>
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
               <Typography.Text strong>录制 cam{c.recorded_cam}</Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {(dogsByCam.get(c.recorded_cam) ?? []).map((s) => (
+                <DogChip
+                  key={s.id}
+                  dogId={s.dog_id}
+                  name={s.dog_name}
+                  imu={s.imu}
+                  room={roomLabel(s.room)}
+                />
+              ))}
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: "auto" }}>
                 挂在 {c.samples} 份样本
               </Typography.Text>
-            </Space>
+            </div>
             <Select
               size="small"
               style={{ width: "100%", marginTop: 4 }}
@@ -249,33 +285,6 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
           </Col>
         ))}
       </Row>
-      {segment.samples.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-          {segment.samples.map((s) => (
-            <div
-              key={s.id}
-              style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: "4px 10px 4px 4px", border: "1px solid #f0f0f0", borderRadius: 6,
-              }}
-            >
-              <DogThumb dogId={s.dog_id} name={s.dog_name} />
-              <div style={{ lineHeight: 1.35 }}>
-                <Typography.Text strong style={{ fontSize: 12 }}>
-                  {s.imu != null ? `IMU${s.imu}` : s.sample_code}
-                  {s.dog_name ? ` ${s.dog_name}` : ""}
-                </Typography.Text>
-                <div>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {/* 画面列按「录制 camN」排，这里直接写出它对应哪一路，跟上面并排看 */}
-                    {s.cam != null ? `→ 录制 cam${s.cam} · ` : ""}{roomLabel(s.room)}
-                  </Typography.Text>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </Card>
   );
 }

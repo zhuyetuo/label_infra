@@ -76,7 +76,9 @@ def _room_and_cam(sample: Sample, site: str | None) -> tuple[int | None, int | N
         path = getattr(sample, f"video_{slot}_path")
         if path and _real_cam(sample, slot, path) == room:
             return room, site_layout.parse_cam_imu(path)[0]
-    return room, None
+    # 还没纠正、文件名里的机位跟房间对不上时，就报它当前挂在哪一路上
+    first = sample.video_cam1_path
+    return room, site_layout.parse_cam_imu(first)[0] if first else None
 
 
 def allowed_real_cams(site: str | None) -> set[int]:
