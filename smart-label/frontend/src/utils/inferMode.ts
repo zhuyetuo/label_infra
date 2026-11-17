@@ -1,5 +1,5 @@
 /** AI 预标注版本选项：稳定版（滞回+合并）/ 稳定版 v2（Viterbi 解码）/ 调试版（逐窗口原始输出） */
-export type AlgoMode = "stable" | "viterbi" | "raw" | "viterbi_noshake";
+export type AlgoMode = "stable" | "viterbi" | "raw" | "viterbi_noshake" | "viterbi_precise";
 
 /** 版本可以是算法服务（imu_train 的 label_service）的后处理 mode，
  *  也可以是它上面挂的另一个模型（srv:<标签>）或端侧模型（edge:<标签>）。
@@ -38,6 +38,9 @@ export const INFER_MODE_OPTIONS: { label: string; value: AlgoMode }[] = [
   // 版本串不同才不会互相覆盖——改配置的话两次跑出来 mode 都是 viterbi，
   // 后一次直接把前一次顶掉，没法并排比。
   { label: "稳定版 v2 · 不吞甩身体", value: "viterbi_noshake" },
+  // 跟「稳定版 v2」片段一模一样（个数、类别都不变），**只改起止**：
+  // 先平移掉 v2 的系统偏差（8 s 窗口：起点早约 0.5 s、终点晚约 1.1 s），再按抓挠节律能量对齐
+  { label: "精准版 · 起止对齐", value: "viterbi_precise" },
   { label: "调试版", value: "raw" },
 ];
 /** 历史记录里回显用：后端存的是 stable/viterbi/raw */
@@ -86,6 +89,7 @@ export const INFER_MODE_HINT: Record<AlgoMode, string> = {
   stable: "活动/睡觉平滑、碎片并入邻段；抓挠用双阈值滞回不被切碎，间隔 4s 内合并，前后的甩身体并入；单窗口噪声丢掉",
   viterbi: "动态规划解码整条时间轴，切换类别要付代价，所有类别统一生效；抓挠同样合并/过滤。跟稳定版对比看哪个更接近人工",
   viterbi_noshake: "跟稳定版 v2 只差一条规则：抓挠不再吞并前后的甩身体。模型完全一样，用来看那条规则划不划算",
+  viterbi_precise: "片段跟稳定版 v2 一模一样，只把起止调准：先校正 v2 起点偏早、终点偏晚的系统偏差，再按陀螺仪 3–9 Hz（抓挠节律）能量对齐到真正开始和停下的点。没有陀螺仪的只做校正",
   raw: "模型逐窗口原始输出，活动/睡觉会来回闪，抓挠有很多单窗口噪声。用来看模型到底说了什么",
 };
 

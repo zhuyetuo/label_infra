@@ -352,3 +352,15 @@ def test_the_option_is_in_the_dropdown():
     code = _code("utils", "inferMode.ts")
     assert '"viterbi_noshake"' in code, "下拉里没有这个版本"
     assert "不吞甩身体" in code, "标签里没说清它跟稳定版 v2 差在哪"
+
+
+def test_precise_is_a_recognised_mode():
+    """精准版也必须登记进 ALGO_MODES，否则会悄悄退回默认版本、结果却标着 viterbi_precise"""
+    assert algo_client._mode("viterbi_precise") == "viterbi_precise"
+    assert algo_client.post_mode_of("srv:acc3@viterbi_precise") == "viterbi_precise"
+
+
+def test_precise_option_is_in_the_dropdown():
+    code = _code("utils", "inferMode.ts")
+    assert '"viterbi_precise"' in code, "下拉里没有精准版"
+    assert "起止" in code

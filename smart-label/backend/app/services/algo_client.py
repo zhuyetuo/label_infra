@@ -46,7 +46,7 @@ def _base_url() -> str:
 #: 算法服务认的后处理版本。**加了新版本要在这里登记**——不登记的话
 #: _mode() 会把它当成"没传"，**退回默认版本**，而结果存进库里标着新版本名。
 #: 没有任何迹象，对比表里那一列其实是另一个版本跑的。
-ALGO_MODES = ("raw", "stable", "viterbi", "stable_noshake", "viterbi_noshake")
+ALGO_MODES = ("raw", "stable", "viterbi", "stable_noshake", "viterbi_noshake", "viterbi_precise")
 
 
 def _mode(mode: str | None) -> str:
