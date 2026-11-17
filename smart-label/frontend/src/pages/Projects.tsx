@@ -1685,8 +1685,8 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
-                {f.labels.length > 0 && (
-                  <Tooltip title="选了类别时，任务列表的「片段」一栏默认只显示这几类，并拆开写通过 / 退回 / 还没审。勾上就跟原来一样显示所有类别">
+                {(f.labels.length > 0 || (f.cand && f.candLabels.length > 0)) && (
+                  <Tooltip title="选了类别（或者按疑似片段类别筛，比如只看疑似饮水）时，任务列表的「片段」一栏默认只显示这几类。勾上就跟原来一样显示所有类别">
                     <Checkbox checked={f.showAllLabels} onChange={(e) => setFilter(p.id, { showAllLabels: e.target.checked })}>
                       片段栏显示全部类别
                     </Checkbox>
@@ -2065,9 +2065,18 @@ export default function Projects() {
                         }
                         return false;
                       };
-                      const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0 && (!focus || inFocus(l)));
-                      const candN = focus ? 0 : task.cand_count ?? 0;
-                      if (!entries.length && !candN) return <Typography.Text type="secondary">-</Typography.Text>;
+                      // 按「疑似片段」类别筛（比如只看疑似饮水）：只显示疑似饮水 + 已经是片段的饮水，
+                      // 别的类别、别的疑似片段都是干扰——要回答的是「这个样本里饮水还有几条没判」
+                      const candOnly = !focus && f.cand && f.candLabels.length > 0 && !f.showAllLabels;
+                      const sameKind = (name: string) =>
+                        f.candLabels.some((c) => name === c || currentName(name) === currentName(c)
+                          || name.startsWith(`${currentName(c)}-`));
+                      const entries = projLabels.filter((l) => (lc[l.id]?.n ?? 0) > 0 && (!focus || inFocus(l))
+                        && (!candOnly || sameKind(l.display_name)));
+                      const candN = focus || candOnly ? 0 : task.cand_count ?? 0;
+                      const candOnlyN = candOnly
+                        ? f.candLabels.reduce((s, name) => s + (task.cand_labels?.[name]?.n ?? 0), 0) : 0;
+                      if (!entries.length && !candN && !candOnlyN) return <Typography.Text type="secondary">-</Typography.Text>;
                       if (focus) {
                         return (
                           <Space size={2} wrap>
@@ -2133,7 +2142,7 @@ export default function Projects() {
                       }
                       return (
                         <Space size={2} wrap>
-                          {overlapOf(task) > 0 && (
+                          {!candOnly && overlapOf(task) > 0 && (
                             <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${overlapOf(task)} 段跟同一轨上别的片段重叠（同类重复 / 父子 / 类别冲突）。点一下打开，片段列表只看这些`}>
                               <Tag color="error" style={{ marginRight: 0, cursor: "pointer" }}
                                 onClick={() => pickOpen(task, p.id, { overlap: true, labels: f.labels.length ? f.labels : undefined })}>
@@ -2141,7 +2150,7 @@ export default function Projects() {
                               </Tag>
                             </Tooltip>
                           )}
-                          {uncertainOf(task) > 0 && (
+                          {!candOnly && uncertainOf(task) > 0 && (
                             <Tooltip title={`${f.labels.length ? "选中的类别里" : ""}有 ${uncertainOf(task)} 段标了待定（没画面 / 看不清 / 要细切）`}>
                               <Tag color="magenta" style={{ marginRight: 0 }}>待定 {uncertainOf(task)} 段</Tag>
                             </Tooltip>
@@ -2174,7 +2183,8 @@ export default function Projects() {
                             </Tooltip>
                           )}
                           {/* 疑似片段里各类别各几条，不用点进工作台就知道有没有舔 / 吠叫… */}
-                          <CandKindTags task={task} labels={projLabels} onPick={(name) => pickOpen(task, p.id, { cands: [name] })} />
+                          <CandKindTags task={task} labels={projLabels} onPick={(name) => pickOpen(task, p.id, { cands: [name] })}
+                            only={candOnly ? f.candLabels : undefined} />
                         </Space>
                       );
                     },

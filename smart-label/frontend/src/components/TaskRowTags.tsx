@@ -30,13 +30,16 @@ export function CandKindTags({
   task,
   labels = [],
   onPick,
+  only,
 }: {
   task: Task;
   labels?: { display_name: string; color?: string | null }[];
   /** 点某一类：打开工作台，疑似片段面板只看这一类 */
   onPick?: (candName: string) => void;
+  /** 只显示这几类（按疑似片段类别筛的时候，比如只看疑似饮水）；不传 = 全部 */
+  only?: string[];
 }) {
-  const kinds = Object.entries(task.cand_labels ?? {}).filter(([, v]) => v.n > 0);
+  const kinds = Object.entries(task.cand_labels ?? {}).filter(([name, v]) => v.n > 0 && (!only || only.includes(name)));
   if (!kinds.length) return null;
   // 还有待判的排前面，同样按条数多的在前
   kinds.sort(([, a], [, b]) => Number(b.pending > 0) - Number(a.pending > 0) || b.n - a.n);
