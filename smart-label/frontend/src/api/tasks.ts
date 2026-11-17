@@ -26,8 +26,10 @@ export const getApprovalsInRange = (projectId: number, from?: string | null, to?
   });
 /** 现在重点补什么（全平台一个，管理员在项目页顶部切）。labels：统计哪几个类别（各自含子类） */
 export interface LabelFocus {
-  key: string; name: string; labels: string[]; hint: string; by?: string | null; at?: string | null;
-  options: { key: string; name: string; labels: string[]; hint: string }[];
+  /** neg：负例（除了抓挠都是）；title：显示名，负例是「负例·舔」 */
+  key: string; name: string; title?: string; neg?: boolean; labels: string[]; hint: string;
+  by?: string | null; at?: string | null;
+  options: { key: string; name: string; title?: string; neg?: boolean; labels: string[]; hint: string }[];
 }
 export const getLabelFocus = () => request.get<never, LabelFocus>("/tasks/label-focus", { silent: true } as object);
 export const setLabelFocus = (key: string) => request.put<never, LabelFocus>("/tasks/label-focus", { key });

@@ -97,7 +97,8 @@ export default function AppLayout() {
     enabled: !!accessToken, refetchInterval: 60_000, staleTime: 30_000,
   });
   const focusLabels = (focus?.labels ?? ["抓挠"]).join(",");
-  const focusName = focus?.name ?? "抓挠";
+  // 负例显示成「负例·舔」：一眼知道现在补的是负例、是哪一类
+  const focusName = focus?.title ?? focus?.name ?? "抓挠";
   const { data: scratch } = useQuery({
     queryKey: ["label-review", focusLabels], queryFn: () => getLabelReview(focusLabels),
     enabled: !!accessToken && reviewer, refetchInterval: 60_000, staleTime: 20_000,

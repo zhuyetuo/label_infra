@@ -185,7 +185,8 @@ export default function Projects() {
   // 「抓挠」不再写死：按全平台的「现在重点补什么」统计（顶部那个开关，默认抓挠，可切到负例）
   const { data: focus } = useQuery({ queryKey: ["label-focus"], queryFn: getLabelFocus, staleTime: 30_000 });
   const focusLabels = focus?.labels ?? ["抓挠"];
-  const focusName = focus?.name ?? "抓挠";
+  // 负例显示成「负例·舔」：一眼知道现在补的是负例、是哪一类
+  const focusName = focus?.title ?? focus?.name ?? "抓挠";
   const isFocusLabel = (l: { display_name: string; code?: string | null }) =>
     focusLabels.includes(l.display_name) || (!!l.code && focusLabels.includes(l.code));
   const { data: scratchReview } = useQuery({
@@ -1348,15 +1349,35 @@ export default function Projects() {
           <Space size={6} style={{ marginLeft: 8 }}>
             <Typography.Text type="secondary">现在重点补</Typography.Text>
             {isAdmin ? (
-              <Segmented
+              // 一次只盯一类：抓挠 / 舔 / 啃 / 蹭 / 进食 / 饮水 / 嗅闻 / 甩身体，选项多了用下拉，每项说明为什么补它
+              <Select
                 size="small"
+                popupMatchSelectWidth={false}
                 value={focus?.key ?? "scratch"}
-                options={(focus?.options ?? [{ key: "scratch", name: "抓挠" }]).map((o) => ({ label: o.name, value: o.key }))}
+                style={{ width: 130 }}
+                options={(() => {
+                  const all = focus?.options ?? [{ key: "scratch", name: "抓挠", title: "抓挠", neg: false, labels: ["抓挠"], hint: "" }];
+                  const opt = (o: (typeof all)[number]) => ({ value: o.key, label: o.title ?? o.name, title: o.hint, neg: !!o.neg, name: o.name });
+                  return [
+                    { label: "正样本", options: all.filter((o) => !o.neg).map(opt) },
+                    { label: "负例（容易被判成抓挠，补了压误报）", options: all.filter((o) => o.neg).map(opt) },
+                  ];
+                })()}
+                optionRender={(o) => {
+                  const d = o.data as { title?: string; neg?: boolean; name?: string };
+                  return (
+                    <div style={{ maxWidth: 440, whiteSpace: "normal" }}>
+                      {d.neg && <Tag color="red" style={{ marginRight: 6 }}>负例</Tag>}
+                      <b>{d.name}</b>
+                      <div style={{ fontSize: 12, color: "var(--sl-text2)" }}>{d.title}</div>
+                    </div>
+                  );
+                }}
                 onChange={async (v) => {
                   const r = await setLabelFocus(String(v));
                   qc.setQueryData(["label-focus"], r);
                   qc.invalidateQueries({ queryKey: ["label-review"] });
-                  message.success(`现在重点补：${r.hint}`);
+                  message.success(`现在重点补「${r.title ?? r.name}」：${r.hint}`);
                 }}
               />
             ) : (
