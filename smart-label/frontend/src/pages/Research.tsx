@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Alert, Card, Col, Progress, Row, Space, Steps, Table, Tag, Timeline, Tooltip, Typography, theme } from "antd";
+import { Alert, Anchor, Card, Col, Progress, Row, Space, Steps, Table, Tag, Timeline, Tooltip, Typography, theme } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 const { Title, Text, Paragraph, Link } = Typography;
@@ -209,11 +209,31 @@ export default function Research() {
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <div>
-        <Title level={4} style={{ margin: 0 }}>行业调研 · 宠物可穿戴</Title>
-        <Text type="secondary">学术与产业里程碑、竞品拆解、我们的位置和下一步。数字截至 2026-11。</Text>
+        <Space align="baseline" wrap>
+          <Title level={4} style={{ margin: 0 }}>行业调研 · 宠物可穿戴</Title>
+          <Text type="secondary">学术与产业里程碑、竞品拆解、我们的位置和下一步。数字截至 2026-11。</Text>
+        </Space>
+        {/* 一行目录：这页很长，点哪个模块直接跳过去，滚到了哪节也会高亮。
+            页面滚动发生在 Content 容器里（不是整个 window），要把容器告诉 Anchor */}
+        <Anchor
+          direction="horizontal"
+          affix={false}
+          getContainer={() => document.querySelector(".ant-layout-content") as HTMLElement}
+          items={[
+            { key: "trend", href: "#trend", title: "三代趋势" },
+            { key: "history", href: "#history", title: "来时路" },
+            { key: "ladder", href: "#ladder", title: "方法台阶" },
+            { key: "rivals", href: "#rivals", title: "竞品拆解" },
+            { key: "datasets", href: "#datasets", title: "公开数据集" },
+            { key: "baseline", href: "#baseline", title: "基线对比" },
+            { key: "pipeline", href: "#pipeline", title: "完整链路" },
+            { key: "next", href: "#next", title: "下一步" },
+            { key: "sources", href: "#sources", title: "参考资料" },
+          ]}
+        />
       </div>
 
-      <Card size="small" title="从「它在哪」到「它怎么了」">
+      <Card id="trend" size="small" title="从「它在哪」到「它怎么了」">
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>
           宠物可穿戴二十年走了三步：先定位，再看活动量，现在比的是能不能从一颗加速度计里读出具体行为（抓挠、舔、喝水、甩头），再把这些行为变成兽医能用的健康信号。
         </Paragraph>
@@ -225,7 +245,7 @@ export default function Research() {
         ]} />
       </Card>
 
-      <Card size="small" title="来时路" extra={<Space size={4}><Tag color="purple">学术</Tag><Tag color="orange">产业</Tag></Space>}>
+      <Card id="history" size="small" title="来时路" extra={<Space size={4}><Tag color="purple">学术</Tag><Tag color="orange">产业</Tag></Space>}>
         <Timeline mode="alternate" style={{ marginTop: 8 }} items={MILESTONES.map((m) => ({
           color: m.kind === "a" ? token.colorPrimary : token.colorWarning,
           label: <Text strong style={{ fontVariantNumeric: "tabular-nums" }}>{m.year}</Text>,
@@ -238,7 +258,7 @@ export default function Research() {
         }))} />
       </Card>
 
-      <Card size="small" title="识别方法的五级台阶">
+      <Card id="ladder" size="small" title="识别方法的五级台阶">
         <Paragraph type="secondary">每一级都没有淘汰上一级。量产产品通常几级混用：门限管静止和未佩戴，模型管动作，后处理做成「事件」。</Paragraph>
         <Row gutter={[12, 12]}>
           {LADDER.map((l) => (
@@ -253,14 +273,14 @@ export default function Research() {
         </Row>
       </Card>
 
-      <Card size="small" title="竞品拆解" extra={<Space size={4} wrap>
+      <Card id="rivals" size="small" title="竞品拆解" extra={<Space size={4} wrap>
         <Tag color="purple">公开资料</Tag><Tag style={{ borderStyle: "dashed" }}>推断</Tag></Space>}>
         <Paragraph type="secondary">厂商自报的准确率口径都不统一，只能当方向参考。「0.949/0.999」是灵敏度 / 特异度。</Paragraph>
         <Table size="small" rowKey="key" pagination={false} columns={columns} dataSource={RIVALS} scroll={{ x: 1130 }}
           onRow={(r) => (r.ours ? { style: { background: "var(--sl-hl-orange)" } } : {})} />
       </Card>
 
-      <Card size="small" title="公开数据集：哪些能下载下来补数据">
+      <Card id="datasets" size="small" title="公开数据集：哪些能下载下来补数据">
         <Paragraph type="secondary">
           结论：公开数据里<Text strong>没有带抓挠标注的狗 IMU 数据</Text>。能补的是两块：抖身 / 甩头正样本（Marcato，颈部传感器）和嗅闻这类难负样本（Vehkaoja）；
           再加一套人类手腕的预训练模型做初始化。用之前统一重采样到 20 Hz，换成我们方向无关的竖直 / 水平 / 模长通道，项圈装法不同也能对上。
@@ -283,7 +303,7 @@ export default function Research() {
           ]} />
       </Card>
 
-      <Row gutter={[16, 16]}>
+      <Row id="baseline" gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card size="small" title="抓挠识别：跟公开基线放一起看" style={{ height: "100%" }}>
             <Paragraph type="secondary" style={{ fontSize: 13 }}>
@@ -308,11 +328,11 @@ export default function Research() {
         </Col>
       </Row>
 
-      <Card size="small" title="一条第三代项圈的完整链路">
+      <Card id="pipeline" size="small" title="一条第三代项圈的完整链路">
         <Steps size="small" items={PIPE.map((p) => ({ title: p.title, description: p.text, status: "process" as const }))} />
       </Card>
 
-      <Card size="small" title="接下来怎么走">
+      <Card id="next" size="small" title="接下来怎么走">
         <Row gutter={[24, 16]}>
           {IDEAS.map((g) => (
             <Col key={g.title} xs={24} md={8}>
@@ -327,7 +347,7 @@ export default function Research() {
         </Row>
       </Card>
 
-      <Card size="small" title="参考资料">
+      <Card id="sources" size="small" title="参考资料">
         <ol style={{ margin: 0, paddingLeft: 20 }}>
           {SOURCES.map(([t, u]) => (
             <li key={u}><Link href={u} target="_blank" rel="noopener noreferrer">{t}</Link></li>
