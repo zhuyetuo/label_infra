@@ -715,7 +715,7 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     )).scalars().all())
     if not root_ids:
         return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
-                   "marks": {}})
+                   "marks": {}, "candidates": {}, "cand_total": 0})
     label_ids = await label_tree.expand_ids(db, root_ids)
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
@@ -755,7 +755,22 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         r["n"] += int(n)
         for k in {x for x in (m or "").split(",") if x}:
             r["by_kind"][k] = r["by_kind"].get(k, 0) + int(n)
-    return ok({"label": label, "projects": projects, "total": total, "marks": marks})
+    # 这一类**待判的疑似片段**（候选，还没确认也没排除，当前轮）。片段要等疑似片段确认了才有——
+    # 只数片段的话，切到「负例·饮水」时一堆「疑似饮水 3/3 待判」的项目行上什么都不显示，
+    # 而那些正是现在要去判的。候选的类别名可能是新旧别名、也可能带部位（舔-后肢），都算
+    from app.services.grooming_labels import alias_names
+    cand_names = sorted({a for n in names for a in alias_names(n)})
+    cand_cond = or_(*[(AiCandidate.label_name == n) | AiCandidate.label_name.like(f"{n}-%") for n in cand_names])
+    cand_rows = await db.execute(
+        select(Task.project_id, func.count(AiCandidate.id))
+        .join(scope, scope.c.id == Task.id)
+        .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
+        .where(AiCandidate.status == CandidateStatus.pending, cand_cond)
+        .group_by(Task.project_id)
+    )
+    candidates = {str(pid): int(n) for pid, n in cand_rows.all()}
+    return ok({"label": label, "projects": projects, "total": total, "marks": marks,
+               "candidates": candidates, "cand_total": sum(candidates.values())})
 
 
 class LabelFocusIn(BaseModel):

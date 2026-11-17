@@ -104,6 +104,8 @@ export default function AppLayout() {
     enabled: !!accessToken && reviewer, refetchInterval: 60_000, staleTime: 20_000,
   });
   const scratchNotPassed = scratch ? scratch.total.n - scratch.total.approved : 0;
+  // 这一类待判的疑似片段：负例大多还停在「疑似」，不数它的话角标看着像没活干
+  const candPending = scratch?.cand_total ?? 0;
 
   if (!accessToken) return <Navigate to="/login" replace />;
 
@@ -149,15 +151,20 @@ export default function AppLayout() {
               ...(i.children ? { children: i.children } : {}),
               // 退回给我的片段：红色数字，有多少条没改好
               label:
-                i.key === "/projects" && scratch && scratchNotPassed > 0 ? (
+                i.key === "/projects" && scratch && (scratchNotPassed > 0 || candPending > 0) ? (
                   <Tooltip placement="right"
-                    title={`现在重点补「${focus?.hint ?? focusName}」：未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段。管理员在项目页顶部切换重点`}>
+                    title={`现在重点补「${focus?.hint ?? focusName}」：红色 = 片段未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段；紫色 = 待判断的疑似片段 ${candPending} 条。管理员在项目页顶部切换重点`}>
                     {/* 菜单栏窄：数字超过 999 写成 3.7k，「项目」后面只放两个小数字，鼠标停上去看完整 */}
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
                       {i.label}
                       <span style={{ fontSize: 10, color: "#ff4d4f", marginLeft: 2 }}>{focusName}</span>
-                      <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
-                      {scratch.total.unreviewed > 0 && (
+                      {scratchNotPassed > 0 && (
+                        <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
+                      )}
+                      {/* 菜单栏窄，只放两个数：红 = 片段未通过，紫 = 待判的疑似片段（还没审几段在悬停里） */}
+                      {candPending > 0 ? (
+                        <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#722ed1", color: "#fff" }}>{kfmt(candPending)}</span>
+                      ) : scratch.total.unreviewed > 0 && (
                         <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#fa8c16", color: "#fff" }}>{kfmt(scratch.total.unreviewed)}</span>
                       )}
                     </span>

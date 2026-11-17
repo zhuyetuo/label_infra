@@ -2614,6 +2614,32 @@ export default function Projects() {
                   );
                 })()}
                 {(() => {
+                  // 这一类待判的疑似片段：负例多半还停在「疑似」（确认了才变成片段），这是现在要去判的
+                  const cn = scratchReview?.candidates?.[String(p.id)] ?? 0;
+                  if (!cn) return null;
+                  const short = focus?.name ?? "抓挠";
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <Tooltip title={`${short}还有 ${cn} 条疑似片段没判（没确认也没排除）。点一下展开、只看有疑似${short}待判的任务`}>
+                        <Tag color="purple" style={{ cursor: "pointer" }} onClick={(e) => {
+                          e.stopPropagation();
+                          const names = new Set<string>();
+                          for (const t of tasksOf(p.id)) {
+                            for (const n of Object.keys(t.cand_labels ?? {})) {
+                              if (focusLabels.some((f) => n === f || n.startsWith(`${f}-`) || currentName(n) === f)) names.add(n);
+                            }
+                          }
+                          setFilter(p.id, { cand: true, candLabels: names.size ? [...names] : focusLabels, labels: [],
+                                            unreviewedOnly: false, segReturned: false, status: "ALL" });
+                          setExpandedKeys(() => [p.id]);
+                        }}>
+                          疑似{short} 待判 {cn}
+                        </Tag>
+                      </Tooltip>
+                    </div>
+                  );
+                })()}
+                {(() => {
                   const sr = scratchReview?.projects[String(p.id)];
                   if (!sr || !sr.n) return null;
                   // 打了备忘的「先放着」，不算没通过（项目行上的 🔖 备忘单独列）
