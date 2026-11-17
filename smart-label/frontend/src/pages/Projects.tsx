@@ -2886,7 +2886,7 @@ export default function Projects() {
                     </Tooltip>
                   </Popconfirm>
                   {PRIVACY_MASK && role === "super_admin" && <PrivacyMaskPanel project={p} onChanged={refresh} />}
-                  <Tooltip title="按来源清点 / 整批删掉画面候选（一句话找画面、用这一张去扩）。不用为了清一轮试错去删项目">
+                  <Tooltip title="按来源清点 / 整批删掉候选（一句话找画面、用这一张去扩、负例挖掘模型）。不用为了清一轮试错去删项目">
                     <Button size="small" type="link" onClick={() => openPurge(p)}>
                       清理候选
                     </Button>
@@ -3807,7 +3807,7 @@ export default function Projects() {
       {/* 按来源清理画面候选。**只删候选，不动片段**——片段是人工成果，
           归人工管；候选是机器的提议，试坏了就该能整批扔掉 */}
       <Modal
-        title={`清理画面候选 - ${purgeTarget?.name ?? ""}`}
+        title={`清理候选 - ${purgeTarget?.name ?? ""}`}
         open={purgeTarget != null}
         onCancel={() => setPurgeTarget(null)}
         footer={null}
@@ -3840,6 +3840,7 @@ export default function Projects() {
                 ["text", "一句话找画面", "项目页那个入口写的"],
                 ["image", "用这一张去扩", "工作台里拿一帧去找相似写的"],
                 ["similar_old", "画面相似（旧）", "两个入口还没分开时写的，认不出是哪一边"],
+                ["model_neg", "负例挖掘模型", "「只补负例候选」写的疑似进食 / 饮水 / 嗅闻；规则候选（姿态像舔、节律像饮水）不在这里，不会被删"],
               ] as const).map(([key, name, why]) => {
                 const s = purgeSrc.sources[key] ?? { total: 0, pending: 0 };
                 const n = purgeDecided ? s.total : s.pending;

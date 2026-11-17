@@ -416,6 +416,9 @@ _CAND_SOURCES: dict[str, tuple[str, str | None]] = {
     "text": ("similar", vindex.MODEL_TEXT),
     "image": ("similar", vindex.MODEL_IMAGE),
     "similar_old": ("similar", vindex.MODEL_TAG),
+    # 负例挖掘模型（「只补负例候选」）写的疑似进食 / 饮水 / 嗅闻。实测不准的话整批删掉，
+    # 不用删项目、也不会碰规则候选（姿态像舔 / 节律像饮水那些）和人工片段
+    "model_neg": ("model_neg", None),
 }
 
 
@@ -558,7 +561,8 @@ async def project_candidate_sources(project_id: int, db: AsyncSession = Depends(
 
 
 class CandidatePurgeIn(BaseModel):
-    source: str = Field(description="text（一句话找画面）/ image（用这一张去扩）/ similar_old（分不清来源的旧数据）")
+    source: str = Field(description="text（一句话找画面）/ image（用这一张去扩）/ similar_old（分不清来源的旧数据）"
+                                    " / model_neg（负例挖掘模型写的疑似进食 / 饮水 / 嗅闻）")
     # 默认只删还没判过的：已确认/已排除/待定是人的判断，删掉就白判了。
     # 真要推倒重来（「这一批全是试错的」）才开这个
     include_decided: bool = False
