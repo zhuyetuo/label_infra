@@ -63,6 +63,37 @@ const RIVALS: Rival[] = [
     tech: [["int8 1D-CNN 跑在板上", "pub"], ["动作门 + Viterbi 后处理", "pub"], ["按片段评估", "pub"]], acc: "抓挠片段命中 86.0%\n查准 94.9% · 误报 5.2 次/h", biz: "端侧推理，不依赖云；模型 236 KB", ours: true },
 ];
 
+type Use = "高" | "中" | "低" | "不能用";
+interface PubDs { key: string; name: string; url: string; what: string; sensor: string; labels: string; license: string; size: string; use: Use; how: string }
+const DATASETS: PubDs[] = [
+  { key: "marcato", name: "Marcato 2023 · 犬姿态惯性数据集", url: "https://data.mendeley.com/datasets/mpph6bmn7g/1",
+    what: "42 只导盲犬幼犬，背 / 颈 / 胸三处同时戴", sensor: "ActiGraph GT9X：加速度 + 陀螺仪 + 磁力计，100 Hz",
+    labels: "站、坐、躺、走、**抖身**", license: "CC BY 4.0", size: "未标（几百 MB 量级）", use: "高",
+    how: "颈部那一路直接当项圈用。抖身是我们最缺的类（8 s 窗口下只有 174 段），拿来补甩头 / 抖身正样本；站坐躺走补静止和活动" },
+  { key: "vehkaoja", name: "Vehkaoja / Kumpulainen 2022 · 犬行为运动传感器", url: "https://data.mendeley.com/datasets/vxhx934tbn/3",
+    what: "45 只中大型犬，项圈 + 胸背带，17 只重复采集", sensor: "ActiGraph GT9X：加速度 + 陀螺仪，100 Hz",
+    labels: "奔跑、趴、坐、**嗅闻**、站、小跑、走（1 s 分辨率视频标注）", license: "CC BY 4.0", size: "850 MB", use: "中",
+    how: "没有抓挠，但嗅闻是低头小幅动作，正好当抓挠 / 舔的难负样本；也能做跨数据集验证，看模型换一批狗、换一种项圈还稳不稳" },
+  { key: "bebe", name: "BEBE 基准（Earth Species Project）", url: "https://github.com/earthspecies/BEBE",
+    what: "9 个物种、149 个个体、1654 小时", sensor: "动物佩戴的加速度 / 陀螺仪，频率各异",
+    labels: "各物种自己的行为类别", license: "开放（见仓库）", size: "GB 级（未核实）", use: "中",
+    how: "不是狗的行为标签，用途是自监督预训练和对照评测；它的预训练代码和划分方式可以直接借用" },
+  { key: "capture24", name: "Capture-24 / ssl-wearables（牛津）", url: "https://github.com/OxWearables/ssl-wearables",
+    what: "人类手腕加速度；预训练模型基于 70 万人·天 UK Biobank", sensor: "三轴加速度",
+    labels: "人的日常活动", license: "模型开源；UK Biobank 原始数据要申请", size: "模型几十 MB", use: "中",
+    how: "BEBE 证明这套人类手腕预训练模型迁到动物上也有效。直接拿预训练权重初始化我们的 CNN，再用自己的数据微调" },
+  { key: "karimjee", name: "Karimjee 2024 · 犬活动量标准化", url: "https://zenodo.org/records/11904922",
+    what: "6 只比格 + 16 只家犬，项圈 Axivity AX3，200 Hz", sensor: "三轴加速度",
+    labels: "公开的只有汇总后的活动量指标", license: "CC0（Dryad）", size: "很小", use: "低",
+    how: "没有逐窗口的原始数据，训练用不上；它的 MXACC 活动量指标可以借来做产品里的「活动强度」" },
+  { key: "whistle", name: "Whistle 2021 补充材料", url: "https://zenodo.org/records/4836665",
+    what: "7 段演示视频（视频 + 同步加速度曲线 + 模型输出）", sensor: "—", labels: "吃、喝、玩、挠、舔、蹭、甩", license: "CC BY 4.0", size: "45 MB", use: "低",
+    how: "没有原始数据，只能看他们怎么界定每种行为，对齐我们的标注规范" },
+  { key: "private", name: "Vetrax 361 只狗、Whistle 5000+ 段、SensiML 项圈", url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC5883579",
+    what: "有抓挠 / 甩头标注的大数据集", sensor: "三轴 / 六轴加速度", labels: "抓挠、甩头等", license: "不公开（SensiML 要申请）", size: "—", use: "不能用",
+    how: "目前没有公开的狗抓挠 IMU 数据集。抓挠正样本只能靠我们自己采，这反而是壁垒" },
+];
+
 const BARS = [
   { name: "Vetrax 2018", note: "抓挠灵敏度", v: 76.9 },
   { name: "Whistle 2021", note: "抓挠灵敏度", v: 87.0 },
@@ -113,6 +144,9 @@ const SOURCES: [string, string][] = [
   ["PetPace（dvm360）", "https://www.dvm360.com/view/vet-grade-ai-powered-dog-collar"],
   ["Maven", "https://maven.pet/dog-health-tracker/"],
   ["Sure Petcare Animo 预印本", "https://www.preprints.org/manuscript/202306.0301"],
+  ["Marcato 2023, PLOS ONE：犬姿态惯性数据集", "https://doi.org/10.1371/journal.pone.0286311"],
+  ["Karimjee 2024：犬活动量标准化（Zenodo）", "https://zenodo.org/records/11904922"],
+  ["Whistle 2021 补充视频（Zenodo）", "https://zenodo.org/records/4836665"],
   ["国内市场（中华网 2026-03）", "https://m.tech.china.com/articles/20260310/202603101822019.html"],
   ["国内项圈融资（投资界 2026-08）", "https://news.pedaily.cn/20260821/136880.shtml"],
   ["端侧牛项圈 CNN（Pavlovic 2021 Sensors）", "https://mdpi.com/1424-8220/21/12/4050"],
@@ -224,6 +258,27 @@ export default function Research() {
         <Paragraph type="secondary">厂商自报的准确率口径都不统一，只能当方向参考。「0.949/0.999」是灵敏度 / 特异度。</Paragraph>
         <Table size="small" rowKey="key" pagination={false} columns={columns} dataSource={RIVALS} scroll={{ x: 1130 }}
           onRow={(r) => (r.ours ? { style: { background: "var(--sl-hl-orange)" } } : {})} />
+      </Card>
+
+      <Card size="small" title="公开数据集：哪些能下载下来补数据">
+        <Paragraph type="secondary">
+          结论：公开数据里<Text strong>没有带抓挠标注的狗 IMU 数据</Text>。能补的是两块：抖身 / 甩头正样本（Marcato，颈部传感器）和嗅闻这类难负样本（Vehkaoja）；
+          再加一套人类手腕的预训练模型做初始化。用之前统一重采样到 20 Hz，换成我们方向无关的竖直 / 水平 / 模长通道，项圈装法不同也能对上。
+        </Paragraph>
+        <Table size="small" rowKey="key" pagination={false} dataSource={DATASETS} scroll={{ x: 1150 }}
+          columns={[
+            { title: "数据集", dataIndex: "name", width: 200, fixed: "left",
+              render: (v: string, r: PubDs) => <Link href={r.url} target="_blank" rel="noopener noreferrer">{v}</Link> },
+            { title: "规模", dataIndex: "what", width: 190 },
+            { title: "传感器", dataIndex: "sensor", width: 170 },
+            { title: "标签", dataIndex: "labels", width: 170,
+              render: (v: string) => v.split("**").map((t, i) => (i % 2 ? <Text key={i} strong>{t}</Text> : t)) },
+            { title: "许可 / 大小", key: "lic", width: 130,
+              render: (_: unknown, r: PubDs) => <><div>{r.license}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.size}</Text></> },
+            { title: "对我们", dataIndex: "use", width: 80,
+              render: (v: Use) => <Tag color={v === "高" ? "green" : v === "中" ? "blue" : v === "低" ? "default" : "red"}>{v}</Tag> },
+            { title: "怎么用", dataIndex: "how", width: 280 },
+          ]} />
       </Card>
 
       <Row gutter={[16, 16]}>
