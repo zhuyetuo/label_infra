@@ -92,6 +92,11 @@ interface Props {
   /** 存过草稿之后通知外面刷新列表（段数、类别汇总都会变） */
   onSaved?: () => void;
   onSubmitted?: () => void;
+  /**
+   * 同一个 IMU（同一只狗）前一个 / 后一个时间段的任务：连着往前往后翻，人眼找喝水这类画面用。
+   * label 是按钮上写的时间（比如「18:00」，跨天带日期），不给就不显示那一边
+   */
+  nav?: { prev?: { label: string; onClick: () => void }; next?: { label: string; onClick: () => void } };
   /** 审核员看完可以直接在这里下结论，省得关掉再回列表点 */
   onApprove?: () => void | Promise<void>;
   onReject?: () => void;
@@ -187,6 +192,7 @@ export default function AnnotationWorkspace({
   onClose,
   onSaved,
   onSubmitted,
+  nav,
   onApprove,
   onReject,
   approveText,
@@ -1882,6 +1888,21 @@ export default function AnnotationWorkspace({
       <span onClick={() => { const next = !imuOpen; saveBool(IMU_OPEN_KEY, next); setImuOpen(next); }} style={{ cursor: "pointer" }}>
         IMU 波形
       </span>
+      {/* 同一只狗前后一个小时：连着翻，人眼找想要的画面（比如喝水） */}
+      {nav && (nav.prev || nav.next) && (
+        <Space.Compact size="small">
+          <Tooltip title={nav.prev ? `同一个 IMU 的上一个时间段（${nav.prev.label}）` : "这只狗前面没有任务了"}>
+            <Button size="small" disabled={!nav.prev} onClick={() => nav.prev?.onClick()}>
+              ◀ 上一个{nav.prev ? ` ${nav.prev.label}` : ""}
+            </Button>
+          </Tooltip>
+          <Tooltip title={nav.next ? `同一个 IMU 的下一个时间段（${nav.next.label}）` : "这只狗后面没有任务了"}>
+            <Button size="small" disabled={!nav.next} onClick={() => nav.next?.onClick()}>
+              下一个{nav.next ? ` ${nav.next.label}` : ""} ▶
+            </Button>
+          </Tooltip>
+        </Space.Compact>
+      )}
       {hasCsv && sampleId != null && (
         <>
           <Segmented

@@ -1185,6 +1185,38 @@ export default function Projects() {
     refreshTasks([t.id]);
   };
 
+  // 同一个 IMU（同一只狗）按采集时间排的前一个 / 后一个任务。跨项目（跨天）也接得上；
+  // 同一个样本出现在好几个项目里的，同一时间只留一个（优先当前这个项目的）
+  const clockOf = (t: Task): string | null => {
+    const m = /_(\d{8})_(\d{6})/.exec(String(sampleCode(t.sample_id) ?? ""));
+    return m ? `${m[1]}${m[2]}` : null;
+  };
+  const neighborsOf = (task: Task): { prev?: Task; next?: Task } => {
+    const imu = imuOf(String(sampleCode(task.sample_id)));
+    const me = clockOf(task);
+    if (!me || !imu) return {};
+    const byClock = new Map<string, Task>();
+    for (const t of allTasks ?? []) {
+      const c = clockOf(t);
+      if (!c || imuOf(String(sampleCode(t.sample_id))) !== imu) continue;
+      const had = byClock.get(c);
+      if (!had || (had.project_id !== task.project_id && t.project_id === task.project_id)) byClock.set(c, t);
+    }
+    byClock.set(me, task);
+    const keys = [...byClock.keys()].sort();
+    const i = keys.indexOf(me);
+    return { prev: i > 0 ? byClock.get(keys[i - 1]) : undefined, next: i >= 0 && i < keys.length - 1 ? byClock.get(keys[i + 1]) : undefined };
+  };
+  // 按钮上写的时间：同一天只写「18:00」，跨天带日期「11-13 00:00」
+  const navLabel = (t: Task, cur: Task) => {
+    const c = clockOf(t), me = clockOf(cur);
+    if (!c) return "";
+    const hm = `${c.slice(8, 10)}:${c.slice(10, 12)}`;
+    return me && me.slice(0, 8) === c.slice(0, 8) ? hm : `${c.slice(4, 6)}-${c.slice(6, 8)} ${hm}`;
+  };
+  // 打开前后那个：一律只读（这是翻着找画面用的；编辑中换任务会把没存的改动丢掉，所以编辑时不给这两个按钮）
+  const openNeighbor = (t: Task) => openWorkspace(t, true, t.project_id);
+
   // 行里点类别标签打开：自己正在标的就可编辑，其余只读（跟「查看标注 / 编辑标注」同一个判断）
   const pickOpen = (task: Task, projectId: number, pick: { labels?: number[]; cands?: string[]; overlap?: boolean; source?: string }) =>
     openWorkspace(task, !(task.status === "IN_PROGRESS" && task.locked_by === userId), projectId, pick);
@@ -3932,7 +3964,17 @@ export default function Projects() {
       </Modal>
 
       <AnnotationWorkspace
+        // 上一个 / 下一个换任务时整个重建：视频、波形、片段面板都从新任务开始，不带上一个的状态
+        key={workspaceTask?.id ?? "none"}
         task={workspaceTask}
+        nav={(() => {
+          if (!workspaceTask || !workspaceReadOnly) return undefined;
+          const { prev, next } = neighborsOf(workspaceTask);
+          return {
+            prev: prev && { label: navLabel(prev, workspaceTask), onClick: () => openNeighbor(prev) },
+            next: next && { label: navLabel(next, workspaceTask), onClick: () => openNeighbor(next) },
+          };
+        })()}
         focusLabelIds={workspaceFocusLabels}
         focusCandLabels={workspaceFocusCands}
         labels={workspaceLabels}
