@@ -248,7 +248,9 @@ export default function Projects() {
   // 一个"抓挠 0 段"的任务照样可能压着十几条候选，光看类别筛选会整个漏掉
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
+  // minConf：疑似片段置信度 ≥ 多少 %（选了候选类别就只看那几类）；hourFrom / hourTo：样本采集时间几点到几点（跨零点也行）
   type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
+    minConf?: number | null; hourFrom?: number | null; hourTo?: number | null;
     /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
     overlapOnly?: boolean; uncertainOnly?: boolean;
     /** 只看有 🔖 备忘的任务（打了复合 / 边界 / 画面≠IMU…，留着以后处理的） */
@@ -315,7 +317,7 @@ export default function Projects() {
   const statsLoadingOf = (pid: number) => !fullByProject.has(pid);
 
   const filterOf = (projectId: number): TaskFilter => ({
-    status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
+    status: "ALL" as const, q: "", labels: [], aiPending: false, cand: false, candLabels: [], minConf: null, hourFrom: null, hourTo: null, imu: "ALL", noCsv: false, unassigned: false, segReturned: false, showAllLabels: false,
     ...(taskFilters[projectId] as Partial<TaskFilter> | undefined),
   });
   // 按审核时间段筛：每段的审核时间要精确算，单独问一次后端（展开着、设了时间段的项目才问）
@@ -1485,6 +1487,19 @@ export default function Projects() {
               if (f.labels.length && !wantLabelIds.size) return false;
               if (f.labels.length && ![...wantLabelIds].some((id) => (lc[id]?.n ?? 0) > 0)) return false;
               if (f.candLabels.length && !f.candLabels.some((name) => (t.cand_labels?.[name]?.n ?? 0) > 0)) return false;
+              // 置信度：选了候选类别就看那几类，没选就看全部类别；有一条待判的够得上就算
+              if (f.minConf) {
+                const names = f.candLabels.length ? f.candLabels : Object.keys(t.cand_labels ?? {});
+                if (!names.some((name) => (t.cand_labels?.[name]?.max_conf ?? 0) * 100 >= f.minConf!)) return false;
+              }
+              // 时间段：样本编号里的采集开始时间（multicam_20261114_150000…_imu20 → 15:00），几点到几点，跨零点也行
+              if (f.hourFrom != null || f.hourTo != null) {
+                const m = /_\d{8}_(\d{2})(\d{2})/.exec(String(sampleCode(t.sample_id) ?? ""));
+                if (!m) return false;
+                const h = Number(m[1]) + Number(m[2]) / 60;
+                const a = f.hourFrom ?? 0, b = f.hourTo ?? 24;
+                if (a <= b ? !(h >= a && h < b) : !(h >= a || h < b)) return false;
+              }
               return true;
             };
             // imu 目录：按样本编号的 _imu{N} 后缀分，一个 imu 对应一只狗，先选目录再看任务
@@ -1570,6 +1585,8 @@ export default function Projects() {
               f.aiPending && "只看 AI 待确认",
               f.cand && "有待判断的疑似片段",
               f.candLabels.length > 0 && `候选类别：${f.candLabels.join("、")}`,
+              !!f.minConf && `置信度 ≥${f.minConf}%`,
+              (f.hourFrom != null || f.hourTo != null) && `时间段 ${f.hourFrom ?? 0}~${f.hourTo ?? 24} 点`,
               f.imu !== "ALL" && `设备 ${f.imu}`,
               f.noCsv && "无 CSV 数据",
               f.unassigned && "只看未指派",
@@ -1583,7 +1600,7 @@ export default function Projects() {
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
-              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], imu: "ALL",
+              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], minConf: null, hourFrom: null, hourTo: null, imu: "ALL",
               noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
               reviewer: null, reviewedFrom: null, reviewedTo: null,
             });
@@ -1685,6 +1702,22 @@ export default function Projects() {
                 <Checkbox checked={f.aiPending} onChange={(e) => setFilter(p.id, { aiPending: e.target.checked })}>
                   只看有 AI 待确认
                 </Checkbox>
+                <Tooltip title="只看疑似片段里有一条待判的置信度不低于这个数的任务（选了候选类别就只看那几类）。先判模型比较有把握的">
+                  <InputNumber size="small" min={0} max={100} step={10} style={{ width: 118 }}
+                    addonBefore="置信度≥" addonAfter="%" placeholder="不限"
+                    value={f.minConf ?? null}
+                    onChange={(v) => setFilter(p.id, { minConf: typeof v === "number" && v > 0 ? v : null })} />
+                </Tooltip>
+                <Tooltip title="按样本采集时间筛：几点到几点（按开始时间算，跨零点也行，比如 22~6）。比如喂食、喝水多在固定时段">
+                  <Space.Compact size="small">
+                    <InputNumber size="small" min={0} max={24} style={{ width: 92 }} addonBefore="时间段" placeholder="0"
+                      value={f.hourFrom ?? null}
+                      onChange={(v) => setFilter(p.id, { hourFrom: typeof v === "number" ? v : null })} />
+                    <InputNumber size="small" min={0} max={24} style={{ width: 78 }} addonBefore="~" addonAfter="点" placeholder="24"
+                      value={f.hourTo ?? null}
+                      onChange={(v) => setFilter(p.id, { hourTo: typeof v === "number" ? v : null })} />
+                  </Space.Compact>
+                </Tooltip>
                 {(f.labels.length > 0 || (f.cand && f.candLabels.length > 0)) && (
                   <Tooltip title="选了类别（或者按疑似片段类别筛，比如只看疑似饮水）时，任务列表的「片段」一栏默认只显示这几类。勾上就跟原来一样显示所有类别">
                     <Checkbox checked={f.showAllLabels} onChange={(e) => setFilter(p.id, { showAllLabels: e.target.checked })}>

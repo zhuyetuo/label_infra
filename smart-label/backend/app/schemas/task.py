@@ -44,7 +44,8 @@ class TaskOut(BaseModel):
     # 候选按类别分 {类别名: {n, pending}}。候选存的是名字，不是 label_id。
     # 没有它，项目页按「舔」筛就只能筛片段——一句话找画面刚给某个任务写的那条
     # 「舔-后爪」候选，在项目页上根本找不着
-    cand_labels: dict[str, dict[str, int]] = {}
+    # {类别名: {n, pending, max_conf}}；max_conf = 待判的里置信度最高多少（0~1，没有就是 null）
+    cand_labels: dict[str, dict[str, int | float | None]] = {}
     # 被驳回时审核员写的意见，方便标注员知道要改什么
     review_comment: str | None = None
     # 样本编号和指派人名字：标注员/审核员拿不到 /samples 和 /users，列表里只能看

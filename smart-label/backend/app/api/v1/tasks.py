@@ -519,7 +519,7 @@ async def list_tasks(
     # 用一句话找画面给某个任务写了一条「舔-后爪」候选，回到项目页按「舔」筛，
     # 那个任务**找不着**——它确实还没有舔的片段，有的是一条等着判的候选。
     # 候选存的是 label_name（字符串），前端按名字对回项目标签
-    cand_labels: dict[int, dict[str, dict[str, int]]] = {}
+    cand_labels: dict[int, dict[str, dict[str, int | float | None]]] = {}
     if task_ids:
         rows = await db.execute(
             select(
@@ -527,18 +527,21 @@ async def list_tasks(
                 AiCandidate.label_name,
                 func.count(AiCandidate.id),
                 func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)),
+                # 待判的里置信度最高多少：项目页「置信度 ≥」筛选用（只看模型比较有把握的那些任务先判）
+                func.max(case((AiCandidate.status == CandidateStatus.pending, AiCandidate.confidence), else_=None)),
             )
             .join(Task, Task.id == AiCandidate.task_id)
             .join(scope, scope.c.id == Task.id)
             .where(AiCandidate.round_no == Task.round_no)
             .group_by(AiCandidate.task_id, AiCandidate.label_name)
         )
-        for task_id, label_name, n, n_pending in rows.all():
+        for task_id, label_name, n, n_pending, max_conf in rows.all():
             c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0})
             c["n"] += int(n)
             c["pending"] += int(n_pending or 0)
             cand_labels.setdefault(task_id, {})[label_name] = {
-                "n": int(n), "pending": int(n_pending or 0)}
+                "n": int(n), "pending": int(n_pending or 0),
+                "max_conf": round(float(max_conf), 4) if max_conf is not None else None}
 
     _lap("cands")
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员

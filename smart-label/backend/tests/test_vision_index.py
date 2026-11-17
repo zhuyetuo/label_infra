@@ -663,10 +663,10 @@ def test_任务列表带出候选的类别分布_项目页才筛得到(db, run):
     u, p, (s1, s2), (t1, t2, t3, t4) = _world(db, run)
     for c in (AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔-后爪",
                           start_time_ms=1000, end_time_ms=2000, reason=vi.REASON,
-                          model=vi.MODEL_TEXT, status=CandidateStatus.pending),
+                          model=vi.MODEL_TEXT, status=CandidateStatus.pending, confidence=0.6),
               AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="舔-后爪",
                           start_time_ms=5000, end_time_ms=6000, reason=vi.REASON,
-                          model=vi.MODEL_TEXT, status=CandidateStatus.rejected),
+                          model=vi.MODEL_TEXT, status=CandidateStatus.rejected, confidence=0.9),
               AiCandidate(task_id=t1.id, round_no=t1.round_no, label_name="抓挠",
                           start_time_ms=9000, end_time_ms=9500, reason="low_conf")):
         db.add(c)
@@ -674,8 +674,9 @@ def test_任务列表带出候选的类别分布_项目页才筛得到(db, run):
 
     rows = run(api.list_tasks(project_id=p.id, db=db, user=u))["data"]
     got = next(r for r in rows if r["id"] == t1.id)
-    assert got["cand_labels"] == {"舔-后爪": {"n": 2, "pending": 1},
-                                  "抓挠": {"n": 1, "pending": 1}}
+    # max_conf 只算待判的（排除掉的那条 0.9 不算）：项目页「置信度 ≥」筛选用
+    assert got["cand_labels"] == {"舔-后爪": {"n": 2, "pending": 1, "max_conf": 0.6},
+                                  "抓挠": {"n": 1, "pending": 1, "max_conf": None}}
     # 总数还是原来那两个数：按类别拆开之后不能把合计算错
     assert got["cand_count"] == 3 and got["cand_pending"] == 2
     # 没有候选的任务给空字典，不是 None——前端直接 Object.entries
