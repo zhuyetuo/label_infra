@@ -3251,6 +3251,20 @@ export default function Projects() {
               但<b>只换「模型判成这一类」那一种候选</b>：草稿片段、疑似抓挠、疑似舔 / 甩头 / 吠叫 / 如厕、大模型看视频的候选、
               判过的候选都原样保留，上面两个勾也不起作用。选的模型没单独训这些类别的话，什么都不会写。
             </Typography.Text>
+            {prelabelNegOnly && (() => {
+              // 选的版本是不是负例挖掘模型：下拉里那种模型名字带「负例挖掘」（useInferModes）
+              type Opt = { value?: unknown; label?: unknown; options?: Opt[] };
+              const all = (inferOptions as Opt[]).flatMap((g) => g.options ?? [g]);
+              const label = String(all.find((o) => o.value === prelabelMode)?.label ?? "");
+              return label.includes("负例挖掘") ? null : (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="选的版本不是负例挖掘模型，跑了也不会写任何负例候选"
+                  description="版本里选名字带「负例挖掘」的那个。没看到的话，先去「模型训练」的训练记录里把它启用（标着「负例挖掘：进食 / 饮水 / 嗅闻」的那条）。"
+                />
+              );
+            })()}
             <Typography.Text>
               本次将处理{prelabelKeepHuman ? "最多" : ""} <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman, prelabelNegOnly)}</b> 个任务。AI 服务按文件多进程并行跑，
               整个过程在后台进行，项目行里能看到进度和预计剩余时间。

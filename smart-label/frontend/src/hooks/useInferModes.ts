@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { negClassesOf } from "@/utils/negMining";
 import { useQuery } from "@tanstack/react-query";
 import { listEdgeModels, listServerModels } from "@/api/modelEval";
 import { listModelVersions } from "@/api/training";
@@ -115,6 +116,8 @@ export function useInferModes() {
             const vid = t ? versionIdOf.get(t.job_id) : undefined;
             const name = t
               ? `训练记录 #${vid ?? `?(算法#${t.job_id})`} · ${t.axes === 3 ? "3轴" : "6轴"}` +
+                // 负例挖掘模型：批量预标注勾「只补负例候选」时选这种
+                (negClassesOf(t.classes ?? []).length ? " · 负例挖掘" : "") +
                 (typeof t.macro_f1 === "number" ? ` · F1 ${t.macro_f1.toFixed(2)}` : "")
               : m.tag;
             const origin = t

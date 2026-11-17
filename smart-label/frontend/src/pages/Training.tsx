@@ -18,6 +18,7 @@ import SizeCurveModal from "@/components/SizeCurveModal";
 import EdgeFootprint from "@/components/EdgeFootprint";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import { fmtSecs } from "@/utils/fmtDuration";
+import { NEG_GROUPS, negClassesOf, negGroupOf } from "@/utils/negMining";
 import ModelCompare from "@/components/ModelCompare";
 import DataPoolPanel from "@/components/DataPoolPanel";
 import ClassCompare from "@/components/ClassCompare";
@@ -1102,6 +1103,16 @@ export default function Training() {
                           {/* 端侧尺寸的跟不限深的大模型不能直接比分数：一个要塞进 128KB，
                               一个没限制。混在一起看，端侧那版永远像是"更差的那个" */}
                           {Boolean(sp.edge_size) && <Tag color="cyan">端侧尺寸</Tag>}
+                          {(() => {
+                            // 负例挖掘模型：进食 / 饮水 / 嗅闻…各自成了一类（没并进「活动」）。
+                            // 项目批量预标注勾「只补负例候选」时选它，判成这些类的片段变成候选给人确认
+                            const negs = negClassesOf(Object.values((sp.label_remap as Record<string, string> | undefined) ?? {}));
+                            return negs.length > 0 ? (
+                              <Tooltip title="负例挖掘模型：这几类各自成一类训的。项目里批量 AI 预标注勾「只补负例候选」、版本选它，判成这些类的片段会变成候选给标注员确认；标注员补了数据，回这里用同一套设置重训">
+                                <Tag color="lime">负例挖掘：{negs.join(" / ")}</Tag>
+                              </Tooltip>
+                            ) : null;
+                          })()}
                           {sp.channel_mode === "inv" && (
                             <Tooltip title="方向无关输入 + 旋转增强：佩戴方向不影响识别">
                               <Tag color="green">方向无关</Tag>
@@ -2427,9 +2438,32 @@ export default function Training() {
                 <Divider style={{ margin: "4px 0" }} />
                 <Space style={{ justifyContent: "space-between", width: "100%" }}>
                   <Typography.Text>类别归并（可不改）</Typography.Text>
-                  <Tooltip title={`段数少于 ${MIN_SEGMENTS} 或不到 1 分钟、又是「自成一类」的细类，并进上一级（上一级加起来还不够就再往上）。并完还能逐行改`}>
-                    <Button size="small" onClick={mergeSmall}>太少的细类并进上一级</Button>
-                  </Tooltip>
+                  <Space size={4}>
+                    <Tooltip title={`把这次数据里的 ${NEG_GROUPS.join(" / ")}（带部位的细类并进大类，比如「舔-后肢」→ 舔）各自设成一类，不并进「活动」，端侧尺寸关掉（这是服务端用的模型）。训出来就是负例挖掘模型：项目批量预标注勾「只补负例候选」时选它。标注员补了舔 / 啃 / 蹭的数据，再点一次重训就把新类别带上。别的类别不动`}>
+                      <Button size="small" onClick={() => {
+                        const hit: string[] = [];
+                        setRemapEdits((m) => {
+                          const next = { ...m };
+                          for (const c of trainCats) {
+                            const g = negGroupOf(c.name);
+                            if (g) {
+                              next[c.name] = g;
+                              if (!hit.includes(g)) hit.push(g);
+                            }
+                          }
+                          return next;
+                        });
+                        setEdgeSize(false);
+                        setTimeout(() => {
+                          if (hit.length) message.success(`已设成负例挖掘模型：${hit.join(" / ")} 各自成一类（端侧尺寸已关）`);
+                          else message.warning(`这次数据里没有 ${NEG_GROUPS.join(" / ")} 这些类别，先在「一起训练的数据集」里加上（比如 pub_vehkaoja2022）`);
+                        }, 0);
+                      }}>设成负例挖掘模型</Button>
+                    </Tooltip>
+                    <Tooltip title={`段数少于 ${MIN_SEGMENTS} 或不到 1 分钟、又是「自成一类」的细类，并进上一级（上一级加起来还不够就再往上）。并完还能逐行改`}>
+                      <Button size="small" onClick={mergeSmall}>太少的细类并进上一级</Button>
+                    </Tooltip>
+                  </Space>
                 </Space>
                 <Table<TrainRow>
                   rowKey="key"
