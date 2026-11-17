@@ -19,6 +19,7 @@ import Vision from "@/pages/Vision";
 import DeviceDebug from "@/pages/DeviceDebug";
 import CamCheck from "@/pages/CamCheck";
 import Training from "@/pages/Training";
+import Research from "@/pages/Research";
 import { SegmentReviewEntry } from "@/pages/SegmentReview";
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/cam-check" element={<CamCheck />} />
         <Route path="/device-debug" element={<DeviceDebug />} />
         <Route path="/training" element={<Training />} />
+        <Route path="/research" element={<Research />} />
         <Route path="/users" element={<Users />} />
         <Route path="/llm-providers" element={<LlmProviders />} />
         <Route path="/system" element={<System />} />
