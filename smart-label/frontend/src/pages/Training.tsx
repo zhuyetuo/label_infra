@@ -1045,7 +1045,22 @@ export default function Training() {
                 // 也别让人左右拖着找「删除」在哪
                 tableLayout="auto"
                 columns={[
-                  { title: "ID", dataIndex: "id", width: 50 },
+                  {
+                    title: "ID",
+                    dataIndex: "id",
+                    width: 50,
+                    render: (id: number, v: ModelVersion) => (
+                      <div>
+                        <div>{id}</div>
+                        {/* 启用状态用颜色标出来：不显眼的话得逐行去操作列里反推「现在停没停」 */}
+                        {v.status === "done" && v.model_path && (
+                          <Tag color={v.listed ? "green" : "default"} style={{ marginInlineEnd: 0, marginTop: 2 }}>
+                            {v.listed ? "启用" : "停用"}
+                          </Tag>
+                        )}
+                      </div>
+                    ),
+                  },
                   {
                     title: "状态",
                     width: 80,
@@ -1254,6 +1269,7 @@ export default function Training() {
                               <Button
                                 size="small"
                                 type="link"
+                                style={{ color: v.listed ? "#fa8c16" : "#52c41a", paddingInline: 4 }}
                                 onClick={async () => {
                                   await setModelListed(v.id, !v.listed);
                                   message.success(v.listed ? `已停用训练记录 #${v.id}` : `已启用训练记录 #${v.id}，项目的版本下拉里可以选了`);
