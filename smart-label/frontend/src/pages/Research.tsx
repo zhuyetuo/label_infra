@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Alert, Anchor, Card, Col, Progress, Row, Space, Steps, Table, Tag, Timeline, Tooltip, Typography, theme } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Card, Col, Flex, Grid, Progress, Row, Space, Steps, Table, Tag, Timeline, Tooltip, Typography, theme } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 const { Title, Text, Paragraph, Link } = Typography;
@@ -191,9 +191,60 @@ const tagOf = ([text, k]: T, i: number) =>
     <Tag key={i} color={k === "dead" ? "red" : "purple"} style={{ marginBottom: 4 }}>{text}</Tag>
   );
 
+/** 右侧目录的各节：跟下面各 Card 的 id 一一对应 */
+const SECTIONS = [
+  { id: "trend", label: "三代趋势" },
+  { id: "history", label: "来时路" },
+  { id: "ladder", label: "方法台阶" },
+  { id: "rivals", label: "竞品拆解" },
+  { id: "datasets", label: "公开数据集" },
+  { id: "baseline", label: "基线对比" },
+  { id: "pipeline", label: "完整链路" },
+  { id: "next", label: "下一步" },
+  { id: "sources", label: "参考资料" },
+] as const;
+
 export default function Research() {
   const { token } = theme.useToken();
+  const bp = Grid.useBreakpoint();
+  const [active, setActive] = useState<string>(SECTIONS[0].id);
   const pre = { whiteSpace: "pre-line" as const, fontVariantNumeric: "tabular-nums" as const };
+
+  // 目录高亮跟着滚动走。页面滚动发生在 Content 容器里（不是 window），要监听
+  // 那个容器；不用 antd Anchor，它在这页上跟手动滚动互相打架
+  useEffect(() => {
+    const container = document.querySelector(".ant-layout-content");
+    if (!container) return;
+    const sync = () => {
+      const cTop = container.getBoundingClientRect().top;
+      let cur: string = SECTIONS[0].id;
+      for (const s of SECTIONS) {
+        const el = document.getElementById(s.id);
+        if (el && el.getBoundingClientRect().top - cTop <= 120) cur = s.id;
+      }
+      // 滚到底时最后一节可能永远停不进阈值线（节太高、下面空间不够），直接点亮最后一项
+      if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {
+        cur = SECTIONS[SECTIONS.length - 1].id;
+      }
+      setActive(cur);
+    };
+    container.addEventListener("scroll", sync, { passive: true });
+    sync();
+    return () => container.removeEventListener("scroll", sync);
+  }, []);
+
+  const jump = (id: string) => {
+    setActive(id);
+    // 只滚内容区这一个容器。scrollIntoView 会把 html/body/#root 这些 overflow:hidden
+    // 的祖先也一起滚（历史上菜单比视口高 8px 时整个页面就被顶上去 8px），这里手动算位置
+    const el = document.getElementById(id);
+    const container = document.querySelector(".ant-layout-content");
+    if (!el || !container) return;
+    container.scrollTo({
+      top: container.scrollTop + el.getBoundingClientRect().top - container.getBoundingClientRect().top,
+      behavior: "smooth",
+    });
+  };
 
   const columns: ColumnsType<Rival> = [
     { title: "产品", dataIndex: "name", width: 150, fixed: "left",
@@ -207,30 +258,13 @@ export default function Research() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Flex gap={16} align="flex-start">
+      <Space direction="vertical" size={16} style={{ flex: 1, minWidth: 0 }}>
       <div>
         <Space align="baseline" wrap>
           <Title level={4} style={{ margin: 0 }}>行业调研 · 宠物可穿戴</Title>
           <Text type="secondary">学术与产业里程碑、竞品拆解、我们的位置和下一步。数字截至 2026-11。</Text>
         </Space>
-        {/* 一行目录：这页很长，点哪个模块直接跳过去，滚到了哪节也会高亮。
-            页面滚动发生在 Content 容器里（不是整个 window），要把容器告诉 Anchor */}
-        <Anchor
-          direction="horizontal"
-          affix={false}
-          getContainer={() => document.querySelector(".ant-layout-content") as HTMLElement}
-          items={[
-            { key: "trend", href: "#trend", title: "三代趋势" },
-            { key: "history", href: "#history", title: "来时路" },
-            { key: "ladder", href: "#ladder", title: "方法台阶" },
-            { key: "rivals", href: "#rivals", title: "竞品拆解" },
-            { key: "datasets", href: "#datasets", title: "公开数据集" },
-            { key: "baseline", href: "#baseline", title: "基线对比" },
-            { key: "pipeline", href: "#pipeline", title: "完整链路" },
-            { key: "next", href: "#next", title: "下一步" },
-            { key: "sources", href: "#sources", title: "参考资料" },
-          ]}
-        />
       </div>
 
       <Card id="trend" size="small" title="从「它在哪」到「它怎么了」">
@@ -358,6 +392,30 @@ export default function Research() {
           我们的数字来自 pool_20261116_all 五折交叉验证（2026-11-17）。竞品功能以各厂商当期公开资料为准，可能已有更新。
         </Paragraph>
       </Card>
-    </Space>
+      </Space>
+
+      {/* 右侧目录：吸在可视区不动，点哪节跳哪节，滚到哪节亮哪节；窄屏放不下就隐藏 */}
+      {bp.lg && (
+        <nav style={{ position: "sticky", top: 0, width: 112, flex: "0 0 112px", userSelect: "none" }}>
+          <div style={{ fontWeight: 600, fontSize: 13, padding: "2px 0 8px 12px" }}>目录</div>
+          {SECTIONS.map((s) => (
+            <div
+              key={s.id}
+              onClick={() => jump(s.id)}
+              style={{
+                padding: "6px 0 6px 12px",
+                fontSize: 13,
+                cursor: "pointer",
+                borderLeft: `2px solid ${active === s.id ? token.colorPrimary : "transparent"}`,
+                color: active === s.id ? token.colorPrimary : token.colorTextSecondary,
+                fontWeight: active === s.id ? 600 : 400,
+              }}
+            >
+              {s.label}
+            </div>
+          ))}
+        </nav>
+      )}
+    </Flex>
   );
 }

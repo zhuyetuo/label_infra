@@ -128,7 +128,9 @@ export default function AppLayout() {
         <Sider width={180}>
           <Menu
             mode="inline"
-            style={{ height: "100%" }}
+            // 菜单项多时（视口矮）在侧边栏内部滚。不加的话菜单比视口高出的部分
+            // 会撑出 #root 的隐形溢出，页面上任何 scrollIntoView 都会把整个布局顶上去
+            style={{ height: "100%", overflowY: "auto" }}
             selectedKeys={[location.pathname]}
             defaultOpenKeys={["samples"]}
             onClick={(e) => navigate(e.key)}
