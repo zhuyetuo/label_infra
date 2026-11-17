@@ -20,6 +20,7 @@ import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import { fmtSecs } from "@/utils/fmtDuration";
 import ModelCompare from "@/components/ModelCompare";
 import DataPoolPanel from "@/components/DataPoolPanel";
+import { markPoolItems, type PoolReviewMark } from "@/api/dataPool";
 import ClassCompare from "@/components/ClassCompare";
 import type { LabelDefinition, Task } from "@/types";
 import {
@@ -30,6 +31,7 @@ import {
   type LabelTreeNode,
   type DatasetSegment,
   getDatasetSegments,
+  dedupeDataset,
   deleteDataset,
   activateModel, cancelModelVersion, dataBundleInfo, downloadDataBundle, downloadEdgeBundle, type EdgeBundleKind, exportModelEdge, setModelListed, type EdgeMetrics, type SizeCurve, deleteModelVersion, exportDataset, listDatasets, listModelVersions, submitTrain,
   trainRemap,
@@ -66,6 +68,19 @@ const MODEL_TYPE_LABEL: Record<string, string> = { rf: "rf（随机森林）", c
  */
 const leafOf = (r: DatasetSegment): string =>
   r.labels?.length ? r.labels[r.labels.length - 1] : r.label;
+
+/** 数据池人工复审的四种结论 + 对不上数据库的（导出时拆/合出来的段） */
+type SegReviewState = "in" | "seen" | "bad" | "none" | "unmatched";
+const SEG_STATE_META: Record<SegReviewState, { color: string; label: string; hint: string }> = {
+  in: { color: "green", label: "已入数据池", hint: "人工复审通过，已经在数据池里，训练时会用到" },
+  seen: { color: "blue", label: "看过·未放入", hint: "人看过，认为不适合放进数据池" },
+  bad: { color: "red", label: "错乱·不适合", hint: "数据错乱 / 标错了，不能用来训练" },
+  none: { color: "default", label: "未看过", hint: "还没人工复审过" },
+  unmatched: { color: "default", label: "无法标记", hint: "这条是导出时拆 / 合出来的，数据库里对不上一条标注，改不了它——要改得回任务里改" },
+};
+const segStateOf = (r: DatasetSegment): SegReviewState =>
+  r.item_id == null ? "unmatched" : ((r.review_state ?? "none") as SegReviewState);
+const segKey = (r: DatasetSegment) => `${r.task_id}-${r.start}-${r.label}`;
 
 const EXPORT_RANGE_KEY = "export-date-range";
 
@@ -390,6 +405,58 @@ export default function Training() {
       setCheckRes(await checkDataset(n));
     } finally {
       setChecking(false);
+    }
+  };
+  // 数据池复审：在数据集里一条条看，标「已入池 / 看过没放 / 错乱 / 没看过」
+  const [segState, setSegState] = useState<SegReviewState | "all">("all");
+  const [pickedSegKeys, setPickedSegKeys] = useState<string[]>([]);
+  const [markingPool, setMarkingPool] = useState(false);
+  const segRows = useMemo(
+    () =>
+      (dsSegs?.rows ?? []).filter(
+        (r) => (!segLabel || leafOf(r) === segLabel) && (segState === "all" || segStateOf(r) === segState)
+      ),
+    [dsSegs, segLabel, segState]
+  );
+  const segCounts = useMemo(() => {
+    const c: Record<SegReviewState, number> = { in: 0, seen: 0, bad: 0, none: 0, unmatched: 0 };
+    for (const r of dsSegs?.rows ?? []) c[segStateOf(r)] += 1;
+    return c;
+  }, [dsSegs]);
+  const pickedItemIds = useMemo(() => {
+    const keys = new Set(pickedSegKeys);
+    return Array.from(
+      new Set((dsSegs?.rows ?? []).filter((r) => keys.has(segKey(r)) && r.item_id != null).map((r) => r.item_id!))
+    );
+  }, [pickedSegKeys, dsSegs]);
+  const markSegs = async (ids: number[], mark: PoolReviewMark) => {
+    if (!ids.length) return;
+    setMarkingPool(true);
+    try {
+      const r = await markPoolItems(ids, mark);
+      message.success(`已标记 ${r.marked} 条`);
+      setPickedSegKeys([]);
+      await qc.invalidateQueries({ queryKey: ["dataset-segments", dsDetail?.name] });
+      qc.invalidateQueries({ queryKey: ["data-pool"] });
+    } finally {
+      setMarkingPool(false);
+    }
+  };
+  const [deduping, setDeduping] = useState(false);
+  const runDedupe = async (n: string) => {
+    setDeduping(true);
+    try {
+      const r = await dedupeDataset(n);
+      message.success(
+        `去重完成：合并同类别重叠 ${r.merged} 段，去掉被细类盖住的粗类段 ${r.removed_parent} 条（动过 ${r.tasks_changed} 个任务）`
+      );
+      qc.invalidateQueries({ queryKey: ["dataset-segments", n] });
+      qc.invalidateQueries({ queryKey: ["data-pool"] });
+      if (r.merged || r.removed_parent) {
+        message.warning("改的是源标注；要重新导出这份数据集，去重才会落进训练文件", 8);
+      }
+    } finally {
+      setDeduping(false);
     }
   };
   const [detail, setDetail] = useState<ModelVersion | null>(null);
@@ -1001,6 +1068,8 @@ export default function Training() {
                             onClick={() => {
                               setCheckRes(null);
                               setSegLabel(null);
+                              setSegState("all");
+                              setPickedSegKeys([]);
                               setDsDetail(d);
                             }}
                           >
@@ -1793,9 +1862,21 @@ export default function Training() {
             {/* 重复和重叠都是"看汇总数字看不出来、进了训练才吃亏"的毛病，
                 单独给个体检 */}
             <div style={{ marginTop: 12 }}>
-              <Button size="small" loading={checking} onClick={() => runCheck(dsDetail.name)}>
-                检查重复 / 重叠
-              </Button>
+              <Space size={6} wrap>
+                <Button size="small" loading={checking} onClick={() => runCheck(dsDetail.name)}>
+                  检查重复 / 重叠
+                </Button>
+                <Popconfirm
+                  title="对这份数据集一键去重？"
+                  description="对文件里每个任务合并同类别的重叠段、去掉被细类盖住的粗类段。改的是源标注，做完要重新导出这份数据集才生效；不会顺手把这些段标成审核通过。"
+                  okText="去重"
+                  onConfirm={() => runDedupe(dsDetail.name)}
+                >
+                  <Button size="small" loading={deduping}>
+                    一键去重
+                  </Button>
+                </Popconfirm>
+              </Space>
               {checkRes && (
                 <div style={{ marginTop: 8 }}>
                   <Space size={6} wrap>
@@ -1898,7 +1979,7 @@ export default function Training() {
                 </Typography.Text>
               )}
             </Typography.Text>
-            <Space size={4} wrap style={{ margin: "4px 0" }}>
+            <Space size={4} wrap style={{ display: "flex", margin: "4px 0" }}>
               <Tag.CheckableTag checked={segLabel == null} onChange={() => setSegLabel(null)}>
                 全部
               </Tag.CheckableTag>
@@ -1919,19 +2000,55 @@ export default function Training() {
                 </Tag.CheckableTag>
               ))}
             </Space>
+            {/* 数据池复审：旧数据集里有一批没人复核过就进了池，这里一条条过。
+                先按结论筛，再勾选批量标；看不出来哪些看过、哪些没看过就无从下手 */}
+            <Space size={4} wrap style={{ display: "flex", margin: "0 0 4px" }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                数据池复审：
+              </Typography.Text>
+              <Tag.CheckableTag checked={segState === "all"} onChange={() => setSegState("all")}>
+                全部 {dsSegs?.rows.length ?? 0}
+              </Tag.CheckableTag>
+              {(["none", "seen", "in", "bad", "unmatched"] as SegReviewState[]).map((k) => (
+                <Tooltip key={k} title={SEG_STATE_META[k].hint}>
+                  <Tag.CheckableTag checked={segState === k} onChange={() => setSegState(k)}>
+                    {SEG_STATE_META[k].label} {segCounts[k]}
+                  </Tag.CheckableTag>
+                </Tooltip>
+              ))}
+            </Space>
+            {pickedItemIds.length > 0 && (
+              <Space size={6} wrap style={{ display: "flex", margin: "0 0 6px" }}>
+                <Typography.Text style={{ fontSize: 12 }}>已选 {pickedItemIds.length} 条：</Typography.Text>
+                <Button size="small" type="primary" loading={markingPool} onClick={() => markSegs(pickedItemIds, "in")}>
+                  放入数据池
+                </Button>
+                <Button size="small" loading={markingPool} onClick={() => markSegs(pickedItemIds, "seen")}>
+                  看过·未放入
+                </Button>
+                <Button size="small" danger loading={markingPool} onClick={() => markSegs(pickedItemIds, "bad")}>
+                  错乱·不适合
+                </Button>
+                <Button size="small" onClick={() => markSegs(pickedItemIds, "none")}>
+                  清除标记
+                </Button>
+              </Space>
+            )}
             <Table<DatasetSegment>
               size="small"
-              rowKey={(r) => `${r.task_id}-${r.start}-${r.label}`}
+              rowKey={segKey}
               loading={loadingSegs}
-              dataSource={(dsSegs?.rows ?? []).filter((r) => !segLabel || leafOf(r) === segLabel)}
+              dataSource={segRows}
+              rowSelection={{
+                selectedRowKeys: pickedSegKeys,
+                onChange: (keys) => setPickedSegKeys(keys as string[]),
+                // 对不上数据库的段标不了——别让人勾了才发现
+                getCheckboxProps: (r) => ({ disabled: r.item_id == null }),
+              }}
               pagination={{ pageSize: 20, size: "small" }}
               // max-content 会按内容无限撑宽，「去修」被推到屏幕外；给个下限，
               // 剩下的宽度归「样本」那一列。
-              // 每一列都定了宽度，加起来 960（80+260+90+175+175+100+80）；
-              // x 给这个数，表格正好铺满，也不会有哪一列被多出来的空间撑开。
-              // 之前「样本」是唯一没宽度的列，弹窗一放宽它就吃掉全部富余，
-              // 样本和类别之间空出一大片。
-              scroll={{ x: 960, y: 300 }}
+              scroll={{ x: 1260, y: 300 }}
               tableLayout="fixed"
               columns={[
                 { title: "任务", dataIndex: "task_id", width: 80 },
@@ -1974,32 +2091,61 @@ export default function Training() {
                   sorter: (a, b) => (a.seconds ?? 0) - (b.seconds ?? 0),
                 },
                 {
+                  title: "数据池复审",
+                  width: 130,
+                  render: (_, r) => {
+                    const st = segStateOf(r);
+                    return (
+                      <Tooltip title={SEG_STATE_META[st].hint}>
+                        <Tag color={SEG_STATE_META[st].color}>{SEG_STATE_META[st].label}</Tag>
+                      </Tooltip>
+                    );
+                  },
+                },
+                {
                   title: "",
-                  width: 80,
+                  width: 150,
                   // 钉在右边：横向滚动时也够得着。列一多就得先往右拖才能点，
                   // 而这一列恰恰是这张表存在的意义——看到不对的就地点开改。
                   fixed: "right",
-                  // 按时长排一下，长得离谱的那几条多半是起止没调好，就地点开改
                   render: (_, r) => (
-                    // start_ms 是后加的字段，早先导出的数据集里没有。没有它就只能
-                    // 把工作台开在开头，人还得自己按时间戳找——那跟"就地改"差远了。
-                    // 与其静默地跳不过去，不如说清楚为什么、以及怎么办。
-                    <Tooltip
-                      title={
-                        r.start_ms == null
-                          ? "这份数据集导出得早，片段里没记时间偏移，点进去只能停在开头。重新导出一次就能直接跳到这一段。"
-                          : undefined
-                      }
-                    >
-                      <Button
-                        size="small"
-                        type="link"
-                        loading={wsOpening === r.task_id}
-                        onClick={() => openTask(r.task_id, r.start_ms)}
+                    <Space size={0}>
+                      <Dropdown
+                        disabled={r.item_id == null}
+                        menu={{
+                          items: [
+                            { key: "in", label: "放入数据池" },
+                            { key: "seen", label: "看过·未放入" },
+                            { key: "bad", label: "错乱·不适合" },
+                            { key: "none", label: "清除标记（回到自动）" },
+                          ],
+                          onClick: ({ key }) => markSegs([r.item_id!], key as PoolReviewMark),
+                        }}
                       >
-                        去修{r.start_ms == null ? "（无法定位）" : ""}
-                      </Button>
-                    </Tooltip>
+                        <Button size="small" type="link" disabled={r.item_id == null}>
+                          标记
+                        </Button>
+                      </Dropdown>
+                      {/* start_ms 是后加的字段，早先导出的数据集里没有。没有它就只能
+                          把工作台开在开头，人还得自己按时间戳找——那跟"就地改"差远了。
+                          与其静默地跳不过去，不如说清楚为什么、以及怎么办。 */}
+                      <Tooltip
+                        title={
+                          r.start_ms == null
+                            ? "这份数据集导出得早，片段里没记时间偏移，点进去只能停在开头。重新导出一次就能直接跳到这一段。"
+                            : undefined
+                        }
+                      >
+                        <Button
+                          size="small"
+                          type="link"
+                          loading={wsOpening === r.task_id}
+                          onClick={() => openTask(r.task_id, r.start_ms)}
+                        >
+                          去修{r.start_ms == null ? "（无法定位）" : ""}
+                        </Button>
+                      </Tooltip>
+                    </Space>
                   ),
                 },
               ]}

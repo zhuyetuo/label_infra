@@ -846,6 +846,25 @@ async def export_dataset(
     return meta
 
 
+def read_task_ids(name: str) -> list[int]:
+    """这份导出里装了哪些任务（去重，保持文件里的顺序）。数据集去重按它逐个任务跑"""
+    if not _NAME_RE.match(name):
+        raise TrainingExportError("数据集名不合法")
+    path = os.path.join(settings.nas_root, TRAIN_DIR, name, "merged_tmp.json")
+    if not os.path.isfile(path):
+        raise TrainingExportError("这个数据集没有导出文件")
+    with open(path, encoding="utf-8") as f:
+        tasks = json.load(f)
+    out: list[int] = []
+    seen: set[int] = set()
+    for t in tasks:
+        tid = t.get("id")
+        if isinstance(tid, int) and tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
 def read_segments(name: str, limit: int = 5000) -> dict:
     """
     把导出文件里的片段摊平成一张表，用来核对"这份数据集到底装了什么"。

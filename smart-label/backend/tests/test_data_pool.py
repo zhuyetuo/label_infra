@@ -223,3 +223,37 @@ def test_按审核时间段筛(db, run):
     r = run(tasks_api.approvals_in_range(project_id=w.p.id, date_from=today - timedelta(days=6),
                                          date_to=today - timedelta(days=4), db=db, user=w.admin))["data"]
     assert r == {str(w.t.id): {"n": 1, "by_label": {str(w.child.id): 1}}}
+
+
+def test_人工复审标记_看过没放入_错乱_清除(db, run):
+    """数据集详情里逐条复审：seen / bad 离开池子，in 放回去，none 恢复自动"""
+    w = _world(db, run)
+    it = w.items[1]
+    assert data_pool.review_state(it.seg_status, it.pool_state, it.pool_review) == "none"
+
+    run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[it.id], mark="seen"), db, w.rev))
+    assert it.pool_state == "out" and it.pool_review == "seen"
+    assert data_pool.review_state(it.seg_status, it.pool_state, it.pool_review) == "seen"
+    assert it.id not in _ids_in_pool(run, db)
+
+    run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[it.id], mark="bad"), db, w.rev))
+    assert data_pool.review_state(it.seg_status, it.pool_state, it.pool_review) == "bad"
+    assert it.id not in _ids_in_pool(run, db)
+
+    run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[it.id], mark="in"), db, w.rev))
+    assert it.id in _ids_in_pool(run, db)
+
+    # 审核通过的那条被标「看过没放入」→ 离开池子；清掉标记后按审核通过自动回来
+    approved = w.items[0]
+    run(seg_api.decide(approved.id, seg_api.DecideIn(decision="approved"), db, w.rev))
+    assert approved.id in _ids_in_pool(run, db)
+    run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[approved.id], mark="seen"), db, w.rev))
+    assert approved.id not in _ids_in_pool(run, db)
+    run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[approved.id], mark="none"), db, w.rev))
+    assert approved.id in _ids_in_pool(run, db)
+
+    # 标注员不能改；非法标记拒绝
+    with pytest.raises(HTTPException):
+        run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[it.id], mark="in"), db, w.ann))
+    with pytest.raises(HTTPException):
+        run(pool_api.post_mark(pool_api.PoolMarkIn(item_ids=[it.id], mark="xx"), db, w.rev))

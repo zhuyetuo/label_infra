@@ -150,6 +150,15 @@ class AnnotationLabelItem(Base):
                                                    comment="数据池：空=自动（审核通过即在池）/ in=手动加入 / out=手动移出")
     # 手动加入数据池的时间。审核通过进来的用 seg_reviewed_at；「刚进池的先」按这两个排
     pool_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="手动加入数据池的时间")
+    # 数据池的**人工复审**记录（「训练数据集 → 详情」里一条条过）。跟 pool_state 分开：
+    #   pool_state 说的是"现在在不在池里"，这是"人看过没有、结论是什么"
+    #   空 = 没看过 / in = 已入池 / seen = 看过没放入 / bad = 错乱、不适合训练
+    # 早年导出的数据集里有一批 AI 给的、没人复核过就进了池，重审时靠它区分
+    # 哪些看过、哪些没看过。标 in / seen / bad 时会一起写 pool_state
+    pool_review: Mapped[str | None] = mapped_column(
+        String(8), nullable=True, index=True, comment="数据池复审：空=没看过 / in=已入池 / seen=看过没放入 / bad=错乱")
+    pool_review_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="谁做的数据池复审")
+    pool_review_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="数据池复审时间")
 
     # 人最后一次动这条（改起止/类别、确认、标待定）的时间和人。created_at 对 AI 给的片段
     # 是机器写入的时刻，算不出"人什么时候确认的"——每一类片段的确认耗时靠这两列

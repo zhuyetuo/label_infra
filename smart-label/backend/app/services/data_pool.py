@@ -40,6 +40,59 @@ def in_pool_cond():
     return or_(ps == "in", and_(ss == "approved", ps != "out"))
 
 
+REVIEW_MARKS = ("in", "seen", "bad", "none")
+
+
+def review_state(seg_status: str | None, pool_state: str | None, pool_review: str | None) -> str:
+    """一条片段在「数据池复审」里的状态：
+      in   已入数据池
+      seen 人看过、没放入（含审核退回的）
+      bad  错乱、不适合训练
+      none 还没看过
+    标记优先；没标记过的按池子的实际状态算——审核通过 / 手动加入的本来就在池里，
+    不该显示成「没看过」，否则重审时会把已经通过的全当成新的再看一遍"""
+    if pool_review == "bad":
+        return "bad"
+    if pool_review == "seen":
+        return "seen"
+    if in_pool(seg_status, pool_state):
+        return "in"
+    # 标记过 in、但后来改了起止 / 类别导致手动加入失效：算看过没放入，不是没看过
+    if pool_review == "in" or seg_status == "returned":
+        return "seen"
+    return "none"
+
+
+async def mark(db: AsyncSession, item_ids: list[int], mark: str, by_user_id: int) -> int:
+    """人工复审：给这几条打标记。in = 放入数据池；seen / bad = 看过但不放（离开池子）；
+    none = 清掉标记，回到自动（审核通过的重新在池里）。返回实际改动的条数"""
+    if mark not in REVIEW_MARKS:
+        raise ValueError(f"mark 只能是 {' / '.join(REVIEW_MARKS)}")
+    ids = [int(x) for x in item_ids if x]
+    if not ids:
+        return 0
+    items = (await db.execute(
+        select(AnnotationLabelItem).where(AnnotationLabelItem.id.in_(ids))
+    )).scalars().all()
+    now = datetime.now()
+    for x in items:
+        if mark == "none":
+            x.pool_review = None
+            x.pool_review_by = x.pool_review_at = None
+            # 回到自动：审核通过的会重新进池；手动加入的撤掉
+            x.pool_state = x.pool_at = None
+        else:
+            x.pool_review = mark
+            x.pool_review_by, x.pool_review_at = by_user_id, now
+            if mark == "in":
+                x.pool_state, x.pool_at = "in", now
+            else:
+                x.pool_state = "out"
+    if items:
+        await db.commit()
+    return len(items)
+
+
 def pool_entered_at():
     """进池时间（SQL）：手动加入的取 pool_at，审核通过的取 seg_reviewed_at；都没有退到最后改动时间"""
     it = AnnotationLabelItem
