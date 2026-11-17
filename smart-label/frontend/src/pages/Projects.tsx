@@ -106,6 +106,7 @@ const SEEK_LLM_KEY = "smart-label:seek-llm";
 // 一遍太烦，而这个选择在一轮刷新里通常是一致的
 const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
 const PRELABEL_KEEP_HUMAN_KEY = "smart-label:prelabel-keep-human";
+const PRELABEL_NEG_ONLY_KEY = "smart-label:prelabel-neg-only";
 const ASSIGN_USER_KEY = "smart-label:assign-user";
 // 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
@@ -359,6 +360,8 @@ export default function Projects() {
   // 有人工标注的任务只补疑似片段。默认开：不开的话这些任务整个跳过，算法加了新候选类别也补不上；
   // 开了也不会动任何片段（见后端 keep_human）
   const [prelabelKeepHuman, setPrelabelKeepHuman] = useState(() => getSavedBool(PRELABEL_KEEP_HUMAN_KEY, true));
+  // 只补负例候选：配负例挖掘模型用，所有任务只换「模型判成负例」那一种候选。默认关
+  const [prelabelNegOnly, setPrelabelNegOnly] = useState(() => getSavedBool(PRELABEL_NEG_ONLY_KEY, false));
   // 记住上次用的版本：用惯哪个就默认哪个，不用每次重选
   const [prelabelMode, setPrelabelMode] = useState<InferMode>(
     () => (getSavedText(PRELABEL_MODE_KEY, DEFAULT_INFER_MODE) as InferMode)
@@ -593,18 +596,20 @@ export default function Projects() {
   // 项目里哪些任务会被批量预标注碰到：待认领/标注中，且还没存过任何片段
   // keepHuman 时有片段的任务也可能被处理（有人工痕迹的只补疑似片段），但列表里分不出哪些有人工痕迹，
   // 所以那种情况报的是上限
-  const prelabelEligible = (projectId: number, overwrite: boolean, keepHuman = false) =>
+  // negOnly 时待认领 / 标注中的全部任务都会被处理（片段不碰，只换负例候选）
+  const prelabelEligible = (projectId: number, overwrite: boolean, keepHuman = false, negOnly = false) =>
     tasksOf(projectId).filter(
       (t) =>
         (t.status === "PENDING_ASSIGN" || t.status === "IN_PROGRESS") &&
-        (overwrite || keepHuman || !(t.draft_item_count ?? 0))
+        (negOnly || overwrite || keepHuman || !(t.draft_item_count ?? 0))
     ).length;
 
   const handleStartPrelabel = async () => {
     if (!prelabelTarget) return;
     setPrelabelStarting(true);
     try {
-      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite, prelabelMode, prelabelKeepHuman);
+      const r = await startProjectPrelabel(prelabelTarget.id, prelabelOverwrite, prelabelMode, prelabelKeepHuman,
+                                           prelabelNegOnly);
       message.info(r.queued ? "这个项目已经有一批在跑，本次请求已排在后面" : "已开始，进度在项目行里看");
       await pollPrelabel([prelabelTarget.id]);
       setPrelabelTarget(null);
@@ -3170,7 +3175,7 @@ export default function Projects() {
         onOk={handleStartPrelabel}
         okText="开始"
         confirmLoading={prelabelStarting}
-        okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman) === 0 }}
+        okButtonProps={{ disabled: !prelabelTarget || prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman, prelabelNegOnly) === 0 }}
         // 里面有版本选择 + 一张历史记录表，默认 520 宽两边都挤
         width={880}
         destroyOnClose
@@ -3205,6 +3210,7 @@ export default function Projects() {
             </Typography.Text>
             <Checkbox
               checked={prelabelOverwrite}
+              disabled={prelabelNegOnly}
               onChange={(e) => {
                 setPrelabelOverwrite(e.target.checked);
                 saveBool(PRELABEL_OVERWRITE_KEY, e.target.checked);
@@ -3218,6 +3224,7 @@ export default function Projects() {
             </Typography.Text>
             <Checkbox
               checked={prelabelKeepHuman}
+              disabled={prelabelNegOnly}
               onChange={(e) => {
                 setPrelabelKeepHuman(e.target.checked);
                 saveBool(PRELABEL_KEEP_HUMAN_KEY, e.target.checked);
@@ -3230,8 +3237,22 @@ export default function Projects() {
               以及他已经判过的疑似片段都原样保留；跟这些重叠的同类候选不会再冒出来；大模型看视频 / 找相似给的候选也不动。
               不勾：这类任务整个跳过。已提交 / 已通过 / 被驳回的任务两种情况都不碰。
             </Typography.Text>
+            <Checkbox
+              checked={prelabelNegOnly}
+              onChange={(e) => {
+                setPrelabelNegOnly(e.target.checked);
+                saveBool(PRELABEL_NEG_ONLY_KEY, e.target.checked);
+              }}
+            >
+              <b>只补负例候选</b>（进食 / 饮水 / 嗅闻…容易被判成抓挠的动作），别的一条不动
+            </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              配「负例挖掘模型」用（训练记录里单独训了这些类别的那种，版本里选它）。勾上之后待认领 / 标注中的任务全部处理，
+              但<b>只换「模型判成这一类」那一种候选</b>：草稿片段、疑似抓挠、疑似舔 / 甩头 / 吠叫 / 如厕、大模型看视频的候选、
+              判过的候选都原样保留，上面两个勾也不起作用。选的模型没单独训这些类别的话，什么都不会写。
+            </Typography.Text>
             <Typography.Text>
-              本次将处理{prelabelKeepHuman ? "最多" : ""} <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman)}</b> 个任务。AI 服务按文件多进程并行跑，
+              本次将处理{prelabelKeepHuman ? "最多" : ""} <b>{prelabelEligible(prelabelTarget.id, prelabelOverwrite, prelabelKeepHuman, prelabelNegOnly)}</b> 个任务。AI 服务按文件多进程并行跑，
               整个过程在后台进行，项目行里能看到进度和预计剩余时间。
             </Typography.Text>
             {(() => {

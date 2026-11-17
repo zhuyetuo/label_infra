@@ -162,6 +162,8 @@ def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str 
 PRELABEL_REASONS = ("low_conf", "spectral", "grooming", "eating", "drinking", "barking", "shaking", "toileting",
                     # 模型单独训了进食 / 饮水 / 嗅闻…这些负例类别时，它判出来的片段（label_service mining.py）
                     "model_neg")
+# 「只补负例候选」时只换这一种：模型单独训了进食 / 饮水 / 嗅闻…时判出来的片段（label_service mining.py）
+NEG_REASONS = ("model_neg",)
 
 
 def _same_kind(cand_label: str, other: str) -> bool:
@@ -176,25 +178,31 @@ def _same_kind(cand_label: str, other: str) -> bool:
 
 
 async def replace_candidates(
-    db: AsyncSession, task: Task, cands: list[CandidateItem], existing_items: list[AnnotationLabelItem] | None = None
+    db: AsyncSession, task: Task, cands: list[CandidateItem], existing_items: list[AnnotationLabelItem] | None = None,
+    reasons: tuple[str, ...] | None = None,
 ) -> int:
     """换掉这个任务当前轮**预标注产出的、还没判的**候选；人判过的（确认/排除/待定）留着不动，
     别的入口（大模型看视频 / 找相似）写的也不动。
 
     新候选跟「已经判过的同类候选」或「已有的同类片段」时间上重叠的不写：人已经看过/标过那一段了，
-    再冒出来一条一样的只会让人再判一遍（有人工标注的任务只补候选时尤其要紧）。返回写了几条。"""
+    再冒出来一条一样的只会让人再判一遍（有人工标注的任务只补候选时尤其要紧）。返回写了几条。
+
+    reasons：只换、只写这几种来源的候选（「只补负例候选」传 NEG_REASONS）。不传 = 全部预标注来源。
+    只补负例的时候疑似抓挠、规则候选（舔 / 甩头 / 吠叫 / 如厕）一条都不能动——它们是另一个模型 / 另一批参数出的，
+    换掉就等于让这次的模型顶替了原来的疑似抓挠（2026-11-17 在项目 325 上就这样换掉了 311 条）。"""
+    rs = tuple(reasons) if reasons is not None else PRELABEL_REASONS
     rows = (
         await db.execute(
             select(AiCandidate).where(AiCandidate.task_id == task.id, AiCandidate.round_no == task.round_no)
         )
     ).scalars().all()
     for o in rows:
-        if o.status == CandidateStatus.pending and o.reason in PRELABEL_REASONS:
+        if o.status == CandidateStatus.pending and o.reason in rs:
             await db.delete(o)
     taken: list[tuple[str, int, int]] = [
         (o.label_name, o.start_time_ms, o.end_time_ms)
         for o in rows
-        if not (o.status == CandidateStatus.pending and o.reason in PRELABEL_REASONS)
+        if not (o.status == CandidateStatus.pending and o.reason in rs)
     ]
     if existing_items:
         ids = {i.label_id for i in existing_items}
@@ -204,6 +212,8 @@ async def replace_candidates(
         taken += [(names.get(i.label_id, ""), i.start_time_ms, i.end_time_ms) for i in existing_items]
     written = 0
     for c in cands:
+        if reasons is not None and c.reason not in rs:
+            continue
         if any(_same_kind(c.label_name, lab) and c.start_time_ms < e and c.end_time_ms > s for lab, s, e in taken):
             continue
         written += 1
@@ -525,7 +535,7 @@ def cancel_project_prelabel(project_id: int) -> bool:
 
 async def start_project_prelabel(
     project_id: int, task_ids: list[int] | None = None, overwrite_ai: bool = False, mode: str | None = None,
-    keep_human: bool = False,
+    keep_human: bool = False, neg_only: bool = False,
 ) -> bool:
     """
     后台开始给项目里的任务做 AI 预标注。task_ids 为空 = 项目下所有符合条件的任务。
@@ -533,7 +543,7 @@ async def start_project_prelabel(
     """
     if project_id in _running:
         q = _queued.setdefault(project_id, {"task_ids": set(), "all": False, "overwrite_ai": False, "mode": None,
-                                            "keep_human": False})
+                                            "keep_human": False, "neg_only": neg_only})
         if task_ids is None:
             q["all"] = True
         else:
@@ -541,9 +551,11 @@ async def start_project_prelabel(
         q["overwrite_ai"] = q["overwrite_ai"] or overwrite_ai
         q["mode"] = mode or q["mode"]
         q["keep_human"] = q.get("keep_human", False) or keep_human
+        # 排在后面的几批里只要有一批不是「只补负例」，就按正常预标注跑（宁可多做，不能把人家要的草稿漏掉）
+        q["neg_only"] = q.get("neg_only", neg_only) and neg_only
         return False
     _running.add(project_id)
-    asyncio.create_task(_run(project_id, task_ids, overwrite_ai, mode, keep_human))
+    asyncio.create_task(_run(project_id, task_ids, overwrite_ai, mode, keep_human, neg_only))
     return True
 
 
@@ -558,7 +570,7 @@ def _project_slots() -> asyncio.Semaphore:
 
 
 async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, mode: str | None = None,
-               keep_human: bool = False) -> None:
+               keep_human: bool = False, neg_only: bool = False) -> None:
     progress = PrelabelProgress(status="running", project_id=project_id, started_at=time.time())
     _progress[project_id] = progress
     slots = _project_slots()
@@ -571,7 +583,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
     try:
         while True:
             async with SessionLocal() as db:
-                await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode, keep_human)
+                await _run_project(db, project_id, task_ids, overwrite_ai, progress, mode, keep_human, neg_only)
             if project_id in _cancelled:
                 break
             nxt = _queued.pop(project_id, None)
@@ -581,6 +593,7 @@ async def _run(project_id: int, task_ids: list[int] | None, overwrite_ai: bool, 
             overwrite_ai = nxt["overwrite_ai"]
             mode = nxt.get("mode")
             keep_human = nxt.get("keep_human", False)
+            neg_only = nxt.get("neg_only", False)
         progress.status = "cancelled" if project_id in _cancelled else "done"
     except Exception as exc:  # noqa: BLE001 后台任务异常不能让进程崩
         progress.status = "error"
@@ -686,6 +699,8 @@ class _Prepared:
     csv_start: datetime
     # 有人工标注的任务：片段一条不动，只把这次跑出来的疑似片段补进去
     candidates_only: bool = False
+    # 只换、只写这几种来源的候选（「只补负例候选」= NEG_REASONS）；None = 全部预标注来源
+    only_reasons: tuple[str, ...] | None = None
 
 
 async def _run_project(
@@ -696,6 +711,7 @@ async def _run_project(
     progress: PrelabelProgress,
     mode: str | None = None,
     keep_human: bool = False,
+    neg_only: bool = False,
 ) -> None:
     # 只处理还在标注员手里之前的任务：待认领 / 标注中。已提交、已通过、被驳回的
     # 都是有人工介入过的成品或半成品，批量覆盖会把人家的活儿冲掉。
@@ -705,6 +721,9 @@ async def _run_project(
     if task_ids is not None:
         query = query.where(Task.id.in_(task_ids))
     tasks = (await db.execute(query.order_by(Task.id))).scalars().all()
+    if neg_only:
+        progress.log("只补负例候选（模型判成进食 / 饮水 / 嗅闻…的片段）：草稿、疑似抓挠、别的候选一条不动。"
+                     "选的模型没单独训这些类别的话，什么都不会写")
 
     # 项目一个标签都没有（建项目时没选标签模板）：先克隆一套，不然模型的片段全被丢掉
     from app.models.project import Project as _Project
@@ -754,7 +773,7 @@ async def _run_project(
             sample = await db.get(Sample, task.sample_id)
             code = sample.sample_code if sample else f"sample#{task.sample_id}"
             try:
-                p = await _prepare(db, task, sample, overwrite_ai, keep_human)
+                p = await _prepare(db, task, sample, overwrite_ai, keep_human, neg_only)
             except PrelabelError as e:
                 progress.failed += 1
                 progress.processed += 1
@@ -846,7 +865,7 @@ async def _run_project(
 
 
 async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrite_ai: bool,
-                   keep_human: bool = False) -> _Prepared | str:
+                   keep_human: bool = False, neg_only: bool = False) -> _Prepared | str:
     """资格检查。返回 _Prepared = 可以跑；返回字符串 = 跳过原因。"""
     if sample is None:
         raise PrelabelError("样本不存在")
@@ -863,6 +882,11 @@ async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrit
             .scalars()
             .all()
         )
+    if neg_only:
+        # 只补负例候选：不管任务里有没有片段、是人标的还是 AI 的，片段一律不碰，只换「模型判成负例」那一种候选
+        csv_start = await _csv_start_of(sample)
+        return _Prepared(task=task, sample=sample, record=record, old_ai_items=existing, csv_start=csv_start,
+                         candidates_only=True, only_reasons=NEG_REASONS)
     if any(i.source_type == LabelItemSource.human_added or i.is_modified or i.ai_confirmed for i in existing):
         if not keep_human:
             return "已有人工标注/确认过的片段，不覆盖"
@@ -884,7 +908,7 @@ async def _apply(
     if p.candidates_only:
         # 有人工标注的任务：草稿、样本上的 AI 结果路径都不动，只换没判的疑似片段。
         # 跟已有片段 / 已判候选重叠的同类候选不写（见 replace_candidates）
-        await replace_candidates(db, p.task, inf.candidates, existing_items=p.old_ai_items)
+        await replace_candidates(db, p.task, inf.candidates, existing_items=p.old_ai_items, reasons=p.only_reasons)
         await db.commit()
         return None
     record = p.record

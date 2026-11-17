@@ -112,3 +112,53 @@ def test_keep_human_only_adds_candidates_and_keeps_every_segment(db, run, monkey
         ("进食", 50_000, "eating", "pending"),
         ("吠叫", 80_000, "barking", "pending"),
     ]                                               # 老的没判的低置信（40s）被这次的结果换掉了
+
+
+def test_neg_only_replaces_only_negative_candidates(db, run, monkeypatch):
+    """只补负例候选：片段不碰、疑似抓挠和别的候选不碰，只换 model_neg；纯 AI 的任务也走这条（不写草稿）"""
+    t, s = _setup(db, run)
+    monkeypatch.setattr(svc, "_csv_start_of", lambda sample: _ret(T0))
+    # 上一次负例挖掘留下的一条没判的负例候选，这次应该被换掉
+    db.add(AiCandidate(task_id=t.id, round_no=1, label_name="饮水", start_time_ms=60_000, end_time_ms=65_000,
+                       reason="model_neg"))
+    run(db.commit())
+    before = [(i.id, i.label_id, i.start_time_ms, i.end_time_ms, i.ai_confirmed) for i in _items(db, run)]
+
+    p = run(svc._prepare(db, t, s, overwrite_ai=False, keep_human=False, neg_only=True))
+    assert not isinstance(p, str) and p.candidates_only and p.only_reasons == svc.NEG_REASONS
+
+    C = svc.CandidateItem
+    inf = svc.SampleInference(
+        items=[PrelabelItem(label_name="静止/休息", start_time_ms=0, end_time_ms=300_000, confidence=0.9)],
+        skipped=0, n_windows=100, ai_label_path="new.json",
+        candidates=[
+            C("抓挠", 50_000, 55_000, 0.5, None, "low_conf"),     # 这次模型的疑似抓挠 → 不写
+            C("舔身体", 90_000, 95_000, 0.5, None, "grooming"),   # 规则候选 → 不写
+            C("进食", 70_000, 80_000, 0.9, None, "model_neg"),    # 负例 → 写
+        ],
+    )
+    s.ai_label_path = "old.json"
+    assert run(svc._apply(db, p, inf, {"静止/休息": 2}, set())) is None
+
+    after = [(i.id, i.label_id, i.start_time_ms, i.end_time_ms, i.ai_confirmed) for i in _items(db, run)]
+    assert after == before, "片段被动了"
+    assert s.ai_label_path == "old.json"
+    got = [(c.label_name, c.start_time_ms, c.reason, c.status.value) for c in _cands(db, run)]
+    assert got == [
+        ("抓挠", 20_000, "low_conf", "confirmed"),
+        ("舔", 30_000, "vision", "pending"),
+        ("抓挠", 40_000, "low_conf", "pending"),     # 原来的疑似抓挠留着
+        ("进食", 70_000, "model_neg", "pending"),    # 上一次的饮水负例被这次的换掉
+    ]
+
+
+def test_neg_only_prepares_tasks_without_human_marks_too(db, run, monkeypatch):
+    """纯 AI 草稿的任务平时会被跳过（「已有 AI 片段」），只补负例时也处理，而且只补候选"""
+    t, s = _setup(db, run)
+    monkeypatch.setattr(svc, "_csv_start_of", lambda sample: _ret(T0))
+    for i in _items(db, run):
+        i.ai_confirmed = False
+    run(db.commit())
+    assert isinstance(run(svc._prepare(db, t, s, overwrite_ai=False)), str)
+    p = run(svc._prepare(db, t, s, overwrite_ai=False, neg_only=True))
+    assert not isinstance(p, str) and p.candidates_only
