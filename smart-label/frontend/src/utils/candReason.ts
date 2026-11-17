@@ -17,6 +17,9 @@ export const REASON_LABEL: Record<AiCandidate["reason"], string> = {
   shaking: "振荡像甩头/抖身",
   // 走 → 停下换姿势不动一会儿 → 又走。判据弱，误报多
   toileting: "走停走像如厕",
+  // 模型里单独训了进食 / 饮水 / 嗅闻…（容易被判成抓挠的动作）：它判成这一类的片段不进草稿，
+  // 拿来给人确认，快速补负例标注（imu_train label_service/mining.py）
+  model_neg: "模型判成这一类",
   // 视觉大模型看视频挑出来的：画面里狗在做这个动作。类别是项目里选的那几类（含部位）
   vision: "画面看像",
   // 画面向量索引：拿一帧样例（或一句话）在整个项目里找长得像的几秒。不问大模型，免费

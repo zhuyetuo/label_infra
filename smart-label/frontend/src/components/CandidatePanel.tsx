@@ -24,6 +24,7 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   barking: "red",
   shaking: "green",
   toileting: "gold",
+  model_neg: "lime",
   vision: "magenta",
   similar: "geekblue",
 };
@@ -122,6 +123,7 @@ export const SRC_CN: Record<string, string> = {
   barking: "冲击串像吠叫",
   shaking: "振荡像甩头/抖身",
   toileting: "走停走像如厕",
+  model_neg: "模型判成这一类",
   vision: "大模型看视频",
 };
 
