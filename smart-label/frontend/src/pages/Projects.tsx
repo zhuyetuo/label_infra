@@ -65,7 +65,9 @@ import {
   deleteTasksBatch,
   editAgain,
   getApprovalsInRange,
+  getLabelFocus,
   getLabelReview,
+  setLabelFocus,
   listTasksByIds,
   listTasksLite,
   listTasks,
@@ -180,8 +182,14 @@ export default function Projects() {
   // 两步拉：轻量的（只有任务状态、样本名，快）先到，项目行「共几个 / 待认领几个」马上出来；
   // 带片段统计的完整列表（要几秒）后到，到了替换掉。完整的一旦有了就一直用它（改动后只刷那几行）
   // 每个项目「抓挠」还有多少没通过 / 没审：不用展开就能看到（服务端按项目汇总）
+  // 「抓挠」不再写死：按全平台的「现在重点补什么」统计（顶部那个开关，默认抓挠，可切到负例）
+  const { data: focus } = useQuery({ queryKey: ["label-focus"], queryFn: getLabelFocus, staleTime: 30_000 });
+  const focusLabels = focus?.labels ?? ["抓挠"];
+  const focusName = focus?.name ?? "抓挠";
+  const isFocusLabel = (l: { display_name: string; code?: string | null }) =>
+    focusLabels.includes(l.display_name) || (!!l.code && focusLabels.includes(l.code));
   const { data: scratchReview } = useQuery({
-    queryKey: ["label-review", "抓挠"], queryFn: () => getLabelReview("抓挠"),
+    queryKey: ["label-review", focusLabels.join(",")], queryFn: () => getLabelReview(focusLabels.join(",")),
     refetchInterval: 60_000, staleTime: 20_000,
   });
   const { data: liteTasks } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
@@ -1331,6 +1339,31 @@ export default function Projects() {
             </Popconfirm>
           );
         })()}
+        {/* 现在重点补什么：全平台一个。左边菜单的角标、每个项目行的「xx 未通过 / 未审」都按它统计 */}
+        <Tooltip title={<div style={{ maxWidth: 360 }}>
+          现在重点补：{focus?.hint ?? focusName}。左边菜单「项目」上的角标、每个项目行的「{focusName} 未通过 / 未审 / 全部通过」都按它统计，所有人看到的一样。
+          {isAdmin ? "管理员可以在这里切换。" : "管理员在这里切换。"}
+          {focus?.by ? `（${focus.by} 在 ${focus.at} 切的）` : ""}
+        </div>}>
+          <Space size={6} style={{ marginLeft: 8 }}>
+            <Typography.Text type="secondary">现在重点补</Typography.Text>
+            {isAdmin ? (
+              <Segmented
+                size="small"
+                value={focus?.key ?? "scratch"}
+                options={(focus?.options ?? [{ key: "scratch", name: "抓挠" }]).map((o) => ({ label: o.name, value: o.key }))}
+                onChange={async (v) => {
+                  const r = await setLabelFocus(String(v));
+                  qc.setQueryData(["label-focus"], r);
+                  qc.invalidateQueries({ queryKey: ["label-review"] });
+                  message.success(`现在重点补：${r.hint}`);
+                }}
+              />
+            ) : (
+              <Tag color="volcano">{focusName}</Tag>
+            )}
+          </Space>
+        </Tooltip>
       </Space>
       {delProg.some((x) => x.status === "queued" || x.status === "running") && (
         <Alert type="info" showIcon style={{ marginBottom: 8 }}
@@ -2568,33 +2601,33 @@ export default function Projects() {
                   // 还有没审的就看没审的；全审过了、只剩退回的，就看退回待改的
                   const open = (e: React.MouseEvent, unreviewed: boolean) => {
                     e.stopPropagation();
-                    const ids = labelsOf(p.id).filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id);
+                    const ids = labelsOf(p.id).filter(isFocusLabel).map((l) => l.id);
                     const u = unreviewed && sr.unreviewed > 0;
                     setFilter(p.id, { labels: ids, unreviewedOnly: u, segReturned: !u && sr.returned > 0, status: "ALL" });
                     setExpandedKeys(() => [p.id]);
                   };
                   return (
                     <div style={{ marginTop: 4 }}>
-                      <Tooltip title={`抓挠（含细类）共 ${sr.n} 段：通过 ${sr.approved}、退回待改 ${sr.returned}、还没审 ${sr.unreviewed}${sr.marked ? `、备忘先放着 ${sr.marked}` : ""}。点一下展开、只看抓挠还没审的任务`}>
+                      <Tooltip title={`${focus?.hint ?? focusName}（含细类）共 ${sr.n} 段：通过 ${sr.approved}、退回待改 ${sr.returned}、还没审 ${sr.unreviewed}${sr.marked ? `、备忘先放着 ${sr.marked}` : ""}。点一下展开、只看这几类还没审的任务`}>
                         {notPassed > 0 ? (
                           <Space size={4} wrap>
                             <Tag color="red" style={{ cursor: "pointer" }} onClick={(e) => open(e, true)}>
-                              抓挠 未通过 {notPassed}
+                              {focusName} 未通过 {notPassed}
                             </Tag>
                             {sr.unreviewed > 0 && (
                               <Tag color="orange" style={{ cursor: "pointer" }} onClick={(e) => open(e, true)}>未审 {sr.unreviewed}</Tag>
                             )}
                             {sr.returned > 0 && (
                               <Tag color="magenta" style={{ cursor: "pointer" }}
-                                onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter((l) => l.display_name === "抓挠").map((l) => l.id), segReturned: true, unreviewedOnly: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
+                                onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter(isFocusLabel).map((l) => l.id), segReturned: true, unreviewedOnly: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
                                 退回待改 {sr.returned}
                               </Tag>
                             )}
                           </Space>
                         ) : (
                           <Tag color="green" style={{ cursor: "pointer" }}
-                            onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id), unreviewedOnly: false, segReturned: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
-                            抓挠 {sr.n} 段全部通过
+                            onClick={(e) => { e.stopPropagation(); setFilter(p.id, { labels: labelsOf(p.id).filter(isFocusLabel).map((l) => l.id), unreviewedOnly: false, segReturned: false, status: "ALL" }); setExpandedKeys(() => [p.id]); }}>
+                            {focusName} {sr.n} 段全部通过
                           </Tag>
                         )}
                       </Tooltip>

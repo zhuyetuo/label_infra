@@ -1,4 +1,4 @@
-import { getLabelReview } from "@/api/tasks";
+import { getLabelFocus, getLabelReview } from "@/api/tasks";
 import { SkinStandardDrawer, useStandardInset } from "@/components/SkinStandard";
 import { useEffect } from "react";
 import { Badge, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
@@ -91,8 +91,15 @@ export default function AppLayout() {
   const standardInset = useStandardInset();
   // 左边「项目」上标抓挠还有多少没通过 / 没审（管理员、审核员看）
   const reviewer = userInfo?.role === "admin" || userInfo?.role === "super_admin" || userInfo?.role === "reviewer";
+  // 现在重点补什么（全平台一个，项目页顶部切）：角标按它统计。默认抓挠
+  const { data: focus } = useQuery({
+    queryKey: ["label-focus"], queryFn: getLabelFocus,
+    enabled: !!accessToken, refetchInterval: 60_000, staleTime: 30_000,
+  });
+  const focusLabels = (focus?.labels ?? ["抓挠"]).join(",");
+  const focusName = focus?.name ?? "抓挠";
   const { data: scratch } = useQuery({
-    queryKey: ["label-review", "抓挠"], queryFn: () => getLabelReview("抓挠"),
+    queryKey: ["label-review", focusLabels], queryFn: () => getLabelReview(focusLabels),
     enabled: !!accessToken && reviewer, refetchInterval: 60_000, staleTime: 20_000,
   });
   const scratchNotPassed = scratch ? scratch.total.n - scratch.total.approved : 0;
@@ -141,11 +148,11 @@ export default function AppLayout() {
               label:
                 i.key === "/projects" && scratch && scratchNotPassed > 0 ? (
                   <Tooltip placement="right"
-                    title={`抓挠：未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段`}>
+                    title={`现在重点补「${focus?.hint ?? focusName}」：未通过 ${scratchNotPassed} 段（其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段。管理员在项目页顶部切换重点`}>
                     {/* 菜单栏窄：数字超过 999 写成 3.7k，「项目」后面只放两个小数字，鼠标停上去看完整 */}
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
                       {i.label}
-                      <span style={{ fontSize: 10, color: "#ff4d4f", marginLeft: 2 }}>抓挠</span>
+                      <span style={{ fontSize: 10, color: "#ff4d4f", marginLeft: 2 }}>{focusName}</span>
                       <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
                       {scratch.total.unreviewed > 0 && (
                         <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#fa8c16", color: "#fff" }}>{kfmt(scratch.total.unreviewed)}</span>

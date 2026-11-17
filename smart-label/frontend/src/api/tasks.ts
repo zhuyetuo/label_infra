@@ -24,6 +24,14 @@ export const getApprovalsInRange = (projectId: number, from?: string | null, to?
   request.get<never, Record<string, { n: number; by_label: Record<string, number> }>>("/tasks/approvals-in-range", {
     params: { project_id: projectId, date_from: from || undefined, date_to: to || undefined, reviewer_id: reviewerId || undefined },
   });
+/** 现在重点补什么（全平台一个，管理员在项目页顶部切）。labels：统计哪几个类别（各自含子类） */
+export interface LabelFocus {
+  key: string; name: string; labels: string[]; hint: string; by?: string | null; at?: string | null;
+  options: { key: string; name: string; labels: string[]; hint: string }[];
+}
+export const getLabelFocus = () => request.get<never, LabelFocus>("/tasks/label-focus", { silent: true } as object);
+export const setLabelFocus = (key: string) => request.put<never, LabelFocus>("/tasks/label-focus", { key });
+/** label：一个类别，或逗号分隔的几个（合在一起算） */
 export const getLabelReview = (label = "抓挠") =>
   request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts;
     /** 每个项目打了 🔖 备忘的段数（全部类别），by_kind 按种类拆：compound / boundary / av_mismatch / other */

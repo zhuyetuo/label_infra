@@ -10,6 +10,7 @@ import time
 from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import and_, case, delete, func, insert, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -701,14 +702,16 @@ async def approvals_in_range(project_id: int, date_from: date | None = None, dat
 async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depends(get_db),
                                 user: User = Depends(get_current_user)):
     """某个类别（默认抓挠，含子类）每个项目的片段审核进度：多少段、通过、退回、还没审。
+    label 可以是逗号分隔的几个类别（「当前重点」切到负例时是 进食,饮水,嗅闻），合在一起算。
 
     项目页每行（不用展开）和左边菜单上标「抓挠 未通过 N / 未审 M」用。只算当前轮、只算看得到的任务，
     跟 list_tasks 里 label_counts 的 approved / returned 同一个口径。"""
     from app.models.label import LabelDefinition
     from app.services import label_tree
 
+    names = [x.strip() for x in label.split(",") if x.strip()] or ["抓挠"]
     root_ids = set((await db.execute(
-        select(LabelDefinition.id).where((LabelDefinition.display_name == label) | (LabelDefinition.code == label))
+        select(LabelDefinition.id).where(LabelDefinition.display_name.in_(names) | LabelDefinition.code.in_(names))
     )).scalars().all())
     if not root_ids:
         return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
@@ -753,6 +756,32 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         for k in {x for x in (m or "").split(",") if x}:
             r["by_kind"][k] = r["by_kind"].get(k, 0) + int(n)
     return ok({"label": label, "projects": projects, "total": total, "marks": marks})
+
+
+class LabelFocusIn(BaseModel):
+    key: str
+
+
+@router.get("/label-focus")
+async def get_label_focus(user: User = Depends(get_current_user)):  # noqa: ARG001
+    """现在重点补什么（全平台一个）：侧栏角标、项目行「xx 未通过 / 未审」按它统计"""
+    from app.services import label_focus
+    return ok(label_focus.get())
+
+
+@router.put("/label-focus")
+async def set_label_focus(body: LabelFocusIn, db: AsyncSession = Depends(get_db),
+                          user: User = Depends(require_role(UserRole.admin, UserRole.super_admin))):
+    """管理员切换重点（项目页顶部那个开关）。记一笔审计日志：谁、什么时候切的"""
+    from app.services import label_focus
+    try:
+        out = label_focus.set_focus(body.key, user.display_name or user.username)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    db.add(AuditLog(user_id=user.id, action="label_focus.set", target_type="system", target_id=0,
+                    detail=json.dumps({"key": body.key}, ensure_ascii=False)))
+    await db.commit()
+    return ok(out)
 
 
 @router.get("/{task_id}")
