@@ -215,6 +215,18 @@ def test_迁移和模型的列必须一一对应():
         if not fn.endswith(".py"):
             continue
         tree = ast.parse(open(f"alembic/versions/{fn}", encoding="utf-8").read())
+        # 表名 / 列名有的迁移直接写字符串，有的写成模块级常量（_TABLE = "annotation_label_items"）。
+        # 只认字符串的话后一种直接 AttributeError，整条测试崩掉、什么都没检查到（2026-11-17 pool_review 迁移）
+        consts = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                  and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+                  for t in n.targets if isinstance(t, ast.Name)}
+
+        def _s(node, consts=consts):
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                return consts.get(node.id)
+            return None
         up = next((f for f in ast.walk(tree)
                    if isinstance(f, ast.FunctionDef) and f.name == "upgrade"), None)
         if up is None:
@@ -227,14 +239,14 @@ def test_迁移和模型的列必须一一对应():
                 # 用并集不用赋值：文件名的字典序跟迁移的先后没关系
                 # （a7c3e5d9f142 排在 c8e1a4d70f52 前面，但它是后加的 add_column），
                 # 赋值的话后扫到的建表会把先扫到的 add_column 整个盖掉
-                mig.setdefault(node.args[0].value, set()).update(
-                    a.args[0].value for a in node.args[1:]
+                mig.setdefault(_s(node.args[0]), set()).update(
+                    _s(a.args[0]) for a in node.args[1:]
                     if isinstance(a, ast.Call) and getattr(a.func, "attr", "") == "Column"
                 )
             elif attr == "add_column" and len(node.args) >= 2:
                 col = node.args[1]
                 if isinstance(col, ast.Call) and col.args:
-                    mig.setdefault(node.args[0].value, set()).add(col.args[0].value)
+                    mig.setdefault(_s(node.args[0]), set()).add(_s(col.args[0]))
     for model in (VisionAsset, VisionAnnotation):
         cols = {c.name for c in model.__table__.columns}
         assert mig.get(model.__tablename__) == cols, model.__tablename__
