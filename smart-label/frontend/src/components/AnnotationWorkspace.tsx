@@ -2748,6 +2748,9 @@ export default function AnnotationWorkspace({
         )
       }
     >
+      {/* 弹窗里的内容按任务重建：上一个 / 下一个换任务时弹窗不关，视频、波形、片段面板
+          从新任务开始，不带上一个任务的状态（筛选、循环区间、刚判过的候选…） */}
+      <Fragment key={taskId ?? "none"}>
       <div className={`ws-body${chartExpanded && imuOpen ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
@@ -2987,6 +2990,7 @@ export default function AnnotationWorkspace({
         </div>
       </Spin>
       </div>
+      </Fragment>
     </Modal>
     {/* 夜视增强：夜里那几路黑得看不出狗在干嘛时，把那一刻捞出来看清楚。
         放在工作台这一层而不是片段面板里——它要用 sampleId，而且弹窗不该

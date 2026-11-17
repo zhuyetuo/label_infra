@@ -3964,8 +3964,6 @@ export default function Projects() {
       </Modal>
 
       <AnnotationWorkspace
-        // 上一个 / 下一个换任务时整个重建：视频、波形、片段面板都从新任务开始，不带上一个的状态
-        key={workspaceTask?.id ?? "none"}
         task={workspaceTask}
         nav={(() => {
           if (!workspaceTask || !workspaceReadOnly) return undefined;
