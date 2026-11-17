@@ -136,11 +136,43 @@ export interface DatasetSegment {
   /** 相对 CSV 起点的毫秒；老数据集没有 */
   start_ms?: number | null;
   end_ms?: number | null;
+  /** 对回数据库里那条标注的 id；导出时拆 / 合出来的段对不上，是 null（标不了） */
+  item_id?: number | null;
+  /** 数据池复审状态：in = 已入池 / seen = 看过没放入 / bad = 错乱 / none = 没看过；
+   *  null = 对不上数据库里的标注，标不了 */
+  review_state?: "in" | "seen" | "bad" | "none" | null;
+  seg_status?: string | null;
+  pool_state?: string | null;
+}
+
+/** 数据集里的一键去重结果（改的是源标注，要重新导出才生效） */
+export interface DatasetDedupeResult {
+  tasks: number;
+  tasks_changed: number;
+  merged: number;
+  removed_parent: number;
+  conflicts_left: number;
+  not_found: number;
+  need_reexport: boolean;
 }
 
 export const getDatasetSegments = (name: string) =>
-  request.get<never, { total: number; truncated: boolean; rows: DatasetSegment[] }>(
+  request.get<never, {
+    total: number;
+    truncated: boolean;
+    rows: DatasetSegment[];
+    /** 按复审状态数的条数（没匹配上数据库的算 unmatched） */
+    state_counts?: Record<"in" | "seen" | "bad" | "none" | "unmatched", number>;
+  }>(
     `/model-versions/datasets/${encodeURIComponent(name)}/segments`
+  );
+
+/** 数据集一键去重：对文件里的每个任务合并同类别重叠段 / 去掉被细类盖住的粗类段 */
+export const dedupeDataset = (name: string) =>
+  request.post<never, DatasetDedupeResult>(
+    `/model-versions/datasets/${encodeURIComponent(name)}/dedupe`,
+    undefined,
+    { timeout: 600_000 }
   );
 
 /** 数据集体检结果 */

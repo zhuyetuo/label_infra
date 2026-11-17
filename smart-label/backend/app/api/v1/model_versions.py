@@ -16,18 +16,21 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.label import LabelDefinition
 from app.models.model_version import ModelTrainStatus, ModelVersion
 from app.models.sample import Sample
+from app.models.task import Task
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.schemas.model_version import ModelVersionOut, TrainSubmitIn
 from app.services.ai_prelabel_service import _csv_start_of
-from app.services import algo_client, edge_client
+from app.services import algo_client, data_pool, edge_client
 from app.services.training_export_service import (
     TrainingExportError,
     delete_dataset,
@@ -36,6 +39,7 @@ from app.services.training_export_service import (
     list_datasets,
     label_stats,
     read_segments,
+    read_task_ids,
 )
 
 router = APIRouter(
@@ -179,6 +183,51 @@ async def dataset_segments(name: str, limit: int = 5000, db: AsyncSession = Depe
                 except (ValueError, KeyError, TypeError):
                     continue
                 r[key] = int(round((dt - base).total_seconds() * 1000))
+
+    # 把每一行对回数据库里当前这一轮的那条标注，好让人在数据集里直接做数据池复审
+    # （已入池 / 看过没放 / 错乱 / 没看过）。导出是快照，人后来可能改过起止，
+    # 所以按「任务 + 叶子类别 + 时间重叠过半」找，不要求起止完全一样。
+    # 导出时拆分 / 压缩出来的段（短促动作补齐、减量抽样）对不上任何一条，标不了
+    task_ids = {r["task_id"] for r in data["rows"] if isinstance(r.get("task_id"), int)}
+    counts = {"in": 0, "seen": 0, "bad": 0, "none": 0, "unmatched": 0}
+    if task_ids:
+        item_rows = (await db.execute(
+            select(AnnotationLabelItem, AnnotationRecord.task_id, LabelDefinition.display_name)
+            .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+            .join(Task, and_(Task.id == AnnotationRecord.task_id, Task.round_no == AnnotationRecord.round_no))
+            .join(LabelDefinition, LabelDefinition.id == AnnotationLabelItem.label_id)
+            .where(AnnotationRecord.task_id.in_(task_ids))
+        )).all()
+        by_key: dict[tuple[int, str], list[AnnotationLabelItem]] = {}
+        for it, tid, leaf_name in item_rows:
+            by_key.setdefault((int(tid), leaf_name or ""), []).append(it)
+        for r in data["rows"]:
+            tid = r.get("task_id")
+            labels = r.get("labels") or []
+            leaf = labels[-1] if labels else (r.get("label") or "")
+            a, b = r.get("start_ms"), r.get("end_ms")
+            best, best_ov = None, 0
+            if isinstance(tid, int) and a is not None and b is not None:
+                dur = max(1, b - a)
+                for it in by_key.get((tid, leaf), ()):
+                    ov = min(b, it.end_time_ms) - max(a, it.start_time_ms)
+                    if ov <= 0:
+                        continue
+                    # 重叠过半才算同一段：导出时并过 / 补过的段起止会差一点
+                    if ov >= 0.5 * min(dur, max(1, it.end_time_ms - it.start_time_ms)) and ov > best_ov:
+                        best, best_ov = it, ov
+            if best is None:
+                r["item_id"] = None
+                r["review_state"] = None
+                counts["unmatched"] += 1
+                continue
+            state = data_pool.review_state(best.seg_status, best.pool_state, best.pool_review)
+            r["item_id"] = best.id
+            r["review_state"] = state
+            r["seg_status"] = best.seg_status
+            r["pool_state"] = best.pool_state
+            counts[state] += 1
+    data["state_counts"] = counts
     return ok(data)
 
 
@@ -189,6 +238,40 @@ async def dataset_check(name: str):
         return ok(await asyncio.to_thread(check_dataset, name))
     except TrainingExportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/datasets/{name}/dedupe")
+async def dataset_dedupe(name: str, db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """这份数据集里的一键去重：对文件里的每个任务跑「同类别重叠合并 / 父子去重」。
+
+    改的是**源标注**（数据集是快照，改文件只会让下次重导再带回来），所以做完要重新
+    导出这份数据集才生效。这里刻意不走片段审核的「审核通过」：去重只是把重复的段
+    合成一条，不代表人看过内容；不然一大批旧数据会被顺手标成通过、又混进数据池。
+    """
+    from app.api.v1.segment_review import _dedupe_task
+
+    try:
+        task_ids = await asyncio.to_thread(read_task_ids, name)
+    except TrainingExportError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    tot = {"tasks": 0, "tasks_changed": 0, "merged": 0, "removed_parent": 0,
+           "conflicts_left": 0, "not_found": 0}
+    for tid in task_ids:
+        task = await db.get(Task, tid)
+        if task is None:
+            tot["not_found"] += 1
+            continue
+        r = await _dedupe_task(db, task, user, approve=False)
+        # 逐个任务提交：几百个任务一个事务会长时间锁着这些片段，别人存不了草稿
+        await db.commit()
+        tot["tasks"] += 1
+        tot["merged"] += r["merged"]
+        tot["removed_parent"] += r["removed_parent"]
+        tot["conflicts_left"] += r["conflicts_left"]
+        if r["merged"] or r["removed_parent"]:
+            tot["tasks_changed"] += 1
+    return ok({**tot, "need_reexport": True})
 
 
 @router.delete("/datasets/{name}")

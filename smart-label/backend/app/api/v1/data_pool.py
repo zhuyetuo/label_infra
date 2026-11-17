@@ -90,6 +90,25 @@ class PoolRemoveIn(PoolFilterIn):
     item_ids: list[int] | None = None
 
 
+class PoolMarkIn(BaseModel):
+    item_ids: list[int]
+    # in = 放入数据池 / seen = 看过没放入 / bad = 错乱不适合 / none = 清掉标记回到自动
+    mark: str
+
+
+@router.post("/mark")
+async def post_mark(body: PoolMarkIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """数据池人工复审：给勾选的片段打标记（训练数据集 → 详情里一条条看）"""
+    _require_curator(user)
+    if body.mark not in data_pool.REVIEW_MARKS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"mark 只能是 {' / '.join(data_pool.REVIEW_MARKS)}")
+    if not body.item_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "要先勾选片段")
+    n = await data_pool.mark(db, body.item_ids, body.mark, user.id)
+    return ok({"marked": n})
+
+
 @router.post("/add")
 async def post_add(body: PoolAddIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     _require_curator(user)

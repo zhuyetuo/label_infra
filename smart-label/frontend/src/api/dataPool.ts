@@ -102,6 +102,11 @@ export const poolRevertApprovals = (body: PoolFilter & { item_ids?: number[]; se
 export const poolRemove = (body: PoolFilter & { item_ids?: number[] }) =>
   request.post<never, { removed: number }>("/data-pool/remove", body);
 
+/** 数据池人工复审标记：in = 放入数据池 / seen = 看过没放入 / bad = 错乱不适合 / none = 清掉标记 */
+export type PoolReviewMark = "in" | "seen" | "bad" | "none";
+export const markPoolItems = (item_ids: number[], mark: PoolReviewMark) =>
+  request.post<never, { marked: number }>("/data-pool/mark", { item_ids, mark });
+
 /** 类别对比：两类片段的原始 IMU 数据逐个维度比 */
 export interface CompareFeature {
   key: string;

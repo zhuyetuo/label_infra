@@ -541,14 +541,16 @@ async def dedupe_project(body: DedupeProjectIn, db: AsyncSession = Depends(get_d
     return ok(tot)
 
 
-async def _dedupe_task(db: AsyncSession, task: Task, user: User) -> dict:
+async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool = True) -> dict:
     """一键去重（当前这一轮）：
       · 同一类别互相重叠（≥0.2s）的：并成一条，起止取并集。留「最靠谱」的那条——审核通过的 >
         人确认 / 改过 / 人加的 > 时长长的，其余删掉
       · 父子类别压在一起（抓挠 + 抓挠-躯干），细的盖住了粗的八成以上：删粗的
       · 同一轨的不同类别（类别冲突）不动：得人看画面判断，只报个数
     审核员 / 管理员不用认领；标注员只能动自己名下的。并过之后起止变了的，跟片段接口的改一样处理
-    （审核员改的算通过；改了就离开手动加入的数据池）。"""
+    （审核员改的算通过；改了就离开手动加入的数据池）。
+    approve=False：只合并、不把改过的段标成审核通过（训练数据集里的一键去重用）。
+    数据集是旧快照，去重不等于有人看过内容，顺手标通过会把没人复审的数据混进数据池。"""
     from app.models.ai_candidate import AiCandidate, CandidateStatus
     from app.services.label_tracks import OVERLAP_MIN_MS, conflict_checker, track_of
     from app.services.task_service import _append_boundary_edit
@@ -589,7 +591,10 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User) -> dict:
         x.touched_at, x.touched_by = now, user.id
         if x.pool_state == "in":
             x.pool_state = None
-        if reviewer:
+        # 起止变了，之前的人工复审结论作废——要重新看一眼
+        x.pool_review = None
+        x.pool_review_by = x.pool_review_at = None
+        if reviewer and approve:
             x.seg_status = "approved"
             x.seg_reviewed_by, x.seg_reviewed_at = user.id, now
         else:
