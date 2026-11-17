@@ -139,7 +139,9 @@ export default function AppLayout() {
             // 会撑出 #root 的隐形溢出，页面上任何 scrollIntoView 都会把整个布局顶上去
             style={{ height: "100%", overflowY: "auto" }}
             selectedKeys={[location.pathname]}
-            defaultOpenKeys={["samples"]}
+            // 默认收起来（点「样本」再展开）；人正停在这两个子页面里刷新时保持展开，
+            // 不然当前高亮项藏在收起的菜单里，看不出来自己在哪
+            defaultOpenKeys={["/samples", "/cam-check"].includes(location.pathname) ? ["samples"] : []}
             onClick={(e) => navigate(e.key)}
             items={items.map((i) => ({
               key: i.key,
