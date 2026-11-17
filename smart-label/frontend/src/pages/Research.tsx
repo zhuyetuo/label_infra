@@ -328,16 +328,24 @@ export default function Research() {
 
         <Card id="history" size="small" title={cardTitle(<HistoryOutlined style={{ color: token.colorPrimary }} />, "来时路", "二十年 16 个里程碑")}
           extra={<Space size={4}><Tag color="purple">学术</Tag><Tag color="orange">产业</Tag></Space>}>
-          <Timeline mode="alternate" style={{ marginTop: 8 }} items={MILESTONES.map((m) => ({
-            color: m.kind === "a" ? token.colorPrimary : token.colorWarning,
-            label: <Text strong style={{ fontVariantNumeric: "tabular-nums" }}>{m.year}</Text>,
-            children: (
-              <div style={{ maxWidth: 300 }}>
-                <Text strong style={{ fontSize: 13 }}>{m.title}</Text>
-                <div><Text type="secondary" style={{ fontSize: 12 }}>{m.text}</Text></div>
-              </div>
-            ),
-          }))} />
+          {/* 两列左对齐时间线：年份就在事件旁边。alternate 模式在宽屏上会把年份甩到
+              轴线另一侧，跟自己的事件隔几百像素，看着像配错了 */}
+          <Row gutter={[24, 0]}>
+            {[MILESTONES.slice(0, 8), MILESTONES.slice(8)].map((col, ci) => (
+              <Col key={ci} xs={24} md={12}>
+                <Timeline mode="left" style={{ marginTop: 8 }} items={col.map((m) => ({
+                  color: m.kind === "a" ? token.colorPrimary : token.colorWarning,
+                  label: <Text strong style={{ fontVariantNumeric: "tabular-nums", fontSize: 13 }}>{m.year}</Text>,
+                  children: (
+                    <div>
+                      <Text strong style={{ fontSize: 13 }}>{m.title}</Text>
+                      <div><Text type="secondary" style={{ fontSize: 12 }}>{m.text}</Text></div>
+                    </div>
+                  ),
+                }))} />
+              </Col>
+            ))}
+          </Row>
         </Card>
 
         <Card id="ladder" size="small" title={cardTitle(<ApartmentOutlined style={{ color: token.colorPrimary }} />, "方法台阶", "每一级都没淘汰上一级，量产通常混用")}>
