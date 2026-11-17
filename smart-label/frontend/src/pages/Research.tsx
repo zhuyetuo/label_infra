@@ -207,7 +207,7 @@ export default function Research() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%", maxWidth: 1200 }}>
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <div>
         <Title level={4} style={{ margin: 0 }}>行业调研 · 宠物可穿戴</Title>
         <Text type="secondary">学术与产业里程碑、竞品拆解、我们的位置和下一步。数字截至 2026-11。</Text>
