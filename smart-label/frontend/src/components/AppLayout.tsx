@@ -153,19 +153,21 @@ export default function AppLayout() {
               label:
                 i.key === "/projects" && scratch && (scratchNotPassed > 0 || candPending > 0) ? (
                   <Tooltip placement="right"
-                    title={`现在重点补「${focusName}」：待判断的疑似片段 ${candPending} 条（紫色，有就显示它）；片段未通过 ${scratchNotPassed} 段（红色，其中退回待改 ${scratch.total.returned}、还没审 ${scratch.total.unreviewed}），共 ${scratch.total.n} 段。${focus?.hint ?? ""}。管理员在项目页顶部切换重点`}>
+                    title={`重点：${focusName}｜红 片段未通过 ${scratchNotPassed}｜紫 疑似待判 ${candPending}`}>
                     {/* 菜单栏窄：数字超过 999 写成 3.7k，「项目」后面只放两个小数字，鼠标停上去看完整 */}
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
                       {i.label}
                       {/* 菜单栏只有 180 宽：负例写成「负·饮水」，只放一个数——有待判的疑似片段（紫）就放它，
                           否则放片段未通过（红）。两个数、还没审几段都在悬停里 */}
                       <span style={{ fontSize: 10, color: "#ff4d4f", marginLeft: 2 }}>
                         {focus?.neg ? `负·${focus.name}` : focusName}
                       </span>
-                      {candPending > 0 ? (
-                        <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#722ed1", color: "#fff" }}>{kfmt(candPending)}</span>
-                      ) : (
-                        <span style={{ fontSize: 11, lineHeight: "16px", padding: "0 5px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
+                      {/* 红 = 片段未通过，紫 = 待判的疑似片段；两个都放，内边距收窄才挤得下 */}
+                      {scratchNotPassed > 0 && (
+                        <span style={{ fontSize: 10, lineHeight: "15px", padding: "0 4px", borderRadius: 8, background: "#ff4d4f", color: "#fff" }}>{kfmt(scratchNotPassed)}</span>
+                      )}
+                      {candPending > 0 && (
+                        <span style={{ fontSize: 10, lineHeight: "15px", padding: "0 4px", borderRadius: 8, background: "#722ed1", color: "#fff" }}>{kfmt(candPending)}</span>
                       )}
                     </span>
                   </Tooltip>
