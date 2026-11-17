@@ -68,12 +68,12 @@ interface PubDs { key: string; name: string; url: string; what: string; sensor: 
 const DATASETS: PubDs[] = [
   { key: "marcato", name: "Marcato 2023 · 犬姿态惯性数据集", url: "https://data.mendeley.com/datasets/mpph6bmn7g/1",
     what: "42 只导盲犬幼犬，背 / 颈 / 胸三处同时戴", sensor: "ActiGraph GT9X：加速度 + 陀螺仪 + 磁力计，100 Hz",
-    labels: "站、坐、躺、走、**抖身**", license: "CC BY 4.0", size: "未标（几百 MB 量级）", use: "高",
-    how: "颈部那一路直接当项圈用。抖身是我们最缺的类（8 s 窗口下只有 174 段），拿来补甩头 / 抖身正样本；站坐躺走补静止和活动" },
+    labels: "站、坐、躺、走、**抖身**", license: "CC BY 4.0", size: "123 MB", use: "高",
+    how: "已下载并入训练。颈部那一路直接当项圈用；抖身 41 段（时长短），站坐躺走补静止和活动" },
   { key: "vehkaoja", name: "Vehkaoja / Kumpulainen 2022 · 犬行为运动传感器", url: "https://data.mendeley.com/datasets/vxhx934tbn/3",
     what: "45 只中大型犬，项圈 + 胸背带，17 只重复采集", sensor: "ActiGraph GT9X：加速度 + 陀螺仪，100 Hz",
-    labels: "奔跑、趴、坐、**嗅闻**、站、小跑、走（1 s 分辨率视频标注）", license: "CC BY 4.0", size: "850 MB", use: "中",
-    how: "没有抓挠，但嗅闻是低头小幅动作，正好当抓挠 / 舔的难负样本；也能做跨数据集验证，看模型换一批狗、换一种项圈还稳不稳" },
+    labels: "奔跑、趴、坐、站、走、玩、**嗅闻、进食、饮水、甩动**、喘气（三列同时标注）", license: "CC BY 4.0", size: "850 MB", use: "高",
+    how: "已下载并入训练。没有抓挠，但进食 1463 段、饮水 90 段、嗅闻 917 段正是我们抓挠误报的来源，当难负样本；甩动 269 段补甩头 / 抖身" },
   { key: "bebe", name: "BEBE 基准（Earth Species Project）", url: "https://github.com/earthspecies/BEBE",
     what: "9 个物种、149 个个体、1654 小时", sensor: "动物佩戴的加速度 / 陀螺仪，频率各异",
     labels: "各物种自己的行为类别", license: "开放（见仓库）", size: "GB 级（未核实）", use: "中",
@@ -265,6 +265,8 @@ export default function Research() {
           结论：公开数据里<Text strong>没有带抓挠标注的狗 IMU 数据</Text>。能补的是两块：抖身 / 甩头正样本（Marcato，颈部传感器）和嗅闻这类难负样本（Vehkaoja）；
           再加一套人类手腕的预训练模型做初始化。用之前统一重采样到 20 Hz，换成我们方向无关的竖直 / 水平 / 模长通道，项圈装法不同也能对上。
         </Paragraph>
+        <Alert type="success" showIcon style={{ marginBottom: 12 }} message="实测：并进训练之后（2026-11-17，五折交叉验证）"
+          description="Vehkaoja + Marcato 并进训练，抓挠只在我们自己的数据里有，所以下面的命中率完全是在自己的数据上算的。6 轴 CNN 抓挠片段命中 88.4% → 91.8%，3 轴 86.0% → 87.3%；甩头 / 抖身 F1 大约翻倍（6 轴 0.10 → 0.24）。服务端 XGBoost 基本没变。转换脚本 experiments/claude_2026_11/convert_public.py，数据在 NAS 的 public_datasets/。" />
         <Table size="small" rowKey="key" pagination={false} dataSource={DATASETS} scroll={{ x: 1150 }}
           columns={[
             { title: "数据集", dataIndex: "name", width: 200, fixed: "left",
