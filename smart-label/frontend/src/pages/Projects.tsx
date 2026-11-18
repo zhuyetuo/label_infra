@@ -182,7 +182,7 @@ export default function Projects() {
   // 两步拉：轻量的（只有任务状态、样本名，快）先到，项目行「共几个 / 待认领几个」马上出来；
   // 带片段统计的完整列表（要几秒）后到，到了替换掉。完整的一旦有了就一直用它（改动后只刷那几行）
   // 每个项目「抓挠」还有多少没通过 / 没审：不用展开就能看到（服务端按项目汇总）
-  // 「抓挠」不再写死：按全平台的「现在重点补什么」统计（顶部那个开关，默认抓挠，可切到负例）
+  // 「抓挠」不再写死：按我自己选的「现在重点补什么」统计（顶部那个开关，每人一个，默认抓挠，可切到负例）
   const { data: focus } = useQuery({ queryKey: ["label-focus"], queryFn: getLabelFocus, staleTime: 30_000 });
   const focusLabels = focus?.labels ?? ["抓挠"];
   // 负例显示成「负例·舔」：一眼知道现在补的是负例、是哪一类
@@ -1379,16 +1379,16 @@ export default function Projects() {
             </Popconfirm>
           );
         })()}
-        {/* 现在重点补什么：全平台一个。左边菜单的角标、每个项目行的「xx 未通过 / 未审」都按它统计 */}
+        {/* 现在重点补什么：每人一个，只影响自己。左边菜单的角标、每个项目行的「xx 未通过 / 未审」都按它统计 */}
         <Tooltip title={<div style={{ maxWidth: 360 }}>
-          现在重点补：{focus?.hint ?? focusName}。左边菜单「项目」上的角标、每个项目行的「{focusName} 未通过 / 未审 / 全部通过」都按它统计，所有人看到的一样。
-          {isAdmin ? "管理员可以在这里切换。" : "管理员在这里切换。"}
-          {focus?.by ? `（${focus.by} 在 ${focus.at} 切的）` : ""}
+          你现在看的重点：{focus?.hint ?? focusName}。左边菜单「项目」上的角标、每个项目行的「{focusName} 未通过 / 未审 / 全部通过」都按它统计。
+          这个开关<b>只影响你自己</b>：每个人各看各的，你切了别人那边不会变。没选过的人默认看抓挠。
         </div>}>
           <Space size={6} style={{ marginLeft: 8 }}>
             <Typography.Text type="secondary">现在重点补</Typography.Text>
-            {isAdmin ? (
-              // 一次只盯一类：抓挠 / 舔 / 啃 / 蹭 / 进食 / 饮水 / 嗅闻 / 甩身体，选项多了用下拉，每项说明为什么补它
+            {(
+              // 一次只盯一类：抓挠 / 舔 / 啃 / 蹭 / 进食 / 饮水 / 嗅闻 / 甩身体，选项多了用下拉，每项说明为什么补它。
+              // 每人一个、谁都能切（只影响自己）
               <Select
                 size="small"
                 popupMatchSelectWidth={false}
@@ -1416,11 +1416,9 @@ export default function Projects() {
                   const r = await setLabelFocus(String(v));
                   qc.setQueryData(["label-focus"], r);
                   qc.invalidateQueries({ queryKey: ["label-review"] });
-                  message.success(`现在重点补「${r.title ?? r.name}」：${r.hint}`);
+                  message.success(`你这里现在看「${r.title ?? r.name}」（只影响你自己）：${r.hint}`);
                 }}
               />
-            ) : (
-              <Tag color="volcano">{focusName}</Tag>
             )}
           </Space>
         </Tooltip>

@@ -1,4 +1,4 @@
-"""「当前重点补什么」：默认抓挠；一次只能选一类；不认识的不让切；文件坏了 / 存的是下线了的选项都退回默认"""
+"""「当前重点补什么」：每人一个；默认抓挠；一次只能选一类；不认识的不让切；文件坏了 / 存的是下线了的选项都退回默认"""
 import json
 
 import pytest
@@ -14,8 +14,8 @@ def nas(tmp_path, monkeypatch):
 
 
 def test_default_is_scratch(nas):
-    f = label_focus.get()
-    assert f["key"] == "scratch" and f["labels"] == ["抓挠"] and f["by"] is None
+    f = label_focus.get(1)
+    assert f["key"] == "scratch" and f["labels"] == ["抓挠"] and f["at"] is None
 
 
 def test_each_option_is_one_class(nas):
@@ -31,27 +31,44 @@ def test_negatives_carry_flag(nas):
     by = {o["key"]: o for o in label_focus.options()}
     assert by["scratch"]["neg"] is False and by["scratch"]["title"] == "抓挠"
     assert all(o["neg"] and o["title"] == f"负例·{o['name']}" for k, o in by.items() if k != "scratch")
-    assert label_focus.get()["title"] == "抓挠"
+    assert label_focus.get(1)["title"] == "抓挠"
 
 
 def test_switch_and_back(nas):
-    f = label_focus.set_focus("lick", "admin")
-    assert f["name"] == "舔" and f["labels"] == ["舔", "舔身体"] and f["by"] == "admin"
+    f = label_focus.set_focus("lick", 1)
+    assert f["name"] == "舔" and f["labels"] == ["舔", "舔身体"] and f["at"]
     assert f["neg"] is True and f["title"] == "负例·舔"
-    assert label_focus.get()["key"] == "lick"          # 存下来了，另一个后端实例读到的也是它
-    assert label_focus.set_focus("scratch", "admin")["labels"] == ["抓挠"]
+    assert label_focus.get(1)["key"] == "lick"          # 存下来了，另一个后端实例读到的也是它
+    assert label_focus.set_focus("scratch", 1)["labels"] == ["抓挠"]
+
+
+def test_each_user_sees_own(nas):
+    """管理员切了只影响自己：实习生那边还是他自己选的（没选过就是抓挠）"""
+    label_focus.set_focus("eat", 1)
+    assert label_focus.get(1)["key"] == "eat"
+    assert label_focus.get(2)["key"] == "scratch"
+    label_focus.set_focus("drink", 2)
+    assert label_focus.get(1)["key"] == "eat" and label_focus.get(2)["key"] == "drink"
+
+
+def test_old_global_value_no_longer_applies(nas):
+    """以前全平台那一份（顶层 key）不再管别人"""
+    p = nas / ".smart_label" / "label_focus.json"
+    p.parent.mkdir()
+    p.write_text(json.dumps({"key": "eat", "by": "admin"}), encoding="utf-8")
+    assert label_focus.get(5)["key"] == "scratch"
 
 
 def test_unknown_key_rejected(nas):
     with pytest.raises(ValueError):
-        label_focus.set_focus("neg", "admin")           # 以前那个「负例」整组已经下线
-    assert label_focus.get()["key"] == "scratch"
+        label_focus.set_focus("neg", 1)           # 以前那个「负例」整组已经下线
+    assert label_focus.get(1)["key"] == "scratch"
 
 
 def test_stale_or_broken_file_falls_back(nas):
     p = nas / ".smart_label" / "label_focus.json"
     p.parent.mkdir()
-    p.write_text(json.dumps({"key": "neg"}), encoding="utf-8")
-    assert label_focus.get()["key"] == "scratch"
+    p.write_text(json.dumps({"users": {"1": {"key": "neg"}}}), encoding="utf-8")
+    assert label_focus.get(1)["key"] == "scratch"
     p.write_text("{坏的", encoding="utf-8")
-    assert label_focus.get()["key"] == "scratch"
+    assert label_focus.get(1)["key"] == "scratch"

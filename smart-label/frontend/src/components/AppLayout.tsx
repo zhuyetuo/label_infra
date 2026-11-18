@@ -91,7 +91,7 @@ export default function AppLayout() {
   const standardInset = useStandardInset();
   // 左边「项目」上标抓挠还有多少没通过 / 没审（管理员、审核员看）
   const reviewer = userInfo?.role === "admin" || userInfo?.role === "super_admin" || userInfo?.role === "reviewer";
-  // 现在重点补什么（全平台一个，项目页顶部切）：角标按它统计。默认抓挠
+  // 我现在重点补什么（每人一个，项目页顶部切，只影响自己）：角标按它统计。默认抓挠
   const { data: focus } = useQuery({
     queryKey: ["label-focus"], queryFn: getLabelFocus,
     enabled: !!accessToken, refetchInterval: 60_000, staleTime: 30_000,

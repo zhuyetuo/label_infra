@@ -1,10 +1,15 @@
-"""「当前重点补什么」：全平台一个设置，侧栏角标、项目行上的「xx 未通过 / 未审 / 全部通过」都按它统计。
+"""「当前重点补什么」：**每个人自己一个**（2026-11-18 起；以前是全平台一个），侧栏角标、项目行上的
+「xx 未通过 / 未审 / 全部通过」都按当前登录人自己选的统计。
+
+为什么改成每人一个：管理员想临时看一眼抓挠的情况，一切换，实习生那边的角标和项目行也全变了，
+以为工作重点换了。现在谁切都只影响自己；没选过的人默认看抓挠。
 
 以前写死成「抓挠」。抓挠补得差不多了，现在要重点补负例（进食 / 饮水 / 嗅闻——容易被判成抓挠的动作），
 得让所有人一眼知道现在重点是什么、还差多少。管理员在项目页顶部切换。
 
-存成 NAS 上的一个小 JSON（nas_root/.smart_label/label_focus.json）：两个后端实例（api / api_b）
-挂的是同一个 nas_root，切了马上两边一致；不用为一个开关加表、跑迁移。读不到 / 坏了就当默认（抓挠）。
+存成 NAS 上的一个小 JSON（nas_root/.smart_label/label_focus.json，{"users": {用户 id: {key, at}}}）：
+两个后端实例（api / api_b）挂的是同一个 nas_root，切了马上两边一致；不用为一个开关加表、跑迁移。
+读不到 / 坏了 / 这个人没选过就当默认（抓挠）。以前全平台那一份（顶层的 key）不再生效。
 """
 from __future__ import annotations
 
@@ -53,25 +58,34 @@ def options() -> list[dict]:
     return [_with_flag(v) for v in PRESETS.values()]
 
 
-def get() -> dict:
-    key, by, at = DEFAULT, None, None
+def _load() -> dict:
     try:
         with open(_path(), encoding="utf-8") as f:
             d = json.load(f) or {}
-        if d.get("key") in PRESETS:
-            key, by, at = d["key"], d.get("by"), d.get("at")
+        return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
-        pass
-    return {**_with_flag(PRESETS[key]), "by": by, "at": at, "options": options()}
+        return {}
 
 
-def set_focus(key: str, by: str | None) -> dict:
+def get(user_id: int | None = None) -> dict:
+    """这个人自己选的重点；没选过（或选的已经下线）就是默认（抓挠）"""
+    mine = ((_load().get("users") or {}).get(str(user_id)) or {}) if user_id is not None else {}
+    key = mine.get("key") if mine.get("key") in PRESETS else DEFAULT
+    return {**_with_flag(PRESETS[key]), "at": mine.get("at") if key == mine.get("key") else None,
+            "personal": True, "options": options()}
+
+
+def set_focus(key: str, user_id: int) -> dict:
+    """只改这个人自己的，别人的不动"""
     if key not in PRESETS:
         raise ValueError(f"不认识的重点：{key}（可选 {', '.join(PRESETS)}）")
+    d = _load()
+    users = d.get("users") if isinstance(d.get("users"), dict) else {}
+    users[str(user_id)] = {"key": key, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     p = _path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
+    tmp = p + f".{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"key": key, "by": by, "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, f, ensure_ascii=False)
+        json.dump({"users": users}, f, ensure_ascii=False)
     os.replace(tmp, p)
-    return get()
+    return get(user_id)

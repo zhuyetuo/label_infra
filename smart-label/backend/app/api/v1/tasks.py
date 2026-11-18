@@ -781,22 +781,22 @@ class LabelFocusIn(BaseModel):
 
 
 @router.get("/label-focus")
-async def get_label_focus(user: User = Depends(get_current_user)):  # noqa: ARG001
-    """现在重点补什么（全平台一个）：侧栏角标、项目行「xx 未通过 / 未审」按它统计"""
+async def get_label_focus(user: User = Depends(get_current_user)):
+    """我现在重点补什么（每人一个，没选过默认抓挠）：侧栏角标、项目行「xx 未通过 / 未审」按它统计"""
     from app.services import label_focus
-    return ok(label_focus.get())
+    return ok(label_focus.get(user.id))
 
 
 @router.put("/label-focus")
 async def set_label_focus(body: LabelFocusIn, db: AsyncSession = Depends(get_db),
-                          user: User = Depends(require_role(UserRole.admin, UserRole.super_admin))):
-    """管理员切换重点（项目页顶部那个开关）。记一笔审计日志：谁、什么时候切的"""
+                          user: User = Depends(get_current_user)):
+    """切我自己的重点（项目页顶部那个开关）：只影响自己，谁都能切。记一笔审计日志"""
     from app.services import label_focus
     try:
-        out = label_focus.set_focus(body.key, user.display_name or user.username)
+        out = label_focus.set_focus(body.key, user.id)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-    db.add(AuditLog(user_id=user.id, action="label_focus.set", target_type="system", target_id=0,
+    db.add(AuditLog(user_id=user.id, action="label_focus.set", target_type="user", target_id=user.id,
                     detail=json.dumps({"key": body.key}, ensure_ascii=False)))
     await db.commit()
     return ok(out)
