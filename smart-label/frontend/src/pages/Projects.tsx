@@ -249,7 +249,7 @@ export default function Projects() {
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
   // minConf：疑似片段置信度 ≥ 多少 %（选了候选类别就只看那几类）；hours：样本采集的整点时段（13 = 13:00~13:59），可多选
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; spot?: boolean; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
     minConf?: number | null; hours?: number[];
     /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
     overlapOnly?: boolean; uncertainOnly?: boolean;
@@ -1509,6 +1509,7 @@ export default function Projects() {
               const lc = t.label_counts ?? {};
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
+              if (f.spot && !(t.cand_spot_pending ?? 0)) return false;
               // 「含类别」只认**片段**。曾经把候选也算进来过（为了让"一句话找画面
               // 刚写的候选"能被搜到），结果更糟：疑似片段的候选 label_name 就是
               // 「抓挠」，236 个任务全有，筛「抓挠」等于筛了大半个项目，
@@ -1616,6 +1617,7 @@ export default function Projects() {
               f.labels.length > 0 && `含类别：${projLabelNames(p.id, f.labels).join("、") || "（已删掉的类别）"}`,
               f.aiPending && "只看 AI 待确认",
               f.cand && "有待判断的疑似片段",
+              f.spot && "只看有「抽查」待判的任务",
               f.candLabels.length > 0 && `候选类别：${f.candLabels.join("、")}`,
               !!f.minConf && `置信度 ≥${f.minConf}%`,
               !!f.hours?.length && `时间段 ${f.hours.map((h) => `${h}点`).join("、")}`,
@@ -1632,7 +1634,7 @@ export default function Projects() {
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
-              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], minConf: null, hours: [], imu: "ALL",
+              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], spot: false, minConf: null, hours: [], imu: "ALL",
               noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
               reviewer: null, reviewedFrom: null, reviewedTo: null,
             });
@@ -2723,6 +2725,25 @@ export default function Projects() {
                           setExpandedKeys(() => [p.id]);
                         }}>
                           疑似{short} 待判 {cn}
+                        </Tag>
+                      </Tooltip>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  // 抽查：新模型报了、人工没标的片段，请人对着视频判（不管当前重点是什么都显示）
+                  const sn = scratchReview?.spot?.[String(p.id)] ?? 0;
+                  if (!sn) return null;
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <Tooltip title={`有 ${sn} 段「抽查」还没判：新模型报了、人工没标，请对着视频判是不是真的。点一下展开、只看这些任务；打开任务后疑似片段面板默认只显示抽查的那几段`}>
+                        <Tag color="red" style={{ cursor: "pointer", fontWeight: 600 }} onClick={(e) => {
+                          e.stopPropagation();
+                          setFilter(p.id, { spot: true, cand: false, candLabels: [], labels: [],
+                                            unreviewedOnly: false, segReturned: false, status: "ALL" });
+                          setExpandedKeys(() => [p.id]);
+                        }}>
+                          抽查 待判 {sn}
                         </Tag>
                       </Tooltip>
                     </div>
@@ -3871,6 +3892,7 @@ export default function Projects() {
                 ["image", "用这一张去扩", "工作台里拿一帧去找相似写的"],
                 ["similar_old", "画面相似（旧）", "两个入口还没分开时写的，认不出是哪一边"],
                 ["model_neg", "负例挖掘模型", "「只补负例候选」写的疑似进食 / 饮水 / 嗅闻；规则候选（姿态像舔、节律像饮水）不在这里，不会被删"],
+                ["spot", "抽查", "新模型报了、人工没标、拿来让人对着视频判的片段；删它不会碰别的来源"],
               ] as const).map(([key, name, why]) => {
                 const s = purgeSrc.sources[key] ?? { total: 0, pending: 0 };
                 const n = purgeDecided ? s.total : s.pending;

@@ -96,6 +96,8 @@ export interface Task {
    *  「疑似片段」的二级筛选选项也是它——只列实有的类别 */
   /** max_conf：待判的里置信度最高多少（0~1） */
   cand_labels?: Record<string, { n: number; pending: number; max_conf?: number | null }>;
+  /** 「抽查」来源（reason=spot）还没判的条数 */
+  cand_spot_pending?: number;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */

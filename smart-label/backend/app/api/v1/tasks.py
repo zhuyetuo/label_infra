@@ -529,16 +529,19 @@ async def list_tasks(
                 func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)),
                 # 待判的里置信度最高多少：项目页「置信度 ≥」筛选用（只看模型比较有把握的那些任务先判）
                 func.max(case((AiCandidate.status == CandidateStatus.pending, AiCandidate.confidence), else_=None)),
+                # 「抽查」来源（reason=spot）还没判的：任务行上单独标红，方便人一眼找到要判的那几段
+                func.sum(case(((AiCandidate.status == CandidateStatus.pending) & (AiCandidate.reason == "spot"), 1), else_=0)),
             )
             .join(Task, Task.id == AiCandidate.task_id)
             .join(scope, scope.c.id == Task.id)
             .where(AiCandidate.round_no == Task.round_no)
             .group_by(AiCandidate.task_id, AiCandidate.label_name)
         )
-        for task_id, label_name, n, n_pending, max_conf in rows.all():
-            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0})
+        for task_id, label_name, n, n_pending, max_conf, n_spot in rows.all():
+            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0, "spot": 0})
             c["n"] += int(n)
             c["pending"] += int(n_pending or 0)
+            c["spot"] += int(n_spot or 0)
             cand_labels.setdefault(task_id, {})[label_name] = {
                 "n": int(n), "pending": int(n_pending or 0),
                 "max_conf": round(float(max_conf), 4) if max_conf is not None else None}
@@ -611,6 +614,7 @@ async def list_tasks(
                 "overlap_by_label": overlap_by_label.get(t.id, {}),
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
+                "cand_spot_pending": cand_counts.get(t.id, {}).get("spot", 0),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出
                 # 「疑似抓挠里实有哪些类别」——项目全量标签列表里大半是没有的
                 "cand_labels": cand_labels.get(t.id, {}),
@@ -718,7 +722,7 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     )).scalars().all())
     if not root_ids:
         return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
-                   "marks": {}, "candidates": {}, "cand_total": 0})
+                   "marks": {}, "candidates": {}, "cand_total": 0, "spot": {}, "spot_total": 0})
     label_ids = await label_tree.expand_ids(db, root_ids)
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
@@ -772,8 +776,18 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         .group_by(Task.project_id)
     )
     candidates = {str(pid): int(n) for pid, n in cand_rows.all()}
+    # 「抽查」（reason=spot）还没判的，不管什么类别、也不管当前重点：项目行上单独标出来，点了只看这些任务
+    spot_rows = await db.execute(
+        select(Task.project_id, func.count(AiCandidate.id))
+        .join(scope, scope.c.id == Task.id)
+        .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
+        .where(AiCandidate.status == CandidateStatus.pending, AiCandidate.reason == "spot")
+        .group_by(Task.project_id)
+    )
+    spot = {str(pid): int(n) for pid, n in spot_rows.all()}
     return ok({"label": label, "projects": projects, "total": total, "marks": marks,
-               "candidates": candidates, "cand_total": sum(candidates.values())})
+               "candidates": candidates, "cand_total": sum(candidates.values()),
+               "spot": spot, "spot_total": sum(spot.values())})
 
 
 class LabelFocusIn(BaseModel):

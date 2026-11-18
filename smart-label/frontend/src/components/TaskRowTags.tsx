@@ -43,8 +43,14 @@ export function CandKindTags({
   if (!kinds.length) return null;
   // 还有待判的排前面，同样按条数多的在前
   kinds.sort(([, a], [, b]) => Number(b.pending > 0) - Number(a.pending > 0) || b.n - a.n);
+  const spot = task.cand_spot_pending ?? 0;
   return (
     <>
+      {spot > 0 && (
+        <Tooltip title={`这个任务里有 ${spot} 段「抽查」：新模型报了、人工没标，请对着视频判是不是真的。打开后疑似片段面板默认只显示这几段`}>
+          <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>抽查 待判 {spot}</Tag>
+        </Tooltip>
+      )}
       {kinds.map(([name, v]) => {
         const shown = currentName(name);
         return (

@@ -14,7 +14,7 @@ export interface AiCandidate {
   spec: number | null;
   /** low_conf=模型低置信 / spectral=频谱像抓挠但模型没判 / grooming=姿态像舔啃（只靠加速度，跟模型无关）
    *  / vision=画面里看着像（视觉大模型看视频挑出来的，类别是项目里选的） */
-  reason: "low_conf" | "spectral" | "grooming" | "eating" | "drinking" | "barking" | "shaking" | "toileting" | "model_neg" | "vision" | "similar";
+  reason: "low_conf" | "spectral" | "grooming" | "eating" | "drinking" | "barking" | "shaking" | "toileting" | "model_neg" | "vision" | "similar" | "spot";
   /** 画面候选是哪家哪个模型给的，如 anthropic:claude-opus-5；IMU 来的为空 */
   model?: string | null;
   /** 模型看到了什么 + 为什么这么判。只有画面候选（reason=vision）有 */

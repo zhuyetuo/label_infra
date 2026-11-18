@@ -38,6 +38,8 @@ class TaskOut(BaseModel):
     # 单独给两个数，否则一个"抓挠 0 段"的任务看着像没事干，其实压着十几条待判断的
     cand_count: int = 0
     cand_pending: int = 0
+    # 「抽查」来源（reason=spot）还没判的条数：任务行上标红「抽查 待判 n」
+    cand_spot_pending: int = 0
     # 同一轨上有重叠的片段数（只有列表接口会算）
     overlap_count: int = 0
     overlap_by_label: dict[int, int] = {}

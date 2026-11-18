@@ -36,6 +36,7 @@ export const setLabelFocus = (key: string) => request.put<never, LabelFocus>("/t
 /** label：一个类别，或逗号分隔的几个（合在一起算） */
 export const getLabelReview = (label = "抓挠") =>
   request.get<never, { label: string; projects: Record<string, LabelReviewCounts>; total: LabelReviewCounts;
+    spot?: Record<string, number>; spot_total?: number;
     /** 每个项目打了 🔖 备忘的段数（全部类别），by_kind 按种类拆：compound / boundary / av_mismatch / other */
     marks?: Record<string, { n: number; by_kind: Record<string, number> }>;
     /** 每个项目这几类**待判的疑似片段**（候选，没确认也没排除，当前轮）；cand_total 是全部项目加起来 */
