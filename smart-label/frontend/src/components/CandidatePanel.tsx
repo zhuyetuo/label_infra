@@ -455,6 +455,9 @@ export default function CandidatePanel({
         // 套在一起——鼠标在表格里滚的是里面那条，想滚整页还得把鼠标挪出去。
         // 一页就十条，让它整个铺开，纵向交给外层那一条
         scroll={{ x: 720 }}
+        // 固定列宽：自动列宽时一条长说明 + 一排操作按钮会把表格撑得比面板宽，人得左右拉。
+        // 固定之后长说明省略成一行（悬停看全文），线索 / 操作放不下就折行，一屏看完
+        tableLayout="fixed"
         locale={{
           // 一条都不显示、标题上却写着「4 待确认」，人只会以为是坏了。
           // 是被筛选挡住的就直说是哪一档挡的，并给一个当场取消的按钮——
@@ -485,12 +488,16 @@ export default function CandidatePanel({
         columns={[
           {
             title: "时间",
-            width: 190,
-            render: (_, c: AiCandidate) => `${formatMs(c.start_time_ms)} ~ ${formatMs(c.end_time_ms)}`,
+            width: 118,
+            render: (_, c: AiCandidate) => (
+              <span style={{ whiteSpace: "nowrap", lineHeight: 1.35 }}>
+                {formatMs(c.start_time_ms)}<br />~ {formatMs(c.end_time_ms)}
+              </span>
+            ),
           },
           {
             title: "时长",
-            width: 80,
+            width: 66,
             sorter: (a: AiCandidate, b: AiCandidate) =>
               a.end_time_ms - a.start_time_ms - (b.end_time_ms - b.start_time_ms),
             render: (_, c: AiCandidate) => `${((c.end_time_ms - c.start_time_ms) / 1000).toFixed(1)}s`,
@@ -499,7 +506,7 @@ export default function CandidatePanel({
             title: "线索",
             width: 150,
             render: (_, c: AiCandidate) => (
-              <Space size={2}>
+              <Space size={2} wrap>
                 {/* 画面相似那一档直接写清是哪个入口写的：两行时间一样、类别不同的
                     候选，多半是同一段在两个入口各写了一遍，看不出来源就只能猜 */}
                 <Tag color={REASON_COLOR[c.reason] ?? "orange"}>
@@ -521,7 +528,7 @@ export default function CandidatePanel({
           },
           {
             title: "置信度",
-            width: 90,
+            width: 72,
             sorter: (a: AiCandidate, b: AiCandidate) => (a.confidence ?? 0) - (b.confidence ?? 0),
             render: (_, c: AiCandidate) => (c.confidence != null ? `${Math.round(c.confidence * 100)}%` : "—"),
           },
@@ -530,7 +537,7 @@ export default function CandidatePanel({
             // 光看「舔身体 62%」还得点开视频才知道对不对；有了这一句，
             // 「一只狗趴在地毯上」这种一眼就能排掉，不用播。IMU 来的候选没有这一列的值
             title: "模型看到了什么",
-            width: 200,
+            width: 160,
             render: (_, c: AiCandidate) =>
               c.evidence ? (
                 <Tooltip title={c.evidence}>
@@ -545,7 +552,7 @@ export default function CandidatePanel({
           },
           {
             title: "频谱",
-            width: 80,
+            width: 64,
             sorter: (a: AiCandidate, b: AiCandidate) => (a.spec ?? 0) - (b.spec ?? 0),
             render: (_, c: AiCandidate) => (
               <Tooltip title="陀螺仪 4–8Hz 能量占比；抓挠是后腿高频往复，这个值越高越像">
@@ -555,7 +562,7 @@ export default function CandidatePanel({
           },
           {
             title: "状态",
-            width: 130,
+            width: 96,
             render: (_, c: AiCandidate) => (
               <>
               {c.review_note && (
@@ -592,7 +599,7 @@ export default function CandidatePanel({
           {
             title: "操作",
             render: (_, c: AiCandidate) => (
-              <Space size={0}>
+              <Space size={0} wrap>
                 <Button size="small" type="link" onClick={() => onSeek(c.start_time_ms)}>
                   跳转
                 </Button>
