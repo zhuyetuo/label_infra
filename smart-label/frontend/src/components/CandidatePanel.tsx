@@ -141,6 +141,11 @@ const UNCERTAIN_KINDS = [
 const isSpecialReason = (r: string) => r === "spot" || r === "act_scr";
 /** 专项待判数变了（判掉一条 -1、撤回 +1）：项目页上的「专项 待判 N」先立刻改，后台再去对账。
  *  不等服务器那边的统计刷新——原来要等最多一分钟，判完了还挂着「待判 1」，看着像 bug */
+const sameKind = (cand: string, picked: string) => {
+  const base = currentName(cand);
+  const p = currentName(picked);
+  return p === base || p.startsWith(base + "-");
+};
 function notifySpecial(c: AiCandidate, delta: number) {
   if (!isSpecialReason(c.reason)) return;
   window.dispatchEvent(new CustomEvent("special-cand-changed", { detail: { taskId: c.task_id, label: c.label_name, delta } }));
@@ -284,9 +289,9 @@ export default function CandidatePanel({
             ? "已记下：不是，模型误报"
             : decision === "uncertain"
               ? `已记下：待定·${UNCERTAIN_KINDS.find((k) => k.value === uncertainReason)?.short ?? ""}`
-              : labelName
+              : labelName && !sameKind(c.label_name, labelName)
                 ? `已记下：其实是「${labelName}」（模型认错了）`
-                : `已记下：确实是${currentName(c.label_name)}（之前漏标了）`
+                : `已记下：确实是${currentName(c.label_name)}（之前漏标了）${labelName ? `，部位 ${labelName.slice(currentName(c.label_name).length + 1) || labelName}` : ""}`
           : decision === "rejected"
           ? "已排除"
           : decision === "uncertain"
@@ -637,8 +642,13 @@ export default function CandidatePanel({
               {/* 改成别的类别的要写清楚改成了什么，不然「已确认」看着像确认成抓挠了 */}
               {c.status === "confirmed" ? (
                 (() => {
-                  const other = otherLabels.find((l) => l.id === c.decided_label_id);
-                  return other ? <Tag color="blue">已改成 {other.display_name}</Tag> : <Tag color="green">已确认</Tag>;
+                  const picked = labels.find((l) => l.id === c.decided_label_id);
+                  // 同一类的部位（抓挠 → 抓挠-头颈耳）是确认，不是改成别的
+                  if (picked && sameKind(c.label_name, picked.display_name)) {
+                    const part = picked.display_name.slice(currentName(c.label_name).length + 1);
+                    return <Tag color="green">已确认{part ? `·${part}` : ""}</Tag>;
+                  }
+                  return picked ? <Tag color="blue">已改成 {picked.display_name}</Tag> : <Tag color="green">已确认</Tag>;
                 })()
               ) :
               c.status === "rejected" ? (
