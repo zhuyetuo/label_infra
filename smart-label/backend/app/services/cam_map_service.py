@@ -136,13 +136,19 @@ def _paired_imu(lay: dict, imu: int) -> int | None:
     return None
 
 
+def _site_key(site: str | None) -> str | None:
+    return site_layout.SITE_KEYS.get((site or "").lower()) or site
+
+
 def cam_room_choices(site: str | None, cam: int | None) -> set[int]:
     """这一路摄像头**可能**拍的是哪一间。
 
-    两台采集机各管三间：1 号机 cam1~3（1~3 号间），2 号机 cam4~6（4~6 号间）。
-    USB 重插只会打乱同一台机器内部的顺序，不可能把 1 号机的画面变成 4 号间，
-    所以只允许在同组三个房间里换。公共区机位（狗场 cam7）固定不动；
-    本地布局里没有的机位（博朗旺户外 cam7~9）也只能保持自己。
+    博朗旺两台采集机各管三间：1 号机 cam1~3（1~3 号间），2 号机 cam4~6（4~6 号间）。
+    USB 重插只会打乱同一台机器内部的顺序，所以只允许在同组三个房间里换。
+
+    深圳雷诺不一样：7 个摄像头是独立装的，6 间房和 1 个公共区，哪一路插到哪一
+    间都可能（实测有跨机器的错位）。所以 cam1~6 都可以对应任意一间，公共区
+    cam7 固定不动；本地布局里没有的机位（博朗旺户外 cam7~9）也只能保持自己。
     """
     allowed = allowed_real_cams(site)
     if cam is None:
@@ -151,6 +157,9 @@ def cam_room_choices(site: str | None, cam: int | None) -> set[int]:
         return set()
     if cam not in allowed:
         return {cam}
+    lay_key = _site_key(site)
+    if lay_key == "gouchang" and cam <= 6:
+        return {c for c in allowed if c <= 6} or {cam}
     if cam <= 6:
         lo = (cam - 1) // 3 * 3 + 1
         same = {c for c in allowed if lo <= c <= lo + 2}
@@ -245,9 +254,17 @@ def _apply_slots(
     session_key: str,
     mapping: dict[int, int],
     mark_corrected: bool,
+    videos: dict[int, str] | None = None,
+    offsets: dict[int, int] | None = None,
 ) -> dict:
-    """把这一场所有样本按 mapping 重新挂画面。返回改了哪些、哪些房间算不出来。"""
-    videos = _session_videos(samples, session_key)
+    """把这一场所有样本按 mapping 重新挂画面。返回改了哪些、哪些房间算不出来。
+
+    videos / offsets：跨采集机核对时把对面那一场的机位也一并传进来——雷诺的
+    7 个摄像头是独立装的，1~6 号间可能录在另一台机器上，只按本场找会缺画面。
+    offsets 是这个录制机位的第 0 秒相对本样本原点的毫秒数（跨机的才有）。
+    """
+    videos = videos or _session_videos(samples, session_key)
+    cross_offsets = offsets or {}
     changed = 0
     missing: set[int] = set()
     for sample in samples:
@@ -268,7 +285,7 @@ def _apply_slots(
             slot = f"cam{i}"
             setattr(sample, f"video_{slot}_path", path)
             new_cams[slot] = real
-            off = offset_by_path.get(path)
+            off = cross_offsets.get(real) or offset_by_path.get(path)
             if off:
                 new_offsets[slot] = int(off)
         for slot in _SLOTS[len(wanted):]:
@@ -308,14 +325,18 @@ async def _validate_and_apply(
     site: str | None,
     mapping: dict,
     user_id: int | None,
+    videos: dict[int, str] | None = None,
+    offsets: dict[int, int] | None = None,
 ) -> dict:
     """一场的「校验 + 重挂 + 记下人工结果」。不 commit——批量时几场一起提交。"""
     try:
         mapping = {int(k): int(v) for k, v in mapping.items()}
     except (TypeError, ValueError):
         raise ValueError("机位号必须是整数") from None
-    videos = _session_videos(samples, session_key)
-    mapping = {recorded: mapping.get(recorded, recorded) for recorded in videos}
+    own_videos = _session_videos(samples, session_key)
+    # 跨采集机核对时按两边合起来的机位校验；没传就是本场
+    all_videos = videos or own_videos
+    mapping = {recorded: mapping.get(recorded, recorded) for recorded in all_videos}
     if allowed_real_cams(site):
         for recorded, real in mapping.items():
             choices = cam_room_choices(site, recorded)
@@ -325,8 +346,10 @@ async def _validate_and_apply(
                 )
     if len(set(mapping.values())) != len(mapping):
         raise ValueError("两路摄像头不能对应同一个房间")
-    result = _apply_slots(db, samples, session_key, mapping, mark_corrected=True)
-    await _upsert(db, session_key, site, mapping, user_id)
+    result = _apply_slots(db, samples, session_key, mapping, mark_corrected=True,
+                          videos=all_videos, offsets=offsets)
+    # 每场只记自己的机位对照：对面那台机器的映射由它自己的那一场记
+    await _upsert(db, session_key, site, {k: mapping[k] for k in own_videos}, user_id)
     return {"mapping": {str(k): v for k, v in mapping.items()}, **result}
 
 
@@ -574,14 +597,6 @@ async def sample_cams(db: AsyncSession, sample_id: int) -> dict:
         raise ValueError("样本不存在")
     session_key = session_key_of(sample.sample_code)
     day_dir = os.path.dirname(sample.video_cam1_path or "")
-    rows = (
-        await db.execute(select(Sample).where(Sample.sample_code.like(f"{session_key}%")))
-    ).scalars().all()
-    samples = [
-        s for s in rows
-        if session_key_of(s.sample_code) == session_key
-        and os.path.dirname(s.video_cam1_path or "") == day_dir
-    ]
     site = site_layout.site_of(session_key, day_dir, sample.video_cam1_path)
     if not site_layout.has_private_rooms(site):
         return {
@@ -589,8 +604,60 @@ async def sample_cams(db: AsyncSession, sample_id: int) -> dict:
             "reason": "这个场地全是公共区，没有「哪一路拍哪一间」的问题，不需要核对机位",
         }
 
-    videos = _session_videos(samples, session_key)
+    # 同一天同一场地、另一台机器、开机时刻挨着的那一场——雷诺 7 个摄像头是独立
+    # 装的，只按本场那 3 路看不到对面机器上的房间，纠正也没法跨过去
+    rows = (
+        await db.execute(select(Sample).where(Sample.session_date == sample.session_date))
+    ).scalars().all()
+    groups: dict[tuple[str, str], list[Sample]] = defaultdict(list)
+    for s in rows:
+        d = os.path.dirname(s.video_cam1_path or "")
+        if d != day_dir:
+            continue
+        groups[(d, session_key_of(s.sample_code))].append(s)
+    groups = {
+        gk: gs for gk, gs in groups.items()
+        if site_layout.site_of(gk[1], gk[0], gs[0].video_cam1_path) == site
+    }
+    own_key = (day_dir, session_key)
+    samples = groups.get(own_key, [sample])
+    videos = dict(_session_videos(samples, session_key))
+    offsets: dict[int, int] = {}
+    session_keys = [session_key]
+    mine_start = _session_start(session_key)
+    mine_machine = _machine_of(sorted(videos))
+    best: tuple[int, tuple[str, str], list[Sample], dict[int, str]] | None = None
+    # 只有雷诺是 7 路独立装的、可能跨机器错位；博朗旺仍按本场三路核对
+    if _site_key(site) == "gouchang":
+        for gk, gs in groups.items():
+            if gk == own_key:
+                continue
+            other = _session_videos(gs, gk[1])
+            m2 = _machine_of(sorted(other))
+            if not m2 or (mine_machine and m2 == mine_machine):
+                continue
+            st2 = _session_start(gk[1])
+            if mine_start is None or st2 is None:
+                continue
+            diff = abs(int((st2 - mine_start).total_seconds()))
+            if diff > _PAIR_WINDOW_SEC:
+                continue
+            if best is None or diff < best[0]:
+                best = (diff, gk, gs, other)
     mapping = mapping_of(samples, session_key)
+    if best is not None:
+        _diff, gk, gs, other = best
+        session_keys.append(gk[1])
+        st2 = _session_start(gk[1])
+        gap = int((st2 - mine_start).total_seconds() * 1000) if st2 and mine_start else 0
+        other_mapping = mapping_of(gs, gk[1])
+        for cam, path in other.items():
+            if cam not in videos:
+                videos[cam] = path
+                offsets[cam] = gap
+                mapping[cam] = other_mapping.get(cam, cam)
+    for cam in videos:
+        mapping.setdefault(cam, cam)
     room, current_cam = _room_and_cam(sample, site)
     paths = [videos[c] for c in sorted(videos)]
     media_ids = {
@@ -606,6 +673,7 @@ async def sample_cams(db: AsyncSession, sample_id: int) -> dict:
         "sample_id": sample.id,
         "sample_code": sample.sample_code,
         "session_key": session_key,
+        "session_keys": session_keys,
         "date": sample.session_date.isoformat() if sample.session_date else None,
         "site": site,
         "site_name": site_layout.SITES.get(site or "", {}).get("name", site),
@@ -620,12 +688,13 @@ async def sample_cams(db: AsyncSession, sample_id: int) -> dict:
                 "real_cam": mapping.get(recorded, recorded),
                 "path": videos[recorded],
                 "media_id": media_ids.get(videos[recorded]),
+                "offset_ms": offsets.get(recorded, 0),
                 "room_options": [
                     {"value": c, "label": _room_label(site, c)}
                     for c in sorted(cam_room_choices(site, recorded))
                 ],
             }
-            for recorded in sorted(mapping)
+            for recorded in sorted(videos)
         ],
     }
 
@@ -669,16 +738,50 @@ async def save_batch(db: AsyncSession, date: str, mapping: dict, session_keys: l
     wanted = set(session_keys)
     results: list[dict] = []
     failed: list[dict] = []
+    # 每场的机位、开机时刻、场地先算好：跨采集机核对时要把对面那一场并进来
+    group_videos = {gk: _session_videos(gs, gk[1]) for gk, gs in groups.items()}
+    group_machine = {gk: _machine_of(sorted(group_videos[gk])) for gk in groups}
+    group_start = {gk: _session_start(gk[1]) for gk in groups}
+    group_site = {
+        gk: site_layout.site_of(gk[1], gk[0], gs[0].video_cam1_path) for gk, gs in groups.items()
+    }
     # 这一天每个场地实际生效的对照：段里有几场（两台机器）时要把两边的机位合起来
     site_mappings: dict[str, dict[int, int]] = defaultdict(dict)
     for (day_dir, session_key), samples in sorted(groups.items(), key=lambda kv: kv[0][1]):
         if session_key not in wanted:
             continue
-        site = site_layout.site_of(session_key, day_dir, samples[0].video_cam1_path)
+        site = group_site[(day_dir, session_key)]
         if not site_layout.has_private_rooms(site):
             continue
+        # 同一天同场地、另一台机器、开机时刻挨着的那一场：跟「机位核对」页合成
+        # 一段的判据一样。雷诺 7 个摄像头是独立装的，1~6 号间可能录在对面机器上
+        videos = dict(group_videos[(day_dir, session_key)])
+        offsets: dict[int, int] = {}
+        mine_start = group_start[(day_dir, session_key)]
+        mine_machine = group_machine[(day_dir, session_key)]
+        # 只有雷诺 7 路是独立装的，才把对面采集机的机位并进来；博朗旺仍按本场
+        if _site_key(site) == "gouchang":
+            for (d2, k2), _ss2 in groups.items():
+                if d2 != day_dir or k2 == session_key:
+                    continue
+                if group_site[(d2, k2)] != site:
+                    continue
+                m2 = group_machine[(d2, k2)]
+                if not m2 or (mine_machine and m2 == mine_machine):
+                    continue
+                st2 = group_start[(d2, k2)]
+                if mine_start is None or st2 is None:
+                    continue
+                gap = int((st2 - mine_start).total_seconds() * 1000)
+                if abs((st2 - mine_start).total_seconds()) > _PAIR_WINDOW_SEC:
+                    continue
+                for cam, path in group_videos[(d2, k2)].items():
+                    if cam not in videos:
+                        videos[cam] = path
+                        offsets[cam] = gap
         try:
-            r = await _validate_and_apply(db, samples, session_key, site, mapping, user_id)
+            r = await _validate_and_apply(db, samples, session_key, site, mapping, user_id,
+                                          videos=videos, offsets=offsets)
             site_mappings[site].update({int(k): int(v) for k, v in r["mapping"].items()})
             results.append({
                 "session_key": session_key,

@@ -9,12 +9,20 @@ function fmt(sec: number): string {
   return m ? `${m}:${s.toFixed(1).padStart(4, "0")}` : `${s.toFixed(1)}s`;
 }
 
-/** 一路画面循环播这一段：先停到起点，播过终点就跳回去 */
-function CamClip({ mediaId, startS, endS }: { mediaId: number | null; startS: number; endS: number }) {
+/** 一路画面循环播这一段：先停到起点，播过终点就跳回去。
+ *  offsetMs：跨机的机位，这一路第 0 秒在本样本时间轴上的位置。 */
+function CamClip({ mediaId, startS, endS, offsetMs }: {
+  mediaId: number | null;
+  startS: number;
+  endS: number;
+  offsetMs: number;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const start = Math.max(0, startS);
-  const end = Math.max(start + 0.5, endS);
+  const off = offsetMs / 1000;
+  const start = Math.max(0, startS - off);
+  const end = endS - off;
+  const empty = end <= start + 0.1;
 
   useEffect(() => {
     let alive = true;
@@ -29,6 +37,14 @@ function CamClip({ mediaId, startS, endS }: { mediaId: number | null; startS: nu
     };
   }, [mediaId]);
 
+  if (empty) {
+    return (
+      <div style={{ aspectRatio: "16 / 9", background: "#111", color: "#888", display: "grid",
+                    placeItems: "center", fontSize: 12, borderRadius: 4, textAlign: "center", padding: 8 }}>
+        这一段这一路还没开始录（跟本机差 {fmt(Math.abs(off))}）
+      </div>
+    );
+  }
   if (url == null) {
     return (
       <div style={{ aspectRatio: "16 / 9", background: "#111", color: "#888", display: "grid",
@@ -118,7 +134,11 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
     if (!data?.date || !data.session_key) return;
     setSaving(true);
     try {
-      const res = await saveCamBatch(data.date, Object.fromEntries(Object.entries(map)), [data.session_key]);
+      const res = await saveCamBatch(
+        data.date,
+        Object.fromEntries(Object.entries(map)),
+        data.session_keys ?? [data.session_key],
+      );
       const missing = res.results.flatMap((r) => r.missing_rooms);
       if (res.failed?.length) {
         message.warning(`部分场次没保存成功：${res.failed.map((f) => f.error).join("；")}`);
@@ -146,7 +166,8 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
           {data?.room_label && <Tag color="green">这只狗应该是 {data.room_label}</Tag>}
         </Space>
       }
-      width={1040}
+      width={1180}
+      styles={{ body: { maxHeight: "70vh", overflowY: "auto", paddingRight: 4 } }}
       onCancel={onClose}
       destroyOnClose
       footer={
@@ -172,8 +193,8 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message={`下面循环播放的是 ${fmt(startS)} – ${fmt(endS)}。哪一路里是这只狗，就把那一间选成「${data.room_label ?? "它所在的房间"}」，另外两路会自动对调。`}
-            description="机位插错是整场录制的事：保存后同一时段的所有样本一起换，不是只改当前这一条。"
+            message={`下面循环播放的是 ${fmt(startS)} – ${fmt(endS)}。哪一路里是这只狗，就把那一间选成「${data.room_label ?? "它所在的房间"}」，占着那个房间的另一路会自动对调。`}
+            description="机位插错是整场录制的事：保存后同一时段的所有样本一起换，不是只改当前这一条。深圳雷诺 7 路是独立装的，列表里会连对面采集机的机位一起列出来。"
           />
           {duplicated && (
             <Alert type="error" showIcon style={{ marginBottom: 12 }} message="两路选了同一个房间，先改开再保存" />
@@ -183,7 +204,7 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
               const pending = map[c.recorded_cam] ?? c.real_cam;
               const isTarget = pending === data.room;
               return (
-                <Col key={c.recorded_cam} xs={24} sm={12} md={8}>
+                <Col key={c.recorded_cam} xs={24} sm={12} md={6}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                     <Typography.Text strong>录制 cam{c.recorded_cam}</Typography.Text>
                     <Tag color={isTarget ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
@@ -195,7 +216,12 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
                       </Tag>
                     )}
                   </div>
-                  <CamClip mediaId={c.media_id} startS={startS} endS={endS} />
+                  <CamClip
+                    mediaId={c.media_id}
+                    startS={startS}
+                    endS={endS}
+                    offsetMs={c.offset_ms ?? 0}
+                  />
                   <Select
                     size="small"
                     style={{ width: "100%", marginTop: 6 }}

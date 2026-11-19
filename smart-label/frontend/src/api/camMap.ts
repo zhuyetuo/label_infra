@@ -88,6 +88,8 @@ export interface CamSampleCam {
   real_cam: number;
   path: string;
   media_id: number | null;
+  /** 跨采集机的机位：这一路第 0 秒相对本样本原点的毫秒数（同场为 0） */
+  offset_ms?: number;
   room_options: CamCheckRoom[];
 }
 
@@ -97,6 +99,8 @@ export interface CamSampleCams {
   sample_id?: number;
   sample_code?: string;
   session_key?: string;
+  /** 这一段的几场（两台采集机）：跨机纠正时一起保存 */
+  session_keys?: string[];
   date?: string | null;
   site?: string | null;
   site_name?: string;
