@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Button, Card, Checkbox, Col, Empty, Modal, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip,
   Typography, message,
@@ -325,6 +325,9 @@ export default function CamCheck() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["cam-map", date, site],
     queryFn: () => listCamSessions(date, site),
+    // 切回窗口别自动重拉：原来一重拉，下面「整日批量」的对照和勾选就被悄悄清回默认，
+    // 再点应用提交的是「不改」，画面不变、还提示成功
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
@@ -346,10 +349,14 @@ export default function CamCheck() {
   const [batchMap, setBatchMap] = useState<Record<number, number>>({});
   const [batchSaving, setBatchSaving] = useState(false);
 
+  // 勾选和批量对照只在换了日期 / 场地时重置；同一天刷新数据（应用后、点刷新）不动，免得人刚改好就被清掉
+  const dayKey = `${data?.date ?? ""}|${site ?? ""}`;
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
   useEffect(() => {
     // 默认勾上还没人工纠正的段：已纠正的多半是对的，批量时别顺手盖掉
-    setSelected(new Set(segments.filter((s) => !s.corrected).map((s) => s.segment_key)));
-  }, [segments]);
+    setSelected(new Set(segmentsRef.current.filter((s) => !s.corrected).map((s) => s.segment_key)));
+  }, [dayKey]);
 
   // 当天所有段出现过的录制机位并集，批量对照按它编辑
   const allRecorded = useMemo(
@@ -366,10 +373,24 @@ export default function CamCheck() {
   }, [segments]);
 
   useEffect(() => {
-    const init: Record<number, number> = {};
-    for (const c of allRecorded) init[c] = c;
-    setBatchMap(init);
+    setBatchMap((prev) => {
+      // 同一天新冒出来的机位补上默认值；已经改过的不动
+      const next: Record<number, number> = {};
+      for (const c of allRecorded) next[c] = prev[c] ?? c;
+      return next;
+    });
   }, [allRecorded]);
+  useEffect(() => {
+    // 换了日期 / 场地：对照回到默认
+    const init: Record<number, number> = {};
+    for (const c of segmentsRef.current.flatMap((s) => s.cams.map((x) => x.recorded_cam))) init[c] = c;
+    setBatchMap(init);
+  }, [dayKey]);
+  // 对照里实际改了哪几路（录制 cam → 几号间）：一个都没改就别让应用
+  const batchChanges = useMemo(
+    () => Object.entries(batchMap).filter(([r, v]) => Number(r) !== v).map(([r, v]) => [Number(r), v] as const),
+    [batchMap]
+  );
 
   const batchDuplicated = useMemo(() => {
     const v = Object.values(batchMap);
@@ -403,7 +424,8 @@ export default function CamCheck() {
           `成了 ${res.results.length} 场；${res.failed.length} 场没改成：${res.failed.map((f) => f.error).join("；")}${pair}`
         );
       } else {
-        message.success(`已把 ${selected.size} 段一起纠正，共 ${res.updated} 份样本${pair}`);
+        const what = batchChanges.map(([r, v]) => `cam${r}→${v}号间`).join("、");
+        message.success(`已把 ${selected.size} 段按「${what}」纠正，共 ${res.updated} 份样本${pair}。下面每段的画面已经按房间号重排`);
       }
       refetch();
     } catch (e) {
@@ -464,15 +486,31 @@ export default function CamCheck() {
                 全选
               </Button>
               <Button size="small" onClick={() => setSelected(new Set())}>清空</Button>
-              <Button
-                size="small"
-                type="primary"
-                loading={batchSaving}
-                disabled={selected.size === 0 || batchDuplicated}
-                onClick={applyBatch}
+              <Popconfirm
+                title={`把 ${selected.size} 段按这套对照改？`}
+                description={
+                  <div style={{ maxWidth: 320 }}>
+                    {batchChanges.map(([r, v]) => (
+                      <div key={r}>录制 cam{r} → {(batchRooms.get(r) ?? []).find((o) => o.value === v)?.label ?? `${v} 号间`}</div>
+                    ))}
+                    <div style={{ color: "#999", marginTop: 4 }}>没列出来的机位保持原样（cam 几就是几号间）</div>
+                  </div>
+                }
+                okText="应用"
+                onConfirm={applyBatch}
+                disabled={selected.size === 0 || batchDuplicated || batchChanges.length === 0}
               >
-                应用到选中段（{selected.size}）
-              </Button>
+                <Tooltip title={batchChanges.length === 0 ? "上面的对照还是默认（cam 几就是几号间），应用了画面也不会变；先在下面把要改的机位选好" : undefined}>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={batchSaving}
+                    disabled={selected.size === 0 || batchDuplicated || batchChanges.length === 0}
+                  >
+                    应用到选中段（{selected.size}）
+                  </Button>
+                </Tooltip>
+              </Popconfirm>
             </Space>
           }
         >
