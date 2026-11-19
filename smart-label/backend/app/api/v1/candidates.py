@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
-from app.models.ai_candidate import AiCandidate, CandidateStatus
+from app.models.ai_candidate import SPECIAL_REASONS, AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource, RecordSourceType
 from app.models.label import LabelDefinition
 from app.models.sample import Sample
@@ -230,7 +230,8 @@ async def set_span(
     if cand.round_no != task.round_no:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "这条候选不在当前这一轮里（任务已经进入新一轮？刷新一下）")
     mine = task.status == TaskStatus.IN_PROGRESS and task.locked_by == user.id
-    if not mine and user.role not in (UserRole.admin, UserRole.super_admin):
+    # 专项的起止不进任务标注，谁判谁就能调，不用认领
+    if not mine and cand.reason not in SPECIAL_REASONS and user.role not in (UserRole.admin, UserRole.super_admin):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有正在标这个任务的人（或管理员）能改起止")
     old = (cand.start_time_ms, cand.end_time_ms)
     new = (body.start_time_ms, body.end_time_ms)
@@ -301,86 +302,90 @@ async def decide(
             ).scalar_one_or_none()
         if label_id is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"项目里没有「{cand.label_name}」标签，先去标签管理里加")
-        record = (
-            await db.execute(
-                select(AnnotationRecord).where(
-                    AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no
+        # 专项（模型调整用）：判断只记在这条疑似片段上——是漏标的（确认）、其实是别的（改成别的）、
+        # 起止 / 复合动作 / 看不清（待定原因）、不是（排除）。不往任务标注里写，所以不用认领、不用提交，
+        # 也不会撞上提交时的时间重叠检查
+        if cand.reason not in SPECIAL_REASONS:
+            record = (
+                await db.execute(
+                    select(AnnotationRecord).where(
+                        AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if record is None:
-            record = AnnotationRecord(task_id=task.id, round_no=task.round_no, source_type=RecordSourceType.ai_revised)
-            db.add(record)
-            await db.flush()
-        # 同类别已经有一条压在这段时间上，就把它撑开，别再加一条。
-        #
-        # 「疑似抓挠」候选常常跟 AI 已经出的抓挠片段指向同一次动作——确认一下就
-        # 多出一条一模一样的，两条都留着的后果不是"多一行"：这些片段是原样送去
-        # 算「今天抓了几次、共多久」的，同一次抓挠被算成两次，C 值跟着虚高。
-        # 皮肤评估是拿来判断要不要干预的，数字虚高比没有数字更糟。
-        #
-        # 只在**真正重叠**时并（严格 < ，不含紧挨着的）：22:00:05 结束、
-        # 22:00:05 开始的两条很可能就是分开的两次，并了反而少算。
-        # 「同类别」按**名字**算，不是按 label_id：一个项目里同名的标签可能有两条
-        # （停用的旧的 + 现在这条），按 id 比的话，挂在另一条 id 上的那行就看不见，
-        # 于是同一段时间留下两行一模一样的——界面上完全分不出差别，人只会以为是 bug
-        same_name = [label_id, *(
-            await db.execute(
-                select(LabelDefinition.id).where(
-                    LabelDefinition.project_id == task.project_id,
-                    LabelDefinition.display_name.in_(
-                        select(LabelDefinition.display_name).where(LabelDefinition.id == label_id)),
+            ).scalar_one_or_none()
+            if record is None:
+                record = AnnotationRecord(task_id=task.id, round_no=task.round_no, source_type=RecordSourceType.ai_revised)
+                db.add(record)
+                await db.flush()
+            # 同类别已经有一条压在这段时间上，就把它撑开，别再加一条。
+            #
+            # 「疑似抓挠」候选常常跟 AI 已经出的抓挠片段指向同一次动作——确认一下就
+            # 多出一条一模一样的，两条都留着的后果不是"多一行"：这些片段是原样送去
+            # 算「今天抓了几次、共多久」的，同一次抓挠被算成两次，C 值跟着虚高。
+            # 皮肤评估是拿来判断要不要干预的，数字虚高比没有数字更糟。
+            #
+            # 只在**真正重叠**时并（严格 < ，不含紧挨着的）：22:00:05 结束、
+            # 22:00:05 开始的两条很可能就是分开的两次，并了反而少算。
+            # 「同类别」按**名字**算，不是按 label_id：一个项目里同名的标签可能有两条
+            # （停用的旧的 + 现在这条），按 id 比的话，挂在另一条 id 上的那行就看不见，
+            # 于是同一段时间留下两行一模一样的——界面上完全分不出差别，人只会以为是 bug
+            same_name = [label_id, *(
+                await db.execute(
+                    select(LabelDefinition.id).where(
+                        LabelDefinition.project_id == task.project_id,
+                        LabelDefinition.display_name.in_(
+                            select(LabelDefinition.display_name).where(LabelDefinition.id == label_id)),
+                    )
                 )
-            )
-        ).scalars()]
-        dup = (
-            await db.execute(
-                select(AnnotationLabelItem).where(
-                    AnnotationLabelItem.annotation_record_id == record.id,
-                    AnnotationLabelItem.label_id.in_(set(same_name)),
-                    AnnotationLabelItem.start_time_ms < cand.end_time_ms,
-                    AnnotationLabelItem.end_time_ms > cand.start_time_ms,
+            ).scalars()]
+            dup = (
+                await db.execute(
+                    select(AnnotationLabelItem).where(
+                        AnnotationLabelItem.annotation_record_id == record.id,
+                        AnnotationLabelItem.label_id.in_(set(same_name)),
+                        AnnotationLabelItem.start_time_ms < cand.end_time_ms,
+                        AnnotationLabelItem.end_time_ms > cand.start_time_ms,
+                    )
                 )
-            )
-        ).scalars().first()
-        if dup is not None:
-            dup.start_time_ms = min(dup.start_time_ms, cand.start_time_ms)
-            dup.end_time_ms = max(dup.end_time_ms, cand.end_time_ms)
-            # 记上出处：点错了还能退回候选重新判断，跟新建那条一个待遇
-            if dup.from_candidate_id is None:
-                dup.from_candidate_id = cand.id
-            # 人特意从候选里确认出来的，算人碰过——否则它还挂着"没人看过的AI片段"，
-            # 按片段取的导出会把它跳过，等于白确认一场
-            dup.ai_confirmed = True
-            cand.status = CandidateStatus(body.decision)
-            # 重新判断过了：审核标的问题算处理过
-            cand.review_note = cand.review_flag_by = cand.review_flag_at = None
-            cand.decided_label_id = label_id
-            cand.uncertain_reason = None
-            cand.decided_by = user.id
-            cand.decided_at = datetime.now(UTC).replace(tzinfo=None)
-            await db.commit()
-            await db.refresh(cand)
-            return ok(_out(cand))
+            ).scalars().first()
+            if dup is not None:
+                dup.start_time_ms = min(dup.start_time_ms, cand.start_time_ms)
+                dup.end_time_ms = max(dup.end_time_ms, cand.end_time_ms)
+                # 记上出处：点错了还能退回候选重新判断，跟新建那条一个待遇
+                if dup.from_candidate_id is None:
+                    dup.from_candidate_id = cand.id
+                # 人特意从候选里确认出来的，算人碰过——否则它还挂着"没人看过的AI片段"，
+                # 按片段取的导出会把它跳过，等于白确认一场
+                dup.ai_confirmed = True
+                cand.status = CandidateStatus(body.decision)
+                # 重新判断过了：审核标的问题算处理过
+                cand.review_note = cand.review_flag_by = cand.review_flag_at = None
+                cand.decided_label_id = label_id
+                cand.uncertain_reason = None
+                cand.decided_by = user.id
+                cand.decided_at = datetime.now(UTC).replace(tzinfo=None)
+                await db.commit()
+                await db.refresh(cand)
+                return ok(_out(cand))
 
-        db.add(
-            AnnotationLabelItem(
-                annotation_record_id=record.id,
-                label_id=label_id,
-                start_time_ms=cand.start_time_ms,
-                end_time_ms=cand.end_time_ms,
-                # 人工从候选里确认出来的 = 模型漏检、人补上的，算人工片段
-                source_type=LabelItemSource.human_added,
-                is_modified=False,
-                ai_confidence=cand.confidence,
-                ai_confirmed=False,
-                # 记住出处，回头点错了能退回候选重新判断
-                from_candidate_id=cand.id,
-                # 候选阶段调过的起止也算这条的调整记录
-                boundary_edits=cand.boundary_edits,
-                created_by=user.id,
+            db.add(
+                AnnotationLabelItem(
+                    annotation_record_id=record.id,
+                    label_id=label_id,
+                    start_time_ms=cand.start_time_ms,
+                    end_time_ms=cand.end_time_ms,
+                    # 人工从候选里确认出来的 = 模型漏检、人补上的，算人工片段
+                    source_type=LabelItemSource.human_added,
+                    is_modified=False,
+                    ai_confidence=cand.confidence,
+                    ai_confirmed=False,
+                    # 记住出处，回头点错了能退回候选重新判断
+                    from_candidate_id=cand.id,
+                    # 候选阶段调过的起止也算这条的调整记录
+                    boundary_edits=cand.boundary_edits,
+                    created_by=user.id,
+                )
             )
-        )
 
     cand.status = CandidateStatus(body.decision)
     # 重新判断过了：审核标的问题算处理过

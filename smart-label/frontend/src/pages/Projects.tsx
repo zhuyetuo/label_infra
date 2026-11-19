@@ -221,6 +221,23 @@ export default function Projects() {
   // 一键去重：勾了几个项目就去重那几个，没勾就全部项目；一个一个跑，按钮上显示做到第几个
   const [dedupeSel, setDedupeSel] = useState<number[]>([]);
   // 只看做过隐私遮罩的项目（开着的 + 做过但关着的）。记在这台电脑上
+  const [specialOnly, setSpecialOnly] = useState(() => {
+    try { return localStorage.getItem("projects-special-only") === "1"; } catch { return false; }
+  });
+  const SPECIAL_FILTER = { spot: true, cand: false, candLabels: [] as string[], labels: [] as number[],
+                           unreviewedOnly: false, segReturned: false, status: "ALL" as const };
+  const specialOf = (pid: number) => scratchReview?.spot?.[String(pid)] ?? 0;
+  const specialWhat = (pid: number) => Object.keys(scratchReview?.spot_labels?.[String(pid)] ?? {}).join("/") || "抓挠";
+  const toggleSpecialOnly = () => setSpecialOnly((v) => {
+    try { localStorage.setItem("projects-special-only", v ? "0" : "1"); } catch { /* 隐私模式 */ }
+    if (!v) {
+      // 打开：有专项的项目都切到「只看专项任务」，只有一个就直接展开
+      const pids = Object.entries(scratchReview?.spot ?? {}).filter(([, n]) => n > 0).map(([k]) => Number(k));
+      pids.forEach((pid) => setFilter(pid, SPECIAL_FILTER));
+      if (pids.length === 1) setExpandedKeys(() => pids);
+    }
+    return !v;
+  });
   const [maskOnly, setMaskOnly] = useState(() => {
     try { return localStorage.getItem("projects-mask-only") === "1"; } catch { return false; }
   });
@@ -1422,7 +1439,33 @@ export default function Projects() {
             )}
           </Space>
         </Tooltip>
+        {/* 专项待判：给模型调整用的疑似片段（不按「现在重点补」统计，所有类别都算）。
+            点了项目列表只剩有专项的项目，点开哪个项目都只看专项任务；再点一下恢复 */}
+        {(scratchReview?.spot_total ?? 0) > 0 || specialOnly ? (
+          <Tooltip title={<div style={{ maxWidth: 380 }}>
+            给模型调整用的「专项」：模型很有把握报了、人工却没标的片段。对着视频判：是漏标的就确认，其实是别的动作就改成别的，
+            起止不对 / 几个动作混在一起 / 看不清就选对应的待定。<b>判了就自动记下，不用认领、不用提交</b>，已通过的任务也能直接判。
+            <br />点一下：项目列表只剩有专项的项目，点开哪个都只看专项任务；再点一下恢复。
+          </div>}>
+            <Button size="small" danger={!specialOnly} type={specialOnly ? "primary" : "default"} style={{ marginLeft: 8 }}
+              onClick={toggleSpecialOnly}>
+              {specialOnly ? "退出专项" : "专项待判"} {scratchReview?.spot_total ?? 0}
+              {(() => {
+                const by: Record<string, number> = {};
+                Object.values(scratchReview?.spot_labels ?? {}).forEach((m) =>
+                  Object.entries(m).forEach(([k, n]) => { by[k] = (by[k] ?? 0) + n; }));
+                const ks = Object.keys(by);
+                return ks.length ? `（${ks.map((k) => `${k} ${by[k]}`).join("、")}）` : "";
+              })()}
+            </Button>
+          </Tooltip>
+        ) : null}
       </Space>
+      {specialOnly && (
+        <Alert type="warning" showIcon style={{ marginBottom: 8 }}
+          message="专项模式：只显示有专项待判的项目，点开哪个都只看专项任务。打开任务直接在「疑似片段」里判，判了自动记下，不用认领、不用提交。"
+          action={<Button size="small" onClick={toggleSpecialOnly}>退出专项</Button>} />
+      )}
       {delProg.some((x) => x.status === "queued" || x.status === "running") && (
         <Alert type="info" showIcon style={{ marginBottom: 8 }}
           message={<span>后台正在删除：{delProg.filter((x) => x.status === "queued" || x.status === "running").map((x) =>
@@ -1438,7 +1481,8 @@ export default function Projects() {
         storageKey="projects"
         rowKey="id"
         loading={isLoading}
-        dataSource={PRIVACY_MASK && maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data}
+        dataSource={(PRIVACY_MASK && maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data ?? [])
+          .filter((p) => !specialOnly || specialOf(p.id) > 0)}
         rowSelection={isAdmin ? {
           selectedRowKeys: dedupeSel,
           onChange: (keys) => setDedupeSel(keys as number[]),
@@ -1456,7 +1500,11 @@ export default function Projects() {
           expandRowByClick: true,
           expandedRowKeys: expandedKeys,
           // 一次只展开一个项目：展开新的就把别的收起来，不然展开几个以后整页都是任务，找不到项目
-          onExpand: (expanded, p: Project) => setExpandedKeys(expanded ? [p.id] : []),
+          onExpand: (expanded, p: Project) => {
+            // 专项模式下点开哪个项目，都自动只看有专项待判的任务
+            if (expanded && specialOnly) setFilter(p.id, SPECIAL_FILTER);
+            setExpandedKeys(expanded ? [p.id] : []);
+          },
           // 一个任务都没有的项目不给展开箭头，一眼就能看出哪些项目还没建任务
           rowExpandable: (p: Project) => tasksOf(p.id).length > 0,
           // 展开就能看到这个项目下都有哪些任务、分给谁了、做到哪一步了
@@ -2736,14 +2784,14 @@ export default function Projects() {
                   if (!sn) return null;
                   return (
                     <div style={{ marginTop: 4 }}>
-                      <Tooltip title={`有 ${sn} 段「专项」还没判：模型很有把握报了抓挠、人工却没标，请对着视频判是不是真的抓挠，不是就改成实际的动作。点一下展开、只看这些任务；打开任务后疑似片段面板默认只显示这几段`}>
+                      <Tooltip title={`有 ${sn} 段「专项·${specialWhat(p.id)}」还没判（给模型调整用）：模型很有把握报了、人工却没标。点一下展开、只看这些任务；打开任务后疑似片段面板默认只显示这几段。判了就自动记下，不用认领、不用提交`}>
                         <Tag color="red" style={{ cursor: "pointer", fontWeight: 600 }} onClick={(e) => {
                           e.stopPropagation();
                           setFilter(p.id, { spot: true, cand: false, candLabels: [], labels: [],
                                             unreviewedOnly: false, segReturned: false, status: "ALL" });
                           setExpandedKeys(() => [p.id]);
                         }}>
-                          专项 待判 {sn}
+                          专项·{specialWhat(p.id)} 待判 {sn}
                         </Tag>
                       </Tooltip>
                     </div>

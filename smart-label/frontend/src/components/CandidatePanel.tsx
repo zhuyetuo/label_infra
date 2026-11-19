@@ -134,8 +134,11 @@ export const SRC_CN: Record<string, string> = {
 const UNCERTAIN_KINDS = [
   { value: "no_view", short: "没画面", label: "画面里没拍到狗" },
   { value: "ambiguous", short: "看不清", label: "拍到了但看不准" },
-  { value: "needs_split", short: "要细切", label: "是抓挠，但起止要调 / 要拆细" },
+  { value: "needs_split", short: "起止要调", label: "是这个动作，但起止不对 / 要拆细" },
+  { value: "compound", short: "复合动作", label: "几个动作混在一起（比如边挠边舔、挠完接着抖）" },
 ] as const;
+// 专项（给模型调整用）：判断只记在疑似片段上，不写进任务标注——只读 / 已通过的任务也能判，不用提交
+const isSpecialReason = (r: string) => r === "spot" || r === "act_scr";
 
 export default function CandidatePanel({
   candidates,
@@ -172,7 +175,7 @@ export default function CandidatePanel({
   }, [initialFilter]);
   const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
   // 抽查（reason=spot）还没判的：有就默认先只看它们（打开一次只自动切一次，人切走了不再拽回来）
-  const isSpecial = (r: string) => r === "spot" || r === "act_scr";
+  const isSpecial = isSpecialReason;
   const spotCount = candidates.filter((c) => isSpecial(c.reason) && c.status === "pending").length;
   const autoSpot = useRef(false);
   useEffect(() => {
@@ -260,8 +263,17 @@ export default function CandidatePanel({
     try {
       await onBeforeDecide?.();
       await decideCandidate(c.id, decision, labelId, uncertainReason);
+      const special = isSpecial(c.reason);
       message.success(
-        decision === "rejected"
+        special
+          ? decision === "rejected"
+            ? "已记下：不是，模型误报"
+            : decision === "uncertain"
+              ? `已记下：待定·${UNCERTAIN_KINDS.find((k) => k.value === uncertainReason)?.short ?? ""}`
+              : labelName
+                ? `已记下：其实是「${labelName}」（模型认错了）`
+                : `已记下：确实是${currentName(c.label_name)}（之前漏标了）`
+          : decision === "rejected"
           ? "已排除"
           : decision === "uncertain"
             ? "已标成待定，这段不会进训练集"
@@ -643,7 +655,7 @@ export default function CandidatePanel({
                       循环播放
                     </Button>
                   ))}
-                {!readOnly && c.status === "pending" && (
+                {(!readOnly || isSpecial(c.reason)) && c.status === "pending" && (
                   <>
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
                       确认是{currentName(c.label_name)}
@@ -736,11 +748,13 @@ export default function CandidatePanel({
                     </Button>
                   </Dropdown>
                 ))}
-                {!readOnly && c.status !== "pending" && onUndo && (
+                {(!readOnly || isSpecial(c.reason)) && c.status !== "pending" && onUndo && (
                   <Popconfirm
                     title="撤回这次判断？"
                     description={
-                      c.status === "confirmed"
+                      isSpecial(c.reason)
+                        ? "这一段会回到「待确认」，重新判断（专项不碰任务标注）"
+                        : c.status === "confirmed"
                         ? "这一段会回到「待确认」，之前带到「已标注片段」的那条也一起收回"
                         : "这一段会回到「待确认」，重新判断"
                     }

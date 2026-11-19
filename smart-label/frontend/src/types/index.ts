@@ -98,6 +98,8 @@ export interface Task {
   cand_labels?: Record<string, { n: number; pending: number; max_conf?: number | null }>;
   /** 「专项」来源（抽查 spot / 活动里疑似抓挠 act_scr）还没判的条数 */
   cand_spot_pending?: number;
+  /** 专项待判是针对哪几类（抓挠 / 舔…） */
+  cand_spot_labels?: string[];
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */

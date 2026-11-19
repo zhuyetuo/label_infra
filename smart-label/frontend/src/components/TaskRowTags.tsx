@@ -44,11 +44,12 @@ export function CandKindTags({
   // 还有待判的排前面，同样按条数多的在前
   kinds.sort(([, a], [, b]) => Number(b.pending > 0) - Number(a.pending > 0) || b.n - a.n);
   const spot = task.cand_spot_pending ?? 0;
+  const spotWhat = (task.cand_spot_labels ?? []).join("/") || "抓挠";
   return (
     <>
       {spot > 0 && (
-        <Tooltip title={`这个任务里有 ${spot} 段「专项」要判：模型很有把握报了抓挠、人工却没标，请对着视频判是不是真的抓挠；不是的话改成实际的动作（舔 / 啃 / 蹭 / 进食…）。打开后疑似片段面板默认只显示这几段`}>
-          <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>专项 待判 {spot}</Tag>
+        <Tooltip title={`这个任务里有 ${spot} 段「专项·${spotWhat}」要判（给模型调整用）：模型很有把握报了${spotWhat}、人工却没标。对着视频判：是漏标的就确认，其实是别的动作就改成别的，起止不对 / 几个动作混在一起 / 看不清就选对应的待定。判了就自动记下，不用认领、不用提交`}>
+          <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>专项·{spotWhat} 待判 {spot}</Tag>
         </Tooltip>
       )}
       {kinds.map(([name, v]) => {

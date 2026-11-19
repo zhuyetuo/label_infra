@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
-from app.models.ai_candidate import AiCandidate, CandidateStatus
+from app.models.ai_candidate import SPECIAL_REASONS, AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.review import ReviewRecord
 from app.models.project import Project
@@ -67,10 +67,6 @@ from app.services.task_service import (
 # 任务号 → (签名, {类别: 重叠段数})。列表接口每次刷新都要这个数，见 list_tasks 里「重叠」那段
 _OVERLAP_CACHE: dict[int, tuple[tuple, dict[int, int]]] = {}
 
-
-# 「专项」：单独拎出来、要人对着视频判的疑似片段来源。spot = 抽查新模型多报的；
-# act_scr = 训练数据里标成「活动」、模型却很有把握判成抓挠的片段（查漏标抓挠 / 收集难负例）
-SPECIAL_REASONS = ("spot", "act_scr")
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("smart-label.tasks")
@@ -543,10 +539,13 @@ async def list_tasks(
             .group_by(AiCandidate.task_id, AiCandidate.label_name)
         )
         for task_id, label_name, n, n_pending, max_conf, n_spot in rows.all():
-            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0, "spot": 0})
+            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0, "spot": 0, "spot_labels": []})
             c["n"] += int(n)
             c["pending"] += int(n_pending or 0)
             c["spot"] += int(n_spot or 0)
+            # 专项是针对哪一类的（抓挠 / 舔…）：任务行上写「专项·抓挠 待判 3」
+            if n_spot:
+                c["spot_labels"].append(label_name)
             cand_labels.setdefault(task_id, {})[label_name] = {
                 "n": int(n), "pending": int(n_pending or 0),
                 "max_conf": round(float(max_conf), 4) if max_conf is not None else None}
@@ -620,6 +619,7 @@ async def list_tasks(
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 "cand_spot_pending": cand_counts.get(t.id, {}).get("spot", 0),
+                "cand_spot_labels": sorted(cand_counts.get(t.id, {}).get("spot_labels", [])),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出
                 # 「疑似抓挠里实有哪些类别」——项目全量标签列表里大半是没有的
                 "cand_labels": cand_labels.get(t.id, {}),
@@ -727,7 +727,7 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     )).scalars().all())
     if not root_ids:
         return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
-                   "marks": {}, "candidates": {}, "cand_total": 0, "spot": {}, "spot_total": 0})
+                   "marks": {}, "candidates": {}, "cand_total": 0, "spot": {}, "spot_total": 0, "spot_labels": {}})
     label_ids = await label_tree.expand_ids(db, root_ids)
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
@@ -783,16 +783,21 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     candidates = {str(pid): int(n) for pid, n in cand_rows.all()}
     # 「专项」（抽查 spot / 活动里疑似抓挠 act_scr）还没判的，不管什么类别、也不管当前重点：项目行上单独标出来，点了只看这些任务
     spot_rows = await db.execute(
-        select(Task.project_id, func.count(AiCandidate.id))
+        select(Task.project_id, AiCandidate.label_name, func.count(AiCandidate.id))
         .join(scope, scope.c.id == Task.id)
         .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
         .where(AiCandidate.status == CandidateStatus.pending, AiCandidate.reason.in_(SPECIAL_REASONS))
-        .group_by(Task.project_id)
+        .group_by(Task.project_id, AiCandidate.label_name)
     )
-    spot = {str(pid): int(n) for pid, n in spot_rows.all()}
+    spot: dict[str, int] = {}
+    # 每个项目的专项是针对哪几类（抓挠 / 舔…），项目行上写「专项·抓挠 待判 N」
+    spot_labels: dict[str, dict[str, int]] = {}
+    for pid, lname, n in spot_rows.all():
+        spot[str(pid)] = spot.get(str(pid), 0) + int(n)
+        spot_labels.setdefault(str(pid), {})[lname] = int(n)
     return ok({"label": label, "projects": projects, "total": total, "marks": marks,
                "candidates": candidates, "cand_total": sum(candidates.values()),
-               "spot": spot, "spot_total": sum(spot.values())})
+               "spot": spot, "spot_total": sum(spot.values()), "spot_labels": spot_labels})
 
 
 class LabelFocusIn(BaseModel):

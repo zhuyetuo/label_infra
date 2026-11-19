@@ -66,3 +66,10 @@ class AiCandidate(Base):
     # 确认成片段时带过去，片段上就能看到它在候选阶段就被调过几次
     boundary_edits: Mapped[str | None] = mapped_column(Text, nullable=True, comment="起止调整记录 JSON")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# 「专项」：单独拎出来、给模型调整用的疑似片段来源。spot = 抽查新模型多报的；
+# act_scr = 训练数据里标成「活动」、模型却很有把握判成抓挠的片段。
+# 专项的判断只记在疑似片段自己身上（确认 / 改成别的 / 待定原因 / 排除），**不写进任务的标注**：
+# 不用认领、不用提交，已通过的任务也能直接判；训练时从这张表读。
+SPECIAL_REASONS = ("spot", "act_scr")
