@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import DogAvatar from "@/components/DogAvatar";
 import {
-  Alert, Button, Card, Checkbox, Col, Empty, Modal, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip,
+  Alert, Button, Card, Col, Empty, Modal, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip,
   Typography, message,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
@@ -127,11 +127,9 @@ function DogChip({ dogId, name, imus, room }: {
   );
 }
 
-function SegmentCard({ segment, onChanged, checked, onCheck }: {
+function SegmentCard({ segment, onChanged }: {
   segment: CamCheckSegment;
   onChanged: () => void;
-  checked: boolean;
-  onCheck: (v: boolean) => void;
 }) {
   const [map, setMap] = useState<Record<number, number>>({});
   const [saving, setSaving] = useState(false);
@@ -226,7 +224,6 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
       style={{ marginBottom: 16 }}
       title={
         <Space wrap>
-          <Checkbox checked={checked} onChange={(e) => onCheck(e.target.checked)} />
           <Typography.Text strong>{sessionTime(segment.segment_key)}</Typography.Text>
           <Tag>{segment.site_name || segment.site || "未知场地"}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -364,94 +361,48 @@ export default function CamCheck() {
   const current = segments[Math.min(page, segments.length) - 1];
   const pageCount = segments.length;
 
-  // ── 整日批量：一天 24 段一条条点太费时间 ──
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [batchMap, setBatchMap] = useState<Record<number, number>>({});
-  const [batchSaving, setBatchSaving] = useState(false);
-
-  // 勾选和批量对照只在换了日期 / 场地时重置；同一天刷新数据（应用后、点刷新）不动，免得人刚改好就被清掉
-  const dayKey = `${data?.date ?? ""}|${site ?? ""}`;
-  const segmentsRef = useRef(segments);
-  segmentsRef.current = segments;
-  useEffect(() => {
-    // 默认勾上还没人工纠正的段：已纠正的多半是对的，批量时别顺手盖掉
-    setSelected(new Set(segmentsRef.current.filter((s) => !s.corrected).map((s) => s.segment_key)));
-  }, [dayKey]);
-
-  // 当天所有段出现过的录制机位并集，批量对照按它编辑
-  const allRecorded = useMemo(
-    () => [...new Set(segments.flatMap((s) => s.cams.map((c) => c.recorded_cam)))].sort((a, b) => a - b),
-    [segments]
-  );
-
-  // 每个录制机位能用哪些房间：cam1~3 只配 1~3 号间，cam4~6 只配 4~6 号间
-  const batchRooms = useMemo(() => {
-    const m = new Map<number, { value: number; label: string }[]>();
-    for (const s of segments)
-      for (const c of s.cams) if (!m.has(c.recorded_cam)) m.set(c.recorded_cam, c.room_options);
-    return m;
+  // ── 整日对调：在每段「现在的对照」基础上把两间画面互换，不用勾选、不管之前纠正过没有 ──
+  const [swapping, setSwapping] = useState<string | null>(null);
+  // 这一天出现过的房间，按机器分组（1 号机 1~3 号间、2 号机 4~6 号间），列出能对调的两两组合
+  const swapPairs = useMemo(() => {
+    const rooms = [...new Set(segments.flatMap((s) => s.cams.flatMap((c) => c.room_options.map((o) => o.value))))].sort((x, y) => x - y);
+    const out: [number, number][] = [];
+    for (const x of rooms) for (const y of rooms) if (x < y && (x <= 3) === (y <= 3)) out.push([x, y]);
+    return out;
   }, [segments]);
-
-  useEffect(() => {
-    setBatchMap((prev) => {
-      // 同一天新冒出来的机位补上默认值；已经改过的不动
-      const next: Record<number, number> = {};
-      for (const c of allRecorded) next[c] = prev[c] ?? c;
-      return next;
-    });
-  }, [allRecorded]);
-  useEffect(() => {
-    // 换了日期 / 场地：对照回到默认
-    const init: Record<number, number> = {};
-    for (const c of segmentsRef.current.flatMap((s) => s.cams.map((x) => x.recorded_cam))) init[c] = c;
-    setBatchMap(init);
-  }, [dayKey]);
-  // 对照里实际改了哪几路（录制 cam → 几号间）：一个都没改就别让应用
-  const batchChanges = useMemo(
-    () => Object.entries(batchMap).filter(([r, v]) => Number(r) !== v).map(([r, v]) => [Number(r), v] as const),
-    [batchMap]
-  );
-
-  const batchDuplicated = useMemo(() => {
-    const v = Object.values(batchMap);
-    return v.length > 0 && new Set(v).size !== v.length;
-  }, [batchMap]);
-
-  /** 批量对照也支持「选了别人占着的房间就两路对调」 */
-  const batchPick = (recorded: number, real: number) => {
-    setBatchMap((prev) => {
-      const next = { ...prev };
-      const other = Object.entries(next).find(([r, v]) => Number(r) !== recorded && v === real);
-      if (other) next[Number(other[0])] = prev[recorded];
-      next[recorded] = real;
-      return next;
-    });
-  };
-
-  const applyBatch = async () => {
-    if (!data?.date) return;
-    const keys = segments.filter((s) => selected.has(s.segment_key)).flatMap((s) => s.session_keys);
-    setBatchSaving(true);
+  const roomName = (v: number) =>
+    segments.flatMap((s) => s.cams.flatMap((c) => c.room_options)).find((o) => o.value === v)?.label ?? `${v} 号间`;
+  const swapDay = async (x: number, y: number) => {
+    setSwapping(`${x}-${y}`);
+    let n = 0, samples = 0;
+    const failed: string[] = [];
     try {
-      const res = await saveCamBatch(
-        data.date,
-        Object.fromEntries(Object.entries(batchMap)),
-        keys
-      );
-      const pair = res.extra.length ? `；另外把配对 IMU 单独出现的 ${res.extra.length} 场一起改了` : "";
-      if (res.failed.length) {
-        message.warning(
-          `成了 ${res.results.length} 场；${res.failed.length} 场没改成：${res.failed.map((f) => f.error).join("；")}${pair}`
-        );
-      } else {
-        const what = batchChanges.map(([r, v]) => `cam${r}→${v}号间`).join("、");
-        message.success(`已把 ${selected.size} 段按「${what}」纠正，共 ${res.updated} 份样本${pair}。下面每段的画面已经按房间号重排`);
+      for (const seg of segments) {
+        if (!seg.cams.some((c) => c.real_cam === x || c.real_cam === y)) continue;
+        const mapping: Record<string, number> = {};
+        for (const c of seg.cams) mapping[String(c.recorded_cam)] = c.real_cam === x ? y : c.real_cam === y ? x : c.real_cam;
+        try {
+          const res = await saveCamBatch(seg.date, mapping, seg.session_keys);
+          n += 1; samples += res.updated;
+        } catch (e) {
+          failed.push(`${sessionTime(seg.segment_key)}：${(e as Error).message}`);
+        }
       }
-      refetch();
-    } catch (e) {
-      message.error(`批量失败：${(e as Error).message}`);
+      if (failed.length) message.warning(`对调了 ${n} 段；${failed.length} 段没成：${failed.slice(0, 3).join("；")}`);
+      else message.success(`这一天 ${n} 段的「${roomName(x)}」和「${roomName(y)}」画面已对调（${samples} 份样本）。看下面头像跟画面里的狗对不对`);
+      await refetch();
     } finally {
-      setBatchSaving(false);
+      setSwapping(null);
+    }
+  };
+  const resetDay = async () => {
+    setSwapping("reset");
+    try {
+      await Promise.all(segments.flatMap((s) => s.session_keys).map((k) => resetCamMap(k).catch(() => null)));
+      message.success("这一天全部恢复成按文件名算（cam 几就是几号间）");
+      await refetch();
+    } finally {
+      setSwapping(null);
     }
   };
 
@@ -493,66 +444,33 @@ export default function CamCheck() {
           style={{ marginBottom: 16 }}
           title={
             <Space wrap>
-              <Typography.Text strong>整日批量</Typography.Text>
+              <Typography.Text strong>整日对调</Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                改一套对照，勾选下面要应用的段一次改完。默认勾上还没纠正的；
-                上午插错就只勾上午的段，下午对的别勾
+                这一天两间画面整个对调：每一段都在「现在」的基础上互换，不管之前纠正过没有。点完看下面头像跟画面里的狗对不对
               </Typography.Text>
             </Space>
           }
           extra={
-            <Space>
-              <Button size="small" onClick={() => setSelected(new Set(segments.map((s) => s.segment_key)))}>
-                全选
-              </Button>
-              <Button size="small" onClick={() => setSelected(new Set())}>清空</Button>
-              <Popconfirm
-                title={`把 ${selected.size} 段按这套对照改？`}
-                description={
-                  <div style={{ maxWidth: 320 }}>
-                    {batchChanges.map(([r, v]) => (
-                      <div key={r}>录制 cam{r} → {(batchRooms.get(r) ?? []).find((o) => o.value === v)?.label ?? `${v} 号间`}</div>
-                    ))}
-                    <div style={{ color: "#999", marginTop: 4 }}>没列出来的机位保持原样（cam 几就是几号间）</div>
-                  </div>
-                }
-                okText="应用"
-                onConfirm={applyBatch}
-                disabled={selected.size === 0 || batchDuplicated || batchChanges.length === 0}
-              >
-                <Tooltip title={batchChanges.length === 0 ? "上面的对照还是默认（cam 几就是几号间），应用了画面也不会变；先在下面把要改的机位选好" : undefined}>
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={batchSaving}
-                    disabled={selected.size === 0 || batchDuplicated || batchChanges.length === 0}
-                  >
-                    应用到选中段（{selected.size}）
-                  </Button>
-                </Tooltip>
-              </Popconfirm>
-            </Space>
+            <Popconfirm title="这一天全部恢复成按文件名算？" description="所有段的人工纠正都清掉，cam 几就是几号间" onConfirm={resetDay}>
+              <Button size="small" loading={swapping === "reset"} disabled={!!swapping}>全天恢复默认</Button>
+            </Popconfirm>
           }
         >
-          {batchDuplicated && (
-            <Alert type="error" showIcon style={{ marginBottom: 12 }}
-                   message="两路画面选了同一个房间，先改开再应用" />
-          )}
-          <Row gutter={[12, 12]}>
-            {allRecorded.map((c) => (
-              <Col key={c} xs={12} sm={8} md={6} lg={4}>
-                <Typography.Text strong>录制 cam{c}</Typography.Text>
-                <Select
-                  size="small"
-                  style={{ width: "100%", marginTop: 4 }}
-                  value={batchMap[c] ?? c}
-                  options={batchRooms.get(c) ?? []}
-                  onChange={(v) => batchPick(c, v)}
-                  disabled={(batchRooms.get(c) ?? []).length <= 1}
-                />
-              </Col>
+          <Space wrap>
+            {swapPairs.map(([x, y]) => (
+              <Popconfirm
+                key={`${x}-${y}`}
+                title={`把这一天所有段的「${roomName(x)}」和「${roomName(y)}」画面对调？`}
+                description="每段在现在的基础上互换；点错了再点一次就换回来"
+                okText="对调"
+                onConfirm={() => swapDay(x, y)}
+              >
+                <Button loading={swapping === `${x}-${y}`} disabled={!!swapping}>
+                  {roomName(x)} ⇄ {roomName(y)}
+                </Button>
+              </Popconfirm>
             ))}
-          </Row>
+          </Space>
         </Card>
       )}
 
@@ -566,15 +484,6 @@ export default function CamCheck() {
                 key={current.segment_key}
                 segment={current}
                 onChanged={() => refetch()}
-                checked={selected.has(current.segment_key)}
-                onCheck={(v) =>
-                  setSelected((prev) => {
-                    const next = new Set(prev);
-                    if (v) next.add(current.segment_key);
-                    else next.delete(current.segment_key);
-                    return next;
-                  })
-                }
               />
             )}
             <Space style={{ width: "100%", justifyContent: "center", marginTop: 8 }}>
