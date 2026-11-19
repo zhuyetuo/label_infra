@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Col, Modal, Row, Select, Space, Spin, Tag, Typography, message } from "antd";
+import { Alert, Button, Col, ConfigProvider, Modal, Row, Select, Space, Spin, Tag, Typography, message } from "antd";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleCams, saveCamBatch, type CamSampleCams } from "@/api/camMap";
 
@@ -157,8 +157,12 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
   };
 
   return (
+    // 工作台的浮动画面（1090）和波形浮窗（1100）都比 antd Modal 默认的 1000 高，
+    // 不抬起来弹窗里的画面会被它们盖住；里面的下拉也要一起抬到弹窗之上
+    <ConfigProvider theme={{ token: { zIndexPopupBase: 1350 } }}>
     <Modal
       open={open}
+      zIndex={1300}
       title={
         <Space wrap>
           <span>机位纠正</span>
@@ -237,5 +241,6 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
         </>
       )}
     </Modal>
+    </ConfigProvider>
   );
 }
