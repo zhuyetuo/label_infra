@@ -2155,6 +2155,8 @@ export default function AnnotationWorkspace({
               }
         }
         onTogglePlay={() => bus.play("toggle")}
+        getCurrentMs={() => curSecRef.current * 1000}
+        onSplit={async () => { if (taskId != null) setCandidates(await listCandidates(taskId)); }}
         onClearSimilar={
           readOnly || taskId == null
             ? undefined

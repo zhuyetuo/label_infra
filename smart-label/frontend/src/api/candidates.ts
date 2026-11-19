@@ -55,6 +55,10 @@ export const setCandidateReviewNote = (id: number, note: string | null) =>
 export const setCandidateSpan = (id: number, startMs: number, endMs: number) =>
   request.put<never, AiCandidate>(`/candidates/${id}/span`, { start_time_ms: startMs, end_time_ms: endMs });
 
+/** 专项片段在 atMs 处切成前后两段（各自再判） */
+export const splitCandidate = (id: number, atMs: number) =>
+  request.post<never, { left: AiCandidate; right: AiCandidate }>(`/candidates/${id}/split`, { at_ms: atMs });
+
 export const decideCandidate = (
   id: number,
   decision: AiCandidate["status"],

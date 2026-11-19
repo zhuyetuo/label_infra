@@ -243,6 +243,50 @@ async def set_span(
     return ok(_out(cand))
 
 
+class SplitIn(BaseModel):
+    at_ms: int = Field(..., ge=0)
+
+
+@router.post("/{candidate_id}/split")
+async def split_candidate(
+    candidate_id: int,
+    body: SplitIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """专项片段里混着几个动作（抓挠一会、休息一会、又抓、再甩身体）：在某个时刻切成前后两段，
+    各自去判。只切还没判的专项片段；切出来的后一段照抄来源 / 说明，状态待判，起止各记一笔调整。"""
+    from app.services.task_service import _append_boundary_edit
+
+    cand = await db.get(AiCandidate, candidate_id)
+    if cand is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "候选不存在")
+    task = await _visible_task(db, cand.task_id, user)
+    if cand.round_no != task.round_no:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "这条候选不在当前这一轮里（刷新一下）")
+    if cand.reason not in SPECIAL_REASONS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "只有专项片段能切开")
+    if cand.status != CandidateStatus.pending:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "已经判过了，先撤回再切")
+    at = int(body.at_ms)
+    if at - cand.start_time_ms < 500 or cand.end_time_ms - at < 500:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "切点要离两头各至少 0.5 秒（把视频播到这一段中间要切的地方）")
+    old_end = cand.end_time_ms
+    piece = AiCandidate(
+        task_id=cand.task_id, round_no=cand.round_no, label_name=cand.label_name,
+        start_time_ms=at, end_time_ms=old_end, confidence=cand.confidence, spec=cand.spec,
+        reason=cand.reason, model=cand.model, evidence=cand.evidence, status=CandidateStatus.pending,
+        boundary_edits=_append_boundary_edit(None, (cand.start_time_ms, old_end), (at, old_end), user),
+    )
+    cand.boundary_edits = _append_boundary_edit(cand.boundary_edits, (cand.start_time_ms, old_end), (cand.start_time_ms, at), user)
+    cand.end_time_ms = at
+    db.add(piece)
+    await db.commit()
+    await db.refresh(cand)
+    await db.refresh(piece)
+    return ok({"left": _out(cand), "right": _out(piece)})
+
+
 @router.put("/{candidate_id}/review-note")
 async def set_review_note(
     candidate_id: int,

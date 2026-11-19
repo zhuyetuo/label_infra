@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message, type MenuProps } from "antd";
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
-import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
+import { clearSimilarCandidates, decideCandidate, splitCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 import BoundaryEditsTag from "@/components/BoundaryEditsTag";
 import { REASON_LABEL, SPOT_KIND, spotKindOf, spotOverlapState } from "@/utils/candReason";
@@ -32,6 +32,10 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
 };
 
 interface Props {
+  /** 视频现在播到哪（毫秒）：专项片段「在这切开」用 */
+  getCurrentMs?: () => number;
+  /** 切开以后重新拉一遍疑似片段 */
+  onSplit?: () => void | Promise<void>;
   candidates: AiCandidate[];
   readOnly?: boolean;
   onSeek: (ms: number) => void;
@@ -152,6 +156,8 @@ function notifySpecial(c: AiCandidate, delta: number) {
 }
 
 export default function CandidatePanel({
+  getCurrentMs,
+  onSplit,
   candidates,
   readOnly,
   onSeek,
@@ -355,6 +361,25 @@ export default function CandidatePanel({
     if (kids.length) return kids;
     return labels.filter((l) => l.display_name.startsWith(name + "-")
                                 && !l.display_name.slice(name.length + 1).includes("-"));
+  };
+
+  // 专项片段里混着几个动作：把视频播到动作换了的地方，点「在这切开」，前后两段各自去判
+  const split = async (c: AiCandidate) => {
+    const at = getCurrentMs?.();
+    if (at == null) return;
+    if (at - c.start_time_ms < 500 || c.end_time_ms - at < 500) {
+      message.warning("先把视频播到这一段中间、动作换了的地方（离两头各至少 0.5 秒），再点「在这切开」");
+      return;
+    }
+    setBusy(c.id);
+    try {
+      await splitCandidate(c.id, Math.round(at));
+      notifySpecial(c, +1);
+      message.success(`已在 ${formatMs(Math.round(at))} 切开成两段，分别判`);
+      await onSplit?.();
+    } finally {
+      setBusy(null);
+    }
   };
 
   // 点错了、或者看完视频改主意了，得能退回去重判——不然只能去「已标注片段」
@@ -722,6 +747,13 @@ export default function CandidatePanel({
                       循环播放
                     </Button>
                   ))}
+                {isSpecial(c.reason) && c.status === "pending" && getCurrentMs && (
+                  <Tooltip title="这一段里混着几个动作（抓一会、歇一会、又抓、甩身体）：把视频播到动作换了的地方，点这里切成前后两段，各自去判。可以连着切几刀">
+                    <Button size="small" type="link" loading={busy === c.id} onClick={() => split(c)}>
+                      在这切开
+                    </Button>
+                  </Tooltip>
+                )}
                 {(!readOnly || isSpecial(c.reason)) && c.status === "pending" && (
                   <>
                     <Button size="small" type="link" loading={busy === c.id} onClick={() => decide(c, "confirmed")}>
