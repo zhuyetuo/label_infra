@@ -273,7 +273,7 @@ export const getCamSlots = (id: number) =>
  *  similar_old = 两个入口还没分开时写的，认不出是哪一边，所以单独一档 */
 export const getCandidateSources = (id: number) =>
   request.get<never, {
-    sources: Record<"text" | "image" | "similar_old" | "model_neg" | "spot", { total: number; pending: number }>;
+    sources: Record<"text" | "image" | "similar_old" | "model_neg" | "spot" | "act_scr", { total: number; pending: number }>;
     other: { total: number; pending: number };
   }>(`/projects/${id}/candidate-sources`);
 

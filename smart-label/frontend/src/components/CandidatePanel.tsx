@@ -28,6 +28,7 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   vision: "magenta",
   similar: "geekblue",
   spot: "red",
+  act_scr: "magenta",
 };
 
 interface Props {
@@ -127,6 +128,7 @@ export const SRC_CN: Record<string, string> = {
   model_neg: "模型判成这一类",
   vision: "大模型看视频",
   spot: "抽查·新模型报的",
+  act_scr: "专项·活动里疑似抓挠",
 };
 
 const UNCERTAIN_KINDS = [
@@ -170,7 +172,8 @@ export default function CandidatePanel({
   }, [initialFilter]);
   const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
   // 抽查（reason=spot）还没判的：有就默认先只看它们（打开一次只自动切一次，人切走了不再拽回来）
-  const spotCount = candidates.filter((c) => c.reason === "spot" && c.status === "pending").length;
+  const isSpecial = (r: string) => r === "spot" || r === "act_scr";
+  const spotCount = candidates.filter((c) => isSpecial(c.reason) && c.status === "pending").length;
   const autoSpot = useRef(false);
   useEffect(() => {
     if (!autoSpot.current && spotCount > 0 && !initialFlaggedOnly) {
@@ -231,7 +234,7 @@ export default function CandidatePanel({
         : filter === "similar"
           ? c.reason === "similar" && (c.status === "pending" || justDecided.has(c.id))
         : filter === "spot"
-          ? c.reason === "spot" && (c.status === "pending" || justDecided.has(c.id))
+          ? isSpecial(c.reason) && (c.status === "pending" || justDecided.has(c.id))
           : c.status === "pending" || justDecided.has(c.id)
     );
     if (labelFilter.length) list = list.filter((c) => labelFilter.includes(c.label_name));
@@ -321,7 +324,7 @@ export default function CandidatePanel({
         options={[
           { label: `待确认 ${pendingCount}`, value: "pending" },
           ...(flaggedCount > 0 || filter === "flagged" ? [{ label: `有问题 ${flaggedCount}`, value: "flagged" }] : []),
-          ...(spotCount > 0 || filter === "spot" ? [{ label: `抽查 ${spotCount}`, value: "spot" }] : []),
+          ...(spotCount > 0 || filter === "spot" ? [{ label: `专项 ${spotCount}`, value: "spot" }] : []),
           ...(similarCount > 0 ? [{ label: `画面相似 ${similarCount}`, value: "similar" }] : []),
           { label: `全部 ${candidates.length}`, value: "all" },
         ]}

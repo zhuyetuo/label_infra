@@ -67,6 +67,11 @@ from app.services.task_service import (
 # 任务号 → (签名, {类别: 重叠段数})。列表接口每次刷新都要这个数，见 list_tasks 里「重叠」那段
 _OVERLAP_CACHE: dict[int, tuple[tuple, dict[int, int]]] = {}
 
+
+# 「专项」：单独拎出来、要人对着视频判的疑似片段来源。spot = 抽查新模型多报的；
+# act_scr = 训练数据里标成「活动」、模型却很有把握判成抓挠的片段（查漏标抓挠 / 收集难负例）
+SPECIAL_REASONS = ("spot", "act_scr")
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("smart-label.tasks")
 
@@ -529,8 +534,8 @@ async def list_tasks(
                 func.sum(case((AiCandidate.status == CandidateStatus.pending, 1), else_=0)),
                 # 待判的里置信度最高多少：项目页「置信度 ≥」筛选用（只看模型比较有把握的那些任务先判）
                 func.max(case((AiCandidate.status == CandidateStatus.pending, AiCandidate.confidence), else_=None)),
-                # 「抽查」来源（reason=spot）还没判的：任务行上单独标红，方便人一眼找到要判的那几段
-                func.sum(case(((AiCandidate.status == CandidateStatus.pending) & (AiCandidate.reason == "spot"), 1), else_=0)),
+                # 「专项」来源（抽查 spot / 活动里疑似抓挠 act_scr）还没判的：任务行上单独标红，方便人一眼找到要判的那几段
+                func.sum(case(((AiCandidate.status == CandidateStatus.pending) & (AiCandidate.reason.in_(SPECIAL_REASONS)), 1), else_=0)),
             )
             .join(Task, Task.id == AiCandidate.task_id)
             .join(scope, scope.c.id == Task.id)
@@ -776,12 +781,12 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         .group_by(Task.project_id)
     )
     candidates = {str(pid): int(n) for pid, n in cand_rows.all()}
-    # 「抽查」（reason=spot）还没判的，不管什么类别、也不管当前重点：项目行上单独标出来，点了只看这些任务
+    # 「专项」（抽查 spot / 活动里疑似抓挠 act_scr）还没判的，不管什么类别、也不管当前重点：项目行上单独标出来，点了只看这些任务
     spot_rows = await db.execute(
         select(Task.project_id, func.count(AiCandidate.id))
         .join(scope, scope.c.id == Task.id)
         .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
-        .where(AiCandidate.status == CandidateStatus.pending, AiCandidate.reason == "spot")
+        .where(AiCandidate.status == CandidateStatus.pending, AiCandidate.reason.in_(SPECIAL_REASONS))
         .group_by(Task.project_id)
     )
     spot = {str(pid): int(n) for pid, n in spot_rows.all()}

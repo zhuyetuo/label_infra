@@ -1617,7 +1617,7 @@ export default function Projects() {
               f.labels.length > 0 && `含类别：${projLabelNames(p.id, f.labels).join("、") || "（已删掉的类别）"}`,
               f.aiPending && "只看 AI 待确认",
               f.cand && "有待判断的疑似片段",
-              f.spot && "只看有「抽查」待判的任务",
+              f.spot && "只看有「专项」待判的任务",
               f.candLabels.length > 0 && `候选类别：${f.candLabels.join("、")}`,
               !!f.minConf && `置信度 ≥${f.minConf}%`,
               !!f.hours?.length && `时间段 ${f.hours.map((h) => `${h}点`).join("、")}`,
@@ -2736,14 +2736,14 @@ export default function Projects() {
                   if (!sn) return null;
                   return (
                     <div style={{ marginTop: 4 }}>
-                      <Tooltip title={`有 ${sn} 段「抽查」还没判：新模型报了、人工没标，请对着视频判是不是真的。点一下展开、只看这些任务；打开任务后疑似片段面板默认只显示抽查的那几段`}>
+                      <Tooltip title={`有 ${sn} 段「专项」还没判：模型很有把握报了抓挠、人工却没标，请对着视频判是不是真的抓挠，不是就改成实际的动作。点一下展开、只看这些任务；打开任务后疑似片段面板默认只显示这几段`}>
                         <Tag color="red" style={{ cursor: "pointer", fontWeight: 600 }} onClick={(e) => {
                           e.stopPropagation();
                           setFilter(p.id, { spot: true, cand: false, candLabels: [], labels: [],
                                             unreviewedOnly: false, segReturned: false, status: "ALL" });
                           setExpandedKeys(() => [p.id]);
                         }}>
-                          抽查 待判 {sn}
+                          专项 待判 {sn}
                         </Tag>
                       </Tooltip>
                     </div>
@@ -3893,6 +3893,7 @@ export default function Projects() {
                 ["similar_old", "画面相似（旧）", "两个入口还没分开时写的，认不出是哪一边"],
                 ["model_neg", "负例挖掘模型", "「只补负例候选」写的疑似进食 / 饮水 / 嗅闻；规则候选（姿态像舔、节律像饮水）不在这里，不会被删"],
                 ["spot", "抽查", "新模型报了、人工没标、拿来让人对着视频判的片段；删它不会碰别的来源"],
+                ["act_scr", "专项·活动里疑似抓挠", "训练数据里标「活动」、模型很有把握判成抓挠的片段，人判是漏标的抓挠还是别的动作；删它不会碰别的来源"],
               ] as const).map(([key, name, why]) => {
                 const s = purgeSrc.sources[key] ?? { total: 0, pending: 0 };
                 const n = purgeDecided ? s.total : s.pending;

@@ -47,8 +47,8 @@ export function CandKindTags({
   return (
     <>
       {spot > 0 && (
-        <Tooltip title={`这个任务里有 ${spot} 段「抽查」：新模型报了、人工没标，请对着视频判是不是真的。打开后疑似片段面板默认只显示这几段`}>
-          <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>抽查 待判 {spot}</Tag>
+        <Tooltip title={`这个任务里有 ${spot} 段「专项」要判：模型很有把握报了抓挠、人工却没标，请对着视频判是不是真的抓挠；不是的话改成实际的动作（舔 / 啃 / 蹭 / 进食…）。打开后疑似片段面板默认只显示这几段`}>
+          <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>专项 待判 {spot}</Tag>
         </Tooltip>
       )}
       {kinds.map(([name, v]) => {
