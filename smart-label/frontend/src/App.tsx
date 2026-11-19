@@ -19,7 +19,6 @@ import Vision from "@/pages/Vision";
 import DeviceDebug from "@/pages/DeviceDebug";
 import CamCheck from "@/pages/CamCheck";
 import Training from "@/pages/Training";
-import Research from "@/pages/Research";
 import { SegmentReviewEntry } from "@/pages/SegmentReview";
 
 export default function App() {
@@ -47,7 +46,8 @@ export default function App() {
         <Route path="/cam-check" element={<CamCheck />} />
         <Route path="/device-debug" element={<DeviceDebug />} />
         <Route path="/training" element={<Training />} />
-        <Route path="/research" element={<Research />} />
+        {/* 行业调研挪到了 GitHub Pages（市场与竞品）：老链接直接跳过去 */}
+        <Route path="/research" element={<GoExternal to="https://zhuyetuo.github.io/imu_train/market.html" />} />
         <Route path="/users" element={<Users />} />
         <Route path="/llm-providers" element={<LlmProviders />} />
         <Route path="/system" element={<System />} />
@@ -55,4 +55,9 @@ export default function App() {
       </Route>
     </Routes>
   );
+}
+
+function GoExternal({ to }: { to: string }) {
+  window.location.replace(to);
+  return null;
 }

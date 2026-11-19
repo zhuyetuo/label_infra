@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from "antd";
+import { Button, Dropdown, Empty, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message, type MenuProps } from "antd";
 import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlined, RetweetOutlined, SearchOutlined } from "@ant-design/icons";
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 import BoundaryEditsTag from "@/components/BoundaryEditsTag";
 import { REASON_LABEL } from "@/utils/candReason";
-import { currentName, findLabel, flatten } from "@/utils/labelTree";
+import { currentName, findLabel } from "@/utils/labelTree";
 
 /**
  * 疑似片段候选面板：AI 挑出来、还没进正式片段的段，给人逐条确认。抓挠那一类是正式片段
@@ -139,6 +139,12 @@ const UNCERTAIN_KINDS = [
 ] as const;
 // 专项（给模型调整用）：判断只记在疑似片段上，不写进任务标注——只读 / 已通过的任务也能判，不用提交
 const isSpecialReason = (r: string) => r === "spot" || r === "act_scr";
+/** 专项待判数变了（判掉一条 -1、撤回 +1）：项目页上的「专项 待判 N」先立刻改，后台再去对账。
+ *  不等服务器那边的统计刷新——原来要等最多一分钟，判完了还挂着「待判 1」，看着像 bug */
+function notifySpecial(c: AiCandidate, delta: number) {
+  if (!isSpecialReason(c.reason)) return;
+  window.dispatchEvent(new CustomEvent("special-cand-changed", { detail: { taskId: c.task_id, label: c.label_name, delta } }));
+}
 
 export default function CandidatePanel({
   candidates,
@@ -260,9 +266,17 @@ export default function CandidatePanel({
     uncertainReason?: string
   ) => {
     setBusy(c.id);
+    // 先改界面，再等服务器
+    const counted = c.status === "pending" && decision !== "pending";
+    if (counted) notifySpecial(c, -1);
     try {
       await onBeforeDecide?.();
-      await decideCandidate(c.id, decision, labelId, uncertainReason);
+      try {
+        await decideCandidate(c.id, decision, labelId, uncertainReason);
+      } catch (e) {
+        if (counted) notifySpecial(c, +1);
+        throw e;
+      }
       const special = isSpecial(c.reason);
       message.success(
         special
@@ -292,6 +306,38 @@ export default function CandidatePanel({
   // 排除只是记一笔"不是抓挠"，标成甩身体则给了模型一个正例，同时天然成为抓挠
   // 的难负样本——正是最缺的那种训练数据
   const otherLabels = labels.filter((l) => !scratchLabelIds.includes(l.id));
+  // 「改成别的」：一上来只摆大类，有小类的再一层层展开（子菜单第一项是「就是 X」，大类本身也能选）。
+  // 原来上百项平铺，判一条要翻半天
+  const otherIds = new Set(otherLabels.map((l) => l.id));
+  const kidsOf = (id: number | null) => otherLabels.filter((l) =>
+    id == null ? l.parent_id == null || !otherIds.has(l.parent_id) : l.parent_id === id);
+  const labelTag = (l: (typeof labels)[number]) => (
+    <Tag color={l.color || undefined} style={{ marginRight: 0 }}>{l.display_name}</Tag>
+  );
+  const relabelItems = (id: number | null): NonNullable<MenuProps["items"]> => kidsOf(id).map((l) => {
+    const kids = kidsOf(l.id);
+    if (!kids.length) return { key: String(l.id), label: labelTag(l) };
+    return {
+      key: `g${l.id}`,
+      label: labelTag(l),
+      popupClassName: "cand-relabel-sub",
+      children: [
+        { key: String(l.id), label: <span>就是 {labelTag(l)}</span> },
+        { type: "divider" as const },
+        ...relabelItems(l.id),
+      ],
+    };
+  });
+  // 记住上一次改成了什么：一连几条都是同一种（比如都是舔-后肢）时直接点，不用再展开
+  const [lastRelabel, setLastRelabel] = useState<string | null>(() => {
+    try { return localStorage.getItem("cand-last-relabel"); } catch { return null; }
+  });
+  const lastLabel = lastRelabel ? otherLabels.find((l) => l.display_name === lastRelabel) : undefined;
+  const relabel = (c: AiCandidate, l: (typeof labels)[number]) => {
+    setLastRelabel(l.display_name);
+    try { localStorage.setItem("cand-last-relabel", l.display_name); } catch { /* 存不了就只管这一次 */ }
+    return decide(c, "confirmed", l.id, l.display_name);
+  };
   /** 某个标签底下的直接子部位。按 parent_id 找，找不到再按「父名-」前缀兜底
    *  （老项目里的标签可能没挂 parent_id，那时候层级只体现在名字上）。 */
   const partsOf = (rawName: string) => {
@@ -311,6 +357,7 @@ export default function CandidatePanel({
   const undo = async (c: AiCandidate) => {
     if (!onUndo) return;
     setBusy(c.id);
+    if (c.status !== "pending") notifySpecial(c, +1);
     try {
       await onUndo(c);
       setJustDecided((prev) => new Set(prev).add(c.id));
@@ -680,27 +727,21 @@ export default function CandidatePanel({
                         </Tag>
                       </Tooltip>
                     ))}
+                    {lastLabel && (
+                      <Tooltip title={`上一条改成的是「${lastLabel.display_name}」，这条一样就直接点`}>
+                        <Button size="small" type="link" loading={busy === c.id} onClick={() => relabel(c, lastLabel)}>
+                          改成 {labelTag(lastLabel)}
+                        </Button>
+                      </Tooltip>
+                    )}
                     {otherLabels.length > 0 && (
                       <Dropdown
                         menu={{
-                          // 标签多了（四个大类各带部位）一屏放不下：限高，里面滚
-                          style: { maxHeight: 380, overflowY: "auto" },
-                          // 跟「已标注片段」那边的标签选择器一样带颜色，扫一眼就能对上
-                          // 按层级排、子类缩进：舔 › 舔-前爪 › 舔-前左爪 挨着，扫一眼就能挑到最细的
-                          items: flatten(otherLabels.map((l) => ({ ...l, parent_id: l.parent_id ?? null }))).map(({ label: l, depth }) => ({
-                            key: String(l.id),
-                            label: (
-                              <span style={{ paddingLeft: depth * 12 }}>
-                                {depth > 0 && <span style={{ color: "#bbb", marginRight: 4 }}>└</span>}
-                                <Tag color={l.color || undefined} style={{ marginRight: 0 }}>
-                                  {l.display_name}
-                                </Tag>
-                              </span>
-                            ),
-                          })),
+                          // 只摆大类，鼠标移上去再展开小类；大类本身在子菜单第一项「就是 X」
+                          items: relabelItems(null),
                           onClick: ({ key }) => {
                             const l = otherLabels.find((x) => String(x.id) === key);
-                            if (l) decide(c, "confirmed", l.id, l.display_name);
+                            if (l) relabel(c, l);
                           },
                         }}
                       >

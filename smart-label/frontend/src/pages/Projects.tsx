@@ -194,6 +194,40 @@ export default function Projects() {
     refetchInterval: 60_000, staleTime: 20_000,
   });
   const { data: liteTasks } = useQuery({ queryKey: ["tasks-lite"], queryFn: listTasksLite, staleTime: 30_000 });
+  // 专项判一条 / 撤回一条：任务行、项目行、顶部按钮上的「专项 待判 N」马上跟着变（乐观更新），
+  // 然后后台再拉一次统计对账。不这样的话要等统计每分钟一次的自动刷新
+  useEffect(() => {
+    type LR = Awaited<ReturnType<typeof getLabelReview>>;
+    const onChange = (e: Event) => {
+      const { taskId, label, delta } = (e as CustomEvent<{ taskId: number; label: string; delta: number }>).detail;
+      const patchTask = (old: Task[] | undefined) =>
+        old?.map((t) => (t.id === taskId ? { ...t, cand_spot_pending: Math.max(0, (t.cand_spot_pending ?? 0) + delta) } : t));
+      const pid = [...(qc.getQueryData<Task[]>(["tasks-lite"]) ?? []),
+                   ...qc.getQueriesData<Task[]>({ queryKey: ["tasks", "project"] }).flatMap(([, d]) => d ?? [])]
+        .find((t) => t.id === taskId)?.project_id;
+      qc.setQueriesData<Task[]>({ queryKey: ["tasks", "project"] }, patchTask);
+      qc.setQueryData<Task[]>(["tasks-lite"], patchTask);
+      if (pid != null) {
+        const k = String(pid);
+        qc.setQueriesData<LR>({ queryKey: ["label-review"] }, (old) => {
+          if (!old) return old;
+          const spot = { ...(old.spot ?? {}) };
+          spot[k] = Math.max(0, (spot[k] ?? 0) + delta);
+          if (!spot[k]) delete spot[k];
+          const sl = { ...(old.spot_labels ?? {}) };
+          const m = { ...(sl[k] ?? {}) };
+          m[label] = Math.max(0, (m[label] ?? 0) + delta);
+          if (!m[label]) delete m[label];
+          sl[k] = m;
+          return { ...old, spot, spot_labels: sl, spot_total: Math.max(0, (old.spot_total ?? 0) + delta) };
+        });
+      }
+      // 后台对账：服务器那边的统计为准（几百毫秒后到，界面已经先变了）
+      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["label-review"] }), 800);
+    };
+    window.addEventListener("special-cand-changed", onChange);
+    return () => window.removeEventListener("special-cand-changed", onChange);
+  }, [qc]);
   const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
@@ -2196,6 +2230,14 @@ export default function Projects() {
                       };
                       // 按「疑似片段」类别筛（比如只看疑似饮水）：只显示疑似饮水 + 已经是片段的饮水，
                       // 别的类别、别的疑似片段都是干扰——要回答的是「这个样本里饮水还有几条没判」
+                      // 只看专项（专项模式 / 点了「专项 待判」）：片段这一列只留专项那个标签，别的片段、疑似片段都是干扰
+                      if (f.spot) {
+                        return (
+                          <Space size={2} wrap>
+                            <CandKindTags task={task} labels={projLabels} specialOnly />
+                          </Space>
+                        );
+                      }
                       const candOnly = !focus && f.cand && f.candLabels.length > 0 && !f.showAllLabels;
                       const sameKind = (name: string) =>
                         f.candLabels.some((c) => name === c || currentName(name) === currentName(c)
