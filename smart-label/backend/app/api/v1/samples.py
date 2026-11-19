@@ -518,6 +518,7 @@ async def get_sample_media(
     cam_paths = [sample.video_cam1_path, sample.video_cam2_path, sample.video_cam3_path]
     return ok(
         SampleMediaOut(
+            site=site_layout.site_of(sample.sample_code, sample.video_cam1_path, sample.imu_csv_path),
             video_note=_video_note(sample, cam_paths, by_path),
             video1_id=by_path.get(sample.video_cam1_path),
             video2_id=by_path.get(sample.video_cam2_path),

@@ -237,6 +237,8 @@ export default function AnnotationWorkspace({
   // 路数比该场地应有的少时的那一句（后端算的）。跟 videoWhy 分开：那个只管
   // "一路都没有"，这个管"有，但少了几路"——两种情况的补救办法不一样
   const [videoNote, setVideoNote] = useState<string | null>(null);
+  // 这个样本在哪个场地：影棚全是公共区，不需要（也没有）「哪一路拍哪一间」
+  const [mediaSite, setMediaSite] = useState<string | null>(null);
   // 播放速度/帧号控件 portal 的目标节点：挂在弹窗标题里的一个空 span 上
   const [controlsHost, setControlsHost] = useState<HTMLSpanElement | null>(null);
   // 「疑似片段」那排筛选/翻页 portal 到它的折叠标题行上，省两行高度
@@ -615,6 +617,7 @@ export default function AnnotationWorkspace({
     }
     setVideos(vids);
     setCamList(cams);
+    setMediaSite(media.site ?? null);
     // 影棚该有三路、狗场该有两路。少了但不是一路都没有时，原来这里一声不吭
     setVideoNote(media.video_note ?? null);
     setVideoWhy(
@@ -2634,7 +2637,7 @@ export default function AnnotationWorkspace({
             </>
           )}
           {/* 画面里那只跟这一间对不上时，就地核对机位：循环看这一段，把这一间换到对的那一路 */}
-          {task && (role === "admin" || role === "super_admin") && (
+          {task && mediaSite !== "yingpeng" && (role === "admin" || role === "super_admin") && (
             <Tooltip title="画面不是这一间（或这只狗不在画面里）时用：循环看这一段，把放这只狗的那一路选成它实际的房间。改的是这一场录制，同时段的所有样本一起换">
               <Button size="small" onClick={openCamFix}>机位纠正</Button>
             </Tooltip>

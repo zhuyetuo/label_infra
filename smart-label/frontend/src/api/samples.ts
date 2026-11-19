@@ -36,6 +36,8 @@ export interface SampleMedia {
   video3_id: number | null;
   csv_id: number | null;
   video_fps: number | null;
+  /** 样本所在场地（bolangwang / yingpeng / gouchang）：影棚是公共区，不做机位纠正 */
+  site?: string | null;
   /** 样本上登记的三路视频相对路径（没登记就是 null）——播不了时用来说清楚缺哪一步 */
   video_paths: (string | null)[];
   /** 登记了路径但媒体库里没有这条：文件没传上 NAS，或者传了还没被扫到 */
