@@ -24,6 +24,7 @@ import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
 import LowlightModal from "@/components/LowlightModal";
+import CamFixModal from "@/components/CamFixModal";
 import DogPicker from "@/components/DogPicker";
 import DogAvatar from "@/components/DogAvatar";
 import { NIGHT_VISION } from "@/config/features";
@@ -308,6 +309,9 @@ export default function AnnotationWorkspace({
   const bus = useMemo(() => new TimeBus(), [taskId]);
   // 片段区间循环：真正的循环逻辑在 bus/视频组件里跑，这里只留一份给按钮高亮/顶部提示用
   const [loopRange, setLoopRange] = useState<{ startMs: number; endMs: number } | null>(null);
+  // 机位纠正：就地循环看这一段该是哪一路画面（改的是整场录制）
+  const [camFixOpen, setCamFixOpen] = useState(false);
+  const [camFixRange, setCamFixRange] = useState<[number, number]>([0, 4000]);
   // 「找相似」：视频当前在第几秒（高频更新，放 ref 不放 state）
   const curSecRef = useRef(0);
   useEffect(() => bus.onTime((sec) => { curSecRef.current = sec; }), [bus]);
@@ -466,6 +470,17 @@ export default function AnnotationWorkspace({
   // 多放一截反而看不出边界在哪；觉得起止不对就去改起止
   const setLoop = (r: { startMs: number; endMs: number } | null) =>
     bus.setLoop(r ? { start: Math.max(0, r.startMs) / 1000, end: r.endMs / 1000 } : null);
+  /** 打开机位纠正：有循环区间就循环那一段，没有就播播放线前后几秒 */
+  const openCamFix = () => {
+    const t = curSecRef.current * 1000;
+    setCamFixRange(loopRange ? [loopRange.startMs, loopRange.endMs] : [Math.max(0, t - 2000), t + 4000]);
+    setCamFixOpen(true);
+  };
+  /** 纠正完这一场视频文件重新挂了，把播放源换成新的（不重开任务、不丢当前编辑） */
+  const reloadAfterCamFix = () => {
+    if (sampleId == null) return;
+    getSampleMedia(sampleId).then(applySampleMedia).catch(() => undefined);
+  };
   // 停止循环后浮窗还留着（勾了「停止循环后保留浮窗」）：拆段、调起止时不想一直循环，
   // 循环一停浮窗就没了又得重新点。记住最后一段，浮窗接着显示它；点浮窗的 X 才真正关
   const KEEP_KEY = "loop-popup-keep";
@@ -576,6 +591,43 @@ export default function AnnotationWorkspace({
     else window.prompt("复制这个链接：", text);
   };
 
+  // 按样本当前的视频挂载重建播放源。机位纠正之后几路文件会重新挂，
+  // 这里单独抽出来：改完不用重开任务，画面直接换成纠正后的那几路
+  const applySampleMedia = async (media: Awaited<ReturnType<typeof getSampleMedia>>) => {
+    const entries: [string, number | null][] = [
+      ["视角1", media.video1_id],
+      ["视角2", media.video2_id],
+      ["视角3", media.video3_id],
+    ];
+    const vids: VideoSrc[] = [];
+    // 夜视弹窗要能切机位：黑的那一路看不清时，得拿同一时刻别的机位
+    // （尤其是看全场那一路）对一眼，才知道增强出来的东西是不是真的
+    const cams: { value: string; label: string }[] = [];
+    for (const [i, [label, id]] of entries.entries()) {
+      if (id == null) continue;
+      cams.push({ value: `cam${i + 1}`, label });
+      const { token } = await getMediaToken(id);
+      // 这一路的原点跟样本差多少：跨 session 挂过来的那一路（看全场的 cam7）
+      // 差着几秒到几十分钟，不换算就是放了十几分钟之外的画面
+      const off = (media.video_offsets_ms?.[i] ?? 0) / 1000;
+      vids.push({ label: off ? `${label}（差 ${off.toFixed(1)}s，已对齐）` : label,
+                  url: mediaStreamUrl(id, token), offsetSec: off });
+    }
+    setVideos(vids);
+    setCamList(cams);
+    // 影棚该有三路、狗场该有两路。少了但不是一路都没有时，原来这里一声不吭
+    setVideoNote(media.video_note ?? null);
+    setVideoWhy(
+      vids.length > 0
+        ? null
+        : media.video_missing_in_library.length > 0
+          ? `样本上登记了 ${media.video_missing_in_library.length} 路视频，但媒体库里没有这些文件：${media.video_missing_in_library.join("、")}。多半是没传上 NAS，或者传了还没被扫到——去「样本」页点一次「立即扫描」再看。`
+          : "这个样本上就没有登记视频文件。采集/归档时这一路只上传了 IMU 数据（比如 imu4 那种只传 csv 的），或者视频还没归档过来。IMU 波形和片段列表照常能用，只是没法对着画面核对。"
+    );
+    setHasCsv(media.csv_id != null);
+    setFps(media.video_fps);
+  };
+
   useEffect(() => {
     if (taskId == null || sampleId == null) {
       setVideos([]);
@@ -595,38 +647,7 @@ export default function AnnotationWorkspace({
       // 这一步按候选行把丢掉的补回来。没有缺的就是个空操作
       await repairCandidateItems(taskId).catch(() => undefined);
       const media = await getSampleMedia(sampleId);
-      const entries: [string, number | null][] = [
-        ["视角1", media.video1_id],
-        ["视角2", media.video2_id],
-        ["视角3", media.video3_id],
-      ];
-      const vids: VideoSrc[] = [];
-      // 夜视弹窗要能切机位：黑的那一路看不清时，得拿同一时刻别的机位
-      // （尤其是看全场那一路）对一眼，才知道增强出来的东西是不是真的
-      const cams: { value: string; label: string }[] = [];
-      for (const [i, [label, id]] of entries.entries()) {
-        if (id == null) continue;
-        cams.push({ value: `cam${i + 1}`, label });
-        const { token } = await getMediaToken(id);
-        // 这一路的原点跟样本差多少：跨 session 挂过来的那一路（看全场的 cam7）
-        // 差着几秒到几十分钟，不换算就是放了十几分钟之外的画面
-        const off = (media.video_offsets_ms?.[i] ?? 0) / 1000;
-        vids.push({ label: off ? `${label}（差 ${off.toFixed(1)}s，已对齐）` : label,
-                    url: mediaStreamUrl(id, token), offsetSec: off });
-      }
-      setVideos(vids);
-      setCamList(cams);
-      // 影棚该有三路、狗场该有两路。少了但不是一路都没有时，原来这里一声不吭
-      setVideoNote(media.video_note ?? null);
-      setVideoWhy(
-        vids.length > 0
-          ? null
-          : media.video_missing_in_library.length > 0
-            ? `样本上登记了 ${media.video_missing_in_library.length} 路视频，但媒体库里没有这些文件：${media.video_missing_in_library.join("、")}。多半是没传上 NAS，或者传了还没被扫到——去「样本」页点一次「立即扫描」再看。`
-            : "这个样本上就没有登记视频文件。采集/归档时这一路只上传了 IMU 数据（比如 imu4 那种只传 csv 的），或者视频还没归档过来。IMU 波形和片段列表照常能用，只是没法对着画面核对。"
-      );
-      setHasCsv(media.csv_id != null);
-      setFps(media.video_fps);
+      await applySampleMedia(media);
       // 从别处点「去修」进来的：直接停在出问题的那一刻，不用自己拖进度条找
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
       // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
@@ -2612,6 +2633,12 @@ export default function AnnotationWorkspace({
               />
             </>
           )}
+          {/* 画面里那只跟这一间对不上时，就地核对机位：循环看这一段，把这一间换到对的那一路 */}
+          {task && (role === "admin" || role === "super_admin") && (
+            <Tooltip title="画面不是这一间（或这只狗不在画面里）时用：循环看这一段，把放这只狗的那一路选成它实际的房间。改的是这一场录制，同时段的所有样本一起换">
+              <Button size="small" onClick={openCamFix}>机位纠正</Button>
+            </Tooltip>
+          )}
           <Tag>
             {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
             样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}
@@ -2994,6 +3021,15 @@ export default function AnnotationWorkspace({
       </div>
       </Fragment>
     </Modal>
+    {/* 机位纠正：标着标着发现画面挂错了屋子，就地循环这一段换过来 */}
+    <CamFixModal
+      open={camFixOpen}
+      sampleId={sampleId}
+      startMs={camFixRange[0]}
+      endMs={camFixRange[1]}
+      onClose={() => setCamFixOpen(false)}
+      onApplied={reloadAfterCamFix}
+    />
     {/* 夜视增强：夜里那几路黑得看不出狗在干嘛时，把那一刻捞出来看清楚。
         放在工作台这一层而不是片段面板里——它要用 sampleId，而且弹窗不该
         嵌在表格行里 */}

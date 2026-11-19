@@ -82,6 +82,35 @@ export interface CamMapBatchOut {
   failed: { session_key: string; error: string }[];
 }
 
+/** 标注工作台里就地核对：这份样本这一场有几路画面、这只狗该在哪一间 */
+export interface CamSampleCam {
+  recorded_cam: number;
+  real_cam: number;
+  path: string;
+  media_id: number | null;
+  room_options: CamCheckRoom[];
+}
+
+export interface CamSampleCams {
+  applicable: boolean;
+  reason?: string;
+  sample_id?: number;
+  sample_code?: string;
+  session_key?: string;
+  date?: string | null;
+  site?: string | null;
+  site_name?: string;
+  room?: number | null;
+  room_label?: string | null;
+  current_recorded_cam?: number | null;
+  rooms?: CamCheckRoom[];
+  mapping?: Record<string, number>;
+  cams?: CamSampleCam[];
+}
+
+export const getSampleCams = (sampleId: number) =>
+  request.get<never, CamSampleCams>(`/cam-map/sample/${sampleId}`);
+
 export const listCamSessions = (date?: string, site?: string) =>
   request.get<never, CamCheckOut>("/cam-map/sessions", {
     params: {

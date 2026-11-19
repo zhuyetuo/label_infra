@@ -53,6 +53,18 @@ async def list_sessions(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
 
 
+@router.get("/sample/{sample_id}")
+async def get_sample_cams(
+    sample_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """标注工作台里就地核对：这份样本这一场的几路画面 + 这只狗该在哪一间。"""
+    try:
+        return ok(await cam_map_service.sample_cams(db, sample_id))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
 @router.put("/batch")
 async def save_batch_mapping(
     body: CamMapBatchIn,

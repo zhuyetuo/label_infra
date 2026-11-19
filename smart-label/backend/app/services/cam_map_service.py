@@ -563,6 +563,73 @@ async def list_sessions(db: AsyncSession, date: str | None = None, site: str | N
     }
 
 
+async def sample_cams(db: AsyncSession, sample_id: int) -> dict:
+    """标注工作台里就地核对机位：这份样本这一场的几路录制画面 + 这只狗该在哪一间。
+
+    跟「机位核对」页是同一套数据，只是不用跳出去：标的时候看到画面不对，
+    当场把那间屋子换到正确的那一路。真正落库仍走 save_batch（整场一起改）。
+    """
+    sample = await db.get(Sample, sample_id)
+    if sample is None:
+        raise ValueError("样本不存在")
+    session_key = session_key_of(sample.sample_code)
+    day_dir = os.path.dirname(sample.video_cam1_path or "")
+    rows = (
+        await db.execute(select(Sample).where(Sample.sample_code.like(f"{session_key}%")))
+    ).scalars().all()
+    samples = [
+        s for s in rows
+        if session_key_of(s.sample_code) == session_key
+        and os.path.dirname(s.video_cam1_path or "") == day_dir
+    ]
+    site = site_layout.site_of(session_key, day_dir, sample.video_cam1_path)
+    if not site_layout.has_private_rooms(site):
+        return {
+            "applicable": False,
+            "reason": "这个场地全是公共区，没有「哪一路拍哪一间」的问题，不需要核对机位",
+        }
+
+    videos = _session_videos(samples, session_key)
+    mapping = mapping_of(samples, session_key)
+    room, current_cam = _room_and_cam(sample, site)
+    paths = [videos[c] for c in sorted(videos)]
+    media_ids = {
+        path: mid
+        for mid, path in (
+            await db.execute(
+                select(MediaFile.id, MediaFile.relative_path).where(MediaFile.relative_path.in_(paths))
+            )
+        ).all()
+    } if paths else {}
+    return {
+        "applicable": True,
+        "sample_id": sample.id,
+        "sample_code": sample.sample_code,
+        "session_key": session_key,
+        "date": sample.session_date.isoformat() if sample.session_date else None,
+        "site": site,
+        "site_name": site_layout.SITES.get(site or "", {}).get("name", site),
+        "room": room,
+        "room_label": _room_label(site, room) if room is not None else None,
+        "current_recorded_cam": current_cam,
+        "rooms": room_options(site),
+        "mapping": {str(k): v for k, v in mapping.items()},
+        "cams": [
+            {
+                "recorded_cam": recorded,
+                "real_cam": mapping.get(recorded, recorded),
+                "path": videos[recorded],
+                "media_id": media_ids.get(videos[recorded]),
+                "room_options": [
+                    {"value": c, "label": _room_label(site, c)}
+                    for c in sorted(cam_room_choices(site, recorded))
+                ],
+            }
+            for recorded in sorted(mapping)
+        ],
+    }
+
+
 async def save_mapping(db: AsyncSession, session_key: str, mapping: dict[int, int],
                        user_id: int | None) -> dict:
     rows = (
