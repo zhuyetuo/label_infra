@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Button, Checkbox, DatePicker, Descriptions, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
-  Segmented,
+  Segmented, Switch,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -379,6 +379,22 @@ function ChartsTab() {
   const all = data?.rows ?? [];
   const metaRows = all.filter((r) => matchDogMeta(r, f));
   const rows = metaRows.filter((r) => f.dogs.length === 0 || f.dogs.includes(r.dog_name));
+  // 趋势图每个点上写不写数值：默认写；狗多时数字会挤，可以关掉（记在这台浏览器里）
+  const [showValues, setShowValues] = useState<boolean>(() => {
+    try { return localStorage.getItem("skin-chart-values") !== "0"; } catch { return true; }
+  });
+  // AI 抓挠次数图：当天 + 基线 / 只看当天 / 只看基线（记在这台浏览器里）
+  const [baseMode, setBaseMode] = useState<"both" | "none" | "only">(() => {
+    try { const v = localStorage.getItem("skin-chart-baseline"); return v === "none" || v === "only" ? v : "both"; } catch { return "both"; }
+  });
+  const pickBaseMode = (v: "both" | "none" | "only") => {
+    setBaseMode(v);
+    try { localStorage.setItem("skin-chart-baseline", v); } catch { /* 存不了就只管这一次 */ }
+  };
+  const toggleValues = (v: boolean) => {
+    setShowValues(v);
+    try { localStorage.setItem("skin-chart-values", v ? "1" : "0"); } catch { /* 存不了就只管这一次 */ }
+  };
 
   // 每只狗一组概览数字：多少天、平均/最高 C、几天 C2、最近一天什么样
   const summary = useMemo(() => {
@@ -494,17 +510,42 @@ function ChartsTab() {
         />
       )}
 
+      {rows.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <Space size={6}>
+            <Switch size="small" checked={showValues} onChange={toggleValues} />
+            <Typography.Text>节点显示数值</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>狗多、数字挤在一起时可以关掉；也可以点图例只留几只狗</Typography.Text>
+          </Space>
+        </div>
+      )}
       {rows.length > 0 &&
         METRICS.map((m) => (
           <div key={m.value} style={{ marginBottom: 20 }}>
-            <Typography.Text strong>{m.label}</Typography.Text>
+            <Typography.Text strong>{m.value === "count" && baseMode === "only" ? "AI 抓挠次数 · 基线" : m.label}</Typography.Text>
+            {m.value === "count" && (
+              <Segmented
+                size="small"
+                style={{ marginLeft: 8 }}
+                value={baseMode}
+                onChange={(v) => pickBaseMode(v as "both" | "none" | "only")}
+                options={[
+                  { label: "当天 + 基线", value: "both" },
+                  { label: "只看当天", value: "none" },
+                  { label: "只看基线", value: "only" },
+                ]}
+              />
+            )}
             <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-              {m.value === "count" && "虚线是基线（这只狗别的日子的中位数），C 值里的「变化幅度」就是跟它比出来的"}
+              {m.value === "count" && (baseMode === "only"
+                ? "基线 = 这只狗别的日子（佩戴够 12 小时的）AI 次数的中位数；C 值里的「变化幅度」就是拿当天跟它比"
+                : "模型预测的次数，还在提升阶段、会多报" + (baseMode === "both" ? "；虚线是基线（这只狗别的日子的中位数），C 值里的「变化幅度」就是跟它比出来的" : ""))}
+              {m.value === "count_human" && "人看视频确认的抓挠次数（「待定」不算）；没人审核的那天空着。只审了一部分时间的那天会偏低，跟踪表里标了「部分」"}
               {m.value === "c" && "0–30 是 C0，30–50 是 C1，50 以上是 C2；红旗信号会直接判 C2"}
               {m.value === "s" && "有问答记录的用含问答的 S，没有的用不填问答的下限值"}
               {m.value === "photo" && "看皮肤照片评的档（兽医评过的以兽医为准，没有就取几个人的共识）；看不清 / 没评的那天空着"}
             </Typography.Text>
-            <TrendChart rows={rows} metric={m.value} height={220} />
+            <TrendChart rows={rows} metric={m.value} height={220} showValues={showValues} baselineMode={m.value === "count" ? baseMode : "both"} />
           </div>
         ))}
       <TierDistribution rows={rows} />

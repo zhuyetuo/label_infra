@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { Space, Tag, Typography } from "antd";
+import { Segmented, Space, Tag, Typography } from "antd";
 import type { TrackingRow } from "@/api/skin";
 import "./TrackingCharts.css";
 import DogInfoPopover from "./DogInfoPopover";
@@ -20,10 +20,19 @@ const SERIES_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#0
 const SERIES_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 // 档位是状态，不是分类，用固定的状态色，且始终带文字标签，不靠颜色单独表意
 const TIER_COLOR: Record<string, string> = { C0: "#0ca30c", C1: "#fab219", C2: "#d03b3b" };
+// 照片评级 S0/S1/S2 跟 C0/C1/C2 用同一套状态色：两行上下对齐，一眼看出 IMU 和照片说的是不是一回事
+const PHOTO_COLOR: Record<string, string> = { S0: TIER_COLOR.C0, S1: TIER_COLOR.C1, S2: TIER_COLOR.C2 };
+const photoOf = (r: TrackingRow | undefined): { g: string; vet: boolean } | null => {
+  if (!r) return null;
+  if (r.photo_grade_vet) return { g: r.photo_grade_vet, vet: true };
+  return r.photo_grade ? { g: r.photo_grade, vet: false } : null;
+};
 
-type Metric = "count" | "c" | "s" | "photo";
+type Metric = "count" | "count_human" | "c" | "s" | "photo";
 const METRICS: { label: string; value: Metric; unit: string }[] = [
-  { label: "抓挠次数", value: "count", unit: "次" },
+  { label: "AI 抓挠次数", value: "count", unit: "次" },
+  // 人看视频定下来的抓挠次数：没审核过的那天空着（不当成 0）
+  { label: "人工审核抓挠次数", value: "count_human", unit: "次" },
   { label: "C 值", value: "c", unit: "" },
   { label: "S 总分", value: "s", unit: "" },
   // 看皮肤照片评的档（兽医评过的以兽医为准，没有就取几个人的共识）：S0=0 / S1=1 / S2=2，看不清 / 没评的空着
@@ -44,7 +53,11 @@ const dayLabel = (sec: number) => {
 };
 
 const valueOf = (r: TrackingRow, m: Metric): number | null => {
-  if (m === "count") return (r.stats?.event_count as number | undefined) ?? null;
+  if (m === "count") return ((r.scratch_ai ?? r.stats)?.event_count as number | undefined) ?? null;
+  if (m === "count_human") {
+    const v = r.scratch_review;
+    return v && v.reviewed_hours > 0 && v.human_count != null ? v.human_count : null;
+  }
   if (m === "c") return r.c_value;
   if (m === "photo") {
     const g = r.photo_grade_vet ?? r.photo_grade;
@@ -55,7 +68,13 @@ const valueOf = (r: TrackingRow, m: Metric): number | null => {
 
 /** 单个指标的折线图：一条线一只狗。图表页把三个指标各画一张（小倍数），
  *  跟踪表里只画一张、用按钮切——两处共用这一个组件。 */
-export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]; metric: Metric; height?: number }) {
+export function TrendChart({ rows, metric, height = 260, showValues = false, baselineMode = "both" }: {
+  rows: TrackingRow[]; metric: Metric; height?: number;
+  /** 抓挠次数图的基线：both = 当天次数 + 虚线基线；none = 只看当天；only = 只看基线（实线，单独看基线怎么变） */
+  baselineMode?: "both" | "none" | "only";
+  /** 每个点上方写出数值（图表页有开关可以关掉；狗多的时候数字会挤在一起） */
+  showValues?: boolean;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const [dark, setDark] = useState(isDark);
@@ -95,8 +114,11 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
             })
           )
         : null;
+    // 只看基线：把基线当主线画（实线、带点、能写数值），不再画当天次数
+    if (b && baselineMode === "only") return { dogs: dogSet, dates: dateSet, series: b, baseline: null };
+    if (baselineMode === "none") return { dogs: dogSet, dates: dateSet, series: s, baseline: null };
     return { dogs: dogSet, dates: dateSet, series: s, baseline: b };
-  }, [rows, metric]);
+  }, [rows, metric, baselineMode]);
 
   // 容器实际宽度。标签页之间来回切时组件并不卸载，图表可能是在「隐藏着」的时候
   // 建的——那会儿 clientWidth 是 0，uPlot 就按 0 宽画了一张，切回来也不会自己
@@ -163,13 +185,41 @@ export function TrendChart({ rows, metric, height = 260 }: { rows: TrackingRow[]
       data,
       hostRef.current
     );
+    if (showValues) {
+      // 每个点上方写数值：颜色跟这条线一样，隐藏了的线（点图例关掉）不写
+      plot.hooks.draw = [
+        (u: uPlot) => {
+          const ctx = u.ctx;
+          const dpr = window.devicePixelRatio || 1;
+          ctx.save();
+          ctx.font = `${11 * dpr}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+          for (let si = 1; si <= dogs.length; si++) {
+            if (!u.series[si]?.show) continue;
+            ctx.fillStyle = palette[(si - 1) % palette.length];
+            const ys = u.data[si] as (number | null)[];
+            for (let j = 0; j < ys.length; j++) {
+              const v = ys[j];
+              if (v == null) continue;
+              const x = u.valToPos(u.data[0][j], "x", true);
+              const y = u.valToPos(v, "y", true);
+              const txt = metric === "photo" ? `S${v}` : Number.isInteger(v) ? String(v) : v.toFixed(1);
+              ctx.fillText(txt, x, y - 6 * dpr);
+            }
+          }
+          ctx.restore();
+        },
+      ];
+      plot.redraw(false, false);
+    }
     plotRef.current = plot;
     return () => {
       plot.destroy();
       plotRef.current = null;
     };
     // hostW 变了就重建/重设尺寸，窗口缩放和"从隐藏变可见"走的是同一条路
-  }, [dogs, dates, series, baseline, palette, dark, height, hostW]);
+  }, [dogs, dates, series, baseline, palette, dark, height, hostW, showValues, metric]);
 
   if (!rows.length) return null;
   return <div className="tracking-charts"><div ref={hostRef} /></div>;
@@ -190,20 +240,33 @@ function allDays(dates: string[]): string[] {
 }
 
 /** C 档位时间线：一只狗一行，一天一格，按日期从左到右，格子颜色是那天的档位；右边是各档天数 */
+type TierView = "both" | "c" | "photo";
+
 export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
+  // 看 C 档 + 照片评级 / 只看 C 档 / 只看照片评级（记在这台浏览器里）
+  const [view, setView] = useState<TierView>(() => {
+    try { const v = localStorage.getItem("skin-tier-view"); return v === "c" || v === "photo" ? v : "both"; } catch { return "both"; }
+  });
+  const pickView = (v: TierView) => {
+    setView(v);
+    try { localStorage.setItem("skin-tier-view", v); } catch { /* 存不了就只管这一次 */ }
+  };
+  const showC = view !== "photo";
+  const showPhoto = view !== "c";
   const { days, dogs } = useMemo(() => {
     const byDog = new Map<string, Map<string, TrackingRow>>();
     for (const r of rows) {
-      if (!r.c_tier) continue;
+      if (!((showC && r.c_tier) || (showPhoto && photoOf(r)))) continue;
       const m = byDog.get(r.dog_name) ?? new Map<string, TrackingRow>();
       m.set(r.date, r);
       byDog.set(r.dog_name, m);
     }
-    const days = allDays(rows.filter((r) => r.c_tier).map((r) => r.date));
+    const days = allDays(rows.filter((r) => (showC && r.c_tier) || (showPhoto && photoOf(r))).map((r) => r.date));
     const dogs = [...byDog.entries()].sort(([a], [b]) => a.localeCompare(b));
     return { days, dogs };
-  }, [rows]);
-  if (!dogs.length) return null;
+  }, [rows, showC, showPhoto]);
+  // 整段时间既没有 C 档也没有照片评级才整块不显示；只是当前视图没数据时留着切换按钮，不然切不回来
+  if (!rows.some((r) => r.c_tier || photoOf(r))) return null;
   // 天多的时候日期标签隔几天写一个，免得挤在一起
   const labelEvery = Math.max(1, Math.ceil(days.length / 20));
   const cellText = days.length <= 31; // 格子够宽才在格子里写档位
@@ -211,9 +274,23 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
   const SUM_W = 150;
   return (
     <div style={{ marginTop: 12 }}>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        C 档位（按日期，一格一天；灰格 = 那天没数据）：
-      </Typography.Text>
+      <Space size={8} wrap>
+        <Segmented
+          size="small"
+          value={view}
+          onChange={(v) => pickView(v as TierView)}
+          options={[
+            { label: "C 档 + 照片评级", value: "both" },
+            { label: "只看 C 档", value: "c" },
+            { label: "只看照片评级", value: "photo" },
+          ]}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {view === "both" && "按日期，一格一天；每只狗上面一行是 C 档，下面一行是照片评级；灰格 = 那天没数据 / 没评"}
+          {view === "c" && "C 档位，按日期一格一天；灰格 = 那天没数据"}
+          {view === "photo" && "照片评级，按日期一格一天；实心 = 兽医评的，空心 = 非兽医的共识；灰格 = 那天没照片 / 没评"}
+        </Typography.Text>
+      </Space>
       {/* 日期刻度 */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginTop: 4 }}>
         <span style={{ width: NAME_W, flex: "0 0 auto" }} />
@@ -226,11 +303,22 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
         </div>
         <span style={{ width: SUM_W, flex: "0 0 auto" }} />
       </div>
+      {!dogs.length && (
+        <div style={{ marginTop: 6 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {view === "photo" ? "这段时间还没有照片评级" : "这段时间还没有 C 档"}
+          </Typography.Text>
+        </div>
+      )}
       {dogs.map(([dog, byDate]) => {
         const counts: Record<string, number> = { C0: 0, C1: 0, C2: 0 };
-        byDate.forEach((r) => { counts[r.c_tier!] = (counts[r.c_tier!] ?? 0) + 1; });
+        byDate.forEach((r) => { if (r.c_tier) counts[r.c_tier] = (counts[r.c_tier] ?? 0) + 1; });
+        const pCounts: Record<string, number> = { S0: 0, S1: 0, S2: 0 };
+        byDate.forEach((r) => { const p = photoOf(r); if (p && p.g in pCounts) pCounts[p.g] += 1; });
         return (
-          <div key={dog} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <div key={dog} style={{ marginTop: 6 }}>
+          {showC && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}><DogInfoPopover name={dog} /></span>
             <div style={{ flex: 1, display: "flex", height: 20, gap: 2 }}>
               {days.map((d) => {
@@ -261,16 +349,61 @@ export function TierDistribution({ rows }: { rows: TrackingRow[] }) {
               C0 {counts.C0} · C1 {counts.C1} · C2 {counts.C2}
             </span>
           </div>
+          )}
+          {/* 照片评级：兽医评过的以兽医为准（格子带「兽」字边框），没有就用几个人的共识 */}
+          {showPhoto && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: showC ? 2 : 0 }}>
+            {showC
+              ? <span style={{ width: NAME_W, fontSize: 11, color: "#999", flex: "0 0 auto", textAlign: "right" }}>照片评级</span>
+              : <span style={{ width: NAME_W, fontSize: 12, flex: "0 0 auto" }}><DogInfoPopover name={dog} /></span>}
+            <div style={{ flex: 1, display: "flex", height: showC ? 16 : 20, gap: 2 }}>
+              {days.map((d) => {
+                const p = photoOf(byDate.get(d));
+                const col = p ? PHOTO_COLOR[p.g] : undefined;
+                return (
+                  <div
+                    key={d}
+                    title={p ? `${d} ${dog}：照片 ${p.g}（${p.vet ? "兽医评的" : "几个人的共识，兽医还没评"}）` : `${d} ${dog}：照片没评 / 没照片`}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      borderRadius: 3,
+                      boxSizing: "border-box",
+                      background: col ?? "rgba(128,128,128,0.12)",
+                      // 不是兽医评的：只描边、不填满，跟兽医定的区分开
+                      ...(p && !p.vet ? { background: "transparent", border: `2px solid ${col ?? "#999"}` } : {}),
+                      color: p?.g === "S1" ? "#0b0b0b" : p?.vet ? "#fff" : "inherit",
+                      fontSize: 10,
+                      lineHeight: p && !p.vet ? "12px" : "16px",
+                      textAlign: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {cellText && p ? p.g : ""}
+                  </div>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 12, width: SUM_W, flex: "0 0 auto", whiteSpace: "nowrap", color: "#888" }}>
+              S0 {pCounts.S0} · S1 {pCounts.S1} · S2 {pCounts.S2}
+            </span>
+          </div>
+          )}
+          </div>
         );
       })}
       <Space size={4} style={{ marginTop: 6 }}>
-        {(["C0", "C1", "C2"] as const).map((t) => (
+        {showC && (["C0", "C1", "C2"] as const).map((t) => (
           <Tag key={t} color={TIER_COLOR[t]}>
             {t}
             {t === "C0" ? " 正常" : t === "C1" ? " 偏高" : " 严重"}
           </Tag>
         ))}
-        <Tag>灰 没数据</Tag>
+        {showPhoto && (["S0", "S1", "S2"] as const).map((t) => (
+          <Tag key={t} color={PHOTO_COLOR[t]}>照片 {t}</Tag>
+        ))}
+        {showPhoto && <Tag style={{ background: "transparent", borderStyle: "dashed" }}>空心格 = 非兽医评的共识</Tag>}
+        <Tag>灰 没数据 / 没评</Tag>
       </Space>
     </div>
   );
