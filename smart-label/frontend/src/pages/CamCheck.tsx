@@ -267,11 +267,20 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
                message="两路画面选了同一个房间，先改开再保存" />
       )}
       <Row gutter={[12, 12]}>
-        {segment.cams.map((c) => (
+        {/* 按「现在算的是几号间」从小到大排（纠正保存后跟着重排），一眼核对 1、2、3 号间是不是各就各位；
+            编辑中不跟着跳，免得刚选完画面就挪走 */}
+        {[...segment.cams].sort((a, b) => (a.real_cam ?? 99) - (b.real_cam ?? 99) || a.recorded_cam - b.recorded_cam).map((c) => (
           <Col key={c.recorded_cam} xs={24} sm={12} md={8}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+              <Typography.Text strong style={{ fontSize: 16 }}>{roomLabel(c.real_cam)}</Typography.Text>
+              {c.real_cam !== c.recorded_cam && <Tag color="orange" style={{ marginRight: 0 }}>已纠正</Tag>}
+              {map[c.recorded_cam] !== c.real_cam && (
+                <Tag color="blue" style={{ marginRight: 0 }}>待保存 → {roomLabel(map[c.recorded_cam] ?? null)}</Tag>
+              )}
+            </div>
             <CamThumb mediaId={c.media_id} />
             <div style={{ marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-              <Typography.Text strong>录制 cam{c.recorded_cam}</Typography.Text>
+              <Typography.Text type="secondary">录制 cam{c.recorded_cam}</Typography.Text>
               {(dogsByCam.get(c.recorded_cam) ?? []).map((g) => {
                 const withDog = g.samples.find((s) => s.dog_id != null) ?? g.samples[0];
                 const imus = g.samples
