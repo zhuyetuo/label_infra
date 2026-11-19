@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import DogAvatar from "@/components/DogAvatar";
 import {
   Alert, Button, Card, Checkbox, Col, Empty, Modal, Pagination, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip,
   Typography, message,
@@ -278,7 +279,25 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
                 <Tag color="blue" style={{ marginRight: 0 }}>待保存 → {roomLabel(map[c.recorded_cam] ?? null)}</Tag>
               )}
             </div>
-            <CamThumb mediaId={c.media_id} />
+            {/* 这一间应该是哪只狗：大头像叠在画面右上角，直接跟画面里那只比，看纠正有没有生效 */}
+            <div style={{ position: "relative" }}>
+              <CamThumb mediaId={c.media_id} />
+              <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 6 }}>
+                {(dogsByCam.get(c.recorded_cam) ?? []).map((g) => {
+                  const withDog = g.samples.find((s) => s.dog_id != null) ?? g.samples[0];
+                  return (
+                    <Tooltip key={g.key} title={`这间应该是 ${withDog.dog_name ?? "（没建档）"}：跟画面里那只比一比，是同一只就说明纠正生效了`}>
+                      <div style={{ background: "rgba(0,0,0,.55)", borderRadius: 10, padding: 4, textAlign: "center" }}>
+                        <DogAvatar dogId={withDog.dog_id} name={withDog.dog_name ?? undefined} size={64} />
+                        <div style={{ color: "#fff", fontSize: 12, marginTop: 2, maxWidth: 72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          应是 {withDog.dog_name ?? "？"}
+                        </div>
+                      </div>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </div>
             <div style={{ marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
               <Typography.Text type="secondary">录制 cam{c.recorded_cam}</Typography.Text>
               {(dogsByCam.get(c.recorded_cam) ?? []).map((g) => {
@@ -309,9 +328,10 @@ function SegmentCard({ segment, onChanged, checked, onCheck }: {
               onChange={(v) => pick(c.recorded_cam, v)}
               disabled={c.room_options.length <= 1}
             />
-            <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ tooltip: c.path }}>
-              {c.path.split("/").pop()}
-            </Typography.Text>
+            {/* 文件名里的 imuN 只是录像时同步的那只项圈，跟这路现在挂给谁无关，整行显示容易看岔：收进提示里 */}
+            <Tooltip title={`视频文件：${c.path.split("/").pop()}（文件名里的 imu 号只是录像时同步的项圈，跟这路现在挂给哪只狗无关）`}>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>录制 cam{c.recorded_cam} 的视频</Typography.Text>
+            </Tooltip>
           </Col>
         ))}
       </Row>
