@@ -100,6 +100,8 @@ export interface Task {
   cand_spot_pending?: number;
   /** 专项待判是针对哪几类（抓挠 / 舔…） */
   cand_spot_labels?: string[];
+  /** 专项待判按背景分：普通 / 任务已通过 / 跟已有片段重叠 / 两样都是 */
+  cand_spot_kinds?: Partial<Record<"plain" | "approved" | "overlap" | "both", number>>;
   /** 被驳回时审核员写的意见（只有 GET /tasks 列表接口会算这个） */
   review_comment?: string | null;
   /** 样本编号 / 指派人名字：列表接口带出来，非管理员拿不到 /samples、/users 也能显示 */

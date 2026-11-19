@@ -32,3 +32,25 @@ export const REASON_LABEL: Record<AiCandidate["reason"], string> = {
 
 /** 疑似片段的显示名：「疑似」+ 类别。类别本身已经叫「疑似如厕-排尿」的不再叠一个「疑似」 */
 export const candTitle = (name: string) => (name.startsWith("疑似") ? name : `疑似${name}`);
+
+
+/** 专项片段的背景（写在说明文字最前面的标记），分四种，人可以按它挑着先判 */
+export type SpotKind = "plain" | "approved" | "overlap" | "both";
+export const SPOT_KIND: Record<SpotKind, { short: string; color: string; tip: string }> = {
+  plain: { short: "普通", color: "green", tip: "没有特别背景，直接判" },
+  approved: { short: "任务已通过", color: "default", tip: "这段所在的任务之前已经审核通过（现在专项不用认领、也能直接判）" },
+  overlap: { short: "跟已有片段重叠", color: "orange", tip: "同一位置已经有一条「AI 低置信」抓挠疑似片段，括号里是那条现在的状态，可以对照着看" },
+  both: { short: "两样都是", color: "purple", tip: "任务已通过，同时跟已有低置信片段重叠" },
+};
+export function spotKindOf(evidence: string | null | undefined): SpotKind {
+  const e = evidence ?? "";
+  if (e.startsWith("【任务已通过】【")) return "both";
+  if (e.startsWith("【任务已通过】")) return "approved";
+  if (e.startsWith("【跟已有")) return "overlap";
+  return "plain";
+}
+/** 重叠那条现在的状态（括号里的：待判 / 已确认 / 已排除…） */
+export function spotOverlapState(evidence: string | null | undefined): string | null {
+  const m = /跟已有低置信抓挠片段重叠（([^）]*)）/.exec(evidence ?? "");
+  return m ? m[1] : null;
+}

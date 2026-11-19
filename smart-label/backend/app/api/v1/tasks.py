@@ -550,6 +550,28 @@ async def list_tasks(
                 "n": int(n), "pending": int(n_pending or 0),
                 "max_conf": round(float(max_conf), 4) if max_conf is not None else None}
 
+    # 专项待判按「背景」分四种（写进疑似片段说明最前面的标记）：普通 / 任务已通过 / 跟已有片段重叠 / 两样都是。
+    # 人想先挑某一种来判（比如先判普通的、或者先判别人已经确认过的重叠段）
+    spot_kinds: dict[int, dict[str, int]] = {}
+    if task_ids:
+        ev = AiCandidate.evidence
+        kind = case(
+            (ev.like("【任务已通过】【%"), "both"),
+            (ev.like("【任务已通过】%"), "approved"),
+            (ev.like("【跟已有%"), "overlap"),
+            else_="plain",
+        )
+        rows = await db.execute(
+            select(AiCandidate.task_id, kind, func.count(AiCandidate.id))
+            .join(Task, Task.id == AiCandidate.task_id)
+            .join(scope, scope.c.id == Task.id)
+            .where(AiCandidate.round_no == Task.round_no, AiCandidate.status == CandidateStatus.pending,
+                   AiCandidate.reason.in_(SPECIAL_REASONS))
+            .group_by(AiCandidate.task_id, kind)
+        )
+        for tid, k, n in rows.all():
+            spot_kinds.setdefault(tid, {})[k] = int(n)
+
     _lap("cands")
     # 被驳回的任务把审核意见带出来，标注员一看就知道要改什么，不用另外去问审核员
     rejected_ids = [] if lite else [t.id for t in tasks if t.status == TaskStatus.REJECTED]
@@ -620,6 +642,7 @@ async def list_tasks(
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 "cand_spot_pending": cand_counts.get(t.id, {}).get("spot", 0),
                 "cand_spot_labels": sorted(cand_counts.get(t.id, {}).get("spot_labels", [])),
+                "cand_spot_kinds": spot_kinds.get(t.id, {}),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出
                 # 「疑似抓挠里实有哪些类别」——项目全量标签列表里大半是没有的
                 "cand_labels": cand_labels.get(t.id, {}),

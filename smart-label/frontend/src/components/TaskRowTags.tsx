@@ -2,7 +2,7 @@ import { Tag, Tooltip } from "antd";
 import type { Task } from "@/types";
 import { currentName, findLabel } from "@/utils/labelTree";
 import { IMU_OTHER, imuOf } from "@/utils/imuOf";
-import { candTitle } from "@/utils/candReason";
+import { SPOT_KIND, candTitle, type SpotKind } from "@/utils/candReason";
 
 /**
  * 任务列表里一行的两种小标签，项目页和任务页共用。
@@ -55,6 +55,14 @@ export function CandKindTags({
           <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>专项·{spotWhat} 待判 {spot}</Tag>
         </Tooltip>
       )}
+      {spot > 0 && (Object.keys(SPOT_KIND) as SpotKind[]).map((k) => {
+        const n = task.cand_spot_kinds?.[k] ?? 0;
+        return n ? (
+          <Tooltip key={k} title={SPOT_KIND[k].tip}>
+            <Tag color={SPOT_KIND[k].color} style={{ marginRight: 0 }}>{SPOT_KIND[k].short} {n}</Tag>
+          </Tooltip>
+        ) : null;
+      })}
       {kinds.map(([name, v]) => {
         const shown = currentName(name);
         return (

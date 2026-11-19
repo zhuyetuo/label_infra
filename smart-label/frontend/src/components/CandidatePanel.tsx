@@ -5,7 +5,7 @@ import { DeleteOutlined, DownOutlined, PauseCircleOutlined, QuestionCircleOutlin
 import { clearSimilarCandidates, decideCandidate, type AiCandidate } from "@/api/candidates";
 import { formatMs } from "@/components/SegmentPanel";
 import BoundaryEditsTag from "@/components/BoundaryEditsTag";
-import { REASON_LABEL } from "@/utils/candReason";
+import { REASON_LABEL, SPOT_KIND, spotKindOf, spotOverlapState } from "@/utils/candReason";
 import { currentName, findLabel } from "@/utils/labelTree";
 
 /**
@@ -608,6 +608,16 @@ export default function CandidatePanel({
             render: (_, c: AiCandidate) =>
               c.evidence ? (
                 <Tooltip title={c.evidence}>
+                  {isSpecial(c.reason) && (() => {
+                    // 专项片段的背景：普通 / 任务已通过 / 跟已有片段重叠（那条现在什么状态）/ 两样都是
+                    const k = spotKindOf(c.evidence);
+                    const st = spotOverlapState(c.evidence);
+                    return (
+                      <Tag color={SPOT_KIND[k].color} style={{ marginRight: 0, marginBottom: 2 }}>
+                        {SPOT_KIND[k].short}{st ? `·那条${st}` : ""}
+                      </Tag>
+                    );
+                  })()}
                   <span style={{ fontSize: 12, color: "var(--sl-text2)", display: "block",
                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {c.evidence}

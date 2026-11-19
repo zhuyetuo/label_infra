@@ -90,6 +90,7 @@ import ResizableTable from "@/components/ResizableTable";
 import { useAuthStore } from "@/stores/authStore";
 import { imuOf, sortImuKeys } from "@/utils/imuOf";
 import { CandKindTags, ImuTag } from "@/components/TaskRowTags";
+import { SPOT_KIND, type SpotKind } from "@/utils/candReason";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { UserTag } from "@/utils/roleTag";
 import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
@@ -260,6 +261,14 @@ export default function Projects() {
   });
   const SPECIAL_FILTER = { spot: true, cand: false, candLabels: [] as string[], labels: [] as number[],
                            unreviewedOnly: false, segReturned: false, status: "ALL" as const };
+  // 专项模式下按背景挑：全部 / 普通 / 任务已通过 / 跟已有片段重叠 / 两样都是（记在这台浏览器里）
+  const [specialKind, setSpecialKind] = useState<"all" | SpotKind>(() => {
+    try { return (localStorage.getItem("projects-special-kind") as "all" | SpotKind) || "all"; } catch { return "all"; }
+  });
+  const pickSpecialKind = (v: "all" | SpotKind) => {
+    setSpecialKind(v);
+    try { localStorage.setItem("projects-special-kind", v); } catch { /* 隐私模式 */ }
+  };
   const specialOf = (pid: number) => scratchReview?.spot?.[String(pid)] ?? 0;
   const specialWhat = (pid: number) => Object.keys(scratchReview?.spot_labels?.[String(pid)] ?? {}).join("/") || "抓挠";
   const toggleSpecialOnly = () => setSpecialOnly((v) => {
@@ -1497,7 +1506,23 @@ export default function Projects() {
       </Space>
       {specialOnly && (
         <Alert type="warning" showIcon style={{ marginBottom: 8 }}
-          message="专项模式：只显示有专项待判的项目，点开哪个都只看专项任务。打开任务直接在「疑似片段」里判，判了自动记下，不用认领、不用提交。"
+          message={
+            <Space direction="vertical" size={6}>
+              <span>专项模式：只显示有专项待判的项目，点开哪个都只看专项任务。打开任务直接在「疑似片段」里判，判了自动记下，不用认领、不用提交。</span>
+              <Space size={6} wrap>
+                <span>先判哪种：</span>
+                <Segmented
+                  size="small"
+                  value={specialKind}
+                  onChange={(v) => pickSpecialKind(v as "all" | SpotKind)}
+                  options={[
+                    { label: "全部", value: "all" },
+                    ...(Object.keys(SPOT_KIND) as SpotKind[]).map((k) => ({ label: <Tooltip title={SPOT_KIND[k].tip}>{SPOT_KIND[k].short}</Tooltip>, value: k })),
+                  ]}
+                />
+              </Space>
+            </Space>
+          }
           action={<Button size="small" onClick={toggleSpecialOnly}>退出专项</Button>} />
       )}
       {delProg.some((x) => x.status === "queued" || x.status === "running") && (
@@ -1592,6 +1617,7 @@ export default function Projects() {
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
               if (f.spot && !(t.cand_spot_pending ?? 0)) return false;
+              if (f.spot && specialOnly && specialKind !== "all" && !(t.cand_spot_kinds?.[specialKind] ?? 0)) return false;
               // 「含类别」只认**片段**。曾经把候选也算进来过（为了让"一句话找画面
               // 刚写的候选"能被搜到），结果更糟：疑似片段的候选 label_name 就是
               // 「抓挠」，236 个任务全有，筛「抓挠」等于筛了大半个项目，
