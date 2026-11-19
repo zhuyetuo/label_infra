@@ -26,7 +26,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 from sqlalchemy import func, select
@@ -50,6 +50,69 @@ from app.services.dog_name_service import DogIndex, dog_meta, dog_profiles, imu_
 
 _ANSWER_FIELDS = ("has_hair_loss", "color", "odor", "lesion", "hair_spot", "hair_diameter", "coat")
 _IMU_RE = re.compile(r"_imu(\d+)$", re.IGNORECASE)
+# 样本编号里的开始时间：multicam_20261028_090000121_imu16 → 2026-10-28 09:00:00
+_CODE_START_RE = re.compile(r"_(\d{8})_(\d{6})\d*_imu\d+$", re.IGNORECASE)
+# 这几种状态的任务算「人看过」：标注员提交了 / 审核通过了
+_REVIEWED_STATUSES = {"SUBMITTED", "APPROVED"}
+
+
+def _task_span(t: dict) -> tuple[datetime, datetime] | None:
+    m = _CODE_START_RE.search(t.get("sample_code") or "")
+    dur = t.get("video_duration_sec")
+    if not m or not dur:
+        return None
+    try:
+        st = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    return st, st + timedelta(seconds=float(dur))
+
+
+def _task_reviewed(t: dict) -> bool:
+    """这个任务的抓挠有没有人看过：提交 / 通过了，或者里面有抓挠被人确认 / 改过，或者点过「抓挠确认无误」"""
+    return (
+        str(t.get("status") or "").upper() in _REVIEWED_STATUSES
+        or (t.get("confirmed") or 0) > 0
+        or (t.get("relabeled") or 0) > 0
+        or bool(t.get("scratch_checked_by"))
+    )
+
+
+def scratch_review_summary(tasks: list[dict], ai_events: list, ai_stats: dict | None, human_stats: dict | None) -> dict:
+    """
+    「人工审核的抓挠」那一列要的数：人工版的次数 / 时长，人看过的是哪几个小时，
+    以及同样这几个小时里 AI 报了几次（同一段时间比，才看得出 AI 多报 / 漏报多少）。
+
+    人工版次数来自上次「重新拉取」存下的人工版日统计（跟 C 值同一口径）；
+    看过几小时、同时段 AI 几次是按任务现在的状态算的。一只狗两个项圈轮换时，
+    同一小时两个任务看的是同一段视频，按时间取并集，不重复算。
+    """
+    spans = sorted(sp for t in tasks if _task_reviewed(t) for sp in [_task_span(t)] if sp)
+    merged: list[list[datetime]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    reviewed_s = sum((b - a).total_seconds() for a, b in merged)
+
+    def _in_reviewed(ev) -> bool:
+        try:
+            t0 = datetime.strptime(str(ev[0])[:19], "%Y-%m-%d %H:%M:%S")
+        except (ValueError, IndexError, TypeError):
+            return False
+        return any(a <= t0 < b for a, b in merged)
+
+    ai_events = ai_events or []
+    return {
+        "human_count": (human_stats or {}).get("event_count") if human_stats else None,
+        "human_duration_min": (human_stats or {}).get("total_duration_min") if human_stats else None,
+        "reviewed_hours": round(reviewed_s / 3600, 1),
+        "reviewed_tasks": sum(1 for t in tasks if _task_reviewed(t)),
+        "total_tasks": len(tasks),
+        "ai_count": (ai_stats or {}).get("event_count") if ai_stats else None,
+        "ai_count_in_reviewed": sum(1 for ev in ai_events if _in_reviewed(ev)) if merged else 0,
+    }
 
 
 def _loads(raw: str | None):
@@ -411,7 +474,9 @@ async def daily_tracking(
     imu_dog_map = imu_dog_map or {}
 
     # 先把 (日期, IMU) 的两份 C 值合到一起
-    merged: dict[tuple[str, str], dict] = defaultdict(lambda: {"ai": None, "human": None, "stats": {}, "devices": None})
+    merged: dict[tuple[str, str], dict] = defaultdict(
+        lambda: {"ai": None, "human": None, "stats": {}, "devices": None, "stats_by": {}, "ai_events": []}
+    )
     for s in stats:
         key = (s.stat_date.isoformat(), s.imu)
         merged[key][s.source] = {
@@ -430,6 +495,13 @@ async def daily_tracking(
                 merged[key]["stats"] = json.loads(s.stats)
             except ValueError:
                 pass
+        # AI 版、人工版的日统计各留一份：跟踪表要把两版的抓挠次数并排摆
+        try:
+            merged[key]["stats_by"][s.source] = json.loads(s.stats) if s.stats else None
+        except ValueError:
+            merged[key]["stats_by"][s.source] = None
+        if s.source == "ai":
+            merged[key]["ai_events"] = _loads(s.events) or []
 
     async def _s_total(c_value, c_tier, answers: dict | None) -> dict | None:
         payload = {"c_value": c_value, "c_tier_hint": c_tier}
@@ -499,6 +571,12 @@ async def daily_tracking(
             "q_score": rec.q_score if rec else None,
             "filler": rec.filler if rec else None,
             "tasks_detail": [t for p in parts for t in tasks_by_key.get((day, p), [])],
+            # 抓挠次数分两版摆：AI 预测的、人工审核过的（附看过几小时、同时段 AI 报了几次）
+            "scratch_ai": m["stats_by"].get("ai"),
+            "scratch_review": scratch_review_summary(
+                [t for p in parts for t in tasks_by_key.get((day, p), [])],
+                m["ai_events"], m["stats_by"].get("ai"), m["stats_by"].get("human"),
+            ),
             "photo_count": photo_n,
             # NAS 上实际的目录名，前端弹窗按它去筛图（可能跟 PM 的狗名不一样）
             "photo_dog": photo_dog,

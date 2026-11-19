@@ -1104,18 +1104,64 @@ function TrackingTab(p: { opts: SkinOptions; onGotoQ: (date: string, dog: string
             },
           },
           {
-            title: "抓挠 次数/时长",
+            title: "AI 抓挠 次数/时长",
             key: "scratch",
             width: 108,
             sorter: (a: TrackingRow, b: TrackingRow) =>
-              ((a.stats?.event_count as number) ?? 0) - ((b.stats?.event_count as number) ?? 0),
+              (((a.scratch_ai ?? a.stats)?.event_count as number) ?? 0) - (((b.scratch_ai ?? b.stats)?.event_count as number) ?? 0),
             render: (_: unknown, r: TrackingRow) => {
-              const n = r.stats?.event_count as number | undefined;
-              const m = r.stats?.total_duration_min as number | undefined;
+              const st = r.scratch_ai ?? r.stats;
+              const n = st?.event_count as number | undefined;
+              const m = st?.total_duration_min as number | undefined;
               if (n == null) return "—";
               return (
                 <Tooltip {...EXPLAIN_TOOLTIP} title={<ScratchExplain r={r} />}>
                   <span>{`${n} 次 / ${fmt(m, 1)} 分`}</span>
+                </Tooltip>
+              );
+            },
+          },
+          {
+            // 抓挠模型还在提升，AI 次数不能直接拿去回答兽医「这只狗一天抓几次」。
+            // 这一列是人看视频定下来的数，并标明人看了几小时、同样这几小时 AI 报了几次
+            title: "人工审核 抓挠",
+            key: "scratch_human",
+            width: 132,
+            sorter: (a: TrackingRow, b: TrackingRow) =>
+              (a.scratch_review?.human_count ?? -1) - (b.scratch_review?.human_count ?? -1),
+            render: (_: unknown, r: TrackingRow) => {
+              const v = r.scratch_review;
+              if (!v || (!v.reviewed_hours && v.human_count == null)) {
+                return (
+                  <Tooltip title="这天还没有人审核过（没有提交 / 通过的任务），只有 AI 的数">
+                    <Typography.Text type="secondary">未审核</Typography.Text>
+                  </Tooltip>
+                );
+              }
+              const wear = r.stats?.valid_wear_hours as number | undefined;
+              const partial = wear != null && v.reviewed_hours < wear * 0.9;
+              return (
+                <Tooltip
+                  {...EXPLAIN_TOOLTIP}
+                  title={
+                    <div style={{ fontSize: 12 }}>
+                      <div>人工审核：{v.human_count ?? "—"} 次 / {fmt(v.human_duration_min, 1)} 分钟（人看视频定下来的抓挠，「待定」的不算）</div>
+                      <div>人看过 {v.reviewed_hours} 小时（{v.reviewed_tasks}/{v.total_tasks} 个任务已提交或已通过）{wear != null ? `，当天有效佩戴 ${fmt(wear, 1)} 小时` : ""}</div>
+                      <div>同样这 {v.reviewed_hours} 小时里 AI 报了 {v.ai_count_in_reviewed} 次（全天 AI {v.ai_count ?? "—"} 次）</div>
+                      {partial && <div style={{ color: "#faad14" }}>只审了一部分时间：没审的那几小时不在人工次数里，全天真实次数会比这个多</div>}
+                      <div style={{ color: "#999" }}>人工次数取自上次「重新拉取」，之后新提交的任务要再拉一次才算进来</div>
+                    </div>
+                  }
+                >
+                  <div>
+                    <Space size={2} wrap>
+                      <b>{`${v.human_count ?? "—"} 次 / ${fmt(v.human_duration_min, 1)} 分`}</b>
+                      {partial && <Tag color="orange">部分</Tag>}
+                    </Space>
+                    <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>
+                      审 {v.reviewed_hours}h · 同时段 AI {v.ai_count_in_reviewed}
+                    </div>
+                  </div>
                 </Tooltip>
               );
             },

@@ -189,6 +189,18 @@ export interface TrackingRow {
   /** 两个项圈合成一行时：每个设备戴了多久、哪几段 */
   devices?: { imu: string; worn_s: number; spans: [string, string][] }[] | null;
   stats: Record<string, number | string | boolean | null>;
+  /** AI 版日统计（模型预测的抓挠） */
+  scratch_ai?: Record<string, number | string | boolean | null> | null;
+  /** 人工审核过的抓挠：人工版次数 / 时长、人看过几小时、同样这几小时 AI 报了几次 */
+  scratch_review?: {
+    human_count: number | null;
+    human_duration_min: number | null;
+    reviewed_hours: number;
+    reviewed_tasks: number;
+    total_tasks: number;
+    ai_count: number | null;
+    ai_count_in_reviewed: number;
+  } | null;
   baseline_count: number | null;
   baseline_duration_min: number | null;
   n_baseline_days: number | null;
