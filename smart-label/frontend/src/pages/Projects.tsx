@@ -76,7 +76,6 @@ import {
   reopenTask,
 } from "@/api/tasks";
 import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
-import { fmtSecs } from "@/utils/fmtDuration";
 import { poolSummary } from "@/api/dataPool";
 import { defaultTemplateId } from "@/utils/defaultTemplate";
 import { usePersistedSort } from "@/utils/persistedSort";
@@ -206,6 +205,22 @@ export default function Projects() {
     const rows = (poolSum?.by_root ?? []).filter((b) => names.has(b.name));
     return { n: rows.reduce((a, b) => a + b.n, 0), hours: rows.reduce((a, b) => a + b.hours, 0) };
   };
+  /** 时长的紧凑写法：1天2时 / 3时38分 / 45秒。别让人拿分钟数去心算 */
+  const fmtDur = (sec: number) => {
+    let t = Math.max(0, Math.round(sec));
+    const out: string[] = [];
+    for (const [unit, name] of [[86400, "天"], [3600, "时"], [60, "分"], [1, "秒"]] as const) {
+      const v = Math.floor(t / unit);
+      t -= v * unit;
+      if (v) out.push(`${v}${name}`);
+      if (out.length === 2) break;
+    }
+    return out.join("") || "0";
+  };
+  // 下拉里的条子按同一组里最长的那一类归一（抓挠快 12 小时，跟负例放一起比，负例全成一条线了）
+  const groupMax = (neg: boolean) => Math.max(1, ...(focus?.options ?? [])
+    .filter((o) => !!o.neg === neg)
+    .map((o) => poolStat(o.labels ?? [o.name]).hours * 3600));
   const isFocusLabel = (l: { display_name: string; code?: string | null }) =>
     focusLabels.includes(l.display_name) || (!!l.code && focusLabels.includes(l.code));
   const { data: scratchReview } = useQuery({
@@ -1478,20 +1493,33 @@ export default function Projects() {
                   const opt = (o: (typeof all)[number]) => ({ value: o.key, label: o.title ?? o.name, title: o.hint, neg: !!o.neg, name: o.name, labels: o.labels });
                   return [
                     { label: "正样本", options: all.filter((o) => !o.neg).map(opt) },
-                    { label: "负例（容易被判成抓挠，补了压误报）", options: all.filter((o) => o.neg).map(opt) },
+                    { label: "负例（压抓挠误报）", options: all.filter((o) => o.neg).map(opt) },
                   ];
                 })()}
                 optionRender={(o) => {
                   const d = o.data as { title?: string; neg?: boolean; name?: string; labels?: string[] };
                   const st = poolStat(d.labels ?? (d.name ? [d.name] : []));
+                  const sec = st.hours * 3600;
                   return (
-                    <div style={{ maxWidth: 440, whiteSpace: "normal" }}>
-                      {d.neg && <Tag color="red" style={{ marginRight: 6 }}>负例</Tag>}
-                      <b>{d.name}</b>
-                      <span style={{ marginLeft: 8, fontSize: 12, color: poolSum && st.n === 0 ? "#cf1322" : "var(--sl-text2)" }}>
-                        {poolSum ? `数据池 ${st.n} 段 · ${fmtSecs(st.hours * 3600)}` : "数据池 统计中…"}
-                      </span>
-                      <div style={{ fontSize: 12, color: "var(--sl-text2)" }}>{d.title}</div>
+                    <div style={{ minWidth: 300 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {d.neg && <Tag color="red" style={{ marginRight: 0 }}>负例</Tag>}
+                        <b>{d.name}</b>
+                        <span style={{ marginLeft: "auto", fontSize: 12, color: poolSum && st.n === 0 ? "#cf1322" : "var(--sl-text2)" }}>
+                          {poolSum ? `${st.n} 段 · ${fmtDur(sec)}` : "…"}
+                        </span>
+                      </div>
+                      {/* 条子长度 = 数据池里这一类的总时长，跟同组里最长的那类比；有一点点就至少画一小截 */}
+                      <div style={{ height: 5, borderRadius: 3, background: "rgba(128,128,128,.16)", margin: "4px 0" }}>
+                        <div style={{
+                          width: `${poolSum ? (st.n ? Math.max(1.5, Math.min(100, (sec / groupMax(!!d.neg)) * 100)) : 0) : 0}%`,
+                          height: "100%", borderRadius: 3,
+                          background: d.neg ? "#ff7875" : "#4096ff", transition: "width .2s",
+                        }} />
+                      </div>
+                      <div title={d.title} style={{ fontSize: 11, color: "var(--sl-text2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {d.title}
+                      </div>
                     </div>
                   );
                 }}
