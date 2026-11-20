@@ -8,6 +8,7 @@ import {
   Empty,
   Modal,
   Popconfirm,
+  Popover,
   Collapse,
   Segmented,
   Space,
@@ -831,8 +832,10 @@ export default function AnnotationWorkspace({
   // 人工标注模式（按项目记在本机）：AI 片段先藏起来，从零自己标；在片段列表里选类别就把那几类的 AI 片段拿出来参考
   const manualKey = task?.project_id != null ? `smart-label:manual-mode:${task.project_id}` : null;
   const [manualMode, setManualModeState] = useState(false);
-  // 类别一排能占两三行（行为/运动/姿态/设备），默认收起，只留当前选中那个
+  // 类别一排能占两三行（行为/运动/姿态/设备），默认收起，只留当前选中那个；点「类别」向上弹出
   const [labelsOpen, setLabelsOpen] = useState(false);
+  // 先拉片段再选类别：在波形上拖出来的起止先挂在这儿，等类别按钮点了才真正建段
+  const [pendingSpan, setPendingSpan] = useState<{ startMs: number; endMs: number } | null>(null);
   useEffect(() => {
     try { setManualModeState(manualKey ? localStorage.getItem(manualKey) === "1" : false); } catch { setManualModeState(false); }
   }, [manualKey]);
@@ -895,6 +898,23 @@ export default function AnnotationWorkspace({
       },
     ]);
   };
+
+  // 先拉后选：类别点下去时，把刚才拉出来的那段按这个类别建好。
+  // 没有待建的就返回 false，让调用方按原来的方式切换类别
+  const commitPendingSpan = (forLabel: number) => {
+    const span = pendingSpan;
+    if (!span) return false;
+    setPendingSpan(null);
+    appendItem(span.startMs, span.endMs, forLabel);
+    message.success({
+      content: `已标 ${nameOf(forLabel)} ${formatMs(span.startMs)} ~ ${formatMs(span.endMs)}`,
+      key: "mark",
+    });
+    return true;
+  };
+  // 键盘选类别（数字键）在 window 上监听，闭包拿不到最新的 pendingSpan，用 ref 过渡
+  const commitPendingRef = useRef(commitPendingSpan);
+  commitPendingRef.current = commitPendingSpan;
 
   // 人工改了 AI 片段的类别/起止：本地立刻标成"已纠正"并清掉确认，跟后端
   // save_draft 的判定一致，不用等保存后重新拉一遍才变
@@ -1391,10 +1411,16 @@ export default function AnnotationWorkspace({
     setItems((prev) => prev.map((it) => (set.has(it.id) ? touchItem(it, patch) : it)));
   };
 
-  // 在波形上直接拖出来一段（参考工具的主要标注方式）
+  // 在波形上直接拖出来一段（参考工具的主要标注方式）。
+  // label-studio 式：没选类别也能先拖，拖完向上弹类别，选完才落段
   const handleCreateFromChart = (startMs: number, endMs: number) => {
-    if (labelId == null) return;
-    appendItem(startMs, endMs, labelId);
+    if (labelId != null) {
+      appendItem(startMs, endMs, labelId);
+      return;
+    }
+    setPendingSpan({ startMs: Math.round(startMs), endMs: Math.round(endMs) });
+    setLabelsOpen(true);
+    setMarkStartMs(null);
   };
 
   // 拖已有色块的左右边缘改时间
@@ -1506,13 +1532,14 @@ export default function AnnotationWorkspace({
   };
   const markAt = (which: "start" | "end") => {
     const now = Math.round(curSecRef.current * 1000);
-    if (labelId == null) {
-      message.info({ content: "先选一个标签（点下面的标签按钮或按数字键），再标起点", key: "mark" });
-      return;
-    }
     if (which === "start" || markStartMs == null) {
       setMarkStartMs(now);
-      message.info({ content: `起点 ${fmtMs(now)}，看到结束时按 ] 或点「标终点」`, key: "mark" });
+      message.info({
+        content: labelId == null
+          ? `起点 ${fmtMs(now)}，看到结束时按 ]，再选类别`
+          : `起点 ${fmtMs(now)}，看到结束时按 ] 或点「标终点」`,
+        key: "mark",
+      });
       return;
     }
     const a = Math.min(markStartMs, now), b = Math.max(markStartMs, now);
@@ -1520,8 +1547,15 @@ export default function AnnotationWorkspace({
       message.info({ content: "起止太近（不到 0.2 秒），没建", key: "mark" });
       return;
     }
-    appendItem(a, b, labelId);
     setMarkStartMs(null);
+    if (labelId == null) {
+      // 先拉后选：区间先挂起，类别弹窗里点一下再建
+      setPendingSpan({ startMs: a, endMs: b });
+      setLabelsOpen(true);
+      message.info({ content: `片段 ${fmtMs(a)} ~ ${fmtMs(b)}，选个类别就建好`, key: "mark" });
+      return;
+    }
+    appendItem(a, b, labelId);
     message.success({ content: `已标 ${nameOf(labelId)} ${fmtMs(a)} ~ ${fmtMs(b)}`, key: "mark" });
   };
   const markAtRef = useRef(markAt);
@@ -1815,9 +1849,11 @@ export default function AnnotationWorkspace({
       if (!canCreate) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
-        // 取消选中 -> 回到拖动平移模式；正在边播边标的也一起取消
+        // 取消选中 -> 回到拖动平移模式；正在边播边标的也一起取消，拉了一半的也丢掉
         setLabelId(null);
         setMarkStartMs(null);
+        setPendingSpan(null);
+        setLabelsOpen(false);
         return;
       }
       if (e.key === "[" || e.key === "]") {
@@ -1831,6 +1867,11 @@ export default function AnnotationWorkspace({
         if (idx < 0 || idx >= labelRows[r].items.length) continue;
         e.preventDefault();
         const id = labelRows[r].items[idx].id;
+        // 刚拉出来一段还没选类别：这一下是给它选类别
+        if (commitPendingRef.current(id)) {
+          setLabelsOpen(false);
+          return;
+        }
         // 再按一次同一个键就取消选中，跟点按钮的行为一致
         setLabelId((prev) => (prev === id ? null : id));
         return;
@@ -1910,6 +1951,79 @@ export default function AnnotationWorkspace({
     );
   };
 
+  // 类别选择往上弹：不再把下面的波形挤出一块；换个类别 / 先拉片段再选都从这里点
+  const labelPicker = (
+    <div style={{ maxWidth: 620, maxHeight: 300, overflow: "auto" }}>
+      {pendingSpan && (
+        <div style={{ marginBottom: 8, color: "#888", fontSize: 12 }}>
+          已拉出 {formatMs(pendingSpan.startMs)} ~ {formatMs(pendingSpan.endMs)}，点下面类别就建好
+        </div>
+      )}
+      <Space wrap size={6}>
+        {labelRows.map((row, r) => (
+          <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {row.parent && (
+              <Tooltip title={`「${row.parent.display_name}」的子类。看得清就选具体的；看不清停在上级也行，标了细的自动算进上级`}>
+                <span style={{ color: "#999", fontSize: 12, marginLeft: r > 1 ? 8 : 0 }}>
+                  {shortName(labelById, row.parent)} ›
+                </span>
+              </Tooltip>
+            )}
+            {row.items.map((l, i) => {
+              const selected = labelId === l.id;
+              const onPath = !selected && selectedChain.has(l.id);
+              const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
+              const kids = (labelChildren.get(l.id) ?? []).length;
+              // 第一行：换到另一条互斥轨时插一个灰字组头（同轨互斥、跨轨可以同时标）
+              const t = row.parent ? "" : trackOf(labelById, l.id);
+              const prevT = row.parent || i === 0 ? null : trackOf(labelById, row.items[i - 1].id);
+              const head = !row.parent && usedTracks.length > 1 && t && t !== prevT ? (
+                <Tooltip key={`t:${t}`} title={`${TRACKS.find((x) => x.key === t)?.hint ?? ""}。同一轨的标签时间上互斥；不同轨的可以同时标（卧着 + 静止 + 舔前爪）`}>
+                  <span style={{ color: "#999", fontSize: 12, marginLeft: i ? 10 : 0, borderLeft: i ? "1px solid #ddd" : undefined, paddingLeft: i ? 8 : 0 }}>
+                    {TRACK_NAME[t]} ·
+                  </span>
+                </Tooltip>
+              ) : null;
+              return (
+                <Fragment key={l.id}>
+                {head}
+                <Button
+                  size="small"
+                  onClick={() => {
+                    // 拖着一段还没选类别：这次点击是给那段选类别，不是切换"下一个要标的类别"
+                    if (commitPendingSpan(l.id)) {
+                      setLabelsOpen(false);
+                      return;
+                    }
+                    setLabelId(selected ? null : l.id);
+                    setLabelsOpen(false);
+                  }}
+                  style={{
+                    borderColor: c,
+                    color: selected ? "#fff" : c,
+                    background: selected ? c : tk.colorBgContainer,
+                    fontWeight: selected || onPath ? 600 : 400,
+                    boxShadow: onPath ? `inset 0 0 0 1px ${c}` : undefined,
+                  }}
+                >
+                  {row.parent ? shortName(labelById, l) : l.display_name}
+                  {kids > 0 && <span style={{ marginLeft: 3, opacity: 0.6, fontSize: 10 }}>▾</span>}
+                  {i < ROW_KEYS[r].length && (
+                    <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{ROW_KEYS[r][i]}</span>
+                  )}
+                </Button>
+                </Fragment>
+              );
+            })}
+          </span>
+        ))}
+        {labels.length === 0 && (
+          <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
+        )}
+      </Space>
+    </div>
+  );
+
   const imuItem = {
   key: "imu",
   label: (
@@ -1923,7 +2037,7 @@ export default function AnnotationWorkspace({
         IMU 波形
       </span>
       {hasCsv && labels.length > 0 && (canCreate || roCreateAllowed) && (
-        <Tooltip title="从零标注：AI 片段全部藏起来（波形和列表都不显示），只留人工标过的。选好类别后在波形上拖一段就建好；边播边标按 [ 开始、] 结束">
+        <Tooltip title="从零标注：AI 片段全部藏起来（波形和列表都不显示），只留人工标过的。在波形上拖一段，松手后选类别就建好；边播边标按 [ 开始、] 结束">
           <Button
             size="small"
             type={manualMode ? "primary" : "default"}
@@ -1933,7 +2047,7 @@ export default function AnnotationWorkspace({
               setManualMode(next);
               // 查看模式下顺手打开新建：不然 AI 藏起来了却标不了
               if (next && roCreateAllowed && !roCreate) setRoCreate(true);
-              if (next) message.info({ content: "从零标注：AI 片段已隐藏，选好类别直接在波形上拖一段", key: "manual-mode" });
+              if (next) message.info({ content: "从零标注：AI 片段已隐藏，在波形上拖一段，松手后选类别", key: "manual-mode" });
             }}
           >
             从零标注
@@ -1942,9 +2056,20 @@ export default function AnnotationWorkspace({
       )}
       {canCreate && labels.length > 0 && (
         <>
-          <Button size="small" type="link" style={{ padding: "0 2px" }} onClick={() => setLabelsOpen((v) => !v)}>
-            {labelsOpen ? "收起类别" : "类别 ▾"}
-          </Button>
+          <Popover
+            open={labelsOpen}
+            onOpenChange={(o) => {
+              // 没选类别就关掉弹窗 = 放弃这段，别留个半成品挂着
+              if (!o) setPendingSpan(null);
+              setLabelsOpen(o);
+            }}
+            trigger="click"
+            placement="topLeft"
+            arrow={false}
+            content={labelPicker}
+          >
+            <Button size="small" type="link" style={{ padding: "0 2px" }}>类别 ▾</Button>
+          </Popover>
           {!labelsOpen && labelId != null && (
             <Tooltip title={chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}>
               <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
@@ -1953,7 +2078,7 @@ export default function AnnotationWorkspace({
             </Tooltip>
           )}
           <Tooltip title={markStartMs == null
-            ? "边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消"
+            ? "边播边标：播放 → 动作开始时按 [（或点这里）→ 结束时按 ]，再选类别。比在波形上拖准，也不用停下来。Esc 取消"
             : `起点现在 ${fmtMs(markStartMs)}，点一下按当前播放位置重标`}>
             <Button size="small" danger={markStartMs != null} onClick={() => markAt("start")}>
               {markStartMs == null ? "起点 [" : "重标起点"}
@@ -1962,8 +2087,9 @@ export default function AnnotationWorkspace({
           <Button size="small" disabled={markStartMs == null} onClick={() => markAt("end")}>终点 ]</Button>
           <Tooltip title={<div style={{ maxWidth: 340, whiteSpace: "normal" }}>
             {readOnly && <>查看模式下新建：每标一段直接存库、算你通过（不用认领）。<br /></>}
-            {manualMode ? "从零标注：AI 片段已隐藏。选好类别在波形上拖一段就建好；" : "选好类别后，在波形上拖一段就建好；"}
-            边播边标按 [ 开始、] 结束。
+            {manualMode ? "从零标注：AI 片段已隐藏。" : ""}
+            在波形空白处拖一段，松手后「类别」弹窗里点一下就建好；边播边标按 [ 开始、] 结束。
+            拖已有片段 = 挪整段 / 改起止。
           </div>}>
             <QuestionCircleOutlined style={{ color: "#999" }} />
           </Tooltip>
@@ -2058,6 +2184,7 @@ export default function AnnotationWorkspace({
               key={chartExpanded ? "expanded" : "single"}
               segments={segments}
               activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
+              pendingSegment={pendingSpan}
               onCreateSegment={canCreate ? handleCreateFromChart : undefined}
               onResizeSegment={readOnly ? undefined : handleResizeFromChart}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
@@ -2917,62 +3044,9 @@ export default function AnnotationWorkspace({
             )}
           </div>
         )}
-        {/* 类别展开了才占这一块；标注员这边还有 AI 预标注 / 模型，单独留着别跟着收起 */}
-        {canCreate && (labelsOpen || labels.length === 0 || !readOnly) && (
+        {canCreate && !readOnly && (
           <div style={{ margin: "12px 0", padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
             <Space wrap size={6} style={{ marginBottom: 8 }}>
-              {labelsOpen && labelRows.map((row, r) => (
-                <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  {row.parent && (
-                    <Tooltip title={`「${row.parent.display_name}」的子类。看得清就选具体的；看不清停在上级也行，标了细的自动算进上级`}>
-                      <span style={{ color: "#999", fontSize: 12, marginLeft: r > 1 ? 8 : 0 }}>
-                        {shortName(labelById, row.parent)} ›
-                      </span>
-                    </Tooltip>
-                  )}
-                  {row.items.map((l, i) => {
-                    const selected = labelId === l.id;
-                    const onPath = !selected && selectedChain.has(l.id);
-                    const c = l.color || FALLBACK_COLORS[l.id % FALLBACK_COLORS.length];
-                    const kids = (labelChildren.get(l.id) ?? []).length;
-                    // 第一行：换到另一条互斥轨时插一个灰字组头（同轨互斥、跨轨可以同时标）
-                    const t = row.parent ? "" : trackOf(labelById, l.id);
-                    const prevT = row.parent || i === 0 ? null : trackOf(labelById, row.items[i - 1].id);
-                    const head = !row.parent && usedTracks.length > 1 && t && t !== prevT ? (
-                      <Tooltip key={`t:${t}`} title={`${TRACKS.find((x) => x.key === t)?.hint ?? ""}。同一轨的标签时间上互斥；不同轨的可以同时标（卧着 + 静止 + 舔前爪）`}>
-                        <span style={{ color: "#999", fontSize: 12, marginLeft: i ? 10 : 0, borderLeft: i ? "1px solid #ddd" : undefined, paddingLeft: i ? 8 : 0 }}>
-                          {TRACK_NAME[t]} ·
-                        </span>
-                      </Tooltip>
-                    ) : null;
-                    return (
-                      <Fragment key={l.id}>
-                      {head}
-                      <Button
-                        size="small"
-                        onClick={() => setLabelId(selected ? null : l.id)}
-                        style={{
-                          borderColor: c,
-                          color: selected ? "#fff" : c,
-                          background: selected ? c : tk.colorBgContainer,
-                          fontWeight: selected || onPath ? 600 : 400,
-                          boxShadow: onPath ? `inset 0 0 0 1px ${c}` : undefined,
-                        }}
-                      >
-                        {row.parent ? shortName(labelById, l) : l.display_name}
-                        {kids > 0 && <span style={{ marginLeft: 3, opacity: 0.6, fontSize: 10 }}>▾</span>}
-                        {i < ROW_KEYS[r].length && (
-                          <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{ROW_KEYS[r][i]}</span>
-                        )}
-                      </Button>
-                      </Fragment>
-                    );
-                  })}
-                </span>
-              ))}
-            {labels.length === 0 && (
-              <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
-            )}
               {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
                 /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
                    换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */

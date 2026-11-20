@@ -85,9 +85,13 @@ export function ImuChartHint() {
     <Tooltip
       title={
         <div style={{ lineHeight: 1.7 }}>
+          在波形空白处拖一段：先划出片段，再选类别（不用提前选类别）
+          <br />
+          拖已有色块：挪整段；拖左右边缘：改起止
+          <br />
           Shift+滚轮：缩放
           <br />
-          放大后按住拖动：左右平移（整体视图下全部数据已在视野内，无需拖动）
+          放大后 Shift+拖动：左右平移
           <br />
           单击 / 拖动黑色播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
           <br />
@@ -115,6 +119,8 @@ interface Props {
   timeAxisOnlyLast?: boolean;
   /** 选中的标签颜色。传了就进入"在波形上拖拽划区间"模式，不传则拖拽=平移 */
   activeColor?: string | null;
+  /** 先拉片段再选类别：刚拖出来、还没选类别的起止，画成灰色预览等用户点类别 */
+  pendingSegment?: { startMs: number; endMs: number } | null;
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
@@ -133,6 +139,8 @@ interface AnnotateCtx {
   onCreate: ((startMs: number, endMs: number) => void) | null;
   onResize: ((index: number, startMs: number, endMs: number) => void) | null;
   pending: { startMs: number; endMs: number; color: string } | null;
+  /** 松手后还没选类别的片段（工作台挂在这等类别），画成灰色 */
+  preview: { startMs: number; endMs: number } | null;
   redrawAll: () => void;
   /** 鼠标停在哪一段的哪个位置：s / e = 起止边（拖了改时间），move = 色块顶上那条（拖了整段平移），
    *  inside = 只是在色块里（提示顶上能拖）。画高亮和提示字用 */
@@ -159,6 +167,7 @@ export default function ImuChart({
   segments,
   timeAxisOnlyLast,
   activeColor,
+  pendingSegment,
   onCreateSegment,
   onResizeSegment,
   onReadOnlyEdit,
@@ -190,6 +199,7 @@ export default function ImuChart({
     onCreate: null,
     onResize: null,
     pending: null,
+    preview: null,
     redrawAll: () => {},
     hover: null,
     hoverOwner: null,
@@ -199,6 +209,7 @@ export default function ImuChart({
     splitMs: null,
   });
   annotateRef.current.activeColor = activeColor ?? null;
+  annotateRef.current.preview = pendingSegment ?? null;
   annotateRef.current.onCreate = onCreateSegment ?? null;
   annotateRef.current.onResize = onResizeSegment ?? null;
   annotateRef.current.onReadOnlyEdit = onReadOnlyEdit ?? null;
@@ -215,6 +226,12 @@ export default function ImuChart({
     }
     plotRefs.current.forEach((p) => p?.redraw(false));
   }, [segments]);
+
+  // 松手后那段灰色预览（等着选类别）：出现/消失都要立刻重画
+  useEffect(() => {
+    annotateRef.current.preview = pendingSegment ?? null;
+    plotRefs.current.forEach((p) => p?.redraw(false));
+  }, [pendingSegment]);
 
   useEffect(() => {
     let disposed = false;
@@ -548,17 +565,16 @@ function segmentBandPlugin(
       // drawClear 在清空画布之后、画曲线之前触发，所以色块会垫在曲线底下
       drawClear: (u: uPlot) => {
         const pending = annotateRef.current.pending;
-        const segs: ChartSegment[] = pending
-          ? [
-              ...segmentsRef.current,
-              {
-                start_time_ms: pending.startMs,
-                end_time_ms: pending.endMs,
-                color: pending.color,
-                label: "",
-              },
-            ]
-          : segmentsRef.current;
+        const preview = annotateRef.current.preview;
+        const segs: ChartSegment[] = [
+          ...segmentsRef.current,
+          ...(preview
+            ? [{ start_time_ms: preview.startMs, end_time_ms: preview.endMs, color: "#8c8c8c", label: "选类别…" }]
+            : []),
+          ...(pending
+            ? [{ start_time_ms: pending.startMs, end_time_ms: pending.endMs, color: pending.color, label: "" }]
+            : []),
+        ];
         if (!segs.length) return;
         const startEpoch = getStartEpoch();
         const highlight = highlightRef.current;
@@ -866,7 +882,12 @@ function dragPanPlugin(
           const min = u.scales.x.min;
           const max = u.scales.x.max;
           const zoomed = min != null && max != null && max - min < fullRangeWidth() - PAN_EPSILON;
-          over.style.cursor = zoomed ? "grab" : "default";
+          // 能标注时，空白处默认就是"划一段"：光标直接给十字，不用先选类别
+          over.style.cursor = annotateRef.current.onCreate
+            ? "crosshair"
+            : zoomed
+              ? "grab"
+              : "default";
         };
         refreshCursor();
 
@@ -979,7 +1000,8 @@ function dragPanPlugin(
             // 只读：别默默变成平移 / 跳转，说清楚为什么改不了
             annotateRef.current.onReadOnlyEdit?.();
           }
-          if (hit && annotateRef.current.onResize && hit.kind === "move") {
+          if (hit && annotateRef.current.onResize && (hit.kind === "move" || hit.kind === "inside")) {
+            // 落在已有片段上（顶上把手或色块里）：拖 = 挪整段，不去新建一段压上去
             const seg = segmentsRef.current[hit.idx];
             bandDragging = true;
             resizeIdx = -1;
@@ -1033,15 +1055,17 @@ function dragPanPlugin(
             }
           }
 
-          // 选中了标签就是"划区间"模式，跟参考工具一致：选标签 -> 在波形上拖
-          if (annotateRef.current.activeColor && annotateRef.current.onCreate) {
+          // label-studio 式：空白处直接拖就能划一段，先拉片段，再选类别。
+          // 选过类别就按那个颜色画；还没选就先灰色，松手后工作台向上弹类别。
+          // 放大后想平移改用 Shift+拖动（普通拖动优先留给划片段）
+          if (annotateRef.current.onCreate && !hit && !e.shiftKey) {
             bandDragging = true;
             resizeIdx = -1;
             bandAnchorMs = toMs(startRelX);
             annotateRef.current.pending = {
               startMs: bandAnchorMs,
               endMs: bandAnchorMs,
-              color: annotateRef.current.activeColor,
+              color: annotateRef.current.activeColor ?? "#8c8c8c",
             };
             over.style.cursor = "crosshair";
             e.preventDefault();
@@ -1100,9 +1124,9 @@ function dragPanPlugin(
               over.style.cursor = "crosshair";
             } else if (nearPlayhead) {
               over.style.cursor = "ew-resize";
-            } else if (hit && hit.kind !== "inside") {
+            } else if (hit) {
               const ro = !annotateRef.current.onResize;
-              over.style.cursor = ro ? "not-allowed" : hit.kind === "move" ? "grab" : "ew-resize";
+              over.style.cursor = ro ? "not-allowed" : hit.kind === "move" || hit.kind === "inside" ? "grab" : "ew-resize";
             } else {
               refreshCursor();
             }
@@ -1127,7 +1151,7 @@ function dragPanPlugin(
               annotateRef.current.pending = {
                 startMs: Math.min(bandAnchorMs, cur),
                 endMs: Math.max(bandAnchorMs, cur),
-                color: annotateRef.current.activeColor ?? "#1677ff",
+                color: annotateRef.current.activeColor ?? "#8c8c8c",
               };
             }
             annotateRef.current.redrawAll();
