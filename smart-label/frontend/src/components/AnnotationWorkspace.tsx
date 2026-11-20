@@ -10,7 +10,6 @@ import {
   Popconfirm,
   Collapse,
   Segmented,
-  Switch,
   Space,
   Spin,
   Tag,
@@ -19,7 +18,7 @@ import {
   Typography,
   message, Select, Input, InputNumber, Checkbox, Table, theme as antdTheme
 } from "antd";
-import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, DeleteOutlined, DownOutlined, ArrowUpOutlined, EditOutlined, EyeInvisibleOutlined, LinkOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { aiPrelabel, getAiLabelInfo, getSampleMedia, scratchCrosscheck, type AiLabelInfo, type ScratchCross } from "@/api/samples";
 import { getImuMeta } from "@/api/imu";
@@ -844,7 +843,9 @@ export default function AnnotationWorkspace({
       items.map((i) => {
         const t = trackOf(labelById, i.label_id);
         const lane = usedTracks.indexOf(t);
-        const off = chartFilter != null && !chartFilter.has(i.id);
+        const off = (chartFilter != null && !chartFilter.has(i.id))
+          // 从零标注：没人碰过的 AI 片段不画进波形（列表里选了什么筛选都一样），只留人工标的
+          || (manualMode && i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain);
         return {
           start_time_ms: off ? -1e12 : i.start_time_ms,
           end_time_ms: off ? -1e12 : i.end_time_ms,
@@ -853,7 +854,7 @@ export default function AnnotationWorkspace({
           ...(usedTracks.length > 1 && lane >= 0 ? { lane, lanes: usedTracks.length } : {}),
         };
       }),
-    [items, labels, usedTracks, chartFilter]
+    [items, labels, usedTracks, chartFilter, manualMode]
   );
 
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
@@ -1919,6 +1920,24 @@ export default function AnnotationWorkspace({
       <span onClick={() => { const next = !imuOpen; saveBool(IMU_OPEN_KEY, next); setImuOpen(next); }} style={{ cursor: "pointer" }}>
         IMU 波形
       </span>
+      {hasCsv && labels.length > 0 && (canCreate || roCreateAllowed) && (
+        <Tooltip title="从零标注：AI 片段全部藏起来（波形和列表都不显示），只留人工标过的。选好类别后在波形上拖一段就建好；边播边标按 [ 开始、] 结束">
+          <Button
+            size="small"
+            type={manualMode ? "primary" : "default"}
+            icon={<EditOutlined />}
+            onClick={() => {
+              const next = !manualMode;
+              setManualMode(next);
+              // 查看模式下顺手打开新建：不然 AI 藏起来了却标不了
+              if (next && roCreateAllowed && !roCreate) setRoCreate(true);
+              if (next) message.info({ content: "从零标注：AI 片段已隐藏，选好类别直接在波形上拖一段", key: "manual-mode" });
+            }}
+          >
+            从零标注
+          </Button>
+        </Tooltip>
+      )}
       {/* 同一只狗前后一个小时：连着翻，人眼找想要的画面（比如喝水） */}
       {nav && (nav.prev || nav.next) && (
         <Space.Compact size="small">
@@ -2872,6 +2891,11 @@ export default function AnnotationWorkspace({
                   onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>收起</Button>
               </div>
             )}
+            {manualMode && (
+              <div style={{ fontSize: 12, marginBottom: 6, color: "var(--sl-text2)" }}>
+                从零标注中：AI 片段已隐藏。选好类别 → 在波形上按住左键拖一段就建好；边播边标按 <b>[</b> 开始、<b>]</b> 结束。
+              </div>
+            )}
             <Space wrap size={6} style={{ marginBottom: 8 }}>
               {labelRows.map((row, r) => (
                 <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -2938,12 +2962,6 @@ export default function AnnotationWorkspace({
                     ■ 标终点 ]
                   </Button>
                   {labelId == null && <Typography.Text type="secondary" style={{ fontSize: 12 }}>先选标签</Typography.Text>}
-                  <Tooltip title="人工标注模式（这个项目记在本机）：AI 片段先藏起来（列表和波形都不显示），自己从零标，用「标起点 / 标终点」边播边标。想参考 AI：在下面片段列表的「全部类别」里选几类（比如抓挠），那几类的 AI 片段就出来了，对着调位置——比一段段审几百条快">
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
-                      <Switch size="small" checked={manualMode} onChange={setManualMode} />
-                      <span style={{ fontSize: 12 }}>人工标注模式</span>
-                    </span>
-                  </Tooltip>
                 </span>
               )}
               {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
