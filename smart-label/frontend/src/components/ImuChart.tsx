@@ -100,7 +100,7 @@ export function ImuChartHint() {
           <br />
           放大后 Shift+拖动：左右平移
           <br />
-          单击 / 拖动黑色播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
+          单击 / 拖动波形底部那条播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
           <br />
           双击：恢复整体视图
         </div>
@@ -802,29 +802,31 @@ function playheadPlugin(
         if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
         const hovered = hoverRef.current;
         const ctx = u.ctx;
+        // 播放头只画在波形底部这一条（像视频进度条），不竖穿整张图：
+        // 整条线压在色块上时，想拖片段边界经常会误抓住播放头，把片段挪歪
+        const bottom = u.bbox.top + u.bbox.height;
+        const bandTop = bottom - PLAYHEAD_BAND_PX;
         ctx.save();
-        // 鼠标移到可拖拽范围内时线变色变粗、顶端加一个手柄圆点，一眼就能看出
+        // 鼠标移到可拖拽范围内时线变色变粗、底端加一个手柄圆点，一眼就能看出
         // "这条线能拖"，不用先按下去试才知道
         // 先画一圈底色描边再画线：明亮 / 暗黑、压在红色波形上都看得清
         ctx.strokeStyle = ink.halo;
         ctx.lineWidth = (hovered ? 4 : 3) + 4;
         ctx.beginPath();
-        ctx.moveTo(x, u.bbox.top);
-        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+        ctx.moveTo(x, bandTop);
+        ctx.lineTo(x, bottom);
         ctx.stroke();
         ctx.strokeStyle = hovered ? "#1677ff" : ink.line;
         ctx.lineWidth = hovered ? 4 : 3;
         ctx.beginPath();
-        ctx.moveTo(x, u.bbox.top);
-        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+        ctx.moveTo(x, bandTop);
+        ctx.lineTo(x, bottom);
         ctx.stroke();
 
-        if (hovered) {
-          ctx.beginPath();
-          ctx.arc(x, u.bbox.top + 7, 5, 0, Math.PI * 2);
-          ctx.fillStyle = "#1677ff";
-          ctx.fill();
-        }
+        ctx.beginPath();
+        ctx.arc(x, bottom - 5, hovered ? 5 : 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = hovered ? "#1677ff" : ink.line;
+        ctx.fill();
 
         if (showLabel) {
           const label = formatTimestamp(stateRef.current);
@@ -832,11 +834,12 @@ function playheadPlugin(
           const textWidth = ctx.measureText(label).width;
           const nearRightEdge = x + 6 + textWidth > u.bbox.left + u.bbox.width;
           const labelX = nearRightEdge ? x - 6 - textWidth : x + 6;
+          const labelY = Math.max(u.bbox.top + 1, bandTop - 19);
           ctx.fillStyle = ink.halo;
-          ctx.fillRect(labelX - 3, u.bbox.top + 1, textWidth + 6, 16);
+          ctx.fillRect(labelX - 3, labelY, textWidth + 6, 16);
           ctx.fillStyle = ink.line;
           ctx.textBaseline = "top";
-          ctx.fillText(label, labelX, u.bbox.top + 3);
+          ctx.fillText(label, labelX, labelY + 2);
         }
         ctx.restore();
       },
@@ -916,6 +919,9 @@ function segmentHighlightPlugin(
 }
 
 const PLAYHEAD_GRAB_PX = 8;
+// 播放头只占波形最底下这么高的一条（像视频进度条），拖动/悬停的判定也只在
+// 这一条里生效——这样拖片段边界、挪整段时不会被播放头抢走
+const PLAYHEAD_BAND_PX = 22;
 const SEGMENT_EDGE_GRAB_PX = 8; // 色块边缘多少像素内按下算"拖边缘改时间"（原来 5，太难点中）
 const SEGMENT_MOVE_GRIP_PX = 14; // 色块顶上多高一条算"拖动整段"的把手
 const X_AXIS_PX = 30; // 单行时间刻度需要的高度
@@ -1085,6 +1091,26 @@ function dragPanPlugin(
             e.preventDefault();
             return;
           }
+          // 播放头在波形底部那一条里：优先给播放头，避免色块盖满时抓不到它。
+          // 中间整片还是留给片段，拖边界/挪整段不会被抢
+          if (playheadState.current != null) {
+            // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
+            // e.clientX 一样是 CSS 像素坐标（DOM鼠标坐标），所以不能传 true，
+            // 否则在 devicePixelRatio != 1 的屏幕上，附近判定会完全偏掉。
+            const playheadX = u.valToPos(playheadState.current, "x", false);
+            const inBand = e.clientY - over.getBoundingClientRect().top >= over.clientHeight - PLAYHEAD_BAND_PX;
+            if (inBand && Math.abs(playheadX - startRelX) <= PLAYHEAD_GRAB_PX) {
+              seekDragging = true;
+              draggingPlayheadRef.current = true;
+              over.style.cursor = "ew-resize";
+              onClickSeek(u.posToVal(startRelX, "x"));
+              stopAutoScroll();
+              autoScrollRaf = requestAnimationFrame(autoScrollStep);
+              e.preventDefault();
+              return;
+            }
+          }
+
           if (hit && !annotateRef.current.onResize && hit.kind !== "inside") {
             // 只读：别默默变成平移 / 跳转，说清楚为什么改不了
             annotateRef.current.onReadOnlyEdit?.();
@@ -1124,23 +1150,6 @@ function dragPanPlugin(
                 e.preventDefault();
                 return;
               }
-            }
-          }
-
-          if (playheadState.current != null) {
-            // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
-            // e.clientX 一样是 CSS 像素坐标（DOM鼠标坐标），所以不能传 true，
-            // 否则在 devicePixelRatio != 1 的屏幕上，附近判定会完全偏掉。
-            const playheadX = u.valToPos(playheadState.current, "x", false);
-            if (Math.abs(playheadX - startRelX) <= PLAYHEAD_GRAB_PX) {
-              seekDragging = true;
-              draggingPlayheadRef.current = true;
-              over.style.cursor = "ew-resize";
-              onClickSeek(u.posToVal(startRelX, "x"));
-              stopAutoScroll();
-              autoScrollRaf = requestAnimationFrame(autoScrollStep);
-              e.preventDefault();
-              return;
             }
           }
 
@@ -1187,7 +1196,8 @@ function dragPanPlugin(
             let nearPlayhead = false;
             if (playheadState.current != null) {
               const playheadX = u.valToPos(playheadState.current, "x", false);
-              nearPlayhead = Math.abs(playheadX - relX) <= PLAYHEAD_GRAB_PX;
+              const inBand = e.clientY - over.getBoundingClientRect().top >= over.clientHeight - PLAYHEAD_BAND_PX;
+              nearPlayhead = inBand && Math.abs(playheadX - relX) <= PLAYHEAD_GRAB_PX;
             }
             if (nearPlayhead !== playheadHoverRef.current) {
               playheadHoverRef.current = nearPlayhead;
