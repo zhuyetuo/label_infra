@@ -875,7 +875,27 @@ export default function AnnotationWorkspace({
     }));
   }, [items, labelById, chartFilter, manualMode]);
 
+  // 同一轨的两段在时间上不能叠（跨轨叠是正常的，靠分带区分）。
+  // 新建 / 拖起止碰到别的段就提示一下：跟哪一段叠了、叠了多少
+  const warnOverlap = (forLabel: number, startMs: number, endMs: number, excludeId?: number) => {
+    const s = Math.round(Math.max(0, startMs)), e = Math.round(Math.max(0, endMs));
+    const track = trackOf(labelById, forLabel);
+    const hit = items.find(
+      (x) => x.id !== excludeId
+        && trackOf(labelById, x.label_id) === track
+        && x.start_time_ms < e
+        && x.end_time_ms > s
+    );
+    if (!hit) return;
+    const overlap = Math.min(e, hit.end_time_ms) - Math.max(s, hit.start_time_ms);
+    message.warning({
+      content: `和「${nameOf(hit.label_id)}」${formatMs(hit.start_time_ms)} ~ ${formatMs(hit.end_time_ms)} 边界重叠 ${formatMs(overlap)}`,
+      key: "seg-overlap",
+    });
+  };
+
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
+    warnOverlap(forLabel, startMs, endMs);
     if (readOnly) {
       if (!roCreateAllowed || taskId == null) return;
       void (async () => {
@@ -1478,6 +1498,8 @@ export default function AnnotationWorkspace({
   const handleResizeFromChart = (index: number, startMs: number, endMs: number) => {
     const it = items[index];
     const s = Math.round(Math.max(0, startMs)), e = Math.round(Math.max(0, endMs));
+    if (!it) return;
+    warnOverlap(it.label_id, s, e, it.id);
     if (!readOnly) {
       setItems((prev) =>
         prev.map((x, i) => (i === index ? touchItem(x, { start_time_ms: s, end_time_ms: e }) : x))
