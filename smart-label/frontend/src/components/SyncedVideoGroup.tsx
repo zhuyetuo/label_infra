@@ -716,6 +716,61 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
     lead?.addEventListener("seeked", onLeadSeeked);
     cleanups.push(() => lead?.removeEventListener("seeked", onLeadSeeked));
 
+    // 波形上的播放头要贴着画面走。timeupdate 一秒只有四次，画面拉大之后
+    // 这一下一下的跳变看起来就很滞后；播放期间改成逐帧上报（优先用
+    // requestVideoFrameCallback，跟实际呈现的帧对齐；没有就退回 rAF）。
+    let followId: number | null = null;
+    let followKind: "rvfc" | "raf" = "raf";
+    const stopFollow = () => {
+      if (followId == null) return;
+      const lead0 = all()[0];
+      if (followKind === "rvfc" && lead0 && typeof (lead0 as any).cancelVideoFrameCallback === "function") {
+        (lead0 as any).cancelVideoFrameCallback(followId);
+      } else {
+        cancelAnimationFrame(followId);
+      }
+      followId = null;
+    };
+    const followFrame = () => {
+      followId = null;
+      const lead0 = all()[0];
+      if (!lead0 || lead0.paused || lead0.ended) return;
+      bus.reportTime(busOf(lead0));
+      scheduleFollow();
+    };
+    const scheduleFollow = () => {
+      if (followId != null) return;
+      const lead0 = all()[0];
+      if (!lead0 || lead0.paused || lead0.ended) return;
+      if (typeof (lead0 as any).requestVideoFrameCallback === "function") {
+        followKind = "rvfc";
+        followId = (lead0 as any).requestVideoFrameCallback(followFrame);
+      } else {
+        followKind = "raf";
+        followId = requestAnimationFrame(followFrame);
+      }
+    };
+    const startFollow = () => {
+      stopFollow();
+      scheduleFollow();
+    };
+    const onFollowPlay = () => startFollow();
+    const onFollowStop = () => stopFollow();
+    const onFollowSeeked = () => {
+      if (lead && !lead.paused) startFollow();
+    };
+    lead?.addEventListener("play", onFollowPlay);
+    lead?.addEventListener("pause", onFollowStop);
+    lead?.addEventListener("ended", onFollowStop);
+    lead?.addEventListener("seeked", onFollowSeeked);
+    cleanups.push(() => {
+      stopFollow();
+      lead?.removeEventListener("play", onFollowPlay);
+      lead?.removeEventListener("pause", onFollowStop);
+      lead?.removeEventListener("ended", onFollowStop);
+      lead?.removeEventListener("seeked", onFollowSeeked);
+    });
+
     // 播放中定期做漂移校正，以第一路为基准。容差要跟着倍速放大：容差是"视频时间"，
     // 但三路解码器之间的天然抖动是按"真实时间"发生的——倍速越高，同样一段真实时间
     // 里视频时间流逝得越快，天然抖动换算成视频时间也跟着放大，用固定容差会导致
