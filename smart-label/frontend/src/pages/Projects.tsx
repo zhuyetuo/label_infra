@@ -262,7 +262,12 @@ export default function Projects() {
     window.addEventListener("special-cand-changed", onChange);
     return () => window.removeEventListener("special-cand-changed", onChange);
   }, [qc]);
-  const { data: allLabels } = useQuery({ queryKey: ["labels"], queryFn: () => listLabels() });
+  // 标签模板是队友在维护的：切回这个页面就重新拉一次，别让人对着旧标签标
+  const { data: allLabels } = useQuery({
+    queryKey: ["labels"],
+    queryFn: () => listLabels(),
+    refetchOnWindowFocus: true,
+  });
   const { data: samples } = useQuery({ queryKey: ["samples"], queryFn: listSamples, enabled: isAdmin });
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: listUsers, enabled: isAdmin });
   const { data: templates } = useQuery({
@@ -455,6 +460,12 @@ export default function Projects() {
   const [sumFlat, setSumFlatState] = useState(loadSummaryFlat);
   const setSumFlat = (v: boolean) => { setSumFlatState(v); saveSummaryFlat(v); };
   const [workspaceLabels, setWorkspaceLabels] = useState<LabelDefinition[]>([]);
+  // 工作台开着时标签变了（队友加了类别 / 调了层级）：跟着换，别停在打开那一刻的旧标签上
+  useEffect(() => {
+    if (!workspaceTask || !allLabels?.length) return;
+    const fresh = allLabels.filter((l) => l.project_id === workspaceTask.project_id);
+    if (fresh.length) setWorkspaceLabels(fresh);
+  }, [allLabels, workspaceTask]);
 
   const [createForProject, setCreateForProject] = useState<Project | null>(null);
   const [createForm] = Form.useForm();
@@ -1163,6 +1174,11 @@ export default function Projects() {
   const openWorkspace = (task: Task, readOnly: boolean, projectId: number,
     pick?: { labels?: number[]; cands?: string[]; overlap?: boolean; source?: string }, fromRefresh = false) => {
     setWorkspaceLabels(labelsOf(projectId));
+    // 队友可能刚在「标签管理 / 标签模板」里加了类别、改了层级：开工作台时顺手拉一份最新的，
+    // 回来直接覆盖（拿到的是这个项目当前的启用标签，跟列表里看到的一致）
+    listLabels(projectId).then((fresh) => {
+      if (fresh.length) setWorkspaceLabels(fresh);
+    }).catch(() => { /* 拉不到就先用缓存那份，不影响标注 */ });
     setWorkspaceReadOnly(readOnly);
     if (pick) {
       // 点了行里某个类别标签：就看这一类，直接跳到它的第一段。

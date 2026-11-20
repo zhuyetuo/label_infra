@@ -2908,7 +2908,7 @@ export default function AnnotationWorkspace({
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <span style={{ color: "#999", fontSize: 12 }}>当前：</span>
                   <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
-                    {nameOf(labelId)}
+                    {chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}
                   </Tag>
                   <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setLabelId(null)}>清除</Button>
                 </span>
