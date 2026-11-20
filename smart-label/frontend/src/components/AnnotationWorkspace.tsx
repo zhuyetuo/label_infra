@@ -843,24 +843,37 @@ export default function AnnotationWorkspace({
     setManualModeState(v);
     try { if (manualKey) localStorage.setItem(manualKey, v ? "1" : "0"); } catch { /* ignore */ }
   };
-  const segments: ChartSegment[] = useMemo(
-    () =>
-      items.map((i) => {
-        const t = trackOf(labelById, i.label_id);
-        const lane = usedTracks.indexOf(t);
-        const off = (chartFilter != null && !chartFilter.has(i.id))
-          // 从零标注：没人碰过的 AI 片段不画进波形（列表里选了什么筛选都一样），只留人工标的
-          || (manualMode && i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain);
-        return {
-          start_time_ms: off ? -1e12 : i.start_time_ms,
-          end_time_ms: off ? -1e12 : i.end_time_ms,
-          color: colorOf(i.label_id),
-          label: nameOf(i.label_id),
-          ...(usedTracks.length > 1 && lane >= 0 ? { lane, lanes: usedTracks.length } : {}),
-        };
-      }),
-    [items, labels, usedTracks, chartFilter, manualMode]
-  );
+  const segments: ChartSegment[] = useMemo(() => {
+    const rows = items.map((i) => {
+      const t = trackOf(labelById, i.label_id);
+      const off = (chartFilter != null && !chartFilter.has(i.id))
+        // 从零标注：没人碰过的 AI 片段不画进波形（列表里选了什么筛选都一样），只留人工标的
+        || (manualMode && i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain);
+      return { i, t, off };
+    });
+    // 只有当别的轨的片段在时间上真压着这一段时才分带，平时整高显示。
+    // 按"项目里有几条轨"一律分带的话，一段会缩在最上面那一条里，看着像没画完整
+    const alive = rows.map((r, idx) => ({ ...r, idx })).filter((r) => !r.off && r.t);
+    const bands: ({ lane: number; lanes: number } | undefined)[] = new Array(rows.length).fill(undefined);
+    for (const r of alive) {
+      const overlaps = alive.filter(
+        (o) => o.idx !== r.idx
+          && o.t !== r.t
+          && o.i.start_time_ms < r.i.end_time_ms
+          && o.i.end_time_ms > r.i.start_time_ms
+      );
+      if (!overlaps.length) continue;
+      const keys = TRACKS.map((t) => t.key).filter((k) => k === r.t || overlaps.some((o) => o.t === k));
+      bands[r.idx] = { lane: keys.indexOf(r.t!), lanes: keys.length };
+    }
+    return rows.map(({ i, off }, idx) => ({
+      start_time_ms: off ? -1e12 : i.start_time_ms,
+      end_time_ms: off ? -1e12 : i.end_time_ms,
+      color: colorOf(i.label_id),
+      label: nameOf(i.label_id),
+      ...(bands[idx] ?? {}),
+    }));
+  }, [items, labelById, chartFilter, manualMode]);
 
   const appendItem = (startMs: number, endMs: number, forLabel: number) => {
     if (readOnly) {
@@ -1423,15 +1436,38 @@ export default function AnnotationWorkspace({
     setMarkStartMs(null);
   };
 
-  // 拖已有色块的左右边缘改时间
+  // 拖已有色块改时间：整段平移也从这里走（起点终点一起变）。
+  // 可编辑时只改本地，等「保存草稿」一起落；只读但能审（管理员/审核员）的直接调片段接口
   const handleResizeFromChart = (index: number, startMs: number, endMs: number) => {
-    setItems((prev) =>
-      prev.map((it, i) =>
-        i === index
-          ? touchItem(it, { start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)) })
-          : it
-      )
-    );
+    const it = items[index];
+    const s = Math.round(Math.max(0, startMs)), e = Math.round(Math.max(0, endMs));
+    if (!readOnly) {
+      setItems((prev) =>
+        prev.map((x, i) => (i === index ? touchItem(x, { start_time_ms: s, end_time_ms: e }) : x))
+      );
+      return;
+    }
+    if (!it || it.id <= 0 || taskId == null) return;
+    if (segReview && it.id === segReview.itemId) {
+      void (async () => {
+        await segReview.onEdit(s, e);
+        setItems((await getDraft(taskId)).items);
+        showRange({ startMs: s, endMs: e });
+        message.success("起止已保存");
+      })();
+      return;
+    }
+    if (!(segReview ? inGroup(it.id) : canFlag)) return;
+    void (async () => {
+      try {
+        const r = await segEdit(it.id, { start_time_ms: s, end_time_ms: e });
+        savedLocally(it.id, r);
+        showRange({ startMs: s, endMs: e });
+        savedWithUndo(it, r);
+      } catch {
+        /* request 拦截器已经弹了错误 */
+      }
+    })();
   };
 
   // 拆片段：一段从 atMs 处切成两段，类别不变（右半段要换类别就选中它按标签键 / 在列表里改）。
@@ -2186,7 +2222,7 @@ export default function AnnotationWorkspace({
               activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
               pendingSegment={pendingSpan}
               onCreateSegment={canCreate ? handleCreateFromChart : undefined}
-              onResizeSegment={readOnly ? undefined : handleResizeFromChart}
+              onResizeSegment={!readOnly || canFlag || segReview ? handleResizeFromChart : undefined}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
               onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
               onSegmentMenu={(idx, at, x, y) => setSegMenu({ idx, at, x, y })}

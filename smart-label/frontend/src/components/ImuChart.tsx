@@ -511,6 +511,10 @@ function segmentBandPlugin(
             ctx.fillStyle = ro ? "#999" : hseg.color;
             ctx.fillText(text, tx, st + sh / 2 - 6 * dpr);
           } else if (!ro) {
+            // 整块描个边：整段都能按住拖，不是只有顶上那一条把手
+            ctx.strokeStyle = hseg.color;
+            ctx.lineWidth = 1.5 * dpr;
+            ctx.strokeRect(x0, st, Math.max(1, x1 - x0), sh);
             // 顶上那条把手：在色块里就显出来，按住它拖是整段平移
             const grip = Math.min(14 * dpr, sh / 3);
             ctx.globalAlpha = hv.kind === "move" ? 0.85 : 0.45;
