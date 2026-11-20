@@ -76,6 +76,8 @@ import {
   reopenTask,
 } from "@/api/tasks";
 import { getSavedBool, getSavedText, saveBool, saveText } from "@/utils/persistedSize";
+import { fmtSecs } from "@/utils/fmtDuration";
+import { poolSummary } from "@/api/dataPool";
 import { defaultTemplateId } from "@/utils/defaultTemplate";
 import { usePersistedSort } from "@/utils/persistedSort";
 import { useResizableColumns } from "@/utils/resizableColumns";
@@ -188,6 +190,22 @@ export default function Projects() {
   const focusLabels = focus?.labels ?? ["抓挠"];
   // 负例显示成「负例·舔」：一眼知道现在补的是负例、是哪一类
   const focusName = focus?.title ?? focus?.name ?? "抓挠";
+  // 下拉里每一类标出数据池现在有多少：负例哪一类太少一眼看出来，先补最缺的。
+  // 池子统计要扫全库，等下拉打开再拉（平时不占请求），拿到后 5 分钟内复用
+  const [focusOpen, setFocusOpen] = useState(false);
+  const { data: poolSum } = useQuery({
+    queryKey: ["data-pool", "summary", "focus-stats"],
+    queryFn: () => poolSummary({}),
+    enabled: focusOpen,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  /** 这一类在数据池里有多少段、多长。labels 是同一类的新旧名字（舔 / 舔身体），按根类别合起来算 */
+  const poolStat = (labels: string[]) => {
+    const names = new Set(labels);
+    const rows = (poolSum?.by_root ?? []).filter((b) => names.has(b.name));
+    return { n: rows.reduce((a, b) => a + b.n, 0), hours: rows.reduce((a, b) => a + b.hours, 0) };
+  };
   const isFocusLabel = (l: { display_name: string; code?: string | null }) =>
     focusLabels.includes(l.display_name) || (!!l.code && focusLabels.includes(l.code));
   const { data: scratchReview } = useQuery({
@@ -1454,20 +1472,25 @@ export default function Projects() {
                 popupMatchSelectWidth={false}
                 value={focus?.key ?? "scratch"}
                 style={{ width: 130 }}
+                onDropdownVisibleChange={(o) => o && setFocusOpen(true)}
                 options={(() => {
                   const all = focus?.options ?? [{ key: "scratch", name: "抓挠", title: "抓挠", neg: false, labels: ["抓挠"], hint: "" }];
-                  const opt = (o: (typeof all)[number]) => ({ value: o.key, label: o.title ?? o.name, title: o.hint, neg: !!o.neg, name: o.name });
+                  const opt = (o: (typeof all)[number]) => ({ value: o.key, label: o.title ?? o.name, title: o.hint, neg: !!o.neg, name: o.name, labels: o.labels });
                   return [
                     { label: "正样本", options: all.filter((o) => !o.neg).map(opt) },
                     { label: "负例（容易被判成抓挠，补了压误报）", options: all.filter((o) => o.neg).map(opt) },
                   ];
                 })()}
                 optionRender={(o) => {
-                  const d = o.data as { title?: string; neg?: boolean; name?: string };
+                  const d = o.data as { title?: string; neg?: boolean; name?: string; labels?: string[] };
+                  const st = poolStat(d.labels ?? (d.name ? [d.name] : []));
                   return (
                     <div style={{ maxWidth: 440, whiteSpace: "normal" }}>
                       {d.neg && <Tag color="red" style={{ marginRight: 6 }}>负例</Tag>}
                       <b>{d.name}</b>
+                      <span style={{ marginLeft: 8, fontSize: 12, color: poolSum && st.n === 0 ? "#cf1322" : "var(--sl-text2)" }}>
+                        {poolSum ? `数据池 ${st.n} 段 · ${fmtSecs(st.hours * 3600)}` : "数据池 统计中…"}
+                      </span>
                       <div style={{ fontSize: 12, color: "var(--sl-text2)" }}>{d.title}</div>
                     </div>
                   );
