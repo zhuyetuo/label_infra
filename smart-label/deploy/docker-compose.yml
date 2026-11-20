@@ -164,6 +164,9 @@ services:
       - api
     ports:
       - "${FRONTEND_PORT:-8284}:8284"
+      # 视频流单独一个端口：同源 6 个连接都被循环播放的视频占着时，接口请求会排队。
+      # 见 frontend/nginx/default.conf 里 8285 那个 server（前端 media.ts 也跟着走这个端口）
+      - "${MEDIA_PORT:-8285}:8285"
     volumes:
       - web_dist:/usr/share/nginx/html
       # 挂整个目录而不是单个文件：git pull 换文件时是新文件替换旧文件，单文件挂载的话容器里还是旧的

@@ -1,4 +1,4 @@
-import { Button, Checkbox, ConfigProvider, Space, Spin, Tag, Tooltip, Typography, theme } from "antd";
+import { Button, Checkbox, ConfigProvider, Space, Spin, Tag, Tooltip, Typography, message, theme } from "antd";
 import { AimOutlined, CaretRightOutlined, LockOutlined, CloseOutlined, LineChartOutlined, MinusOutlined, PauseOutlined, PlusOutlined, PushpinOutlined, QuestionCircleOutlined, UnlockOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
@@ -815,11 +815,21 @@ export default function LoopWaveform({
   const save = async () => {
     if (!target || !onAdjust || !edit) return;
     setSaving(true);
+    // 浏览器标签页被切走 / 锁屏 / 休眠时会把页面整个冻住，请求发不出去，axios 的
+    // 60 秒超时计时也跟着暂停——按钮就一直转，人以为卡死了（2026-11-20）。这里加个
+    // 兜底：超过 20 秒就不再转，说清楚请求已经发出去了，页面恢复后自己会落库
+    let timedOut = false;
+    const guard = window.setTimeout(() => {
+      timedOut = true;
+      setSaving(false);
+      message.warning("服务器还没回应，请求还在后台跑；页面恢复后会自动完成，不用再点");
+    }, 20000);
     try {
       bus.previewLoop(null);
       await onAdjust(target, edit.s, edit.e);
     } finally {
-      setSaving(false);
+      window.clearTimeout(guard);
+      if (!timedOut) setSaving(false);
     }
   };
 

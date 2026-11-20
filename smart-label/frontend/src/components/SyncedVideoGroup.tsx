@@ -1312,6 +1312,10 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                     if (el) el.preservesPitch = false;
                   }}
                   src={v.url}
+                  // 视频流在生产环境走单独的端口（8285，见 api/media.ts），对页面来说
+                  // 就是跨源了。夜视要把画面画到 canvas 上读亮度，不声明 anonymous 的话
+                  // canvas 会被当成"脏了"，getImageData 直接抛错
+                  crossOrigin="anonymous"
                   controls
                   preload="auto"
                   style={{

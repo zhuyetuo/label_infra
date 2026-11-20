@@ -33,7 +33,7 @@ bash up.sh             # 等价于 docker compose up -d --build，跑完会打�
 `api` 和 `scheduler` 会等它跑成功再启动，所以**不需要手动执行迁移**，
 每次 `git pull` 之后直接 `bash up.sh` 就行。
 
-容器：`mysql`（数据库）、`migrate`（一次性，跑数据库迁移，跑完就退出）、`api`（FastAPI，映射宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）、`frontend`（映射宿主机 8284）。
+容器：`mysql`（数据库）、`migrate`（一次性，跑数据库迁移，跑完就退出）、`api`（FastAPI，映射宿主机 8283）、`scheduler`（超时回收定时任务，单实例，不要 `docker compose up --scale scheduler=2`）、`frontend`（映射宿主机 8284，视频流另走 8285——视频占满同源 6 个连接时接口会排队）。
 
 访问 `http://<服务器IP>:8284` 打开测试用前端页面，首次会引导创建管理员账号。API 文档在 `http://<服务器IP>:8283/docs`。
 
