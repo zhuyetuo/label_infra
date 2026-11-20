@@ -2222,6 +2222,57 @@ export default function AnnotationWorkspace({
           </Button>
         </Tooltip>
       )}
+      {canCreate && !readOnly && hasCsv && sampleId != null && labels.length > 0 && (
+        <>
+          {/* AI 预标注原来单独占一行，挪到波形标题这排，省一行高度 */}
+          <Popconfirm
+            title={`用「${modeLabelOf(prelabelMode)}」重新跑一遍？`}
+            description={
+              <div style={{ maxWidth: 380, whiteSpace: "normal" }}>
+                没人碰过的 AI 片段会被这一版的结果整批替换；
+                <b>已确认 / 已改类别 / 标了待定 / 自己画的（{humanTouched} 段）会原样保留</b>
+                ，跟新结果重叠的会标出「疑似重复」方便对比。
+              </div>
+            }
+            okText="重新跑"
+            onConfirm={handleAiPrelabel}
+          >
+            <Button size="small" icon={<ThunderboltOutlined />} loading={prelabeling}>
+              AI预标注
+            </Button>
+          </Popconfirm>
+          {/* 原来是 Radio.Group（按钮条）。加上端侧模型之后它不支持分组，
+              线上和端侧会混在一排看不出区别；选项也从 3 个变成 5 个。换成 Select。 */}
+          <Tooltip title={hintOf(prelabelMode)}>
+            <Select
+              size="small"
+              {...INFER_SELECT_PROPS}
+              value={prelabelMode}
+              onChange={(v) => setPrelabelMode(v as InferMode)}
+              options={inferOptions}
+            />
+          </Tooltip>
+          <InferModeHelp />
+          {/* 项目页批量跑过之后，这些片段到底出自哪个模型完全看不出来；换了
+              模型重跑更是。把结果 JSON 里记的版本/模型/时间摆出来 */}
+          {aiInfo?.exists && (
+            <Tooltip
+              title={
+                <div style={{ whiteSpace: "normal" }}>
+                  现在这些 AI 片段是 {aiInfo.generated_at} 跑的
+                  {aiInfo.model_path ? <>，模型 {aiInfo.model_path}</> : null}
+                  {aiInfo.missing_seconds ? <>；其中掉数据 {Math.round(aiInfo.missing_seconds)} 秒已挖掉</> : null}
+                </div>
+              }
+            >
+              <Tag style={{ margin: 0 }}>
+                当前：{aiInfo.mode ? modeLabelOf(aiInfo.mode) : "未知版本"}
+                {aiInfo.model_path ? ` · ${aiInfo.model_path.split("/").slice(-1)[0]}` : ""}
+              </Tag>
+            </Tooltip>
+          )}
+        </>
+      )}
       {canCreate && labels.length > 0 && (
         <>
           <Popover
@@ -3286,64 +3337,6 @@ export default function AnnotationWorkspace({
                 {hiddenPanelTags}
               </>
             )}
-          </div>
-        )}
-        {canCreate && !readOnly && (
-          <div style={{ margin: "12px 0", padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
-            <Space wrap size={6} style={{ marginBottom: 8 }}>
-              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
-                /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
-                   换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */
-                <Popconfirm
-                  title={`用「${modeLabelOf(prelabelMode)}」重新跑一遍？`}
-                  description={
-                    <div style={{ maxWidth: 380, whiteSpace: "normal" }}>
-                      没人碰过的 AI 片段会被这一版的结果整批替换；
-                      <b>已确认 / 已改类别 / 标了待定 / 自己画的（{humanTouched} 段）会原样保留</b>
-                      ，跟新结果重叠的会标出「疑似重复」方便对比。
-                    </div>
-                  }
-                  okText="重新跑"
-                  onConfirm={handleAiPrelabel}
-                >
-                  <Button size="small" icon={<ThunderboltOutlined />} loading={prelabeling} style={{ marginLeft: 8 }}>
-                    AI预标注
-                  </Button>
-                </Popconfirm>
-              )}
-              {/* 原来是 Radio.Group（按钮条）。加上端侧模型之后它**不支持分组**，
-                  线上和端侧会混在一排看不出区别；选项也从 3 个变成 5 个。换成 Select。 */}
-              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
-                <Tooltip title={hintOf(prelabelMode)}>
-                  <Select
-                    size="small"
-                    {...INFER_SELECT_PROPS}
-                    value={prelabelMode}
-                    onChange={(v) => setPrelabelMode(v as InferMode)}
-                    options={inferOptions}
-                  />
-                </Tooltip>
-              )}
-              {!readOnly && hasCsv && sampleId != null && labels.length > 0 && <InferModeHelp />}
-              {/* 项目页批量跑过之后，这些片段到底出自哪个模型完全看不出来；换了
-                  模型重跑更是。把结果 JSON 里记的版本/模型/时间摆出来 */}
-              {!readOnly && aiInfo?.exists && (
-                <Tooltip
-                  title={
-                    <div style={{ whiteSpace: "normal" }}>
-                      现在这些 AI 片段是 {aiInfo.generated_at} 跑的
-                      {aiInfo.model_path ? <>，模型 {aiInfo.model_path}</> : null}
-                      {aiInfo.missing_seconds ? <>；其中掉数据 {Math.round(aiInfo.missing_seconds)} 秒已挖掉</> : null}
-                    </div>
-                  }
-                >
-                  <Tag style={{ marginLeft: 4 }}>
-                    当前：{aiInfo.mode ? modeLabelOf(aiInfo.mode) : "未知版本"}
-                    {aiInfo.model_path ? ` · ${aiInfo.model_path.split("/").slice(-1)[0]}` : ""}
-                  </Tag>
-                </Tooltip>
-              )}
-            </Space>
           </div>
         )}
         {/* 「已隐藏」放在面板区最上面（IMU 波形上面）：夹在波形和片段列表中间看着像哪个面板的一部分。
