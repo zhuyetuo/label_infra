@@ -1896,10 +1896,15 @@ export default function Projects() {
                   只看有 AI 待确认
                 </Checkbox>
                 <Tooltip title="只看疑似片段里有一条待判的置信度不低于这个数的任务（选了候选类别就只看那几类）。先判模型比较有把握的">
-                  <InputNumber size="small" min={0} max={100} step={10} style={{ width: 118 }}
-                    addonBefore="置信度≥" addonAfter="%" placeholder="不限"
-                    value={f.minConf ?? null}
-                    onChange={(v) => setFilter(p.id, { minConf: typeof v === "number" && v > 0 ? v : null })} />
+                  {/* 「置信度≥」原来塞在输入框的 addon 里，宽度一算下来数字只剩二三十像素，
+                      填了 60 也看不全。标签挪到框外，框里只放数字，当前的阈值一眼能看见 */}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: 12, color: "var(--sl-text2)" }}>置信度≥</span>
+                    <InputNumber size="small" min={0} max={100} step={10} style={{ width: 92 }}
+                      addonAfter="%" placeholder="不限"
+                      value={f.minConf ?? null}
+                      onChange={(v) => setFilter(p.id, { minConf: typeof v === "number" && v > 0 ? v : null })} />
+                  </span>
                 </Tooltip>
                 <Tooltip title="按样本的采集时段筛（一个样本一小时），可多选。比如喂食、喝水多在固定时段">
                   <Select
