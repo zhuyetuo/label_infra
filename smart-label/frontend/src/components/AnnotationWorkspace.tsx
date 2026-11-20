@@ -159,6 +159,10 @@ const CHART_VIEWPORT_PX = 185;
 const CHART_EXPANDED_PX = 520;
 // 两个模式各记各的高度：单条波形只看一条，拖到刚好一条的高度；展开全部要看六条，
 // 拖得高得多。共用一个值的话，来回切模式就得来回拖
+// 双波形：上面原始（人工标注）、下面 AI 辅助，各只画一条通道
+const CHART_DUAL_PX = 320;
+const CHART_DUAL_KEY = "smart-label:chart-dual";
+const CHART_DUAL_HEIGHT_KEY = "smart-label:chart-area-height-dual";
 const CHART_MODE_KEY = "smart-label:chart-expanded";
 const CHART_HEIGHT_KEY = "smart-label:chart-area-height";
 const CHART_EXPANDED_HEIGHT_KEY = "smart-label:chart-area-height-expanded";
@@ -259,6 +263,8 @@ export default function AnnotationWorkspace({
   // 波形区改为占满剩余高度，视频相应缩小
   // 用哪个模式也记住：不然每开一个任务都要重新点一次「展开全部」
   const [chartExpanded, setChartExpanded] = useState(() => getSavedBool(CHART_MODE_KEY, false));
+  // 双波形（原始 / AI 辅助上下两张）：同样是用户习惯，记住
+  const [chartDual, setChartDual] = useState(() => getSavedBool(CHART_DUAL_KEY, false));
   // 展开时要"一屏看全六轴"，所以行高不能写死，得按波形区实际拿到多少高度算
   const chartBoxRef = useRef<HTMLDivElement | null>(null);
   const [chartBoxH, setChartBoxH] = useState(0);
@@ -268,14 +274,19 @@ export default function AnnotationWorkspace({
   const [expandedHeight, setExpandedHeight] = useState(
     () => getSavedHeight(CHART_EXPANDED_HEIGHT_KEY) ?? CHART_EXPANDED_PX
   );
+  const [dualHeight, setDualHeight] = useState(() => getSavedHeight(CHART_DUAL_HEIGHT_KEY) ?? CHART_DUAL_PX);
   // 单条波形模式下滚轮很容易不小心把波形区滚到别的通道去，锁住之后波形区不响应
   // 滚动，想看别的通道再解锁。是否锁定记住成用户的习惯，下次打开别的任务沿用。
   const [chartScrollLocked, setChartScrollLocked] = useState(() => getSavedBool(CHART_SCROLL_LOCK_KEY, false));
   // 当前模式用哪一份高度。切模式 = 换一份记忆，互不影响
-  const chartHeight = chartExpanded ? expandedHeight : singleHeight;
-  const setChartHeight = chartExpanded ? setExpandedHeight : setSingleHeight;
-  const chartHeightKey = chartExpanded ? CHART_EXPANDED_HEIGHT_KEY : CHART_HEIGHT_KEY;
-  const chartHeightDefault = chartExpanded ? CHART_EXPANDED_PX : CHART_VIEWPORT_PX;
+  const chartHeight = chartExpanded ? expandedHeight : chartDual ? dualHeight : singleHeight;
+  const setChartHeight = chartExpanded ? setExpandedHeight : chartDual ? setDualHeight : setSingleHeight;
+  const chartHeightKey = chartExpanded
+    ? CHART_EXPANDED_HEIGHT_KEY
+    : chartDual
+      ? CHART_DUAL_HEIGHT_KEY
+      : CHART_HEIGHT_KEY;
+  const chartHeightDefault = chartExpanded ? CHART_EXPANDED_PX : chartDual ? CHART_DUAL_PX : CHART_VIEWPORT_PX;
   // 复看抓挠时波形其实用得不多（主要看视频），可以整块折起来把地方让给视频；
   // 想看再展开。跟下面两个面板一样，记住各人自己的习惯
   const [imuOpen, setImuOpen] = useState(() => getSavedBool(IMU_OPEN_KEY, true));
@@ -843,12 +854,16 @@ export default function AnnotationWorkspace({
     setManualModeState(v);
     try { if (manualKey) localStorage.setItem(manualKey, v ? "1" : "0"); } catch { /* ignore */ }
   };
-  const segments: ChartSegment[] = useMemo(() => {
+  // 波形上画哪些片段。mode="main" 是上面那张（人工标注用的），
+  // mode="ai" 是双波形下面那张（只看 AI 的结果，人工自己画的不重复画）
+  const buildChartSegments = (mode: "main" | "ai"): ChartSegment[] => {
     const rows = items.map((i) => {
       const t = trackOf(labelById, i.label_id);
       const off = (chartFilter != null && !chartFilter.has(i.id))
-        // 从零标注：没人碰过的 AI 片段不画进波形（列表里选了什么筛选都一样），只留人工标的
-        || (manualMode && i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain);
+        || (mode === "ai"
+          ? i.source_type !== "ai_generated"
+          // 从零标注：没人碰过的 AI 片段不画进上面那张（列表里选了什么筛选都一样）
+          : manualMode && i.source_type === "ai_generated" && !i.ai_confirmed && !i.is_modified && !i.uncertain);
       return { i, t, off };
     });
     // 只有当别的轨的片段在时间上真压着这一段时才分带，平时整高显示。
@@ -873,7 +888,15 @@ export default function AnnotationWorkspace({
       label: nameOf(i.label_id),
       ...(bands[idx] ?? {}),
     }));
-  }, [items, labelById, chartFilter, manualMode]);
+  };
+  const segments: ChartSegment[] = useMemo(
+    () => buildChartSegments("main"),
+    [items, labelById, chartFilter, manualMode]
+  );
+  const aiSegments: ChartSegment[] = useMemo(
+    () => buildChartSegments("ai"),
+    [items, labelById, chartFilter, manualMode]
+  );
 
   // 同一轨的两段在时间上不能叠（跨轨叠是正常的，靠分带区分）。
   // 新建 / 拖起止碰到别的段就提示一下：跟哪一段叠了、叠了多少
@@ -1878,12 +1901,12 @@ export default function AnnotationWorkspace({
 
   useEffect(() => {
     const el = chartBoxRef.current;
-    if (!el || !chartExpanded) return;
+    if (!el || (!chartExpanded && !chartDual)) return;
     const ro = new ResizeObserver(() => setChartBoxH(el.clientHeight));
     ro.observe(el);
     setChartBoxH(el.clientHeight);
     return () => ro.disconnect();
-  }, [chartExpanded, imuView, videos]);
+  }, [chartExpanded, chartDual, imuView, videos]);
 
   // 紧凑模式下通道名画进图里，没有额外的标题行，height 本身已含时间轴
   const CHANNEL_CHROME_PX = 4;
@@ -1894,6 +1917,11 @@ export default function AnnotationWorkspace({
   const expandedRowHeight = Math.max(
     MIN_ROW_PX,
     Math.floor((chartBoxH - 24) / 6) - CHANNEL_CHROME_PX
+  );
+  // 双波形：上下各一张单通道，高度对半分；标题行和日期行各占一点
+  const dualRowHeight = Math.max(
+    56,
+    Math.floor((chartBoxH || chartHeight) / 2) - 40
   );
 
   // 拖波形区（单条波形模式）底边的把手改高度，跟视频区的把手一个用法；
@@ -2247,18 +2275,21 @@ export default function AnnotationWorkspace({
             <>
               <Segmented
                 size="small"
-                options={["单条波形", "展开全部"]}
-                value={chartExpanded ? "展开全部" : "单条波形"}
+                options={["单条波形", "双波形", "展开全部"]}
+                value={chartDual ? "双波形" : chartExpanded ? "展开全部" : "单条波形"}
                 onChange={(v) => {
-                  const next = v === "展开全部";
-                  setChartExpanded(next);
-                  saveBool(CHART_MODE_KEY, next);
+                  const dual = v === "双波形";
+                  const expanded = v === "展开全部";
+                  setChartDual(dual);
+                  setChartExpanded(expanded);
+                  saveBool(CHART_DUAL_KEY, dual);
+                  saveBool(CHART_MODE_KEY, expanded);
                 }}
               />
             </>
           )}
           {imuView === "曲线图" && <ImuChartHint />}
-          {imuView === "曲线图" && !chartExpanded && (
+          {imuView === "曲线图" && !chartExpanded && !chartDual && (
             <Tooltip title={chartScrollLocked ? "已锁定滚动，点击解锁（可以滚动切换通道）" : "锁定滚动，防止误滚动切到别的通道"}>
               <Button
                 size="small"
@@ -2295,25 +2326,77 @@ export default function AnnotationWorkspace({
               overflowY: chartScrollLocked ? "hidden" : "auto",
             }}
           >
-            <ImuChart
-              sampleId={sampleId}
-              bus={bus}
-              rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
-              // 展开全部时六条共用最下面那一条时间轴：六条各画一条，
-              // 光轴就吃掉一百多像素，而横轴本来就是同一条时间线
-              timeAxisOnlyLast={chartExpanded}
-              key={chartExpanded ? "expanded" : "single"}
-              segments={segments}
-              activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
-              pendingSegment={pendingSpan}
-              selectedIndex={selSegIdx >= 0 ? selSegIdx : null}
-              onSelectSegment={(idx) => setSelSegId(idx == null ? null : items[idx]?.id ?? null)}
-              onCreateSegment={canCreate ? handleCreateFromChart : undefined}
-              onResizeSegment={!readOnly || canFlag || segReview ? handleResizeFromChart : undefined}
-              onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
-              onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
-              onSegmentMenu={(idx, at, x, y) => setSegMenu({ idx, at, x, y })}
-            />
+            {chartDual ? (
+              // 双波形：上面原始（人工在这里标），下面 AI 辅助（只看 AI 结果）。
+              // 只画一条通道；两张图共用一个 syncGroup，缩放/平移联动
+              <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+                <div style={{ fontSize: 11, color: tk.colorTextSecondary, padding: "2px 6px 0" }}>
+                  原始（人工标注）
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                  <ImuChart
+                    key="dual-main"
+                    sampleId={sampleId}
+                    bus={bus}
+                    onlyChannel="acc_x"
+                    rowHeight={dualRowHeight}
+                    syncGroup={`ws-dual-${taskId ?? 0}`}
+                    segments={segments}
+                    activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
+                    pendingSegment={pendingSpan}
+                    selectedIndex={selSegIdx >= 0 ? selSegIdx : null}
+                    onSelectSegment={(idx) => setSelSegId(idx == null ? null : items[idx]?.id ?? null)}
+                    onCreateSegment={canCreate ? handleCreateFromChart : undefined}
+                    onResizeSegment={!readOnly || canFlag || segReview ? handleResizeFromChart : undefined}
+                    onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
+                    onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
+                    onSegmentMenu={(idx, at, x, y) => setSegMenu({ idx, at, x, y })}
+                  />
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: tk.colorTextSecondary,
+                    padding: "2px 6px 0",
+                    borderTop: `1px solid ${tk.colorBorderSecondary}`,
+                    marginTop: 2,
+                  }}
+                >
+                  AI 辅助（只看 AI 结果，不可修改）
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                  <ImuChart
+                    key="dual-ai"
+                    sampleId={sampleId}
+                    bus={bus}
+                    onlyChannel="acc_x"
+                    rowHeight={dualRowHeight}
+                    syncGroup={`ws-dual-${taskId ?? 0}`}
+                    segments={aiSegments}
+                  />
+                </div>
+              </div>
+            ) : (
+              <ImuChart
+                sampleId={sampleId}
+                bus={bus}
+                rowHeight={chartExpanded && chartBoxH > 0 ? expandedRowHeight : undefined}
+                // 展开全部时六条共用最下面那一条时间轴：六条各画一条，
+                // 光轴就吃掉一百多像素，而横轴本来就是同一条时间线
+                timeAxisOnlyLast={chartExpanded}
+                key={chartExpanded ? "expanded" : "single"}
+                segments={segments}
+                activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
+                pendingSegment={pendingSpan}
+                selectedIndex={selSegIdx >= 0 ? selSegIdx : null}
+                onSelectSegment={(idx) => setSelSegId(idx == null ? null : items[idx]?.id ?? null)}
+                onCreateSegment={canCreate ? handleCreateFromChart : undefined}
+                onResizeSegment={!readOnly || canFlag || segReview ? handleResizeFromChart : undefined}
+                onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}
+                onSplitSegment={!readOnly || segReview || canFlag ? splitItem : undefined}
+                onSegmentMenu={(idx, at, x, y) => setSegMenu({ idx, at, x, y })}
+              />
+            )}
           </div>
           {(
             // 两种模式都给这个把手：波形要多高是看数据的人说了算

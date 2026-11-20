@@ -1,6 +1,6 @@
 import { Tooltip, theme } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./ImuChart.css";
@@ -38,6 +38,11 @@ const getSeries = (sampleId: number, startMs: number, endMs: number, maxPoints =
   request.get<never, ImuSeries>(`/imu/${sampleId}/series`, {
     params: { start_ms: startMs, end_ms: endMs, max_points: maxPoints },
   });
+
+// 同一页里可能同时有不止一个 ImuChart（比如"原始 / AI 辅助"上下两张），
+// 缩放和平移得一起动，不然上下两张对不上时间。按 syncGroup 分组互相通知
+type ViewApply = (min: number, max: number) => void;
+const viewGroups = new Map<string, Set<ViewApply>>();
 
 // 播放头标签/十字线只需要看时分秒毫秒，日期已经在图表下方那一行统一显示了，
 // 这里再带一遍年月日纯属占地方。
@@ -127,6 +132,10 @@ interface Props {
   selectedIndex?: number | null;
   /** 单击片段选中（没拖动）；点空白处传 null */
   onSelectSegment?: (index: number | null) => void;
+  /** 只画一条通道（单轴）。上下对照的两张图用这个，看同一路就够 */
+  onlyChannel?: keyof Omit<ImuSeries, "t">;
+  /** 缩放/平移联动：同一个组里的图（比如上下两张）视窗保持一致 */
+  syncGroup?: string;
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
@@ -179,6 +188,8 @@ export default function ImuChart({
   pendingSegment,
   selectedIndex,
   onSelectSegment,
+  onlyChannel,
+  syncGroup,
   onCreateSegment,
   onResizeSegment,
   onReadOnlyEdit,
@@ -187,6 +198,10 @@ export default function ImuChart({
 }: Props) {
   // 坐标轴文字 / 网格跟着明亮 / 暗黑走（uPlot 默认是黑字，暗黑底上看不见）
   const { token } = theme.useToken();
+  const channels = useMemo(
+    () => (onlyChannel ? CHANNELS.filter((c) => c.key === onlyChannel) : CHANNELS),
+    [onlyChannel]
+  );
   const axisStroke = token.colorTextSecondary, gridStroke = token.colorBorderSecondary;
   // 播放线 / 时间标签的颜色：写死黑色的话暗黑底上几乎看不见。放在 ref 里，切主题不用重建图
   const inkRef = useRef({ line: token.colorText, halo: token.colorBgContainer });
@@ -256,6 +271,9 @@ export default function ImuChart({
 
   useEffect(() => {
     let disposed = false;
+    // 缩放联动组的退出句柄。注册发生在异步拉完数据之后，清理可能在注册前跑，
+    // 所以放在 effect 这层，别放进里面那个 async 函数
+    let leaveGroup: (() => void) | null = null;
     const playheadState: { current: number | null } = { current: null };
     // 鼠标靠近播放头可拖拽范围内时置 true，画播放头的地方据此高亮，让人一眼
     // 看出"这条线能拖"，不用先按下去试
@@ -296,7 +314,7 @@ export default function ImuChart({
         const viewMax = first.scales.x.max!;
 
         syncingRef.current = true;
-        CHANNELS.forEach((c, i) => {
+        channels.forEach((c, i) => {
           const plot = plotRefs.current[i];
           if (!plot) return;
           plot.setData([t, s[c.key]]);
@@ -319,6 +337,29 @@ export default function ImuChart({
         debounceTimer = setTimeout(() => refetchForRange(min, max), 120);
       };
 
+      // 另一张图（同 syncGroup）改了视窗：跟着设过去，顺便把那段数据补回来。
+      // 用 syncingRef 包住，避免 setScale 又触发 onScaleChange 反弹回去
+      const applyExternalView: ViewApply = (min, max) => {
+        if (plotRefs.current.some((p) => !p)) return;
+        syncingRef.current = true;
+        plotRefs.current.forEach((p) => p?.setScale("x", { min, max }));
+        syncingRef.current = false;
+        setRangeCaption(formatDayCaption(min));
+        scheduleRefetch(min, max);
+      };
+      if (syncGroup) {
+        let group = viewGroups.get(syncGroup);
+        if (!group) {
+          group = new Set();
+          viewGroups.set(syncGroup, group);
+        }
+        group.add(applyExternalView);
+        leaveGroup = () => {
+          group!.delete(applyExternalView);
+          if (!group!.size) viewGroups.delete(syncGroup);
+        };
+      }
+
       const onScaleChange = (originIdx: number) => (u: uPlot, key: string) => {
         if (key !== "x" || syncingRef.current) return;
         const { min, max } = u.scales.x;
@@ -333,6 +374,12 @@ export default function ImuChart({
         syncingRef.current = false;
 
         scheduleRefetch(min, max);
+        // 上下对照的另一张图跟着走
+        if (syncGroup) {
+          viewGroups.get(syncGroup)?.forEach((fn) => {
+            if (fn !== applyExternalView) fn(min, max);
+          });
+        }
       };
 
       const onClickSeek = (epochVal: number) => {
@@ -349,10 +396,10 @@ export default function ImuChart({
       const t0 = toEpoch(series.t);
       setRangeCaption(formatDayCaption(t0[0] ?? startEpochRef.current));
 
-      CHANNELS.forEach((c, i) => {
+      channels.forEach((c, i) => {
         const container = containerRefs.current[i];
         if (!container) return;
-        const isLast = i === CHANNELS.length - 1;
+        const isLast = i === channels.length - 1;
 
         const opts: uPlot.Options = {
           // 通道名不占地方：既不用 uPlot 的标题行（一行就是二十几像素，六条
@@ -445,15 +492,16 @@ export default function ImuChart({
 
     return () => {
       disposed = true;
+      leaveGroup?.();
       cleanupBusRef.current?.();
       plotRefs.current.forEach((p) => p?.destroy());
       plotRefs.current = [];
     };
-  }, [sampleId, rowHeight, bus, timeAxisOnlyLast, axisStroke, gridStroke]);
+  }, [sampleId, rowHeight, bus, timeAxisOnlyLast, axisStroke, gridStroke, channels, syncGroup]);
 
   return (
     <div>
-      {CHANNELS.map((c, i) => (
+      {channels.map((c, i) => (
         // 每条波形套一层相对定位的壳，左边缘贴一个平时透明、鼠标移上去才显出来
         // 的通道名。既不占高度，也不挡曲线
         <div key={c.key} className="ws-chan">
