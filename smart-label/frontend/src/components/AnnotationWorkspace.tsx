@@ -296,6 +296,13 @@ export default function AnnotationWorkspace({
   const [panelHidden, setPanelHidden] = useState<PanelKey[]>(loadHidden);
 
   const [items, setItems] = useState<LabelItem[]>([]);
+  // 从服务端拉回来的那份片段。人工改动后 items 会换成新数组，自动保存据此判断
+  // "这是人工改的"还是"刚从服务器同步回来的"，避免每次拉草稿都原样再存一遍
+  const serverItemsRef = useRef<LabelItem[]>(items);
+  const loadItems = (next: LabelItem[]) => {
+    serverItemsRef.current = next;
+    setItems(next);
+  };
   // 疑似片段候选：不在草稿里，单独一张表，人工逐条确认/排除
   const [candidates, setCandidates] = useState<AiCandidate[]>([]);
   // 现在这份 AI 结果是哪个版本/哪个模型跑的
@@ -650,7 +657,7 @@ export default function AnnotationWorkspace({
       setVideoNote(null);
       setHasCsv(false);
       setFps(null);
-      setItems([]);
+      loadItems([]);
       setDurationMs(null);
       return;
     }
@@ -680,7 +687,7 @@ export default function AnnotationWorkspace({
       }
 
       const draft = await getDraft(taskId);
-      setItems(draft.items);
+      loadItems(draft.items);
       const flagged = draft.items.filter((it) => it.review_note).sort((a, b) => a.start_time_ms - b.start_time_ms);
       setFlagFocus(!readOnly && flagged.length > 0);
       // 从筛过类别的列表点进来（项目页筛了「进食」/候选类别「进食」），又没指定具体时刻：
@@ -953,7 +960,7 @@ export default function AnnotationWorkspace({
             task_id: taskId, label_id: forLabel,
             start_time_ms: Math.round(Math.max(0, startMs)), end_time_ms: Math.round(Math.max(0, endMs)),
           });
-          setItems((await getDraft(taskId)).items);
+          loadItems((await getDraft(taskId)).items);
           message.success({ content: "已新建并保存（算通过）", key: "ro-create" });
         } catch {
           /* request 拦截器已经弹了错误 */
@@ -1035,7 +1042,7 @@ export default function AnnotationWorkspace({
     setItems(next);
     await saveDraft(taskId, toDraftPayload(next));
     const d = await getDraft(taskId);
-    setItems(d.items);
+    loadItems(d.items);
     showRange({ startMs, endMs });
     message.success("起止已保存");
   };
@@ -1104,7 +1111,7 @@ export default function AnnotationWorkspace({
     if (taskId == null || labelId === it.label_id) return;
     await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
     const d = await getDraft(taskId);
-    setItems(d.items);
+    loadItems(d.items);
     syncMain(d.items);
     message.success(`已改成「${nameOf(labelId)}」`);
   };
@@ -1127,7 +1134,7 @@ export default function AnnotationWorkspace({
     if (v === it.label_id) return;
     if (!readOnly) {
       updateItems([it.id], { label_id: v });
-      message.success({ content: `已改成「${nameOf(v)}」（存草稿后生效）`, key: "relabel" });
+      message.success({ content: `已改成「${nameOf(v)}」（自动保存）`, key: "relabel" });
     } else if (segReview) {
       if (!inGroup(it.id)) {
         message.info({ content: "这里只能改退回给你的那一条（和从它拆出来的几段）", key: "relabel" });
@@ -1233,7 +1240,7 @@ export default function AnnotationWorkspace({
   const splitPanel = (
     <div style={{ width: "100%", borderTop: "1px dashed var(--sl-border2)", paddingTop: 4, marginTop: 2 }}>
       <Space size={6} wrap style={{ marginBottom: 4 }}>
-        <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，存草稿后生效"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
+        <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，自动保存"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
           <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
         </Tooltip>
         {panelItems.length > 1 && (
@@ -1344,7 +1351,7 @@ export default function AnnotationWorkspace({
       if (taskId == null || d.taskId !== taskId) return;
       getDraft(taskId)
         .then((dr) => {
-          setItems(dr.items);
+          loadItems(dr.items);
           message.info(`有 ${d.n} 段刚被管理员改过或通过，已按他的版本更新`);
         })
         .catch(() => {});
@@ -1357,7 +1364,7 @@ export default function AnnotationWorkspace({
   // 片段审核那边改了类别：重新拉草稿，片段列表 / 波形色块跟着变
   useEffect(() => {
     if (!segReview?.reloadKey || taskId == null) return;
-    getDraft(taskId).then((d) => setItems(d.items)).catch(() => {});
+    getDraft(taskId).then((d) => loadItems(d.items)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segReview?.reloadKey]);
 
@@ -1368,7 +1375,7 @@ export default function AnnotationWorkspace({
     if (!readOnly) await saveDraft(taskId, toDraftPayload(items));
     const r = await segDedupe(taskId);
     const d = await getDraft(taskId);
-    setItems(d.items);
+    loadItems(d.items);
     const n = r.merged + r.removed_parent;
     message.success(
       `${n ? `去掉 ${n} 段（合并同类 ${r.merged}、删父类 ${r.removed_parent}）` : "没有能自动去掉的重复"}` +
@@ -1388,7 +1395,7 @@ export default function AnnotationWorkspace({
     }
     setSelSegId(null);
     const d = await getDraft(taskId);
-    setItems(d.items);
+    loadItems(d.items);
     message.success("已删除这一段");
   };
   // 波形上选中一段后按 Delete / 标题行的「删除」都走这里
@@ -1398,7 +1405,7 @@ export default function AnnotationWorkspace({
     if (!readOnly) {
       setSelSegId(null);
       setItems((prev) => prev.filter((x) => x.id !== it.id));
-      message.success({ content: "已删除这一段（存草稿后生效）", key: "del-seg" });
+      message.success({ content: "已删除这一段（自动保存）", key: "del-seg" });
       return;
     }
     if (!canFlag) {
@@ -1421,7 +1428,7 @@ export default function AnnotationWorkspace({
     if (taskId == null || labelId === it.label_id) return;
     await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
     const d = await getDraft(taskId);
-    setItems(d.items);
+    loadItems(d.items);
     message.success(`已改成「${nameOf(labelId)}」`);
   };
 
@@ -1436,7 +1443,7 @@ export default function AnnotationWorkspace({
         const d = await getDraft(taskId);
         const it = d.items.find((x) => x.id === target.id);
         if (it && Math.abs(it.start_time_ms - startMs) < 2 && Math.abs(it.end_time_ms - endMs) < 2) {
-          setItems(d.items);
+          loadItems(d.items);
           showRange({ startMs, endMs });
           message.success({ content: "刚才服务器回得慢，但起止其实已经保存上了", key: "timeout" });
           return;
@@ -1457,7 +1464,7 @@ export default function AnnotationWorkspace({
       ? { ...it, start_time_ms: r.start_time_ms, end_time_ms: r.end_time_ms, label_id: r.label_id,
           seg_status: (r.seg_status === "pending" ? null : r.seg_status) as LabelItem["seg_status"] }
       : it)));
-    if (taskId != null) getDraft(taskId).then((d) => setItems(d.items)).catch(() => { /* 对齐失败就用本地这份，下次打开会重拉 */ });
+    if (taskId != null) getDraft(taskId).then((d) => loadItems(d.items)).catch(() => { /* 对齐失败就用本地这份，下次打开会重拉 */ });
   };
 
   // 管理员 / 审核员在只读任务里改起止，后端直接算「通过」（改过的就是认可的版本）。
@@ -1508,7 +1515,7 @@ export default function AnnotationWorkspace({
     if (segReview && target.kind === "item" && target.id === segReview.itemId && taskId != null) {
       await segReview.onEdit(startMs, endMs);
       const d = await getDraft(taskId);
-      setItems(d.items);
+      loadItems(d.items);
       showRange({ startMs, endMs });
       message.success("起止已保存");
       return;
@@ -1559,7 +1566,7 @@ export default function AnnotationWorkspace({
     if (segReview && it.id === segReview.itemId) {
       void (async () => {
         await segReview.onEdit(s, e);
-        setItems((await getDraft(taskId)).items);
+        loadItems((await getDraft(taskId)).items);
         showRange({ startMs: s, endMs: e });
         message.success("起止已保存");
       })();
@@ -1603,7 +1610,7 @@ export default function AnnotationWorkspace({
         try {
           const r = await segSplit(it.id, at);
           const list = (await getDraft(taskId)).items;
-          setItems(list);
+          loadItems(list);
           if (segReview) {
             setSplitGroup((g) => (g.includes(r.right.id) ? g : [...g, r.right.id]));
             // 浮窗接着循环刚才那一段的左半段，方便接着往下切
@@ -1641,7 +1648,7 @@ export default function AnnotationWorkspace({
     if (loopInfo?.itemId === it.id) showRange({ startMs: it.start_time_ms, endMs: at });
     const fmt = (ms: number) => (ms / 1000).toFixed(1);
     message.success({
-      content: `已拆开「${nameOf(it.label_id)}」：${fmt(it.start_time_ms)}–${fmt(at)} s ｜ ${fmt(at)}–${fmt(it.end_time_ms)} s（存草稿后生效，右半段要换类别在右侧列表改）`,
+      content: `已拆开「${nameOf(it.label_id)}」：${fmt(it.start_time_ms)}–${fmt(at)} s ｜ ${fmt(at)}–${fmt(it.end_time_ms)} s（自动保存，右半段要换类别在右侧列表改）`,
       key: "split",
       duration: 4,
     });
@@ -1766,7 +1773,7 @@ export default function AnnotationWorkspace({
       onOk: async () => {
         const next = trimUnder(list, fresh, new Set(hit.map((h) => h.id)));
         await saveDraft(taskId, toDraftPayload(next));
-        setItems((await getDraft(taskId)).items);
+        loadItems((await getDraft(taskId)).items);
         message.success("已裁好，重叠没有了");
       },
     });
@@ -1792,12 +1799,37 @@ export default function AnnotationWorkspace({
 
   const persist = async () => {
     if (taskId == null) return;
-    await saveDraft(taskId, toDraftPayload(items));
+    const snapshot = items;
+    await saveDraft(taskId, toDraftPayload(snapshot));
+    serverItemsRef.current = snapshot;
     // 存完通知外面刷一遍列表。原来只有「提交」才通知，于是存草稿之后回到列表，
     // 段数、类别汇总全是旧的——人刚标完 3 段「抓挠-躯干」，列表里一条没有，
     // 只能以为没存上。存草稿是最常用的那个动作，它才最该刷新
     onSaved?.();
   };
+
+  // 人工标注自动保存：本地改动（新建、改起止、挪整段、删除、改类别、拆开）停下
+  // 0.8 秒就落草稿，不用每次手动点「存草稿」。从服务端拉回来的片段不算改动
+  // （loadItems 会同步 serverItemsRef），所以打开任务、别人改过之后的同步都不会空转
+  useEffect(() => {
+    if (readOnly || taskId == null) return;
+    if (items === serverItemsRef.current) return;
+    const snapshot = items;
+    const timer = window.setTimeout(async () => {
+      try {
+        await saveDraft(taskId, toDraftPayload(snapshot));
+        serverItemsRef.current = snapshot;
+        onSaved?.();
+      } catch {
+        message.error({
+          content: "片段自动保存失败，改动还在本地，可以点「存草稿」重试",
+          key: "autosave",
+        });
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, readOnly, taskId]);
 
   // AI 预标注：后端转发到 imu_train/label_service 的 /infer，返回的类别名按
   // 标签的显示名（退一步按 code）匹配到项目标签，匹配不上的类别整体跳过并提示。
@@ -1907,7 +1939,7 @@ export default function AnnotationWorkspace({
       // 「可能根本用不上」的刷新让人多转一圈不值当。工作台留着不关的话，
       // 它回来时再把片段更新上
       void getDraft(taskId)
-        .then((d) => setItems(d.items))
+        .then((d) => loadItems(d.items))
         .catch(() => {});
     } finally {
       setSaving(false);
@@ -2616,7 +2648,7 @@ export default function AnnotationWorkspace({
           // 只删片段不动候选的话，那条候选还挂着"已确认"，再也不会出现
           await decideCandidate(i.from_candidate_id, "pending");
           const next = items.filter((x) => x.id !== i.id);
-          setItems(next);
+          loadItems(next);
           await saveDraft(taskId, toDraftPayload(next));
           setCandidates(await listCandidates(taskId));
           message.success("已退回候选，可以重新判断");
@@ -2696,7 +2728,7 @@ export default function AnnotationWorkspace({
         onDecided={async (c, decision) => {
           if (taskId == null) return;
           const [draft, cs] = await Promise.all([getDraft(taskId), listCandidates(taskId)]);
-          setItems(draft.items);
+          loadItems(draft.items);
           setCandidates(cs);
           if (decision === "confirmed" && !readOnly) checkOverlapAfterConfirm(draft.items, c.id);
         }}
@@ -2713,7 +2745,7 @@ export default function AnnotationWorkspace({
           if (!readOnly && next.length !== draft.items.length) {
             await saveDraft(taskId, toDraftPayload(next));
           }
-          setItems(next);
+          loadItems(next);
           setCandidates(await listCandidates(taskId));
         }}
       />
