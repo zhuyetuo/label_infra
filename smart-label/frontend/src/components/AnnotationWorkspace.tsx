@@ -854,6 +854,14 @@ export default function AnnotationWorkspace({
   // 人工标注模式（按项目记在本机）：AI 片段先藏起来，从零自己标；在片段列表里选类别就把那几类的 AI 片段拿出来参考
   const manualKey = task?.project_id != null ? `smart-label:manual-mode:${task.project_id}` : null;
   const [manualMode, setManualModeState] = useState(false);
+  // 双波形只在「从零标注」下有意义（上面原始、下面 AI 对照）。
+  // 退出从零标注时一并收回，免得留着一个选不回去的模式
+  useEffect(() => {
+    if (!manualMode && chartDual) {
+      setChartDual(false);
+      saveBool(CHART_DUAL_KEY, false);
+    }
+  }, [manualMode, chartDual]);
   // 类别一排能占两三行（行为/运动/姿态/设备），默认收起，只留当前选中那个；点「类别」向上弹出
   const [labelsOpen, setLabelsOpen] = useState(false);
   // 先拉片段再选类别：在波形上拖出来的起止先挂在这儿，等类别按钮点了才真正建段
@@ -2364,7 +2372,7 @@ export default function AnnotationWorkspace({
             <>
               <Segmented
                 size="small"
-                options={["单条波形", "双波形", "展开全部"]}
+                options={manualMode ? ["单条波形", "双波形", "展开全部"] : ["单条波形", "展开全部"]}
                 value={chartDual ? "双波形" : chartExpanded ? "展开全部" : "单条波形"}
                 onChange={(v) => {
                   const dual = v === "双波形";
