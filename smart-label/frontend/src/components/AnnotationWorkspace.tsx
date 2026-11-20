@@ -831,6 +831,8 @@ export default function AnnotationWorkspace({
   // 人工标注模式（按项目记在本机）：AI 片段先藏起来，从零自己标；在片段列表里选类别就把那几类的 AI 片段拿出来参考
   const manualKey = task?.project_id != null ? `smart-label:manual-mode:${task.project_id}` : null;
   const [manualMode, setManualModeState] = useState(false);
+  // 类别一排能占两三行（行为/运动/姿态/设备），默认收起，只留当前选中那个
+  const [labelsOpen, setLabelsOpen] = useState(false);
   useEffect(() => {
     try { setManualModeState(manualKey ? localStorage.getItem(manualKey) === "1" : false); } catch { setManualModeState(false); }
   }, [manualKey]);
@@ -2897,7 +2899,24 @@ export default function AnnotationWorkspace({
               </div>
             )}
             <Space wrap size={6} style={{ marginBottom: 8 }}>
-              {labelRows.map((row, r) => (
+              {labels.length > 0 && (
+                <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setLabelsOpen((v) => !v)}>
+                  {labelsOpen ? "收起类别 ▴" : `展开选类别（${labels.length}）▾`}
+                </Button>
+              )}
+              {!labelsOpen && labelId != null && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: "#999", fontSize: 12 }}>当前：</span>
+                  <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
+                    {nameOf(labelId)}
+                  </Tag>
+                  <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setLabelId(null)}>清除</Button>
+                </span>
+              )}
+              {!labelsOpen && labelId == null && labels.length > 0 && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>先展开选一个类别，再在波形上拖</Typography.Text>
+              )}
+              {labelsOpen && labelRows.map((row, r) => (
                 <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   {row.parent && (
                     <Tooltip title={`「${row.parent.display_name}」的子类。看得清就选具体的；看不清停在上级也行，标了细的自动算进上级`}>
@@ -2946,11 +2965,11 @@ export default function AnnotationWorkspace({
                   })}
                 </span>
               ))}
-              {labels.length === 0 && (
-                <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
-              )}
-              {labels.length > 0 && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8, paddingLeft: 8, borderLeft: "1px solid var(--sl-border, #ddd)" }}>
+            {labels.length === 0 && (
+              <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
+            )}
+            {labels.length > 0 && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
                   <Tooltip title="边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消">
                     <Button size="small" type={markStartMs == null ? "primary" : "default"} danger={markStartMs != null}
                       onClick={() => markAt("start")}>
