@@ -1041,6 +1041,11 @@ export default function AnnotationWorkspace({
   };
   // ── 大波形上右键片段：改类别 / 拆开 / 删除 ──
   const [segMenu, setSegMenu] = useState<{ idx: number; at: number; x: number; y: number } | null>(null);
+  // 波形上单击选中的片段。按 id 记：重排、删掉别的段之后不会串到别的一段上
+  const [selSegId, setSelSegId] = useState<number | null>(null);
+  useEffect(() => { setSelSegId(null); }, [task?.id]);
+  const selSegIdx = selSegId == null ? -1 : items.findIndex((x) => x.id === selSegId);
+  const selectedItem = selSegIdx >= 0 ? items[selSegIdx] : null;
   useEffect(() => {
     if (!segMenu) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSegMenu(null);
@@ -1104,8 +1109,19 @@ export default function AnnotationWorkspace({
           <Button size="small" onClick={() => { setSegMenu(null); setLoop({ startMs: menuItem.start_time_ms, endMs: menuItem.end_time_ms }); }}>
             ▶ 循环
           </Button>
-          {!readOnly && (
-            <Button size="small" danger onClick={() => { setSegMenu(null); setItems((prev) => prev.filter((x) => x.id !== menuItem.id)); }}>
+          {(!readOnly || canFlag) && (
+            <Button
+              size="small"
+              danger
+              onClick={() => {
+                setSegMenu(null);
+                if (readOnly) void deleteItemRemote(menuItem);
+                else {
+                  setSelSegId(null);
+                  setItems((prev) => prev.filter((x) => x.id !== menuItem.id));
+                }
+              }}
+            >
               删除
             </Button>
           )}
@@ -1301,10 +1317,31 @@ export default function AnnotationWorkspace({
       setStickyRange(null);
       setUrlSeg(null);
     }
+    setSelSegId(null);
     const d = await getDraft(taskId);
     setItems(d.items);
     message.success("已删除这一段");
   };
+  // 波形上选中一段后按 Delete / 标题行的「删除」都走这里
+  const deleteSelected = () => {
+    const it = selSegId == null ? null : items.find((x) => x.id === selSegId);
+    if (!it) return;
+    if (!readOnly) {
+      setSelSegId(null);
+      setItems((prev) => prev.filter((x) => x.id !== it.id));
+      message.success({ content: "已删除这一段（存草稿后生效）", key: "del-seg" });
+      return;
+    }
+    if (!canFlag) {
+      message.info({ content: readOnlyHint, key: "del-seg" });
+      return;
+    }
+    void deleteItemRemote(it);
+  };
+  const deleteSelectedRef = useRef(deleteSelected);
+  deleteSelectedRef.current = deleteSelected;
+  const selSegRef = useRef<number | null>(null);
+  selSegRef.current = selSegId;
   // 只看模式下打标记：直接落库（标记只是记号，不用认领、不动类别起止）
   const marksRemote = async (it: LabelItem, marks: string[], note: string | null) => {
     const r = await segMarks(it.id, marks, note);
@@ -1882,6 +1919,12 @@ export default function AnnotationWorkspace({
         splitAtPlayheadRef.current();
         return;
       }
+      // Delete / Backspace：删掉波形上选中的那一段
+      if ((e.key === "Delete" || e.key === "Backspace") && selSegRef.current != null) {
+        e.preventDefault();
+        deleteSelectedRef.current();
+        return;
+      }
       if (!canCreate) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
@@ -1890,6 +1933,7 @@ export default function AnnotationWorkspace({
         setMarkStartMs(null);
         setPendingSpan(null);
         setLabelsOpen(false);
+        setSelSegId(null);
         return;
       }
       if (e.key === "[" || e.key === "]") {
@@ -2125,7 +2169,7 @@ export default function AnnotationWorkspace({
             {readOnly && <>查看模式下新建：每标一段直接存库、算你通过（不用认领）。<br /></>}
             {manualMode ? "从零标注：AI 片段已隐藏。" : ""}
             在波形空白处拖一段，松手后「类别」弹窗里点一下就建好；边播边标按 [ 开始、] 结束。
-            拖已有片段 = 挪整段 / 改起止。
+            拖已有片段 = 挪整段 / 改起止；单击片段选中，按 Delete 删除。
           </div>}>
             <QuestionCircleOutlined style={{ color: "#999" }} />
           </Tooltip>
@@ -2133,6 +2177,25 @@ export default function AnnotationWorkspace({
             <Button size="small" type="link" style={{ padding: 0 }}
               onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>退出</Button>
           )}
+        </>
+      )}
+      {/* 波形上点中了哪一段：显示起止 + 删除，选中状态跟图上那圈实线框对应 */}
+      {selectedItem && (
+        <>
+          <span style={{ color: "#888", fontSize: 12 }}>
+            已选 {nameOf(selectedItem.label_id)} {formatMs(selectedItem.start_time_ms)} ~ {formatMs(selectedItem.end_time_ms)}
+          </span>
+          {(!readOnly || canFlag) && (
+            <Popconfirm
+              title="删除这一段？"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              onConfirm={deleteSelected}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
+          <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setSelSegId(null)}>取消选择</Button>
         </>
       )}
       {/* 同一只狗前后一个小时：连着翻，人眼找想要的画面（比如喝水） */}
@@ -2221,6 +2284,8 @@ export default function AnnotationWorkspace({
               segments={segments}
               activeColor={!canCreate || labelId == null ? null : colorOf(labelId)}
               pendingSegment={pendingSpan}
+              selectedIndex={selSegIdx >= 0 ? selSegIdx : null}
+              onSelectSegment={(idx) => setSelSegId(idx == null ? null : items[idx]?.id ?? null)}
               onCreateSegment={canCreate ? handleCreateFromChart : undefined}
               onResizeSegment={!readOnly || canFlag || segReview ? handleResizeFromChart : undefined}
               onReadOnlyEdit={readOnly ? () => message.info({ content: readOnlyHint, key: "ro-edit" }) : undefined}

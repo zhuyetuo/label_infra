@@ -89,6 +89,8 @@ export function ImuChartHint() {
           <br />
           拖已有色块：挪整段；拖左右边缘：改起止
           <br />
+          单击片段选中，按 Delete 删除（右键菜单里也有删除）
+          <br />
           Shift+滚轮：缩放
           <br />
           放大后 Shift+拖动：左右平移
@@ -121,6 +123,10 @@ interface Props {
   activeColor?: string | null;
   /** 先拉片段再选类别：刚拖出来、还没选类别的起止，画成灰色预览等用户点类别 */
   pendingSegment?: { startMs: number; endMs: number } | null;
+  /** 当前选中的片段（segments 下标）：选中后可以按 Delete 删、也能看出操作的是哪一段 */
+  selectedIndex?: number | null;
+  /** 单击片段选中（没拖动）；点空白处传 null */
+  onSelectSegment?: (index: number | null) => void;
   onCreateSegment?: (startMs: number, endMs: number) => void;
   /** 拖已有色块的左右边缘改时间 */
   onResizeSegment?: (index: number, startMs: number, endMs: number) => void;
@@ -141,6 +147,9 @@ interface AnnotateCtx {
   pending: { startMs: number; endMs: number; color: string } | null;
   /** 松手后还没选类别的片段（工作台挂在这等类别），画成灰色 */
   preview: { startMs: number; endMs: number } | null;
+  /** 选中的片段下标（单击选中，Delete 删除） */
+  selected: number | null;
+  onSelect: ((index: number | null) => void) | null;
   redrawAll: () => void;
   /** 鼠标停在哪一段的哪个位置：s / e = 起止边（拖了改时间），move = 色块顶上那条（拖了整段平移），
    *  inside = 只是在色块里（提示顶上能拖）。画高亮和提示字用 */
@@ -168,6 +177,8 @@ export default function ImuChart({
   timeAxisOnlyLast,
   activeColor,
   pendingSegment,
+  selectedIndex,
+  onSelectSegment,
   onCreateSegment,
   onResizeSegment,
   onReadOnlyEdit,
@@ -200,6 +211,8 @@ export default function ImuChart({
     onResize: null,
     pending: null,
     preview: null,
+    selected: null,
+    onSelect: null,
     redrawAll: () => {},
     hover: null,
     hoverOwner: null,
@@ -210,6 +223,8 @@ export default function ImuChart({
   });
   annotateRef.current.activeColor = activeColor ?? null;
   annotateRef.current.preview = pendingSegment ?? null;
+  annotateRef.current.selected = selectedIndex ?? null;
+  annotateRef.current.onSelect = onSelectSegment ?? null;
   annotateRef.current.onCreate = onCreateSegment ?? null;
   annotateRef.current.onResize = onResizeSegment ?? null;
   annotateRef.current.onReadOnlyEdit = onReadOnlyEdit ?? null;
@@ -232,6 +247,12 @@ export default function ImuChart({
     annotateRef.current.preview = pendingSegment ?? null;
     plotRefs.current.forEach((p) => p?.redraw(false));
   }, [pendingSegment]);
+
+  // 选中的片段换了：把选中框画出来
+  useEffect(() => {
+    annotateRef.current.selected = selectedIndex ?? null;
+    plotRefs.current.forEach((p) => p?.redraw(false));
+  }, [selectedIndex]);
 
   useEffect(() => {
     let disposed = false;
@@ -555,8 +576,8 @@ function segmentBandPlugin(
               ctx.fillRect(sx + 4 * dpr, st + sh / 2 - 8 * dpr, tw + 6 * dpr, 16 * dpr);
               ctx.fillStyle = "#000";
               ctx.fillText(t, sx + 7 * dpr, st + sh / 2 - 6 * dpr);
-            } else if (annotateRef.current.onSplit && x1 - x0 > 190 * dpr) {
-              const t = "右键改类别 · Alt+点击 拆开";
+            } else if (annotateRef.current.onSplit && x1 - x0 > 250 * dpr) {
+              const t = "单击选中（Delete 删）· 右键改类别 · Alt+点击 拆开";
               ctx.fillStyle = "rgba(255,255,255,.85)";
               ctx.fillText(t, x0 + 4 * dpr, st + sh - 15 * dpr);
             }
@@ -600,6 +621,7 @@ function segmentBandPlugin(
         const edges = new Map<string, Path2D>();
         const labels: { x: number; y: number; text: string; color: string }[] = [];
         let highlighted: { x0: number; x1: number; seg: ChartSegment } | null = null;
+        let selected: { x0: number; x1: number; seg: ChartSegment } | null = null;
 
         // x 轴是线性时间轴，自己按比例算像素比每段调两次 valToPos 便宜
         const scaleMin = u.scales.x.min ?? 0;
@@ -607,10 +629,15 @@ function segmentBandPlugin(
         const pxPerSec = u.bbox.width / Math.max(1e-9, scaleMax - scaleMin);
         const toX = (ms: number) => left + (startEpoch + ms / 1000 - scaleMin) * pxPerSec;
 
-        for (const seg of segs) {
+        for (let si = 0; si < segs.length; si++) {
+          const seg = segs[si];
           const x0 = toX(seg.start_time_ms);
           const x1 = toX(seg.end_time_ms);
           if (x1 < left || x0 > right) continue;
+          // 选中的这一段：画一圈实线框，跟"只是鼠标停着"区分开
+          if (si === annotateRef.current.selected && si < segmentsRef.current.length) {
+            selected = { x0, x1, seg };
+          }
           if (
             highlight &&
             highlight.start_time_ms === seg.start_time_ms &&
@@ -692,6 +719,16 @@ function segmentBandPlugin(
             const endWidth = ctx.measureText(endLabel).width;
             ctx.fillText(endLabel, Math.min(right, x1) - endWidth - 3, top + h - 14);
           }
+        }
+
+        if (selected) {
+          const { x0, x1, seg } = selected;
+          const lanes = seg.lanes && seg.lanes > 1 ? seg.lanes : 1;
+          const sh = h / lanes;
+          const st = top + (seg.lane ?? 0) * sh;
+          ctx.strokeStyle = seg.color;
+          ctx.lineWidth = 2.5;
+          ctx.strokeRect(x0, st, Math.max(1, x1 - x0), sh);
         }
         ctx.restore();
       },
@@ -1063,6 +1100,7 @@ function dragPanPlugin(
           // 选过类别就按那个颜色画；还没选就先灰色，松手后工作台向上弹类别。
           // 放大后想平移改用 Shift+拖动（普通拖动优先留给划片段）
           if (annotateRef.current.onCreate && !hit && !e.shiftKey) {
+            annotateRef.current.onSelect?.(null);
             bandDragging = true;
             resizeIdx = -1;
             bandAnchorMs = toMs(startRelX);
@@ -1076,6 +1114,7 @@ function dragPanPlugin(
             return;
           }
 
+          annotateRef.current.onSelect?.(null);
           dragging = true;
           startMin = u.scales.x.min!;
           startMax = u.scales.x.max!;
@@ -1137,6 +1176,7 @@ function dragPanPlugin(
           }
 
           if (bandDragging) {
+            maxMoveDistance = Math.max(maxMoveDistance, Math.abs(relX - startRelX));
             const cur = toMs(relX);
             if (moveIdx >= 0) {
               const seg = segmentsRef.current[moveIdx];
@@ -1198,7 +1238,10 @@ function dragPanPlugin(
             // 太短的当成误点，不生成区间
             if (pending && pending.endMs - pending.startMs >= MIN_SEGMENT_MS) {
               if (idx >= 0) {
-                annotateRef.current.onResize?.(idx, Math.round(pending.startMs), Math.round(pending.endMs));
+                // 按了片段但几乎没动 = 单击选中（选中后可以按 Delete 删），
+                // 不能当成"改起止"往库里写一遍同样的时间
+                if (maxMoveDistance < 3) annotateRef.current.onSelect?.(idx);
+                else annotateRef.current.onResize?.(idx, Math.round(pending.startMs), Math.round(pending.endMs));
               } else {
                 annotateRef.current.onCreate?.(Math.round(pending.startMs), Math.round(pending.endMs));
               }
