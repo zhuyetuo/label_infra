@@ -1940,6 +1940,40 @@ export default function AnnotationWorkspace({
           </Button>
         </Tooltip>
       )}
+      {canCreate && labels.length > 0 && (
+        <>
+          <Button size="small" type="link" style={{ padding: "0 2px" }} onClick={() => setLabelsOpen((v) => !v)}>
+            {labelsOpen ? "收起类别" : `类别（${labels.length}）▾`}
+          </Button>
+          {!labelsOpen && labelId != null && (
+            <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
+              {chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}
+            </Tag>
+          )}
+          <Tooltip title={markStartMs == null
+            ? "边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消"
+            : `起点现在 ${fmtMs(markStartMs)}，点一下按当前播放位置重标`}>
+            <Button size="small" danger={markStartMs != null} onClick={() => markAt("start")}>
+              {markStartMs == null ? "标起点 [" : "重标起点"}
+            </Button>
+          </Tooltip>
+          <Button size="small" disabled={markStartMs == null} onClick={() => markAt("end")}>标终点 ]</Button>
+          {labelId == null && !labelsOpen && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>先选类别</Typography.Text>
+          )}
+          <Tooltip title={<div style={{ maxWidth: 340, whiteSpace: "normal" }}>
+            {readOnly && <>查看模式下新建：每标一段直接存库、算你通过（不用认领）。<br /></>}
+            {manualMode ? "从零标注：AI 片段已隐藏。选好类别在波形上拖一段就建好；" : "选好类别后，在波形上拖一段就建好；"}
+            边播边标按 [ 开始、] 结束。
+          </div>}>
+            <QuestionCircleOutlined style={{ color: "#999" }} />
+          </Tooltip>
+          {readOnly && (
+            <Button size="small" type="link" style={{ padding: 0 }}
+              onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>退出新建</Button>
+          )}
+        </>
+      )}
       {/* 同一只狗前后一个小时：连着翻，人眼找想要的画面（比如喝水） */}
       {nav && (nav.prev || nav.next) && (
         <Space.Compact size="small">
@@ -2884,38 +2918,10 @@ export default function AnnotationWorkspace({
             )}
           </div>
         )}
-        {canCreate && (
+        {/* 类别展开了才占这一块；标注员这边还有 AI 预标注 / 模型，单独留着别跟着收起 */}
+        {canCreate && (labelsOpen || labels.length === 0 || !readOnly) && (
           <div style={{ margin: "12px 0", padding: 8, background: "var(--sl-fill)", borderRadius: 4 }}>
-            {readOnly && (
-              <div style={{ fontSize: 12, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
-                <Typography.Text type="warning">查看模式下新建：每标一段直接存库、算你通过（不用认领）</Typography.Text>
-                <Button size="small" type="link" style={{ padding: 0 }}
-                  onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>收起</Button>
-              </div>
-            )}
-            {manualMode && (
-              <div style={{ fontSize: 12, marginBottom: 6, color: "var(--sl-text2)" }}>
-                从零标注中：AI 片段已隐藏。选好类别 → 在波形上按住左键拖一段就建好；边播边标按 <b>[</b> 开始、<b>]</b> 结束。
-              </div>
-            )}
             <Space wrap size={6} style={{ marginBottom: 8 }}>
-              {labels.length > 0 && (
-                <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setLabelsOpen((v) => !v)}>
-                  {labelsOpen ? "收起类别 ▴" : `展开选类别（${labels.length}）▾`}
-                </Button>
-              )}
-              {!labelsOpen && labelId != null && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ color: "#999", fontSize: 12 }}>当前：</span>
-                  <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
-                    {chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}
-                  </Tag>
-                  <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setLabelId(null)}>清除</Button>
-                </span>
-              )}
-              {!labelsOpen && labelId == null && labels.length > 0 && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>先展开选一个类别，再在波形上拖</Typography.Text>
-              )}
               {labelsOpen && labelRows.map((row, r) => (
                 <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   {row.parent && (
@@ -2968,21 +2974,6 @@ export default function AnnotationWorkspace({
             {labels.length === 0 && (
               <Typography.Text type="secondary">还没有标签，先去「标签管理」里建</Typography.Text>
             )}
-            {labels.length > 0 && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  <Tooltip title="边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消">
-                    <Button size="small" type={markStartMs == null ? "primary" : "default"} danger={markStartMs != null}
-                      onClick={() => markAt("start")}>
-                      {markStartMs == null ? "● 标起点 [" : `● 重标起点（现在 ${fmtMs(markStartMs)}）`}
-                    </Button>
-                  </Tooltip>
-                  <Button size="small" type={markStartMs != null ? "primary" : "default"} disabled={markStartMs == null}
-                    onClick={() => markAt("end")}>
-                    ■ 标终点 ]
-                  </Button>
-                  {labelId == null && <Typography.Text type="secondary" style={{ fontSize: 12 }}>先选标签</Typography.Text>}
-                </span>
-              )}
               {!readOnly && hasCsv && sampleId != null && labels.length > 0 && (
                 /* 误点一下就重跑一遍模型，代价不小：没人碰过的 AI 片段会被整批
                    换掉。所以问一句，并且把"会保留几段人工成果"写清楚 */
