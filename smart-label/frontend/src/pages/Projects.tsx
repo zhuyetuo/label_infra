@@ -2465,8 +2465,9 @@ export default function Projects() {
                     title: "操作",
                     width: 190,
                     render: (_, task: Task) => {
-                      // 自己锁着的进行中任务才能改，其余情况（已提交/别人在标/管理员旁观）只读
-                      const editable = task.status === "IN_PROGRESS" && task.locked_by === userId;
+                      // 自己锁着的进行中任务能改；管理员 / 超管不受锁限制，别人标到一半的也能直接进去改
+                      const ownLock = task.status === "IN_PROGRESS" && task.locked_by === userId;
+                      const editable = ownLock || (isAdmin && task.status === "IN_PROGRESS");
                       return (
                         <Space size={[4, 2]} wrap>
                           {/* 认领 = 领到自己名下来标（不是审核）。已经指派给别人的领不到，不显示，
@@ -2493,7 +2494,7 @@ export default function Projects() {
                               </Button>
                             </Tooltip>
                           )}
-                          {editable && (
+                          {ownLock && (
                             <Popconfirm
                               title="放弃任务"
                               description="退回公共池，别人可以接手；已经标的内容会保留成草稿，不会丢"

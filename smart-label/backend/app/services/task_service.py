@@ -331,7 +331,9 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     task = await db.get(Task, task_id)
     if task is None:
         raise TaskConflictError("任务不存在")
-    if task.locked_by != user.id or task.status != TaskStatus.IN_PROGRESS:
+    # 管理员 / 超管不受锁限制：别人标到一半的任务也能直接进去改，存草稿不用先抢锁
+    is_admin = user.role in (UserRole.admin, UserRole.super_admin)
+    if task.status != TaskStatus.IN_PROGRESS or (task.locked_by != user.id and not is_admin):
         raise TaskConflictError("任务不在你名下或已不在进行中，无法保存")
 
     record = await _get_or_create_record(db, task)
@@ -525,7 +527,9 @@ async def submit_task(db: AsyncSession, task_id: int, user: User) -> Task:
     task = await db.get(Task, task_id)
     if task is None:
         raise TaskConflictError("任务不存在")
-    if task.locked_by != user.id or task.status != TaskStatus.IN_PROGRESS:
+    # 同上：管理员不持有锁也能提交（他改完就该能收尾，不用先把任务抢过来）
+    is_admin = user.role in (UserRole.admin, UserRole.super_admin)
+    if task.status != TaskStatus.IN_PROGRESS or (task.locked_by != user.id and not is_admin):
         raise TaskConflictError("任务不在你名下或已不在进行中，无法提交")
 
     record = await _get_or_create_record(db, task)
