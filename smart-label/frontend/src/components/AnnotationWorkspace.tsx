@@ -1943,24 +1943,23 @@ export default function AnnotationWorkspace({
       {canCreate && labels.length > 0 && (
         <>
           <Button size="small" type="link" style={{ padding: "0 2px" }} onClick={() => setLabelsOpen((v) => !v)}>
-            {labelsOpen ? "收起类别" : `类别（${labels.length}）▾`}
+            {labelsOpen ? "收起类别" : "类别 ▾"}
           </Button>
           {!labelsOpen && labelId != null && (
-            <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
-              {chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}
-            </Tag>
+            <Tooltip title={chainOf(labelById, labelId).map((l) => l.display_name).join(" › ")}>
+              <Tag style={{ marginInlineEnd: 0, color: "#fff", background: colorOf(labelId), borderColor: colorOf(labelId) }}>
+                {shortName(labelById, labelById.get(labelId)!)}
+              </Tag>
+            </Tooltip>
           )}
           <Tooltip title={markStartMs == null
             ? "边播边标：选好标签 → 播放 → 动作开始时按 [（或点这里）→ 结束时按 ]。比在波形上拖准，也不用停下来。Esc 取消"
             : `起点现在 ${fmtMs(markStartMs)}，点一下按当前播放位置重标`}>
             <Button size="small" danger={markStartMs != null} onClick={() => markAt("start")}>
-              {markStartMs == null ? "标起点 [" : "重标起点"}
+              {markStartMs == null ? "起点 [" : "重标起点"}
             </Button>
           </Tooltip>
-          <Button size="small" disabled={markStartMs == null} onClick={() => markAt("end")}>标终点 ]</Button>
-          {labelId == null && !labelsOpen && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>先选类别</Typography.Text>
-          )}
+          <Button size="small" disabled={markStartMs == null} onClick={() => markAt("end")}>终点 ]</Button>
           <Tooltip title={<div style={{ maxWidth: 340, whiteSpace: "normal" }}>
             {readOnly && <>查看模式下新建：每标一段直接存库、算你通过（不用认领）。<br /></>}
             {manualMode ? "从零标注：AI 片段已隐藏。选好类别在波形上拖一段就建好；" : "选好类别后，在波形上拖一段就建好；"}
@@ -1970,7 +1969,7 @@ export default function AnnotationWorkspace({
           </Tooltip>
           {readOnly && (
             <Button size="small" type="link" style={{ padding: 0 }}
-              onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>退出新建</Button>
+              onClick={() => { setRoCreate(false); setLabelId(null); setMarkStartMs(null); }}>退出</Button>
           )}
         </>
       )}
