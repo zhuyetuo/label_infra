@@ -21,7 +21,7 @@ from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import label_template_service as tsvc
-from app.services import label_tracks
+from app.services import label_tracks, label_tree
 from app.schemas.label_template import (
     ApplyTemplateResult,
     LabelTemplateCreate,
@@ -250,6 +250,43 @@ async def delete_template(template_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(tpl)
     await db.commit()
     return ok(msg="模板已删除")
+
+
+@router.post("/sync-project/{project_id}")
+async def sync_project(project_id: int, db: AsyncSession = Depends(get_db),
+                       admin: User = Depends(get_current_user)):
+    """按项目对应的标签模板同步一次：补上模板里新加的标签，并把还跟着模板的标签的上级对齐。
+    项目里已经跟模板脱钩（自己改过）的不动。老项目一条都没挂上时，先按名字认一遍。"""
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+
+    async def linked_template_ids() -> list[int]:
+        return (await db.execute(
+            select(LabelTemplateItem.template_id)
+            .join(LabelDefinition, LabelDefinition.template_item_id == LabelTemplateItem.id)
+            .where(LabelDefinition.project_id == project_id)
+            .distinct()
+        )).scalars().all()
+
+    tids = await linked_template_ids()
+    if not tids:
+        # 以前手工建的平铺标签：先按名字/内置约定挂到模板条目上（跟启动时做的一样），再同步
+        await label_tree.link_from_templates(db, project_id)
+        await label_tree.link_by_convention(db, project_id)
+        tids = await linked_template_ids()
+
+    totals = {"created": 0, "skipped": 0, "linked": 0}
+    for tid in tids:
+        items = (await _load_items(db, [tid])).get(tid, [])
+        if not items:
+            continue
+        r = await tsvc.apply_to_project(db, items, project_id, admin.id)
+        totals["created"] += r["created"]
+        totals["skipped"] += r["skipped"]
+        totals["linked"] += r["linked"]
+    await db.commit()
+    return ok({**totals, "templates": len(tids)})
 
 
 @router.post("/{template_id}/apply-to/{project_id}")

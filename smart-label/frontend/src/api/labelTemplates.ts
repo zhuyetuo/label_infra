@@ -48,3 +48,9 @@ export const applyLabelTemplate = (templateId: number, projectId: number) =>
   request.post<never, { created: number; skipped: number; skipped_codes: string[]; linked: number }>(
     `/label-templates/${templateId}/apply-to/${projectId}`
   );
+
+/** 按项目对应的标签模板同步：补新标签、把还跟着模板的标签的上级对齐 */
+export const syncProjectLabelsFromTemplate = (projectId: number) =>
+  request.post<never, { created: number; skipped: number; linked: number; templates: number }>(
+    `/label-templates/sync-project/${projectId}`
+  );

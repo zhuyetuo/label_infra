@@ -91,6 +91,12 @@ async def apply_to_project(db: AsyncSession, items: list[LabelTemplateItem], pro
             label.parent_id = parent.id
             if item.code in skipped:
                 linked += 1
+        elif label.template_item_id == item.id and label.parent_id != parent.id:
+            # 还跟着模板条目的标签：父子关系以模板为准（模板里把子标签挪到别的上级下，项目里跟着挪）；
+            # 只是同名复用、已经和模板脱钩的（自己改过颜色/手动摆过层级的）不动
+            label.parent_id = parent.id
+            if item.code in skipped:
+                linked += 1
     return {"created": created, "skipped": len(skipped), "skipped_codes": skipped, "linked": linked}
 
 

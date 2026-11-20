@@ -7,6 +7,7 @@ import {
   applyLabelTemplate,
   listLabelTemplates,
   saveProjectLabelsAsTemplate,
+  syncProjectLabelsFromTemplate,
 } from "@/api/labelTemplates";
 import LabelTemplates from "@/pages/LabelTemplates";
 import ProjectPicker from "@/components/ProjectPicker";
@@ -73,6 +74,21 @@ function LabelDefinitionsPanel() {
     }
     setApplyOpen(false);
     setApplyTemplateId(null);
+    refresh();
+  };
+
+  const handleSyncFromTemplate = async () => {
+    if (projectId == null) return;
+    const r = await syncProjectLabelsFromTemplate(projectId);
+    if (!r.templates) {
+      message.warning("这个项目还没有跟任何标签模板对应上，先「套用模板」一次");
+    } else if (!r.created && !r.linked) {
+      message.success(`已经和 ${r.templates} 个标签模板一致`);
+    } else {
+      message.success(
+        `按 ${r.templates} 个模板同步：新增 ${r.created} 个标签` + (r.linked ? `，对齐 ${r.linked} 处上级/分轨` : "")
+      );
+    }
     refresh();
   };
 
@@ -174,6 +190,11 @@ function LabelDefinitionsPanel() {
         <Button disabled={projectId == null} onClick={() => setApplyOpen(true)}>
           套用模板
         </Button>
+        <Tooltip title="项目跟着哪几个标签模板，就按它们补齐新加的标签、把还跟着模板的标签的上级对齐；项目里自己改过的保持不动">
+          <Button disabled={projectId == null} onClick={handleSyncFromTemplate}>
+            按模板同步
+          </Button>
+        </Tooltip>
         <Button disabled={projectId == null || !data?.length} onClick={() => setSaveTplOpen(true)}>
           存为模板
         </Button>
