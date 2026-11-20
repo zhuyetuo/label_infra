@@ -39,7 +39,7 @@ import { clearSimilarCandidates, findSimilarCandidates, repairCandidateItems, de
 import LabelTreeSelect from "@/components/LabelTreeSelect";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import { DRAFT_STALE_EVENT, getDraft, heartbeat, reopenTask, saveDraft, setReviewNote, submitTask } from "@/api/tasks";
-import ImuChart, { ImuChartHint, type ChartSegment } from "@/components/ImuChart";
+import ImuChart, { ImuChartHint, ImuScrubber, type ChartSegment } from "@/components/ImuChart";
 import ImuTable from "@/components/ImuTable";
 import SyncedVideoGroup from "@/components/SyncedVideoGroup";
 import { TimeBus } from "@/utils/timeBus";
@@ -2527,6 +2527,8 @@ export default function AnnotationWorkspace({
               />
             )}
           </div>
+          {/* 播放进度单独一行放在波形下面：找位置不用在色块上点，避免误动已标片段 */}
+          <ImuScrubber sampleId={sampleId} bus={bus} />
           {(
             // 两种模式都给这个把手：波形要多高是看数据的人说了算
             <div

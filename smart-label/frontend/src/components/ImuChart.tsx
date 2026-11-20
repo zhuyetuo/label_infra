@@ -100,7 +100,9 @@ export function ImuChartHint() {
           <br />
           放大后 Shift+拖动：左右平移
           <br />
-          单击 / 拖动波形底部那条播放头：视频跳到该时刻（放大后拖到边缘会自动继续滚动）
+          拖波形下方那条进度条：视频跳到该时刻（播放时进度跟着走）
+          <br />
+          在空白处拖动：按当前类别划一段（从零标注时先拉片段、再选类别）
           <br />
           双击：恢复整体视图
         </div>
@@ -522,6 +524,134 @@ export default function ImuChart({
   );
 }
 
+/**
+ * 专门的播放进度条：波形下面单独一行，点/拖都是找位置，波形整片留给片段。
+ * 波形里那条播放头只做位置指示，不再能抓——原来色块铺满时想拖进度很容易
+ * 点到已经标好的片段，把起止挪歪。
+ */
+export function ImuScrubber({ sampleId, bus }: { sampleId: number; bus: TimeBus }) {
+  const { token } = theme.useToken();
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const knobRef = useRef<HTMLDivElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const durationRef = useRef(0);
+  const lastSecRef = useRef(0);
+  const seekingRef = useRef(false);
+
+  const clock = (sec: number) => {
+    const s = Math.max(0, sec);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = Math.floor(s % 60);
+    const base = h
+      ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+      : `${m}:${String(ss).padStart(2, "0")}`;
+    return `${base}.${Math.floor((s - Math.floor(s)) * 10)}`;
+  };
+
+  const paint = (sec: number) => {
+    lastSecRef.current = sec;
+    const d = durationRef.current;
+    if (!d) return;
+    const p = Math.max(0, Math.min(1, sec / d));
+    if (fillRef.current) fillRef.current.style.width = `${p * 100}%`;
+    if (knobRef.current) knobRef.current.style.left = `${p * 100}%`;
+    if (textRef.current) textRef.current.textContent = `${clock(sec)} / ${clock(d)}`;
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    getMeta(sampleId)
+      .then((meta) => {
+        if (disposed) return;
+        durationRef.current = meta.duration_ms / 1000;
+        paint(lastSecRef.current);
+      })
+      .catch(() => {});
+    const unsub = bus.onTime((sec) => paint(sec));
+    return () => {
+      disposed = true;
+      unsub();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sampleId, bus]);
+
+  const seekAt = (clientX: number) => {
+    const el = barRef.current;
+    const d = durationRef.current;
+    if (!el || !d) return;
+    const r = el.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    const sec = p * d;
+    bus.seek(sec);
+    paint(sec);
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 8px 2px", flex: "0 0 auto" }}>
+      <div
+        ref={barRef}
+        title="点击或拖动定位视频"
+        onPointerDown={(e) => {
+          seekingRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          seekAt(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (seekingRef.current) seekAt(e.clientX);
+        }}
+        onPointerUp={() => {
+          seekingRef.current = false;
+        }}
+        onPointerCancel={() => {
+          seekingRef.current = false;
+        }}
+        style={{
+          position: "relative",
+          flex: 1,
+          height: 16,
+          display: "flex",
+          alignItems: "center",
+          cursor: "pointer",
+          touchAction: "none",
+        }}
+      >
+        <div style={{ width: "100%", height: 6, borderRadius: 3, background: token.colorFillSecondary, overflow: "hidden" }}>
+          <div ref={fillRef} style={{ width: "0%", height: "100%", background: token.colorPrimary }} />
+        </div>
+        <div
+          ref={knobRef}
+          style={{
+            position: "absolute",
+            left: "0%",
+            top: 3,
+            width: 10,
+            height: 10,
+            marginLeft: -5,
+            borderRadius: "50%",
+            background: token.colorPrimary,
+            border: `2px solid ${token.colorBgContainer}`,
+          }}
+        />
+      </div>
+      <span
+        ref={textRef}
+        style={{
+          fontSize: 11,
+          color: token.colorTextSecondary,
+          fontVariantNumeric: "tabular-nums",
+          whiteSpace: "nowrap",
+          minWidth: 108,
+          textAlign: "right",
+        }}
+      >
+        0:00.0 / 0:00.0
+      </span>
+    </div>
+  );
+}
+
 // 把已标注的时间段画成半透明色块垫在曲线下面，第一张图上再标上标签名，
 // 这样一眼能看出哪段已经标了什么行为。
 function segmentBandPlugin(
@@ -918,9 +1048,8 @@ function segmentHighlightPlugin(
   };
 }
 
-const PLAYHEAD_GRAB_PX = 8;
-// 播放头只占波形最底下这么高的一条（像视频进度条），拖动/悬停的判定也只在
-// 这一条里生效——这样拖片段边界、挪整段时不会被播放头抢走
+// 播放头只占波形最底下这么高的一条（像视频进度条），只做位置指示、不再能抓：
+// 找进度用波形下面那条专用进度条，波形中间整片留给片段
 const PLAYHEAD_BAND_PX = 22;
 const SEGMENT_EDGE_GRAB_PX = 8; // 色块边缘多少像素内按下算"拖边缘改时间"（原来 5，太难点中）
 const SEGMENT_MOVE_GRIP_PX = 14; // 色块顶上多高一条算"拖动整段"的把手
@@ -1091,26 +1220,6 @@ function dragPanPlugin(
             e.preventDefault();
             return;
           }
-          // 播放头在波形底部那一条里：优先给播放头，避免色块盖满时抓不到它。
-          // 中间整片还是留给片段，拖边界/挪整段不会被抢
-          if (playheadState.current != null) {
-            // 注意：valToPos 第三个参数是"是否返回canvas设备像素坐标"，这里要跟
-            // e.clientX 一样是 CSS 像素坐标（DOM鼠标坐标），所以不能传 true，
-            // 否则在 devicePixelRatio != 1 的屏幕上，附近判定会完全偏掉。
-            const playheadX = u.valToPos(playheadState.current, "x", false);
-            const inBand = e.clientY - over.getBoundingClientRect().top >= over.clientHeight - PLAYHEAD_BAND_PX;
-            if (inBand && Math.abs(playheadX - startRelX) <= PLAYHEAD_GRAB_PX) {
-              seekDragging = true;
-              draggingPlayheadRef.current = true;
-              over.style.cursor = "ew-resize";
-              onClickSeek(u.posToVal(startRelX, "x"));
-              stopAutoScroll();
-              autoScrollRaf = requestAnimationFrame(autoScrollStep);
-              e.preventDefault();
-              return;
-            }
-          }
-
           if (hit && !annotateRef.current.onResize && hit.kind !== "inside") {
             // 只读：别默默变成平移 / 跳转，说清楚为什么改不了
             annotateRef.current.onReadOnlyEdit?.();
@@ -1191,21 +1300,15 @@ function dragPanPlugin(
           }
           const relX = e.clientX - overRectLeft;
           if (!dragging && !seekDragging && !bandDragging) {
-            // 靠近播放头（还没按下去）时先给个提示：光标变成可拖拽样式，
-            // 播放头本身也高亮，不用真按下去试才知道这条线能拖
-            let nearPlayhead = false;
-            if (playheadState.current != null) {
-              const playheadX = u.valToPos(playheadState.current, "x", false);
-              const inBand = e.clientY - over.getBoundingClientRect().top >= over.clientHeight - PLAYHEAD_BAND_PX;
-              nearPlayhead = inBand && Math.abs(playheadX - relX) <= PLAYHEAD_GRAB_PX;
-            }
-            if (nearPlayhead !== playheadHoverRef.current) {
-              playheadHoverRef.current = nearPlayhead;
+            // 播放头只做指示，不在波形上抓它——找位置用波形下面那条专用进度条，
+            // 免得拖进度时点到已经标好的片段。这里只处理色块的悬停提示
+            if (playheadHoverRef.current) {
+              playheadHoverRef.current = false;
               annotateRef.current.redrawAll();
             }
             const r = over.getBoundingClientRect();
             const inThis = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-            const hit = nearPlayhead || !inThis ? null : hitTest(e);
+            const hit = !inThis ? null : hitTest(e);
             const prev = annotateRef.current.hover;
             // 不在这张图上：只有 hover 是这张图设的才清，别把别的图刚设的抹掉
             if ((inThis || annotateRef.current.hoverOwner === over) &&
@@ -1223,8 +1326,6 @@ function dragPanPlugin(
             if (!inThis) return;
             if (sm != null) {
               over.style.cursor = "crosshair";
-            } else if (nearPlayhead) {
-              over.style.cursor = "ew-resize";
             } else if (hit) {
               const ro = !annotateRef.current.onResize;
               over.style.cursor = ro ? "not-allowed" : hit.kind === "move" || hit.kind === "inside" ? "grab" : "ew-resize";
