@@ -1845,6 +1845,13 @@ export default function AnnotationWorkspace({
   // 当前任务里实际存在的面板（没跑过画面对照就没有那一块），按用户顺序
   const presentPanels: PanelKey[] = panelOrder.filter((k) => k !== "cross" || hasCross);
   const shownPanels = presentPanels.filter((k) => !panelHidden.includes(k));
+  /** 折叠掉的面板标签。查看模式下跟「新建片段」挤一行，不单独占一行把下面的面板区往下压 */
+  const hiddenPanelKeys = panelHidden.filter((k) => presentPanels.includes(k));
+  const hiddenPanelTags = hiddenPanelKeys.map((k) => (
+    <Tooltip key={k} title="点一下恢复显示">
+      <Tag style={{ cursor: "pointer" }} onClick={() => showPanel(k)}>{PANEL_TITLES[k]}</Tag>
+    </Tooltip>
+  ));
   // IMU 波形排在最前面时钉在滚动区外面（跟原来一样：波形要跟视频一起盯着看，
   // 翻列表时不能被滚走）；挪到别的位置就跟其他面板一起在滚动区里
   const pinnedImu = shownPanels[0] === "imu";
@@ -2843,10 +2850,17 @@ export default function AnnotationWorkspace({
         )}
 
         {roCreateAllowed && !roCreate && (
-          <div style={{ margin: "8px 0" }}>
+          <div style={{ margin: "8px 0", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <Tooltip title="不用认领：选标签后用「标起点 / 标终点」或在波形上拖，标出来的直接存库、算你通过">
               <Button size="small" icon={<PlusOutlined />} onClick={() => setRoCreate(true)}>新建片段</Button>
             </Tooltip>
+            {/* 「已隐藏」跟按钮并排：单独一行会把下面的面板区整体往下压一截 */}
+            {hiddenPanelKeys.length > 0 && (
+              <>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>已隐藏：</Typography.Text>
+                {hiddenPanelTags}
+              </>
+            )}
           </div>
         )}
         {canCreate && (
@@ -2987,17 +3001,12 @@ export default function AnnotationWorkspace({
             </Space>
           </div>
         )}
-        {/* 「已隐藏」放在面板区最上面（IMU 波形上面）：夹在波形和片段列表中间看着像哪个面板的一部分 */}
-        {panelHidden.some((k) => presentPanels.includes(k)) && (
+        {/* 「已隐藏」放在面板区最上面（IMU 波形上面）：夹在波形和片段列表中间看着像哪个面板的一部分。
+            查看模式里已经跟「新建片段」并排了，这里就不重复占一行 */}
+        {hiddenPanelKeys.length > 0 && !(roCreateAllowed && !roCreate) && (
           <div style={{ marginTop: 6, marginBottom: 2, fontSize: 12, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
             <Typography.Text type="secondary">已隐藏：</Typography.Text>
-            {panelHidden.filter((k) => presentPanels.includes(k)).map((k) => (
-              <Tooltip key={k} title="点一下恢复显示">
-                <Tag style={{ cursor: "pointer" }} onClick={() => showPanel(k)}>
-                  {PANEL_TITLES[k]}
-                </Tag>
-              </Tooltip>
-            ))}
+            {hiddenPanelTags}
           </div>
         )}
         {pinnedImu && renderPanel("imu")}
