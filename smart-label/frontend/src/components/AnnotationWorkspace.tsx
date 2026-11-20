@@ -784,8 +784,10 @@ export default function AnnotationWorkspace({
     () => labels.filter((l) => l.display_name === "抓挠" || l.code === "抓挠").map((l) => l.id),
     [labels]
   );
-  // 层级标签：第一行只摆大类（没有上级的），选了哪个大类下面才展开它的子类，再下一层同理
+  // 层级标签：第一行只摆大类（没有上级的）。展开跟"选哪个"分开：
+  // 点标签 = 选这个类别（大级别也能直接选）；点后面的 ▾ 才展开子类
   const labelChildren = useMemo(() => childrenMap(labels), [labels]);
+  const [expandPath, setExpandPath] = useState<number[]>([]);
   const labelRows = useMemo(() => {
     // 第一行的大类按互斥轨分组排（行为 / 运动 / 姿态 / 设备），组间画个灰字分隔；没分轨的项目原样
     const roots = [...(labelChildren.get(null) ?? [])];
@@ -795,14 +797,23 @@ export default function AnnotationWorkspace({
     };
     roots.sort((a, b) => rank(a) - rank(b) || a.sort_order - b.sort_order || a.id - b.id);
     const rows: { parent: LabelDefinition | null; items: LabelDefinition[] }[] = [{ parent: null, items: roots }];
-    if (labelId != null) {
-      for (const node of chainOf(labelById, labelId)) {
-        const kids = labelChildren.get(node.id) ?? [];
-        if (kids.length) rows.push({ parent: node, items: kids });
-      }
+    for (const id of expandPath) {
+      const node = labelById.get(id);
+      if (!node) break;
+      const kids = labelChildren.get(id) ?? [];
+      if (!kids.length) break;
+      rows.push({ parent: node, items: kids });
     }
     return rows.slice(0, ROW_KEYS.length);
-  }, [labels, labelId, labelChildren, labelById]);
+  }, [labels, labelById, labelChildren, expandPath]);
+  // 展开某一层的子类（再点一次收起它和它下面的）；只影响看，不动当前选中的类别
+  const toggleExpand = (l: LabelDefinition) => {
+    setExpandPath((prev) => {
+      const idx = prev.indexOf(l.id);
+      if (idx >= 0) return prev.slice(0, idx);
+      return chainOf(labelById, l.id).map((x) => x.id);
+    });
+  };
   const selectedChain = useMemo(() => new Set(labelId != null ? chainOf(labelById, labelId).map((l) => l.id) : []), [labelId, labelById]);
   const colorOf = (id: number) =>
     labelById.get(id)?.color || FALLBACK_COLORS[id % FALLBACK_COLORS.length];
@@ -854,6 +865,13 @@ export default function AnnotationWorkspace({
     setManualModeState(v);
     try { if (manualKey) localStorage.setItem(manualKey, v ? "1" : "0"); } catch { /* ignore */ }
   };
+  // 每次打开类别弹窗：待建区间从大类开始（方便一次点到大类）；平时顺着当前类别展开
+  useEffect(() => {
+    if (!labelsOpen) return;
+    if (pendingSpan || labelId == null) setExpandPath([]);
+    else setExpandPath(chainOf(labelById, labelId).map((x) => x.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labelsOpen]);
   // 波形上画哪些片段。mode="main" 是上面那张（人工标注用的），
   // mode="ai" 是双波形下面那张（只看 AI 的结果，人工自己画的不重复画）
   const buildChartSegments = (mode: "main" | "ai"): ChartSegment[] => {
@@ -2089,6 +2107,9 @@ export default function AnnotationWorkspace({
           已拉出 {formatMs(pendingSpan.startMs)} ~ {formatMs(pendingSpan.endMs)}，点下面类别就建好
         </div>
       )}
+      <div style={{ marginBottom: 6, color: "#999", fontSize: 12 }}>
+        点标签直接选（大级别也能选）；要往下看细分，点标签后面的 ▾ 展开
+      </div>
       <Space wrap size={6}>
         {labelRows.map((row, r) => (
           <span key={row.parent?.id ?? "root"} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -2137,7 +2158,24 @@ export default function AnnotationWorkspace({
                   }}
                 >
                   {row.parent ? shortName(labelById, l) : l.display_name}
-                  {kids > 0 && <span style={{ marginLeft: 3, opacity: 0.6, fontSize: 10 }}>▾</span>}
+                  {kids > 0 && (
+                    <span
+                      title={expandPath.includes(l.id) ? "收起子类" : "展开子类（不影响当前选择的类别）"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpand(l);
+                      }}
+                      style={{
+                        marginLeft: 4,
+                        padding: "0 2px",
+                        opacity: expandPath.includes(l.id) ? 1 : 0.65,
+                        cursor: "pointer",
+                        fontSize: 11,
+                      }}
+                    >
+                      {expandPath.includes(l.id) ? "▴" : "▾"}
+                    </span>
+                  )}
                   {i < ROW_KEYS[r].length && (
                     <span style={{ marginLeft: 6, opacity: 0.65, fontSize: 11 }}>{ROW_KEYS[r][i]}</span>
                   )}
