@@ -100,6 +100,8 @@ export interface Task {
   cand_labels?: Record<string, { n: number; pending: number; max_conf?: number | null }>;
   /** 「专项」来源（抽查 spot / 活动里疑似抓挠 act_scr）还没判的条数 */
   cand_spot_pending?: number;
+  /** 「补标」来源（reason=unl_fill）还没判的条数 */
+  cand_fill_pending?: number;
   /** 专项待判是针对哪几类（抓挠 / 舔…） */
   cand_spot_labels?: string[];
   /** 专项待判按背景分：普通 / 任务已通过 / 跟已有片段重叠 / 两样都是 */

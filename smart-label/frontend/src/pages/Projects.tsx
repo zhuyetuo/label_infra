@@ -4153,6 +4153,7 @@ export default function Projects() {
                 ["model_neg", "负例挖掘模型", "「只补负例候选」写的疑似进食 / 饮水 / 嗅闻；规则候选（姿态像舔、节律像饮水）不在这里，不会被删"],
                 ["spot", "抽查", "新模型报了、人工没标、拿来让人对着视频判的片段；删它不会碰别的来源"],
                 ["act_scr", "专项·活动里疑似抓挠", "训练数据里标「活动」、模型很有把握判成抓挠的片段，人判是漏标的抓挠还是别的动作；删它不会碰别的来源"],
+                ["unl_fill", "补标·未标时间", "模型在没人标过的时间里报的抓挠（抽查约 3/4 是漏标的），确认了写进标注；删它不会碰别的来源"],
               ] as const).map(([key, name, why]) => {
                 const s = purgeSrc.sources[key] ?? { total: 0, pending: 0 };
                 const n = purgeDecided ? s.total : s.pending;

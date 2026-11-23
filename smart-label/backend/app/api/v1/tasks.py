@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
-from app.models.ai_candidate import SPECIAL_REASONS, AiCandidate, CandidateStatus
+from app.models.ai_candidate import FILL_REASONS, SPECIAL_REASONS, AiCandidate, CandidateStatus
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
 from app.models.review import ReviewRecord
 from app.models.project import Project
@@ -532,14 +532,17 @@ async def list_tasks(
                 func.max(case((AiCandidate.status == CandidateStatus.pending, AiCandidate.confidence), else_=None)),
                 # 「专项」来源（抽查 spot / 活动里疑似抓挠 act_scr）还没判的：任务行上单独标红，方便人一眼找到要判的那几段
                 func.sum(case(((AiCandidate.status == CandidateStatus.pending) & (AiCandidate.reason.in_(SPECIAL_REASONS)), 1), else_=0)),
+                # 「补标」来源还没判的：任务行上单独一个蓝标签，几百条混在几万条低置信里人找不着
+                func.sum(case(((AiCandidate.status == CandidateStatus.pending) & (AiCandidate.reason.in_(FILL_REASONS)), 1), else_=0)),
             )
             .join(Task, Task.id == AiCandidate.task_id)
             .join(scope, scope.c.id == Task.id)
             .where(AiCandidate.round_no == Task.round_no)
             .group_by(AiCandidate.task_id, AiCandidate.label_name)
         )
-        for task_id, label_name, n, n_pending, max_conf, n_spot in rows.all():
-            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0, "spot": 0, "spot_labels": []})
+        for task_id, label_name, n, n_pending, max_conf, n_spot, n_fill in rows.all():
+            c = cand_counts.setdefault(task_id, {"n": 0, "pending": 0, "spot": 0, "spot_labels": [], "fill": 0})
+            c["fill"] += int(n_fill or 0)
             c["n"] += int(n)
             c["pending"] += int(n_pending or 0)
             c["spot"] += int(n_spot or 0)
@@ -641,6 +644,7 @@ async def list_tasks(
                 "cand_count": cand_counts.get(t.id, {}).get("n", 0),
                 "cand_pending": cand_counts.get(t.id, {}).get("pending", 0),
                 "cand_spot_pending": cand_counts.get(t.id, {}).get("spot", 0),
+                "cand_fill_pending": cand_counts.get(t.id, {}).get("fill", 0),
                 "cand_spot_labels": sorted(cand_counts.get(t.id, {}).get("spot_labels", [])),
                 "cand_spot_kinds": spot_kinds.get(t.id, {}),
                 # 候选按类别分：{类别名: {n, pending}}。项目页要按它筛、要列出

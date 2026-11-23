@@ -29,6 +29,7 @@ const REASON_COLOR: Record<AiCandidate["reason"], string> = {
   similar: "geekblue",
   spot: "red",
   act_scr: "magenta",
+  unl_fill: "geekblue",
 };
 
 interface Props {
@@ -133,6 +134,7 @@ export const SRC_CN: Record<string, string> = {
   vision: "大模型看视频",
   spot: "抽查·新模型报的",
   act_scr: "专项·活动里疑似抓挠",
+  unl_fill: "补标·未标时间",
 };
 
 const UNCERTAIN_KINDS = [

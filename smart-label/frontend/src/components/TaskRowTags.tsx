@@ -43,13 +43,19 @@ export function CandKindTags({
   specialOnly?: boolean;
 }) {
   const kinds = specialOnly ? [] : Object.entries(task.cand_labels ?? {}).filter(([name, v]) => v.n > 0 && (!only || only.includes(name)));
-  if (!kinds.length && !(task.cand_spot_pending ?? 0)) return null;
+  if (!kinds.length && !(task.cand_spot_pending ?? 0) && !(task.cand_fill_pending ?? 0)) return null;
   // 还有待判的排前面，同样按条数多的在前
   kinds.sort(([, a], [, b]) => Number(b.pending > 0) - Number(a.pending > 0) || b.n - a.n);
   const spot = task.cand_spot_pending ?? 0;
   const spotWhat = (task.cand_spot_labels ?? []).join("/") || "抓挠";
+  const fill = specialOnly ? 0 : task.cand_fill_pending ?? 0;
   return (
     <>
+      {fill > 0 && (
+        <Tooltip title={`这个任务里有 ${fill} 段「补标」疑似抓挠要判：模型在没人标过的时间里很有把握报了抓挠，抽查下来大约 3/4 是漏标的真抓挠。对着视频判：是抓挠就确认（起止可以先调），会写进标注；不是就排除或改成别的`}>
+          <Tag color="geekblue" style={{ marginRight: 0, fontWeight: 600 }}>补标·抓挠 待判 {fill}</Tag>
+        </Tooltip>
+      )}
       {spot > 0 && (
         <Tooltip title={`这个任务里有 ${spot} 段「专项·${spotWhat}」要判（给模型调整用）：模型很有把握报了${spotWhat}、人工却没标。对着视频判：是漏标的就确认，其实是别的动作就改成别的，起止不对 / 几个动作混在一起 / 看不清就选对应的待定。判了就自动记下，不用认领、不用提交`}>
           <Tag color="red" style={{ marginRight: 0, fontWeight: 600 }}>专项·{spotWhat} 待判 {spot}</Tag>

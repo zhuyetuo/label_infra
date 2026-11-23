@@ -425,6 +425,8 @@ _CAND_SOURCES: dict[str, tuple[str, str | None]] = {
     # 专项·活动里疑似抓挠（reason=act_scr）：训练数据里标「活动」、模型很有把握判成抓挠的片段，
     # 人对着视频判是漏标的抓挠还是别的动作。单独一个来源，整批删也不会碰别的
     "act_scr": ("act_scr", None),
+    # 补标（reason=unl_fill）：模型在没人标的时间里报的抓挠，抽查约 3/4 是漏标的，让人补标。确认了写进任务标注
+    "unl_fill": ("unl_fill", "未标负例新模型·未标时间补标"),
 }
 
 

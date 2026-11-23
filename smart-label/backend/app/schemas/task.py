@@ -40,6 +40,8 @@ class TaskOut(BaseModel):
     cand_pending: int = 0
     # 「抽查」来源（reason=spot）还没判的条数：任务行上标红「抽查 待判 n」
     cand_spot_pending: int = 0
+    # 「补标」来源（reason=unl_fill）还没判的条数：任务行上蓝色「补标·抓挠 待判 n」
+    cand_fill_pending: int = 0
     # 同一轨上有重叠的片段数（只有列表接口会算）
     overlap_count: int = 0
     overlap_by_label: dict[int, int] = {}
