@@ -74,9 +74,23 @@ export interface EvalRunProgress {
   detail: string[];
 }
 
+/** 评测范围：评测集 / 日期 / 样本 / 项目（单个、多选、全部）。
+ *  项目范围不要求人工审过——两版互比不需要正确答案。 */
+export interface ScopeParams {
+  set_id?: number;
+  sample_ids?: number[];
+  date_from?: string;
+  date_to?: string;
+  project_ids?: number[];
+  all_projects?: boolean;
+}
+
 /** 给了范围就只数这批样本：n_scope = 这批多少个审过的样本，runs 里的 n_samples = 其中跑了几个 */
-export const listEvalRuns = (params: { set_id?: number; date_from?: string; date_to?: string } = {}) =>
-  request.get<never, { n_scope: number | null; runs: EvalRunOption[] }>("/model-eval/runs", { params });
+export const listEvalRuns = (params: ScopeParams = {}) =>
+  request.get<never, { n_scope: number | null; runs: EvalRunOption[] }>("/model-eval/runs", {
+    // axios 默认把数组拼成 project_ids[]=1，FastAPI 认的是重复键 / 逗号分隔
+    params: { ...params, project_ids: params.project_ids?.join(",") },
+  });
 export const listEvalSets = () => request.get<never, EvalSet[]>("/model-eval/sets");
 export const createEvalSet = (body: {
   name: string;
@@ -97,13 +111,8 @@ export const compareModels = (body: {
   conf_min?: number;
 }) => request.post<never, CompareResult>("/model-eval/compare", body, { timeout: 600_000 });
 
-export const startEvalRun = (body: {
-  set_id?: number;
-  sample_ids?: number[];
-  date_from?: string;
-  date_to?: string;
-  modes: string[];
-}) => request.post<never, { started: boolean; n_samples: number; modes: string[] }>("/model-eval/run", body);
+export const startEvalRun = (body: ScopeParams & { modes: string[] }) =>
+  request.post<never, { started: boolean; n_samples: number; modes: string[] }>("/model-eval/run", body);
 
 export const getEvalRunProgress = () => request.get<never, EvalRunProgress>("/model-eval/run/progress");
 
@@ -145,7 +154,7 @@ export const listEdgeModels = () =>
  *  人会以为它是板子会跑的东西。 */
 export interface ServerModel {
   tag: string;
-  /** 默认那个 = 界面上「稳定版 / 稳定版 v2 / 调试版」用的那份模型。
+  /** 默认那个 = 界面上「稳定版 / 稳定版v2 / 调试版」用的那份模型。
    *  它的 spec 是 null：再给一个 srv:default 会让同一个东西有两种写法，
    *  而两种写法存进库里是两个不同的 model_tag，对比表里会分成两列 */
   is_default: boolean;
@@ -171,3 +180,88 @@ export interface ServerModel {
  *  多模型是可选功能，没有它下拉跟以前一模一样。 */
 export const listServerModels = () =>
   request.get<never, { models: ServerModel[] }>("/model-eval/server-models");
+
+// ── 两版互比：不需要人工标注，A/B 互相参照 ─────────────────────────────
+
+export interface ABVersionRef {
+  model_tag: string;
+  mode: string;
+}
+
+export interface ABSeg {
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface ABSegRow {
+  kind: "both" | "only_a" | "only_b";
+  iou?: number;
+  /** 只有一边有的片段：它被认成什么类别 */
+  label?: string | null;
+  /** 两边都有的片段：各自认的类别 */
+  label_a?: string | null;
+  label_b?: string | null;
+  same_label?: boolean;
+  a?: ABSeg;
+  b?: ABSeg;
+  /** B - A，正数 = B 比 A 晚；类别不同时不算起止差 */
+  d_start_ms?: number | null;
+  d_end_ms?: number | null;
+}
+
+export interface ABSampleDiff {
+  sample_id: number;
+  sample_code: string;
+  project_id?: number | null;
+  task_id?: number | null;
+  n_a: number;
+  n_b: number;
+  matched: number;
+  only_a: number;
+  only_b: number;
+  /** 同一时段两边认成了不同类别 */
+  label_diff: number;
+  boundary_bad: number;
+  d_start_mean_ms: number | null;
+  d_end_mean_ms: number | null;
+  diff_count: number;
+  segments: ABSegRow[];
+}
+
+export interface ABDiffTotals {
+  n_seg_a?: number;
+  n_seg_b?: number;
+  matched?: number;
+  only_a?: number;
+  only_b?: number;
+  label_diff?: number;
+  label_same_ratio?: number | null;
+  boundary_bad?: number;
+  mean_iou?: number | null;
+  d_start_mean_ms?: number | null;
+  d_end_mean_ms?: number | null;
+  d_start_abs_mean_ms?: number | null;
+  d_end_abs_mean_ms?: number | null;
+  within_2s_ratio?: number | null;
+}
+
+export interface ABDiffResult {
+  a: ABVersionRef & { key: string; n_runs: number };
+  b: ABVersionRef & { key: string; n_runs: number };
+  n_scope: number;
+  n_covered: number;
+  totals: ABDiffTotals;
+  n_diverged: number;
+  diverged_samples: ABSampleDiff[];
+  iou_min: number;
+  edge_2s_ms: number;
+  warnings: string[];
+}
+
+export const diffModels = (body: ScopeParams & {
+  a: ABVersionRef;
+  b: ABVersionRef;
+  label?: string;
+  iou_min?: number;
+  max_samples?: number;
+}) => request.post<never, ABDiffResult>("/model-eval/diff", body, { timeout: 600_000 });

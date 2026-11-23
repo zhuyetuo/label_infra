@@ -45,6 +45,29 @@ body,
 }
 
 
+/* 任务列表里「我看过」的任务：整行淡黄底 + 最左边一条竖线，翻列表时一眼看出
+   哪些点开过，不会重复打开看（ID 旁的小圆点由 Projects.tsx 渲染） */
+.ant-table-tbody > tr.task-row-viewed > td {
+  background: rgba(250, 173, 20, 0.08);
+}
+.ant-table-tbody > tr.task-row-viewed > td:first-child {
+  box-shadow: inset 3px 0 0 #faad14;
+}
+.ant-table-tbody > tr.task-row-viewed:hover > td {
+  background: rgba(250, 173, 20, 0.16);
+}
+
+/* 「上一个看的」：蓝色，压过黄底——全看过之后还能找回刚才停在哪个任务 */
+.ant-table-tbody > tr.task-row-last > td {
+  background: rgba(22, 119, 255, 0.14);
+}
+.ant-table-tbody > tr.task-row-last > td:first-child {
+  box-shadow: inset 3px 0 0 #1677ff;
+}
+.ant-table-tbody > tr.task-row-last:hover > td {
+  background: rgba(22, 119, 255, 0.22);
+}
+
 /* 账号管理：离职（禁用）的账号置灰、名字划掉；操作列不灰，方便再启用 */
 .user-row-inactive > td:not(:last-child) {
   opacity: 0.45;

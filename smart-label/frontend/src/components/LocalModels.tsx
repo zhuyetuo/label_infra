@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Alert, Button, Modal, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Modal, Popconfirm, Progress, Segmented, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { actLocalModel, getVllmLog, listLocalModels, type LocalModel } from "@/api/llmProviders";
+import { actLocalModel, getLocalDevice, getVllmLog, listLocalModels, setLocalDevice, type LocalModel } from "@/api/llmProviders";
 
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 
@@ -10,8 +10,28 @@ const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${M
 export default function LocalModels() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["local-models"], queryFn: listLocalModels, refetchInterval: 10_000 });
+  const { data: dev } = useQuery({ queryKey: ["local-device"], queryFn: getLocalDevice, refetchInterval: 10_000 });
   const [busy, setBusy] = useState<string | null>(null);
+  const [devBusy, setDevBusy] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["local-models"] });
+
+  const changeDevice = async (mode: "auto" | "cuda" | "cpu") => {
+    setDevBusy(true);
+    try {
+      const r = await setLocalDevice(mode);
+      message.success(
+        `设备已切到 ${mode}（实际 ${r.resolved === "cuda" ? "GPU" : "CPU"}）` +
+          (r.released?.length ? `，卸载了 ${r.released.length} 个模型，下次用到再加载` : ""),
+        6
+      );
+      refresh();
+      qc.invalidateQueries({ queryKey: ["local-device"] });
+    } catch {
+      // 错误提示由请求拦截器统一弹出
+    } finally {
+      setDevBusy(false);
+    }
+  };
   // vLLM 的整份日志：引擎那边的报错在 API 进程堆栈之前，30 行尾巴看不到
   const [log, setLog] = useState<{ lines: string[]; errors: string[] } | null>(null);
   const [logLoading, setLogLoading] = useState(false);
@@ -55,6 +75,31 @@ export default function LocalModels() {
           </>
         )}
       </Typography.Paragraph>
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Typography.Text strong>算力设备</Typography.Text>
+        <Segmented
+          value={dev?.mode ?? "auto"}
+          disabled={devBusy}
+          options={[
+            { label: "自动 (auto)", value: "auto" },
+            { label: "GPU (cuda)", value: "cuda" },
+            { label: "CPU", value: "cpu" },
+          ]}
+          onChange={(v) => changeDevice(v as "auto" | "cuda" | "cpu")}
+        />
+        <Tag color={dev?.resolved === "cuda" ? "green" : undefined}>
+          {dev?.error
+            ? dev.error
+            : !dev?.resolved
+              ? "—"
+              : dev.resolved === "cuda"
+                ? `实际：GPU（${dev?.cuda?.gpu ?? "CUDA"}）`
+                : "实际：CPU"}
+        </Tag>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          切换会先卸载已加载的模型，不会自动重新加载；默认不预加载，第一次用到时才加载
+        </Typography.Text>
+      </Space>
       {data && !data.available && (
         <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={`连不上视觉服务：${data.error ?? ""}`}
                description="算法机上 cd ~/imu_train && ./up.sh deploy -g 起服务；平台的 VISION_SERVICE_URL 要指向那台机器" />
@@ -89,7 +134,9 @@ export default function LocalModels() {
                   <Tag color="red">不可用</Tag>
                 </Tooltip>
               ) : (
-                <Tag>未加载</Tag>
+                <Tooltip title={m.note || undefined}>
+                  <Tag>未加载</Tag>
+                </Tooltip>
               ),
           },
           { title: "设备", dataIndex: "device", width: 90, render: (v: string | null) => v ?? "—" },
@@ -154,6 +201,8 @@ export default function LocalModels() {
                   </div>
                 ) : m.error && !m.available ? (
                   <Typography.Text type={m.loading ? "secondary" : "danger"} style={{ fontSize: 12 }}>{m.error}</Typography.Text>
+                ) : m.note && !m.available ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{m.note}</Typography.Text>
                 ) : null}
                 {m.vllm && (
                   <div style={{ fontSize: 12, color: "#888" }}>

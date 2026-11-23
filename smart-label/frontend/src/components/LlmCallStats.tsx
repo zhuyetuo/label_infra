@@ -282,7 +282,7 @@ export default function LlmCallStats() {
                 <ModelCard
                   key={`${m.model_tag}|${m.mode}`}
                   title={m.model_tag}
-                  // 后处理（稳定版 v2 / 调试版 / 板上整条链…）：同一个模型换后处理是两张卡，
+                  // 后处理（稳定版v2 / 调试版 / 板上整条链…）：同一个模型换后处理是两张卡，
                   // 悬停说明这一档跟别的差在哪
                   tag={
                     <Tooltip title={hintOf(kind === "edge" ? `edge:${m.model_tag}@${m.mode}` : m.mode)}>

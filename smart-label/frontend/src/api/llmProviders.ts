@@ -99,6 +99,8 @@ export interface LocalModel {
   purpose: string;
   available: boolean;
   error: string | null;
+  /** 非故障说明（还没加载 / 没启动 / 正在加载）：页面上仍显示「未加载」，只有 error 才显示「不可用」 */
+  note?: string | null;
   device: string | null;
   weights: string | null;
   warm?: boolean;
@@ -153,6 +155,25 @@ export const actLocalModel = (key: string, action: "load" | "unload" | "test") =
     `/llm-providers/local-models/${key}`,
     { action },
     { timeout: 320000 }
+  );
+
+/** 视觉模型跑在哪个设备上：mode 是选择，resolved 是实际落到的（auto 时可能是 cuda 或 cpu） */
+export interface LocalDevice {
+  mode: "auto" | "cuda" | "cpu" | null;
+  resolved: "cuda" | "cpu" | null;
+  env_default?: string;
+  error?: string | null;
+  cuda?: { cuda_available: boolean | null; gpu: string | null; torch: string | null; why: string | null } | null;
+}
+
+export const getLocalDevice = () => request.get<never, LocalDevice>("/llm-providers/local-models/device");
+
+/** 切设备：视觉服务会先卸载已加载的模型，不会自动重新加载 */
+export const setLocalDevice = (mode: "auto" | "cuda" | "cpu") =>
+  request.post<never, { ok: boolean; changed: boolean; released: string[]; mode: string; resolved: string; error?: string | null }>(
+    "/llm-providers/local-models/device",
+    { mode },
+    { timeout: 120000 }
   );
 
 export const resetLocalModelMeter = () => request.post<never, { ok: boolean }>("/llm-providers/local-models/meter/reset");

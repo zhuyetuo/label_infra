@@ -34,7 +34,7 @@ const ROWS: Row[] = [
   },
   {
     key: "viterbi",
-    name: "稳定版 v2",
+    name: "稳定版v2",
     model: "线上模型",
     infer: "服务端",
     post: "服务端 · 离线 viterbi",
@@ -42,7 +42,7 @@ const ROWS: Row[] = [
   },
   {
     key: "viterbi-noshake",
-    name: "稳定版 v2 · 不吞甩身体",
+    name: "稳定版v2·不吞甩身体",
     model: "线上模型",
     infer: "服务端",
     post: "服务端 · 离线 viterbi",
@@ -50,11 +50,11 @@ const ROWS: Row[] = [
   },
   {
     key: "viterbi-precise",
-    name: "精准版 · 起止对齐",
+    name: "稳定版v2·起止对齐",
     model: "线上模型",
     infer: "服务端",
     post: "服务端 · 离线 viterbi + 起止对齐",
-    note: "片段跟「稳定版 v2」一模一样（个数、类别都不变），**只把起止调准**：先校正 v2 起点偏早、终点偏晚的系统偏差，再按陀螺仪 3–9 Hz（抓挠节律）能量对齐到真正开始和停下的点",
+    note: "片段跟「稳定版v2」一模一样（个数、类别都不变），**只把起止调准**：先校正 v2 起点偏早、终点偏晚的系统偏差，再按陀螺仪 3–9 Hz（抓挠节律）能量对齐到真正开始和停下的点",
   },
   {
     key: "raw",
@@ -70,7 +70,7 @@ const ROWS: Row[] = [
     model: "另一个模型",
     infer: "服务端",
     post: "服务端 · 离线 viterbi",
-    note: "同一台 AI 服务、同一份后处理，只换了模型。跟上面的「稳定版 v2」比，差的只有模型本身",
+    note: "同一台 AI 服务、同一份后处理，只换了模型。跟上面的「稳定版v2」比，差的只有模型本身",
   },
   {
     key: "srv-raw",
@@ -82,11 +82,11 @@ const ROWS: Row[] = [
   },
   {
     key: "edge",
-    name: "端侧 · 稳定版 v2",
+    name: "端侧 · 稳定版v2",
     model: "板上 C",
     infer: "板上 C",
     post: "服务端 · 离线 viterbi",
-    note: "跟上面的「稳定版 v2」比，差的只有模型本身",
+    note: "跟上面的「稳定版v2」比，差的只有模型本身",
   },
   {
     key: "edge-board",

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
-  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Dropdown, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Segmented, Select, Slider, Space, Table, Tabs,
+  Alert, AutoComplete, Button, Checkbox, DatePicker, Descriptions, Divider, Dropdown, Input, InputNumber, Modal, Popover, Popconfirm, Progress, Radio, Segmented, Select, Slider, Space, Table, Tabs,
   Tag, Tooltip, Typography, message,
 } from "antd";
 import dayjs from "dayjs";
@@ -15,6 +16,7 @@ import { listLabels } from "@/api/labels";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
 import TrainLogModal from "@/components/TrainLogModal";
 import SizeCurveModal from "@/components/SizeCurveModal";
+import TrainCurvesModal, { type TrainCurves } from "@/components/TrainCurvesModal";
 import EdgeFootprint from "@/components/EdgeFootprint";
 import { TRACKS, TRACK_NAME } from "@/utils/labelTree";
 import { fmtSecs } from "@/utils/fmtDuration";
@@ -208,6 +210,12 @@ function parseFilters(s: string): number[] | null {
 
 export default function Training() {
   const qc = useQueryClient();
+  // 项目页的「两版对比」直接跳到这里，带 ?tab=cmp&ab=1&project=ID：
+  // 落在模型对比页签、默认打开两个版本互比、并预填这个项目
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get("tab") || "cmp");
+  const abMode = params.get("ab") === "1";
+  const abProject = Number(params.get("project")) || undefined;
   const { data: datasets, isLoading: loadingDs } = useQuery({ queryKey: ["train-datasets"], queryFn: listDatasets });
   const { data: versions, isLoading: loadingV } = useQuery({
     queryKey: ["model-versions"],
@@ -304,6 +312,7 @@ export default function Training() {
   const [edgeDepth, setEdgeDepth] = useState<number | null>(null);
   const [edgeFilters, setEdgeFilters] = useState<string>("");
   const [curveFor, setCurveFor] = useState<ModelVersion | null>(null);
+  const [trainCurveFor, setTrainCurveFor] = useState<ModelVersion | null>(null);
   const [hz, setHz] = useState<number>(16);
   const [skipSyn, setSkipSyn] = useState(false);
   // 类别均衡：none / min / cap:N。默认不动——砍数据会丢多样性，先看训练集统计和回放再决定
@@ -852,6 +861,48 @@ export default function Training() {
       return null;
     }
   };
+  /** 窗口 / 步长（秒）。新版记录存在 spec 里；老记录从 metrics 里取，都没有就 null */
+  const windowOf = (v: ModelVersion): { win: number; stride: number } | null => {
+    const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+    const sp = specOf(v);
+    const m = metricsOf(v) ?? {};
+    const win = num(sp.window_s) ?? num(m.window_s);
+    const stride = num(sp.stride_s) ?? num(m.stride_s);
+    return win != null && stride != null ? { win, stride } : null;
+  };
+  /** 抓挠按场地（佛山 / 影棚 / 合计）。只有 2026-11-23 之后新训的版本才有 per_site */
+  const scratchSites = (v: ModelVersion) => {
+    const m = metricsOf(v) ?? {};
+    const ps = (m.per_site ?? {}) as Record<string, {
+      name?: string;
+      n_windows?: number;
+      scratch_segments?: { recall?: number | null; precision?: number | null; f1?: number | null; n_gt?: number; n_pred?: number };
+    }>;
+    const rows = Object.entries(ps).filter(([, r]) => r.scratch_segments);
+    if (!rows.length) return null;
+    return { rows, total: m.scratch_segments as { recall?: number | null; precision?: number | null; f1?: number | null } | undefined };
+  };
+  const prfText = (x?: number | null) => (x == null ? "-" : x.toFixed(3));
+  const scratchSiteTip = (v: ModelVersion) => {
+    const d = scratchSites(v);
+    if (!d) return null;
+    return (
+      <div style={{ fontVariantNumeric: "tabular-nums" }}>
+        {d.rows.map(([k, r]) => {
+          const s = r.scratch_segments!;
+          return (
+            <div key={k}>
+              {r.name ?? k}：P {prfText(s.precision)} / R {prfText(s.recall)} / F1 {prfText(s.f1)}
+              {s.n_gt != null && <span style={{ opacity: 0.65 }}>（人标 {s.n_gt} 段 / 模型报 {s.n_pred ?? "-"} 段）</span>}
+            </div>
+          );
+        })}
+        {d.total && (
+          <div style={{ marginTop: 2 }}>合计：P {prfText(d.total.precision)} / R {prfText(d.total.recall)} / F1 {prfText(d.total.f1)}</div>
+        )}
+      </div>
+    );
+  };
   /** 这一版的数据集参数（提交时存的那份 JSON） */
   const specOf = (v: ModelVersion): Record<string, unknown> => {
     try {
@@ -900,6 +951,84 @@ export default function Training() {
     const remap = (sp.label_remap as Record<string, string> | undefined) ?? {};
     if (Object.keys(remap).length) setRemapEdits(remap);
     message.info(`已照训练记录 #${v.id} 的配置填好，「方向无关」已勾上，确认后提交`, 5);
+  };
+  /** 训练用了哪些数据集、每份是整份还是只挑了部分类别 */
+  const datasetRows = (v: ModelVersion) => {
+    const sp = specOf(v);
+    const remap = (sp.label_remap as Record<string, string> | undefined) ?? {};
+    const extras = (sp.extra_datasets as { date: string; source_hz?: number | null; exclude_classes?: string[] }[] | undefined) ?? [];
+    const base = [
+      { name: String(sp.date ?? "-"), sourceHz: null as number | null, excl: [] as string[] },
+      ...extras.map((e) => ({ name: e.date, sourceHz: e.source_hz ?? null, excl: e.exclude_classes ?? [] })),
+    ];
+    return base.map((r) => {
+      const d = (datasets ?? []).find((x) => x.name === r.name);
+      // 这份数据集里、按归并表能落到模型类别上的样本（老数据集是粗标签）
+      const coarse: Record<string, { n: number; sec: number }> = {};
+      for (const [lab, n] of Object.entries(d?.labels ?? {})) {
+        const c = remap[lab];
+        if (!c) continue;
+        coarse[c] = coarse[c] ?? { n: 0, sec: 0 };
+        coarse[c].n += n;
+        coarse[c].sec += d?.label_seconds?.[lab] ?? 0;
+      }
+      const kept = Object.entries(coarse).filter(([c]) => !r.excl.includes(c)).sort((a, b) => b[1].n - a[1].n);
+      return { ...r, d, kept };
+    });
+  };
+  /** 悬停「数据集」列：每份数据集两行，最多 56vh，超了在提示框里滚动 */
+  const usedDatasetsTip = (v: ModelVersion) => {
+    const rows = datasetRows(v);
+    const SCOPE: Record<string, string> = {
+      approved: "整份审完的任务", reviewed: "人确认过的片段",
+      seg_approved: "片段审核通过", pool: "复审入池的数据池",
+    };
+    const fmtN = (x: { n: number; sec: number }) =>
+      `${x.n} 段${x.sec >= 90 ? ` / ${(x.sec / 60).toFixed(1)} 分` : x.sec ? ` / ${Math.round(x.sec)} 秒` : ""}`;
+    return (
+      <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 470, maxHeight: "56vh", overflowY: "auto", paddingRight: 4 }}>
+        <div style={{ fontWeight: 600, marginBottom: 2 }}>
+          训练用了 {rows.length} 份数据集
+          <span style={{ fontWeight: 400, opacity: 0.55 }}>（内容多可滚动）</span>
+        </div>
+        {rows.map((r, i) => (
+          <div key={`${r.name}-${i}`} style={{ marginTop: 4, paddingTop: 4, borderTop: i ? "1px solid rgba(127,127,127,0.2)" : undefined }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+              <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 250 }}>{r.name}</b>
+              {i === 0 && <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "16px" }}>主</Tag>}
+              <span style={{ opacity: 0.6, whiteSpace: "nowrap" }}>
+                {r.sourceHz != null ? `原始 ${r.sourceHz}Hz · ` : ""}{r.d ? `${r.d.n_tasks} 任务 / ${r.d.n_segments} 段` : "清单里找不到"}
+              </span>
+            </div>
+            <div style={{ opacity: 0.85 }}>
+              {r.d && <span style={{ opacity: 0.6 }}>{SCOPE[r.d.scope ?? ""] ?? r.d.scope ?? "未知"} · {r.d.date_from} ~ {r.d.date_to} · </span>}
+              {r.excl.length === 0 ? (
+                <>整份都用{r.kept.length ? `（${r.kept.length} 类）` : ""}</>
+              ) : (
+                <>
+                  只用 <b>{r.kept.length ? r.kept.map(([c, x]) => `${c}（${fmtN(x)}）`).join("、") : "（无）"}</b>
+                  <span title={`排除：${r.excl.join("、")}`}>；其余 {r.excl.length} 类排除</span>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  /** 各折 F1 的悬停里只放数据集名单，详细用法看「数据集」列，避免提示框太高 */
+  const datasetsBrief = (v: ModelVersion) => {
+    const rows = datasetRows(v);
+    return (
+      <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 430 }}>
+        <div style={{ fontWeight: 600 }}>训练用了 {rows.length} 份数据集（用法见「数据集」列悬停）</div>
+        {rows.map((r) => (
+          <div key={r.name} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {r.name}：{r.excl.length === 0 ? "整份" : `只用 ${r.kept.map(([c]) => c).join("、") || "—"}`}
+          </div>
+        ))}
+      </div>
+    );
   };
   /** 每类的 P/R/F1。训练脚本产出的 json 里叫 per_class，键是类别名 */
   const perClassOf = (v: ModelVersion) => {
@@ -957,6 +1086,8 @@ export default function Training() {
     <div>
       {/* 说明收进问号，放在页签栏最右边，不占一整块地方 */}
       <Tabs
+        activeKey={tab}
+        onChange={setTab}
         tabBarExtraContent={
           <Tooltip overlayStyle={{ maxWidth: 460 }} title={<div><b>AI 辅助标注闭环</b><div style={{ marginTop: 4 }}>AI 预标注（稳定版）→ 人工在工作台确认/纠正片段、逐条处理「疑似片段」→ 这里把审核通过的标注导成数据集 → 提交训练 → 训练完「启用」，下一轮预标注就用新模型。</div></div>}>
           <QuestionCircleOutlined style={{ color: "#888", cursor: "help", fontSize: 15 }} />
@@ -966,7 +1097,7 @@ export default function Training() {
           {
             key: "cmp",
             label: "模型对比",
-            children: <ModelCompare />,
+            children: <ModelCompare initialMode={abMode ? "ab" : "human"} initialProjectId={abProject} />,
           },
           {
             key: "pool",
@@ -1148,8 +1279,15 @@ export default function Training() {
                       const scopes = names.map((n) => (datasets ?? []).find((d) => d.name === n)?.scope);
                       const nHq = scopes.filter((x) => x === "seg_approved" || x === "pool").length;
                       return (
-                        <Space size={4} wrap>
-                          <span>{(sp.date as string) ?? "-"}</span>
+                        <Popover
+                          trigger="hover"
+                          placement="topLeft"
+                          mouseEnterDelay={0.15}
+                          overlayStyle={{ maxWidth: 500 }}
+                          content={usedDatasetsTip(v)}
+                        >
+                          <Space size={4} wrap style={{ cursor: "help" }}>
+                            <span>{(sp.date as string) ?? "-"}</span>
                           {extra > 0 && <Tag>+{extra} 份</Tag>}
                           {nHq === names.length && (
                             <Tooltip title="用到的数据集全部是「片段审核通过」导出的高质量数据">
@@ -1168,16 +1306,35 @@ export default function Training() {
                           {/* 训练采样率：端侧要跟项圈 IMU 实际采样率一致（QMI8658 原生 31.25），
                               不同采样率的模型不能混用。老记录没存就是默认 16 */}
                           <Tag color={Number(sp.hz) === 31.25 || Number(sp.hz) === 15.625 ? "gold" : undefined}>{String(sp.hz ?? 16)}Hz</Tag>
+                          {/* 窗口 / 步长：直接决定误报片段最短有多长、短促抓挠会不会被冲淡。
+                              8 秒窗口的误报一段至少 8 秒，抓挠这种一两秒的动作很容易被邻段的动作盖过去 */}
+                          {(() => {
+                            const ws = windowOf(v);
+                            if (!ws) return null;
+                            return (
+                              <Tooltip title={
+                                <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                                  <div>窗口 {ws.win}s：一次判决喂给模型的时长；步长 {ws.stride}s：窗口每次往前挪多少。</div>
+                                  <div style={{ marginTop: 4 }}>窗口越长，一次判决覆盖的时间越长：短促抓挠容易被前后的动作冲淡，误报的片段也至少有一个窗口那么长（{ws.win}s 窗口的误报一段至少 {ws.win} 秒）。</div>
+                                  <div style={{ marginTop: 4, opacity: 0.75 }}>早期 RF 是 1s 窗 / 0.5s 步；新版默认 4s 窗 / 1s 步。</div>
+                                </div>
+                              }>
+                                <Tag color={ws.win >= 6 ? "volcano" : ws.win >= 4 ? "orange" : undefined} style={{ cursor: "help" }}>
+                                  窗 {ws.win}s / 步 {ws.stride}s
+                                </Tag>
+                              </Tooltip>
+                            );
+                          })()}
                           <Tag>{v.model_type}</Tag>
                           {/* 端侧尺寸的跟不限深的大模型不能直接比分数：一个要塞进 128KB，
                               一个没限制。混在一起看，端侧那版永远像是"更差的那个" */}
                           {Boolean(sp.edge_size) && <Tag color="cyan">端侧尺寸</Tag>}
                           {(() => {
                             // 负例挖掘模型：进食 / 饮水 / 嗅闻…各自成了一类（没并进「活动」）。
-                            // 项目批量预标注勾「只补负例候选」时选它，判成这些类的片段变成候选给人确认
+                            // 项目批量预标注勾「只补负例片段」时选它，判成这些类的片段直接写成 AI 片段给人确认
                             const negs = negClassesOf(Object.values((sp.label_remap as Record<string, string> | undefined) ?? {}));
                             return negs.length > 0 ? (
-                              <Tooltip title="负例挖掘模型：这几类各自成一类训的。项目里批量 AI 预标注勾「只补负例候选」、版本选它，判成这些类的片段会变成候选给标注员确认；标注员补了数据，回这里用同一套设置重训">
+                              <Tooltip title="负例挖掘模型：这几类各自成一类训的。项目里批量 AI 预标注勾「只补负例片段」、版本选它，判成这些类的片段会直接写成 AI 片段给标注员确认；标注员补了数据，回这里用同一套设置重训">
                                 <Tag color="lime">负例挖掘：{negs.join(" / ")}</Tag>
                               </Tooltip>
                             ) : null;
@@ -1187,7 +1344,8 @@ export default function Training() {
                               <Tag color="green">方向无关</Tag>
                             </Tooltip>
                           )}
-                        </Space>
+                          </Space>
+                        </Popover>
                       );
                     },
                   },
@@ -1204,12 +1362,19 @@ export default function Training() {
                       // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
                       const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number; segment_macro_f1?: number; scratch_segments?: { recall?: number | null; precision?: number | null } }>;
                       const seg = m.segment_macro_f1 as number | undefined;
-                      const sc = m.scratch_segments as { recall?: number; precision?: number } | undefined;
+                      const sc = m.scratch_segments as { recall?: number | null; precision?: number | null; f1?: number | null } | undefined;
+                      const sites = scratchSites(v);
                       return (
                         <Tooltip title={
                           <div style={{ fontSize: 12, lineHeight: 1.7 }}>
                             <div>新版流程：按（天, 项圈）分组交叉验证，同一只狗同一天不会两边都有——比老流程的分数低一些，但更接近换一只狗的真实表现。不能跟老流程的数直接比</div>
-                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}{sc?.recall != null ? `；抓挠按次数 查全 ${sc.recall} / 查准 ${sc.precision}` : ""}</div>}
+                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}{sc?.recall != null ? `；抓挠按次数 查全 ${sc.recall} / 查准 ${sc.precision}${sc.f1 != null ? ` / F1 ${sc.f1}` : ""}` : ""}</div>}
+                            {sites && (
+                              <div style={{ marginTop: 6 }}>
+                                <div>抓挠按场地（按片段；合起来看上面）：</div>
+                                {scratchSiteTip(v)}
+                              </div>
+                            )}
                             {Object.keys(pd).length > 0 && <div style={{ marginTop: 4 }}>分数据集（老数据标得粗，会拉低总分）：</div>}
                             {Object.entries(pd).map(([d, r]) => (
                               <div key={d}>
@@ -1244,6 +1409,8 @@ export default function Training() {
                         <Space size={2} wrap>
                           {main && (
                             <Tooltip title={<div style={{ fontSize: 12 }}>
+                              {datasetsBrief(v)}
+                              <div style={{ margin: "8px 0", borderTop: "1px solid rgba(127,127,127,0.3)" }} />
                               <div>这里是主数据集 {main.name} 的（交叉验证，没训练过的数据）。全部数据集合在一起：</div>
                               {all.map((c) => <div key={c.cls}>{c.cls} {c.f1.toFixed(2)}（P {c.p.toFixed(2)} / R {c.r.toFixed(2)}）</div>)}
                             </div>}>
@@ -1251,7 +1418,22 @@ export default function Training() {
                             </Tooltip>
                           )}
                           {pc.map((c) => (
-                            <Tooltip key={c.cls} title={`${c.cls}：精确率 ${c.p.toFixed(2)} / 召回 ${c.r.toFixed(2)} / F1 ${c.f1.toFixed(2)}`}>
+                            <Tooltip
+                              key={c.cls}
+                              title={
+                                <div style={{ fontSize: 12 }}>
+                                  <div>{c.cls}：精确率 {c.p.toFixed(2)} / 召回 {c.r.toFixed(2)} / F1 {c.f1.toFixed(2)}</div>
+                                  {/* 抓挠在不同场地差得最多：佛山几乎全对、影棚可能一段都判不出来，
+                                      只看一个总分会以为「都还行」 */}
+                                  {c.cls === "抓挠" && scratchSites(v) && (
+                                    <div style={{ marginTop: 4 }}>
+                                      <div>按场地（按片段）：</div>
+                                      {scratchSiteTip(v)}
+                                    </div>
+                                  )}
+                                </div>
+                              }
+                            >
                               <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>
                                 {c.cls} {c.f1.toFixed(2)}
                               </Tag>
@@ -1338,6 +1520,13 @@ export default function Training() {
                           <Button size="small" type="link" onClick={() => setDetail(v)}>
                             详情
                           </Button>
+                          {v.status === "done" && !!metricsOf(v)?.curves && (
+                            <Tooltip title="看训练过程：CNN 的每轮 loss / 训练准确率（每折一条，虚线是最后全量重训），以及各折留出集的准确率和 macro-F1">
+                              <Button size="small" type="link" onClick={() => setTrainCurveFor(v)}>
+                                训练曲线
+                              </Button>
+                            </Tooltip>
+                          )}
                           {v.status === "done" && v.model_path && (
                             <Tooltip
                               title={
@@ -1372,7 +1561,7 @@ export default function Training() {
                               title={
                                 edgeOf(v)
                                   ? "已经导过端侧了。再点一次会重新导（模型没变的话结果一样）"
-                                  : "转成板上那份 C，在留出集上算「端侧 F1」，并挂到端侧服务上。之后启用它，「端侧模型 · 板上 C」那组下拉里就能选、能跟稳定版 v2 对比。要几十秒到一两分钟"
+                                  : "转成板上那份 C，在留出集上算「端侧 F1」，并挂到端侧服务上。之后启用它，「端侧模型 · 板上 C」那组下拉里就能选、能跟稳定版v2 对比。要几十秒到一两分钟"
                               }
                             >
                               <Button
@@ -2585,7 +2774,7 @@ export default function Training() {
                 <Space style={{ justifyContent: "space-between", width: "100%" }}>
                   <Typography.Text>类别归并（可不改）</Typography.Text>
                   <Space size={4}>
-                    <Tooltip title={`把这次数据里的 ${NEG_GROUPS.join(" / ")}（带部位的细类并进大类，比如「舔-后肢」→ 舔）各自设成一类，不并进「活动」，端侧尺寸关掉（这是服务端用的模型）。训出来就是负例挖掘模型：项目批量预标注勾「只补负例候选」时选它。标注员补了舔 / 啃 / 蹭的数据，再点一次重训就把新类别带上。别的类别不动`}>
+                    <Tooltip title={`把这次数据里的 ${NEG_GROUPS.join(" / ")}（带部位的细类并进大类，比如「舔-后肢」→ 舔）各自设成一类，不并进「活动」，端侧尺寸关掉（这是服务端用的模型）。训出来就是负例挖掘模型：项目批量预标注勾「只补负例片段」时选它。标注员补了舔 / 啃 / 蹭的数据，再点一次重训就把新类别带上。别的类别不动`}>
                       <Button size="small" onClick={() => {
                         const hit: string[] = [];
                         setRemapEdits((m) => {
@@ -2837,6 +3026,13 @@ export default function Training() {
               : `已按 ${spec.edge_trees} 棵 × 深 ${spec.edge_depth} 填好，确认后提交`,
           );
         }}
+      />
+
+      <TrainCurvesModal
+        open={trainCurveFor != null}
+        title={trainCurveFor ? `#${trainCurveFor.id} ${trainCurveFor.model_version ?? ""}` : ""}
+        curves={trainCurveFor ? ((metricsOf(trainCurveFor)?.curves as TrainCurves | undefined) ?? null) : null}
+        onClose={() => setTrainCurveFor(null)}
       />
 
       <TrainReviewModal

@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import InferModeHelp from "@/components/InferModeHelp";
 import { currentName, descendantIds } from "@/utils/labelTree";
+import { loadLastViewed, loadViewed, markViewed } from "@/utils/viewedTasks";
 import { buildLabelTotals, loadSummaryFlat, saveSummaryFlat } from "@/utils/labelSummary";
 import {
   Alert,
@@ -112,7 +113,7 @@ const PRELABEL_OVERWRITE_KEY = "smart-label:prelabel-overwrite";
 const PRELABEL_KEEP_HUMAN_KEY = "smart-label:prelabel-keep-human";
 const PRELABEL_NEG_ONLY_KEY = "smart-label:prelabel-neg-only";
 const ASSIGN_USER_KEY = "smart-label:assign-user";
-// 没选过时的默认版本。稳定版 v2 是现在实际在用的那个
+// 没选过时的默认版本。稳定版v2 是现在实际在用的那个
 const DEFAULT_INFER_MODE: InferMode = "viterbi";
 import { useUrlTask } from "@/utils/urlTask";
 import { listLlmProviders } from "@/api/llmProviders";
@@ -177,6 +178,15 @@ export default function Projects() {
   const returnedSegs = useReturnedSegments();
   const qc = useQueryClient();
   const userId = useAuthStore((s) => s.userInfo?.id);
+  // 我看过哪些任务（记在本机）：看过的整行淡黄底、任务 ID 旁加个小圆点，
+  // 几百个任务翻下来不用靠记忆判断哪个点开过
+  const [viewed, setViewed] = useState<Record<string, number>>({});
+  // 上一个看的单独一种高亮（蓝色）：整页都看黄了之后，还能一眼找回刚才停在哪
+  const [lastViewed, setLastViewed] = useState<number | null>(null);
+  useEffect(() => {
+    setViewed(loadViewed(userId ?? null));
+    setLastViewed(loadLastViewed(userId ?? null));
+  }, [userId]);
   const role = useAuthStore((s) => s.userInfo?.role);
   const isAdmin = role === "admin" || role === "super_admin";
 
@@ -480,7 +490,7 @@ export default function Projects() {
   // 有人工标注的任务只补疑似片段。默认开：不开的话这些任务整个跳过，算法加了新候选类别也补不上；
   // 开了也不会动任何片段（见后端 keep_human）
   const [prelabelKeepHuman, setPrelabelKeepHuman] = useState(() => getSavedBool(PRELABEL_KEEP_HUMAN_KEY, true));
-  // 只补负例候选：配负例挖掘模型用，所有任务只换「模型判成负例」那一种候选。默认关
+  // 只补负例片段：配负例挖掘模型用，模型判成负例的那几段直接写成 AI 片段。默认关
   const [prelabelNegOnly, setPrelabelNegOnly] = useState(() => getSavedBool(PRELABEL_NEG_ONLY_KEY, false));
   // 记住上次用的版本：用惯哪个就默认哪个，不用每次重选
   const [prelabelMode, setPrelabelMode] = useState<InferMode>(
@@ -716,7 +726,7 @@ export default function Projects() {
   // 项目里哪些任务会被批量预标注碰到：待认领/标注中，且还没存过任何片段
   // keepHuman 时有片段的任务也可能被处理（有人工痕迹的只补疑似片段），但列表里分不出哪些有人工痕迹，
   // 所以那种情况报的是上限
-  // negOnly 时待认领 / 标注中的全部任务都会被处理（片段不碰，只换负例候选）
+  // negOnly 时待认领 / 标注中的全部任务都会被处理（别的片段不碰，只写负例片段）
   const prelabelEligible = (projectId: number, overwrite: boolean, keepHuman = false, negOnly = false) =>
     tasksOf(projectId).filter(
       (t) =>
@@ -1173,6 +1183,10 @@ export default function Projects() {
 
   const openWorkspace = (task: Task, readOnly: boolean, projectId: number,
     pick?: { labels?: number[]; cands?: string[]; overlap?: boolean; source?: string }, fromRefresh = false) => {
+    // 打开过就算「看过」：列表回来时这一行会带底色和小圆点
+    markViewed(userId ?? null, task.id);
+    setViewed((prev) => (prev[task.id] ? prev : { ...prev, [task.id]: Date.now() }));
+    setLastViewed(task.id);
     setWorkspaceLabels(labelsOf(projectId));
     // 队友可能刚在「标签管理 / 标签模板」里加了类别、改了层级：开工作台时顺手拉一份最新的，
     // 回来直接覆盖（拿到的是这个项目当前的启用标签，跟列表里看到的一致）
@@ -1607,6 +1621,9 @@ export default function Projects() {
         storageKey="projects"
         rowKey="id"
         loading={isLoading}
+        // 这几列加起来 1210：窄屏（笔记本 1024 / 1366）下宁可横向滚动，也别把
+        // 右边的操作按钮裁掉——那些按钮是这一行的主要入口，裁掉就点不到了
+        scroll={{ x: 1210 }}
         dataSource={(PRIVACY_MASK && maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data ?? [])
           .filter((p) => !specialOnly || specialOf(p.id) > 0)}
         rowSelection={isAdmin ? {
@@ -2202,6 +2219,9 @@ export default function Projects() {
                 storageKey="project-tasks"
                 size="small"
                 rowKey="id"
+                rowClassName={(t: Task) =>
+                  t.id === lastViewed ? "task-row-last" : viewed[t.id] ? "task-row-viewed" : ""
+                }
                 dataSource={rows}
                 pagination={(() => {
                   const tp = pager.tasks[p.id] ?? { current: 1, pageSize: 10 };
@@ -2227,7 +2247,30 @@ export default function Projects() {
                 // x = 100%：表格跟容器一样宽，片段那一列不写宽度、吃剩下的，内容换行——不用左右拖就能一眼看全
                 scroll={{ x: "100%" }}
                 columns={taskWidth.applyResize<Task>(taskSort.applySort<Task>([
-                  { title: "任务ID", dataIndex: "id", width: 72, sorter: (a: Task, b: Task) => a.id - b.id },
+                  {
+                    title: "任务ID", dataIndex: "id", width: 88,
+                    sorter: (a: Task, b: Task) => a.id - b.id,
+                    render: (id: number) => {
+                      const at = viewed[id];
+                      if (id === lastViewed) {
+                        return (
+                          <Tooltip title={`上次看的是这个任务${at ? `（${dayjs(at).format("MM-DD HH:mm")}）` : ""}，蓝底标出来了`}>
+                            <span>
+                              {id} <span style={{ color: "#1677ff", fontSize: 11 }}>●</span>
+                            </span>
+                          </Tooltip>
+                        );
+                      }
+                      if (!at) return id;
+                      return (
+                        <Tooltip title={`我看过这个任务（${dayjs(at).format("MM-DD HH:mm")}），黄底`}>
+                          <span>
+                            {id} <span style={{ color: "#faad14", fontSize: 11 }}>●</span>
+                          </span>
+                        </Tooltip>
+                      );
+                    },
+                  },
                   {
                     title: "样本",
                     dataIndex: "sample_id",
@@ -2622,9 +2665,9 @@ export default function Projects() {
           {
             title: "项目名",
             key: "name",
-            width: 230,   // 说明那一列撤了，宽度还给项目名——导入的项目名很长
-            ellipsis: true,
-            // 项目名就是日期，按名字排 = 按日期排
+            width: 260,   // 说明那一列撤了，宽度还给项目名——导入的项目名很长
+            // 不省略：名字是「日期 · 任务号 · 轴数 · …」，截断后连是哪个任务都看不出来，
+            // 宁可折成两行（列宽的账见下面 scroll.x）
             sorter: (a: Project, b: Project) => a.name.localeCompare(b.name),
             sortDirections: ["descend", "ascend", "descend"],
             // 默认按项目名（= 日期）倒序：最新那天在最上面
@@ -2665,7 +2708,7 @@ export default function Projects() {
           },
           {
             title: "任务",
-            width: 240,
+            width: 270,
             render: (_, p: Project) => {
               const counts = statusSummary(p.id);
               const total = tasksOf(p.id).length;
@@ -2986,7 +3029,7 @@ export default function Projects() {
           },
           {
             title: "指派给",
-            width: 180,
+            width: 140,
             render: (_, p: Project) => {
               const { named, hasUnassigned, unassignedN } = assigneeSummary(p.id);
               if (!named.length && !hasUnassigned) return "-";
@@ -3017,7 +3060,7 @@ export default function Projects() {
           { title: "标签数", width: 80, render: (_, p: Project) => labelCount(p.id) },
           {
             title: "操作",
-            width: 360,
+            width: 400,
             render: (_, p: Project) =>
               isAdmin && (
                 // 整行点击展开后，操作按钮得挡住这个冒泡，不然点"编辑"之类的
@@ -3040,6 +3083,17 @@ export default function Projects() {
                   <Button size="small" type="link" onClick={() => openBulkImport(p)}>
                     批量导入
                   </Button>
+                  {/* 不用等人工标完：两个版本互相比，A/B 互相就是参照物。
+                      跳到训练页的「模型对比」，预填这个项目并切到两版互比 */}
+                  <Tooltip title="同一批样本让两个版本各跑一遍，看两版答得一样不一样。不需要人工标注，没审过的项目也能比">
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => navigate(`/training?tab=cmp&ab=1&project=${p.id}`)}
+                    >
+                      两版对比
+                    </Button>
+                  </Tooltip>
                   <Button size="small" type="link" onClick={() => openAssign(p)}>
                     指派
                   </Button>
@@ -3623,12 +3677,13 @@ export default function Projects() {
                 saveBool(PRELABEL_NEG_ONLY_KEY, e.target.checked);
               }}
             >
-              <b>只补负例候选</b>（进食 / 饮水 / 嗅闻…容易被判成抓挠的动作），别的一条不动
+              <b>只补负例片段</b>（进食 / 饮水 / 嗅闻…容易被判成抓挠的动作），别的一条不动
             </Checkbox>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               配「负例挖掘模型」用（训练记录里单独训了这些类别的那种，版本里选它）。勾上之后待认领 / 标注中的任务全部处理，
-              但<b>只换「模型判成这一类」那一种候选</b>：草稿片段、疑似抓挠、疑似舔 / 甩头 / 吠叫 / 如厕、大模型看视频的候选、
-              判过的候选都原样保留，上面两个勾也不起作用。选的模型没单独训这些类别的话，什么都不会写。
+              模型判成这些类别的片段<b>直接写成 AI 片段（待确认）</b>，草稿里对应的「活动」剪掉；别的片段、疑似抓挠、
+              疑似舔 / 甩头 / 吠叫 / 如厕、大模型看视频的候选、判过的候选都原样保留，上面两个勾也不起作用。
+              选的模型没单独训这些类别的话，什么都不会写。
             </Typography.Text>
             {prelabelNegOnly && (() => {
               // 选的版本是不是负例挖掘模型：下拉里那种模型名字带「负例挖掘」（useInferModes）
@@ -3639,7 +3694,7 @@ export default function Projects() {
                 <Alert
                   type="warning"
                   showIcon
-                  message="选的版本不是负例挖掘模型，跑了也不会写任何负例候选"
+                  message="选的版本不是负例挖掘模型，跑了也不会写任何负例片段"
                   description="版本里选名字带「负例挖掘」的那个。没看到的话，先去「模型训练」的训练记录里把它启用（标着「负例挖掘：进食 / 饮水 / 嗅闻」的那条）。"
                 />
               );
@@ -3911,6 +3966,21 @@ export default function Projects() {
                 onChange={async (v) => {
                   await updateProject(editing.id, { is_active: v });
                   setEditing({ ...editing, is_active: v });
+                  refresh();
+                }}
+              />
+            </Form.Item>
+          )}
+          {editing && (
+            <Form.Item
+              label="输出模型负例片段"
+              tooltip="模型判成负例类别（进食 / 饮水 / 嗅闻 / 啃…）的片段当成正式 AI 片段列出来（草稿里待确认），web 上补这些类别的标注方便。端侧只报抓挠这些，不需要，关掉"
+            >
+              <Switch
+                checked={editing.model_neg !== false}
+                onChange={async (v) => {
+                  await updateProject(editing.id, { model_neg: v });
+                  setEditing({ ...editing, model_neg: v });
                   refresh();
                 }}
               />

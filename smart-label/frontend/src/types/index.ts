@@ -9,6 +9,8 @@ export interface Project {
   privacy_mask?: boolean;
   /** 最近一次「一键遮罩」的时间：做过遮罩（开关可能关着） */
   privacy_mask_at?: string | null;
+  /** AI 预标注是否把模型负例类别（进食/饮水/嗅闻/啃…）输出成正式片段；默认开 */
+  model_neg?: boolean;
   created_by: number;
   created_at: string;
 }

@@ -24,7 +24,7 @@ import { EDGE_BOARD_HINT, EDGE_MODE_HINT, EDGE_RAW_HINT, INFER_MODE_HINT, INFER_
  * 有的宽有的窄，而窄的那个会把选项截断。
  *
  * `popupMatchSelectWidth: false` 是关键：antd 默认让弹出列表跟触发器一样宽，
- * 触发器只有 150~190px，于是「edge_cnn_i8 · 稳定版 v2」被截成
+ * 触发器只有 150~190px，于是「edge_cnn_i8 · 稳定版v2」被截成
  * 「edge_cnn_i8 · …」——**截掉的恰好是区分它们的那部分**，
  * 三行端侧模型看起来一模一样。关掉之后列表按内容撑开，不再截断。
  *
@@ -88,7 +88,7 @@ export function useInferModes() {
   const edgeModels = (data?.models ?? []).filter(
     (m) => !m.train?.job_id || listedJobs.has(m.train.job_id),
   );
-  // 默认模型不列：它就是「稳定版 / 稳定版 v2 / 调试版」那三行
+  // 默认模型不列：它就是「稳定版 / 稳定版v2 / 调试版」那三行
   const serverModels = (srv?.models ?? []).filter(
     (m) => !m.is_default && m.spec && (!m.train || listedJobs.has(m.train.job_id)),
   );
@@ -103,7 +103,7 @@ export function useInferModes() {
     const server = serverModels.length
       ? [{
           label: "算法服务 · 其它模型",
-          // 每个模型两个选项。默认的「稳定版 v2」排在前面——跟线上那三行
+          // 每个模型两个选项。默认的「稳定版v2」排在前面——跟线上那三行
           // 用的是同一份后处理，所以跟它们比，差的只有模型本身。
           //
           // 标签**只留名字**，差异放在下拉旁边那个问号里（InferModeHelp）。
@@ -125,9 +125,17 @@ export function useInferModes() {
               : "";
             return [
             {
-              label: `${name} · 稳定版 v2`,
+              label: `${name} · 稳定版v2`,
               value: m.spec as string,
-              title: `${origin}服务端推理。后处理跟线上「稳定版 v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
+              title: `${origin}服务端推理。后处理跟线上「稳定版v2」是同一份代码，所以跟它比差的只有模型本身。${m.model_path}`,
+            },
+            {
+              // 跟线上「稳定版v2·起止对齐」同一份后处理：片段跟稳定版v2 一样，
+              // 只把起止校正到真正开始/停下的位置。训练记录里只训了模型，起止
+              // 偏差是 8s 窗口共有的，所以这一版跟别的模型比才公平。
+              label: `${name} · 稳定版v2·起止对齐`,
+              value: `${m.spec}@viterbi_precise`,
+              title: `${origin}服务端推理。后处理跟线上「稳定版v2·起止对齐」是同一份：片段跟稳定版v2 一样，只校正起止偏早/偏晚。${m.model_path}`,
             },
             {
               label: `${name} · 调试版`,
@@ -170,7 +178,7 @@ export function useInferModes() {
             : m.tag;
           return [
             {
-              label: `${name} · 稳定版 v2`,
+              label: `${name} · 稳定版v2`,
               value: m.spec,
               title: `${geom}。${EDGE_MODE_HINT}`,
             },

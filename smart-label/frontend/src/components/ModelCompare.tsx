@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Button, DatePicker, Input, InputNumber, Progress, Select, Space, Table, Tag, Tooltip, Typography, message,
+  Alert, Button, DatePicker, Input, InputNumber, Progress, Segmented, Select, Space, Table, Tag, Tooltip,
+  Typography, message,
 } from "antd";
 import dayjs from "dayjs";
 import { useQuery } from "@tanstack/react-query";
@@ -12,6 +13,7 @@ import {
 } from "@/api/modelEval";
 import { modeLabelOf } from "@/utils/inferMode";
 import ThresholdCurve from "@/components/ThresholdCurve";
+import ModelABDiff from "@/components/ModelABDiff";
 
 /**
  * 模型对比：同一批数据，几个模型/版本各跟人工标注比一遍。
@@ -33,7 +35,7 @@ const keyLabel = (k: string) => {
   return `${tag} · ${modeLabel(mode ?? "")}`;
 };
 
-export default function ModelCompare() {
+function HumanCompare() {
   const [setId, setSetId] = useState<number | undefined>();
   const [range, setRange] = useState<[string, string]>([
     dayjs().subtract(7, "day").format("YYYY-MM-DD"),
@@ -407,6 +409,37 @@ export default function ModelCompare() {
           <ThresholdCurve versions={result.versions} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * 模型对比页：两种比法。
+ *   - 跟人工标注比：要有人标的正确答案，回答"准不准"
+ *   - 两个版本互比：A/B 互相参照，不需要标注，回答"换模型之后哪里变了"
+ * 默认还是老的那一个；从项目页点「两版对比」进来直接落在第二种。
+ */
+export default function ModelCompare({
+  initialMode = "human",
+  initialProjectId,
+}: {
+  initialMode?: "human" | "ab";
+  initialProjectId?: number;
+}) {
+  const [mode, setMode] = useState<"human" | "ab">(initialMode);
+  useEffect(() => setMode(initialMode), [initialMode]);
+  return (
+    <div>
+      <Segmented
+        style={{ marginBottom: 12 }}
+        value={mode}
+        onChange={(v) => setMode(v as "human" | "ab")}
+        options={[
+          { label: "跟人工标注比", value: "human" },
+          { label: "两个版本互比", value: "ab" },
+        ]}
+      />
+      {mode === "human" ? <HumanCompare /> : <ModelABDiff initialProjectId={initialProjectId} />}
     </div>
   );
 }

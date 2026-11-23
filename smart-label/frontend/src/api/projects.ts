@@ -7,7 +7,7 @@ export const listProjects = () => request.get<never, Project[]>("/projects");
 export const createProject = (body: { name: string; description?: string }) =>
   request.post<never, Project>("/projects", body);
 
-export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "description" | "is_active">>) =>
+export const updateProject = (id: number, body: Partial<Pick<Project, "name" | "description" | "is_active" | "model_neg">>) =>
   request.patch<never, Project>(`/projects/${id}`, body);
 
 export const deleteProject = (id: number) => request.delete<never, DeleteProgress>(`/projects/${id}`);
@@ -58,7 +58,7 @@ export interface PrelabelProgress {
 export type InferMode = string;
 
 /** keepHuman：有人工标注的任务不跳过——片段一条不动，只把这次跑出来的疑似片段补进去
- *  negOnly：只补负例候选——所有任务只换「模型判成负例」（进食 / 饮水 / 嗅闻…）那一种候选，别的一律不动 */
+ *  negOnly：只补负例片段——模型判成负例（进食 / 饮水 / 嗅闻…）的那几段直接写成 AI 片段，别的一律不动 */
 export const startProjectPrelabel = (id: number, overwriteAi = false, mode: InferMode = "stable", keepHuman = false,
                                      negOnly = false) =>
   request.post<never, { started: boolean; queued: boolean }>(`/projects/${id}/ai-prelabel`, {
