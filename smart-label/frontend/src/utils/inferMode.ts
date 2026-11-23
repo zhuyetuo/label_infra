@@ -1,5 +1,5 @@
 /** AI 预标注版本选项：稳定版（滞回+合并）/ 稳定版v2（Viterbi 解码）/ 调试版（逐窗口原始输出） */
-export type AlgoMode = "stable" | "viterbi" | "raw" | "viterbi_noshake" | "viterbi_precise";
+export type AlgoMode = "stable" | "viterbi" | "raw" | "viterbi_noshake" | "viterbi_precise" | "viterbi_strict";
 
 /** 版本可以是算法服务（imu_train 的 label_service）的后处理 mode，
  *  也可以是它上面挂的另一个模型（srv:<标签>）或端侧模型（edge:<标签>）。
@@ -41,6 +41,9 @@ export const INFER_MODE_OPTIONS: { label: string; value: AlgoMode }[] = [
   // 跟「稳定版v2」片段一模一样（个数、类别都不变），**只改起止**：
   // 先平移掉 v2 的系统偏差（8 s 窗口：起点早约 0.5 s、终点晚约 1.1 s），再按抓挠节律能量对齐
   { label: "稳定版v2·起止对齐", value: "viterbi_precise" },
+  // 跟「稳定版v2」解码一样，**只把抓挠的门槛收紧**（段内平均概率 0.7、陀螺仪 std 20、节律占比 0.45）：
+  // 少报不是抓挠的，代价是少报一些短 / 弱的真抓挠（被筛掉的会落进疑似抓挠候选里给人看）
+  { label: "稳定版v2·抓挠严格", value: "viterbi_strict" },
   { label: "调试版", value: "raw" },
 ];
 /** 历史记录里回显用：后端存的是 stable/viterbi/raw */
@@ -90,6 +93,7 @@ export const INFER_MODE_HINT: Record<AlgoMode, string> = {
   viterbi: "动态规划解码整条时间轴，切换类别要付代价，所有类别统一生效；抓挠同样合并/过滤。跟稳定版对比看哪个更接近人工",
   viterbi_noshake: "跟稳定版v2 只差一条规则：抓挠不再吞并前后的甩身体。模型完全一样，用来看那条规则划不划算",
   viterbi_precise: "片段跟稳定版v2 一模一样，只把起止调准：先校正 v2 起点偏早、终点偏晚的系统偏差，再按陀螺仪 3–9 Hz（抓挠节律）能量对齐到真正开始和停下的点。没有陀螺仪的只做校正",
+  viterbi_strict: "解码跟稳定版v2 一样，只把抓挠收严：段内平均概率 ≥ 0.7、陀螺仪 std ≥ 20、2–10 Hz 节律占比 ≥ 0.45 才算抓挠。训练记录 #61 上实测（事件级，重叠 ≥ 0.5 s 算对）：人看过的时间里报对的从 91% 升到 95%，查全从 89% 降到 83%。被筛掉的段照常出现在疑似抓挠候选里",
   raw: "模型逐窗口原始输出，活动/睡觉会来回闪，抓挠有很多单窗口噪声。用来看模型到底说了什么",
 };
 

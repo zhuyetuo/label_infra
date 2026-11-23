@@ -364,3 +364,16 @@ def test_precise_option_is_in_the_dropdown():
     code = _code("utils", "inferMode.ts")
     assert '"viterbi_precise"' in code, "下拉里没有精准版"
     assert "起止" in code
+
+
+def test_strict_is_a_recognised_mode():
+    """抓挠严格版也必须登记进 ALGO_MODES，否则会悄悄退回默认版本、结果却标着 viterbi_strict"""
+    assert algo_client._mode("viterbi_strict") == "viterbi_strict"
+    assert algo_client.post_mode_of("srv:train60@viterbi_strict") == "viterbi_strict"
+
+
+def test_strict_option_is_in_the_dropdown():
+    code = _code("utils", "inferMode.ts")
+    assert '"viterbi_strict"' in code, "下拉里没有抓挠严格版"
+    assert "抓挠严格" in code
+    assert "@viterbi_strict" in _code("hooks", "useInferModes.ts"), "训练记录模型下面没有抓挠严格版"

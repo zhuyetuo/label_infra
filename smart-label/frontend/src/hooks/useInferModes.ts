@@ -138,6 +138,12 @@ export function useInferModes() {
               title: `${origin}服务端推理。后处理跟线上「稳定版v2·起止对齐」是同一份：片段跟稳定版v2 一样，只校正起止偏早/偏晚。${m.model_path}`,
             },
             {
+              // 跟线上「稳定版v2·抓挠严格」同一份后处理：解码同 v2，只把抓挠的三道门槛收紧，少报不是抓挠的
+              label: `${name} · 稳定版v2·抓挠严格`,
+              value: `${m.spec}@viterbi_strict`,
+              title: `${origin}服务端推理。后处理跟线上「稳定版v2·抓挠严格」是同一份：解码同稳定版v2，抓挠要段内平均概率 ≥ 0.7、陀螺仪 std ≥ 20、节律占比 ≥ 0.45。${m.model_path}`,
+            },
+            {
               label: `${name} · 调试版`,
               value: (m.spec_raw ?? `${m.spec}@raw`) as string,
               title: `${origin}模型逐窗口原始输出，不做后处理。用来看这个模型到底说了什么。${m.model_path}`,
