@@ -357,7 +357,7 @@ export default function Projects() {
   // candLabels：「疑似片段」里的二级筛选——只看某几类候选。选项只列**这批候选里
   // 实有的类别**，项目全量标签里大半是一条候选都没有的，摆出来只是让人一个个试
   // minConf：疑似片段置信度 ≥ 多少 %（选了候选类别就只看那几类）；hours：样本采集的整点时段（13 = 13:00~13:59），可多选
-  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; spot?: boolean; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
+  type TaskFilter = { status: StatusFilter; q: string; labels: number[]; aiPending: boolean; cand: boolean; candLabels: string[]; spot?: boolean; fill?: boolean; imu: string; noCsv: boolean; unassigned: boolean; segReturned: boolean; showAllLabels: boolean;
     minConf?: number | null; hours?: number[];
     /** 只看有重叠的 / 只看有「待定」片段的（审核时最常看的两类） */
     overlapOnly?: boolean; uncertainOnly?: boolean;
@@ -1701,6 +1701,7 @@ export default function Projects() {
               if (f.aiPending && !Object.values(lc).some((c) => c.ai_pending > 0)) return false;
               if (f.cand && !(t.cand_pending ?? 0)) return false;
               if (f.spot && !(t.cand_spot_pending ?? 0)) return false;
+              if (f.fill && !(t.cand_fill_pending ?? 0)) return false;
               if (f.spot && specialOnly && specialKind !== "all" && !(t.cand_spot_kinds?.[specialKind] ?? 0)) return false;
               // 「含类别」只认**片段**。曾经把候选也算进来过（为了让"一句话找画面
               // 刚写的候选"能被搜到），结果更糟：疑似片段的候选 label_name 就是
@@ -1810,6 +1811,7 @@ export default function Projects() {
               f.aiPending && "只看 AI 待确认",
               f.cand && "有待判断的疑似片段",
               f.spot && "只看有「专项」待判的任务",
+              f.fill && "只看有「补标」待判的任务",
               f.candLabels.length > 0 && `候选类别：${f.candLabels.join("、")}`,
               !!f.minConf && `置信度 ≥${f.minConf}%`,
               !!f.hours?.length && `时间段 ${f.hours.map((h) => `${h}点`).join("、")}`,
@@ -1826,7 +1828,7 @@ export default function Projects() {
               !!minMs && `片段 ≥${f.minSec} 秒`,
             ].filter((x): x is string => !!x);
             const clearFilters = () => setFilter(p.id, {
-              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], spot: false, minConf: null, hours: [], imu: "ALL",
+              status: "ALL", q: "", labels: [], aiPending: false, cand: false, candLabels: [], spot: false, fill: false, minConf: null, hours: [], imu: "ALL",
               noCsv: false, unassigned: false, segReturned: false, overlapOnly: false, uncertainOnly: false, unreviewedOnly: false, minSec: null, marked: false,
               reviewer: null, reviewedFrom: null, reviewedTo: null,
             });
@@ -2976,6 +2978,25 @@ export default function Projects() {
                           setExpandedKeys(() => [p.id]);
                         }}>
                           专项·{specialWhat(p.id)} 待判 {sn}
+                        </Tag>
+                      </Tooltip>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  // 补标：模型在没人标的时间里报的抓挠（抽查约 3/4 是漏标的），确认了写进标注
+                  const fn = scratchReview?.fill?.[String(p.id)] ?? 0;
+                  if (!fn) return null;
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <Tooltip title={`有 ${fn} 段「补标」疑似抓挠还没判：模型在没人标过的时间里很有把握报了抓挠，抽查下来约 3/4 是漏标的真抓挠。点一下展开、只看这些任务；是抓挠就确认（起止可以先调），会写进标注`}>
+                        <Tag color="geekblue" style={{ cursor: "pointer", fontWeight: 600 }} onClick={(e) => {
+                          e.stopPropagation();
+                          setFilter(p.id, { fill: true, spot: false, cand: false, candLabels: [], labels: [],
+                                            unreviewedOnly: false, segReturned: false, status: "ALL" });
+                          setExpandedKeys(() => [p.id]);
+                        }}>
+                          补标·抓挠 待判 {fn}
                         </Tag>
                       </Tooltip>
                     </div>

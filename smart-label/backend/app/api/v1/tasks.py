@@ -822,9 +822,19 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     for pid, lname, n in spot_rows.all():
         spot[str(pid)] = spot.get(str(pid), 0) + int(n)
         spot_labels.setdefault(str(pid), {})[lname] = int(n)
+    # 「补标」来源还没判的：项目行上蓝色「补标·抓挠 待判 N」，点了只看这些任务（几百条混在几万条低置信里人找不着）
+    fill_rows = await db.execute(
+        select(Task.project_id, func.count(AiCandidate.id))
+        .join(scope, scope.c.id == Task.id)
+        .join(AiCandidate, (AiCandidate.task_id == Task.id) & (AiCandidate.round_no == Task.round_no))
+        .where(AiCandidate.status == CandidateStatus.pending, AiCandidate.reason.in_(FILL_REASONS))
+        .group_by(Task.project_id)
+    )
+    fill = {str(pid): int(n) for pid, n in fill_rows.all()}
     return ok({"label": label, "projects": projects, "total": total, "marks": marks,
                "candidates": candidates, "cand_total": sum(candidates.values()),
-               "spot": spot, "spot_total": sum(spot.values()), "spot_labels": spot_labels})
+               "spot": spot, "spot_total": sum(spot.values()), "spot_labels": spot_labels,
+               "fill": fill, "fill_total": sum(fill.values())})
 
 
 class LabelFocusIn(BaseModel):
