@@ -870,36 +870,73 @@ export default function Training() {
     const stride = num(sp.stride_s) ?? num(m.stride_s);
     return win != null && stride != null ? { win, stride } : null;
   };
-  /** 抓挠按场地（佛山 / 影棚 / 合计）。只有 2026-11-23 之后新训的版本才有 per_site */
+  type Prf = { recall?: number | null; precision?: number | null; f1?: number | null };
+  /** 窗口级的 P/R/F1 是 sklearn 的 precision/recall/f1-score；片段级的是按段算的 */
+  const prfOfClass = (pc?: Record<string, Record<string, number>>): Prf | undefined => {
+    const x = pc?.["抓挠"];
+    return x ? { precision: x.precision, recall: x.recall, f1: x["f1-score"] } : undefined;
+  };
+  /** 抓挠按场地（佛山 / 影棚 / 合计），窗口级、片段宽松、事件级三套都给。
+   *  只有 2026-11-23 之后新训的版本才有 per_site / scratch_events */
   const scratchSites = (v: ModelVersion) => {
     const m = metricsOf(v) ?? {};
     const ps = (m.per_site ?? {}) as Record<string, {
       name?: string;
       n_windows?: number;
-      scratch_segments?: { recall?: number | null; precision?: number | null; f1?: number | null; n_gt?: number; n_pred?: number };
+      per_class?: Record<string, Record<string, number>>;
+      scratch_segments?: Prf & { n_gt?: number; n_pred?: number };
+      scratch_events?: Prf & { n_gt?: number; n_pred?: number; matched?: number };
     }>;
-    const rows = Object.entries(ps).filter(([, r]) => r.scratch_segments);
+    const rows = Object.entries(ps).filter(([, r]) => r.scratch_segments || r.scratch_events || prfOfClass(r.per_class));
     if (!rows.length) return null;
-    return { rows, total: m.scratch_segments as { recall?: number | null; precision?: number | null; f1?: number | null } | undefined };
+    // 事件级：新版本存了 scratch_events；老版本（如 job58）只有 postprocess_segments 的 iou50
+    const pe = (m.postprocess_segments as Record<string, {
+      recall_iou50?: number; precision_iou50?: number; f1_iou50?: number; n_gt?: number; n_pred?: number;
+    }> | undefined)?.["抓挠"];
+    const totalEv = (m.scratch_events as Prf | undefined)
+      ?? (pe ? { recall: pe.recall_iou50, precision: pe.precision_iou50, f1: pe.f1_iou50 } : undefined);
+    return {
+      rows,
+      totalWin: prfOfClass(m.per_class as Record<string, Record<string, number>> | undefined),
+      total: m.scratch_segments as Prf | undefined,
+      totalEv,
+    };
   };
   const prfText = (x?: number | null) => (x == null ? "-" : x.toFixed(3));
+  /** 老记录的片段级只存了查全/查准，没有 F1：按定义补出来，别显示成 "-" */
+  const f1OrCalc = (x: Prf) =>
+    x.f1 ?? (x.recall != null && x.precision != null && x.recall + x.precision > 0
+      ? (2 * x.recall * x.precision) / (x.recall + x.precision) : null);
+  const prfLine = (tag: string, x?: Prf) =>
+    x ? (
+      <div style={{ paddingLeft: 10 }}>
+        {tag}：查全 {prfText(x.recall)} / 查准 {prfText(x.precision)} / F1 {prfText(f1OrCalc(x))}
+      </div>
+    ) : null;
+  /** 抓挠指标：同一个场地下，窗口级和片段级各一行 */
   const scratchSiteTip = (v: ModelVersion) => {
     const d = scratchSites(v);
     if (!d) return null;
     return (
       <div style={{ fontVariantNumeric: "tabular-nums" }}>
         {d.rows.map(([k, r]) => {
-          const s = r.scratch_segments!;
+          const s = r.scratch_segments;
           return (
-            <div key={k}>
-              {r.name ?? k}：P {prfText(s.precision)} / R {prfText(s.recall)} / F1 {prfText(s.f1)}
-              {s.n_gt != null && <span style={{ opacity: 0.65 }}>（人标 {s.n_gt} 段 / 模型报 {s.n_pred ?? "-"} 段）</span>}
+            <div key={k} style={{ marginTop: 4 }}>
+              <div>{r.name ?? k}{r.n_windows != null ? `（${r.n_windows} 窗）` : ""}</div>
+              {prfLine("按窗口", prfOfClass(r.per_class))}
+              {prfLine("按片段（宽松）", s)}
+              {prfLine("按事件（IoU≥50%）", r.scratch_events)}
+              {s?.n_gt != null && (
+                <div style={{ paddingLeft: 10, opacity: 0.65 }}>人标 {s.n_gt} 段 / 模型报 {s.n_pred ?? "-"} 段</div>
+              )}
             </div>
           );
         })}
-        {d.total && (
-          <div style={{ marginTop: 2 }}>合计：P {prfText(d.total.precision)} / R {prfText(d.total.recall)} / F1 {prfText(d.total.f1)}</div>
-        )}
+        <div style={{ marginTop: 6, borderTop: "1px solid rgba(127,127,127,0.3)", paddingTop: 4 }}>合计</div>
+        {prfLine("按窗口", d.totalWin)}
+        {prfLine("按片段（宽松）", d.total)}
+        {prfLine("按事件（IoU≥50%）", d.totalEv)}
       </div>
     );
   };
@@ -1360,30 +1397,42 @@ export default function Training() {
                       if (m.pipeline !== "v2") return <b>{f1.toFixed(3)}</b>;
                       const main = mainOf(v);
                       // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
-                      const pd = (m.per_dataset ?? {}) as Record<string, { macro_f1: number; n: number; segment_macro_f1?: number; scratch_segments?: { recall?: number | null; precision?: number | null } }>;
+                      const pd = (m.per_dataset ?? {}) as Record<string, {
+                        macro_f1: number; n: number; segment_macro_f1?: number;
+                        per_class?: Record<string, Record<string, number>>;
+                        scratch_segments?: { recall?: number | null; precision?: number | null };
+                      }>;
                       const seg = m.segment_macro_f1 as number | undefined;
-                      const sc = m.scratch_segments as { recall?: number | null; precision?: number | null; f1?: number | null } | undefined;
+                      const sc = m.scratch_segments as Prf | undefined;
+                      const sw = prfOfClass(m.per_class as Record<string, Record<string, number>> | undefined);
                       const sites = scratchSites(v);
                       return (
                         <Tooltip title={
                           <div style={{ fontSize: 12, lineHeight: 1.7 }}>
                             <div>新版流程：按（天, 项圈）分组交叉验证，同一只狗同一天不会两边都有——比老流程的分数低一些，但更接近换一只狗的真实表现。不能跟老流程的数直接比</div>
-                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}{sc?.recall != null ? `；抓挠按次数 查全 ${sc.recall} / 查准 ${sc.precision}${sc.f1 != null ? ` / F1 ${sc.f1}` : ""}` : ""}</div>}
+                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}</div>}
+                            {sw && <div>抓挠 按窗口：查全 {prfText(sw.recall)} / 查准 {prfText(sw.precision)} / F1 {prfText(sw.f1)}</div>}
+                            {sc && <div>抓挠 按片段（宽松）：查全 {prfText(sc.recall)} / 查准 {prfText(sc.precision)} / F1 {prfText(f1OrCalc(sc))}</div>}
+                            {sites?.totalEv && <div>抓挠 按事件（IoU≥50%）：查全 {prfText(sites.totalEv.recall)} / 查准 {prfText(sites.totalEv.precision)} / F1 {prfText(sites.totalEv.f1)}</div>}
                             {sites && (
                               <div style={{ marginTop: 6 }}>
-                                <div>抓挠按场地（按片段；合起来看上面）：</div>
+                                <div>抓挠按场地（窗口 / 片段宽松 / 事件；合计看上面）：</div>
                                 {scratchSiteTip(v)}
                               </div>
                             )}
                             {Object.keys(pd).length > 0 && <div style={{ marginTop: 4 }}>分数据集（老数据标得粗，会拉低总分）：</div>}
-                            {Object.entries(pd).map(([d, r]) => (
-                              <div key={d}>
-                                {d}：{r.macro_f1.toFixed(3)}
-                                {r.segment_macro_f1 != null ? `，按片段 ${r.segment_macro_f1.toFixed(3)}` : ""}
-                                {r.scratch_segments?.recall != null ? `，抓挠按次数 查全 ${r.scratch_segments.recall} / 查准 ${r.scratch_segments.precision}` : ""}
-                                （{r.n} 窗）
-                              </div>
-                            ))}
+                            {Object.entries(pd).map(([d, r]) => {
+                              const w = prfOfClass(r.per_class);
+                              return (
+                                <div key={d}>
+                                  {d}：{r.macro_f1.toFixed(3)}
+                                  {r.segment_macro_f1 != null ? `，按片段 ${r.segment_macro_f1.toFixed(3)}` : ""}
+                                  {w ? `；抓挠 按窗口 查全 ${prfText(w.recall)} / 查准 ${prfText(w.precision)} / F1 ${prfText(w.f1)}` : ""}
+                                  {r.scratch_segments?.recall != null ? `；按片段 查全 ${prfText(r.scratch_segments.recall)} / 查准 ${prfText(r.scratch_segments.precision)}` : ""}
+                                  （{r.n} 窗）
+                                </div>
+                              );
+                            })}
                           </div>
                         }>
                           <span style={{ cursor: "help" }}>
@@ -1422,12 +1471,12 @@ export default function Training() {
                               key={c.cls}
                               title={
                                 <div style={{ fontSize: 12 }}>
-                                  <div>{c.cls}：精确率 {c.p.toFixed(2)} / 召回 {c.r.toFixed(2)} / F1 {c.f1.toFixed(2)}</div>
+                                  <div>{c.cls} 按窗口：精确率 {c.p.toFixed(2)} / 召回 {c.r.toFixed(2)} / F1 {c.f1.toFixed(2)}</div>
                                   {/* 抓挠在不同场地差得最多：佛山几乎全对、影棚可能一段都判不出来，
                                       只看一个总分会以为「都还行」 */}
                                   {c.cls === "抓挠" && scratchSites(v) && (
                                     <div style={{ marginTop: 4 }}>
-                                      <div>按场地（按片段）：</div>
+                                      <div>按场地（窗口 / 片段宽松 / 事件）：</div>
                                       {scratchSiteTip(v)}
                                     </div>
                                   )}
