@@ -331,6 +331,26 @@ async def models_act(key: str, action: str) -> dict:
     return await _post(f"/api/v1/models/{key}", {"action": action}, 300)
 
 
+async def models_device() -> dict:
+    """视觉服务当前跑在哪个设备上：mode=auto/cuda/cpu，resolved=实际落的设备。"""
+    if not enabled():
+        return {"mode": None, "resolved": None, "error": _off_reason()}
+    url = f"{settings.vision_service_url.rstrip('/')}/api/v1/device"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"mode": None, "resolved": None, "error": f"视觉服务返回 {resp.status_code}"}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"mode": None, "resolved": None, "error": f"连不上视觉服务：{type(e).__name__}"}
+
+
+async def set_models_device(mode: str) -> dict:
+    """切 auto / cuda / cpu。视觉服务会先卸载已加载的模型，不会自动重新加载。"""
+    return await _post("/api/v1/device", {"mode": mode}, 120)
+
+
 async def models_meter_reset() -> dict:
     return await _post("/api/v1/models/meter/reset", {}, 10)
 

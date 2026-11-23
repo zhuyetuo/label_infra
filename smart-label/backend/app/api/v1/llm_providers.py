@@ -127,6 +127,32 @@ async def local_models():
     return ok(await vision_sam_client.models_overview())
 
 
+class LocalDeviceIn(BaseModel):
+    mode: str = Field(..., pattern="^(auto|cuda|cpu)$")
+
+
+# 注意：这两条必须放在 /local-models/{key} 之前，否则 POST /local-models/device
+# 会被当成 key="device" 的动作请求吃掉
+@router.get("/local-models/device")
+async def local_model_device():
+    """视觉服务当前设备模式（auto / cuda / cpu）以及实际落到的设备。"""
+    return ok(await vision_sam_client.models_device())
+
+
+@router.post("/local-models/device")
+async def set_local_model_device(body: LocalDeviceIn, db: AsyncSession = Depends(get_db),
+                                 admin: User = Depends(get_current_user)):
+    """切设备。视觉服务会先卸载已加载的模型（不会自动重加载），下次用到在新设备上加载。"""
+    try:
+        r = await vision_sam_client.set_models_device(body.mode)
+    except vision_sam_client.SamUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    db.add(AuditLog(user_id=admin.id, action="local_model.device", target_type="local_model", target_id=None,
+                    detail=f"mode={body.mode} → {r.get('resolved')}，卸载 {len(r.get('released') or [])} 个"[:500]))
+    await db.commit()
+    return ok(r)
+
+
 class LocalModelActionIn(BaseModel):
     action: str = Field(..., pattern="^(load|unload|test)$")
 
