@@ -54,6 +54,9 @@ class Seg:
     start_ms: int
     end_ms: int
     conf: float | None = None
+    # 模型把这一段判成什么类别。两版互比时用来回答"同一段两边认的类别一样吗"；
+    # 跟人工比时人工的 Seg 不带类别（外面按类别分组了）
+    label: str | None = None
 
     @property
     def dur(self) -> int:
@@ -66,6 +69,16 @@ def _iou(a: Seg, b: Seg) -> float:
         return 0.0
     union = a.dur + b.dur - inter
     return inter / union if union > 0 else 0.0
+
+
+def _best_overlap(s: Seg, candidates: list[Seg], iou_min: float) -> tuple[Seg, float] | None:
+    """在候选片段里找跟 s 重叠最多的一个（IoU 达到门槛才算）。"""
+    best: tuple[Seg, float] | None = None
+    for c in candidates:
+        v = _iou(s, c)
+        if v >= iou_min and (best is None or v > best[1]):
+            best = (c, v)
+    return best
 
 
 def _overlaps_any(s: Seg, holes: list[tuple[int, int]], ratio: float = 0.5) -> bool:
@@ -175,9 +188,13 @@ async def _human_by_sample(
 
 
 async def _run_segments(
-    samples: list[Sample], runs: dict[int, SampleInferenceRun], label_names: list[str]
+    samples: list[Sample], runs: dict[int, SampleInferenceRun], label_names: list[str] | None
 ) -> tuple[dict[int, list[Seg]], dict[int, list[tuple[int, int]]], list[str]]:
-    """把一次跑的结果 JSON 读出来，换算成相对 CSV 起点的毫秒。"""
+    """把一次跑的结果 JSON 读出来，换算成相对 CSV 起点的毫秒。
+
+    label_names=None 表示读全部类别——两版互比要判断"类别一致不一致"，
+    只读一个类别的话永远比不出类别差异。
+    """
     preds: dict[int, list[Seg]] = {}
     missing: dict[int, list[tuple[int, int]]] = {}
     warnings: list[str] = []
@@ -198,9 +215,14 @@ async def _run_segments(
         except PrelabelError as e:
             warnings.append(f"样本 {s.sample_code}：{e}")
             return
+        by_label = data.get("segments") or {}
+        classes = (
+            list(by_label.items()) if label_names is None
+            else [(name, by_label.get(name) or []) for name in label_names]
+        )
         segs: list[Seg] = []
-        for name in label_names:
-            for seg in (data.get("segments") or {}).get(name) or []:
+        for name, items in classes:
+            for seg in items:
                 a, b = parse_ts(seg.get("start_ts")), parse_ts(seg.get("end_ts"))
                 if a is None or b is None or b <= a:
                     continue
@@ -212,6 +234,7 @@ async def _run_segments(
                         int(round((a - csv_start).total_seconds() * 1000)),
                         int(round((b - csv_start).total_seconds() * 1000)),
                         float(conf) if conf is not None else None,
+                        label=name,
                     )
                 )
         segs.sort(key=lambda x: x.start_ms)
@@ -434,6 +457,289 @@ async def evaluate(
     }
 
 
+async def diff_versions(
+    db: AsyncSession,
+    sample_ids: list[int],
+    a: dict,
+    b: dict,
+    label: str | None = None,
+    iou_min: float = 0.3,
+    max_samples: int = 30,
+    edge_2s_ms: int = 2000,
+) -> dict:
+    """
+    两版互比：同一批样本，A/B 各跑一遍，看两边答得一样不一样。
+
+    跟 evaluate 的区别是**不需要人工标注**——A 和 B 互相就是参照物。
+    回答的是"换了模型之后，哪些地方它俩吵起来了"：A 有 B 没有、B 有 A 没有、
+    两边都有的**类别是不是一样**、以及同类别时起止差了多少。
+    分歧样本可以按分歧数排序，直接跳过去看。
+
+    label=None 比全部类别（默认）；给了类别就只看这一类，此时类别不可能不同。
+    a/b: {"model_tag": ..., "mode": ...}
+    """
+    warnings: list[str] = []
+    ids = sorted(set(sample_ids))
+    key_a = f"{a.get('model_tag')}::{a.get('mode')}"
+    key_b = f"{b.get('model_tag')}::{b.get('mode')}"
+    if key_a == key_b:
+        warnings.append("选的 A 和 B 是同一个版本，结果只会是两边完全一致")
+
+    async def _runs_of(ref: dict) -> dict[int, SampleInferenceRun]:
+        rows = (
+            await db.execute(
+                select(SampleInferenceRun).where(
+                    SampleInferenceRun.sample_id.in_(ids),
+                    SampleInferenceRun.model_tag == ref.get("model_tag"),
+                    SampleInferenceRun.mode == ref.get("mode"),
+                )
+            )
+        ).scalars().all()
+        return {r.sample_id: r for r in rows}
+
+    runs_a = await _runs_of(a)
+    runs_b = await _runs_of(b)
+    if len(runs_a) < len(ids):
+        warnings.append(f"A（{key_a}）在这批里只跑了 {len(runs_a)}/{len(ids)} 个样本")
+    if len(runs_b) < len(ids):
+        warnings.append(f"B（{key_b}）在这批里只跑了 {len(runs_b)}/{len(ids)} 个样本")
+    covered = set(runs_a) & set(runs_b)
+    if not covered:
+        return {
+            "a": {**a, "key": key_a, "n_runs": len(runs_a)},
+            "b": {**b, "key": key_b, "n_runs": len(runs_b)},
+            "n_scope": len(ids),
+            "n_covered": 0,
+            "totals": {},
+            "diverged_samples": [],
+            "n_diverged": 0,
+            "iou_min": iou_min,
+            "edge_2s_ms": edge_2s_ms,
+            "warnings": [*warnings, "两个版本没有共同跑过的样本——先点「跑这两个版本」"],
+        }
+
+    samples = (
+        await db.execute(
+            select(Sample).where(Sample.id.in_(covered)).order_by(Sample.id)
+        )
+    ).scalars().all()
+    # 两边都读全部类别：选了某个类别时，它只决定"哪些片段算事件"，
+    # 另一边读全类别才能回答"同一段它认成了什么"（A 说抓挠、B 说活动）
+    pa, missing_a, warn_a = await _run_segments(samples, runs_a, None)
+    pb, missing_b, warn_b = await _run_segments(samples, runs_b, None)
+    warnings.extend(warn_a)
+    warnings.extend(warn_b)
+
+    n_seg_a = n_seg_b = 0
+    n_matched = n_only_a = n_only_b = n_boundary_bad = 0
+    n_label_diff = 0
+    # 配对里就已经类别不同的（不选类别、全量比时会出现）
+    n_pair_label_diff = 0
+    n_time_compared = 0
+    ious: list[float] = []
+    d_start: list[int] = []
+    d_end: list[int] = []
+    within_2s = 0
+    per_sample: list[dict] = []
+
+    for s in samples:
+        # 有一边读不出来（CSV 对不上之类）就没法比，跳过而不是算成"那边全漏"
+        if s.id not in pa or s.id not in pb:
+            continue
+        # 采集掉数据的时段两边都不算：那是没采到，不是模型没认出来
+        holes = (missing_a.get(s.id) or []) + (missing_b.get(s.id) or [])
+        all_a = [x for x in (pa.get(s.id) or []) if not _overlaps_any(x, holes)]
+        all_b = [x for x in (pb.get(s.id) or []) if not _overlaps_any(x, holes)]
+        # 事件 = 选中的类别；不选类别时就是全部片段
+        seg_a = [x for x in all_a if label is None or x.label == label]
+        seg_b = [x for x in all_b if label is None or x.label == label]
+        pairs, only_a, only_b = match(seg_a, seg_b, iou_min)
+
+        n_seg_a += len(seg_a)
+        n_seg_b += len(seg_b)
+        n_matched += len(pairs)
+
+        seg_rows: list[dict] = []
+        sample_ds: list[int] = []
+        sample_de: list[int] = []
+        bad = 0
+        label_diff = 0
+        pair_label_diff = 0
+        for ia, ib, v in pairs:
+            sa, sb = seg_a[ia], seg_b[ib]
+            same_label = sa.label == sb.label
+            ious.append(v)
+            if not same_label:
+                # 同一时段两边认成了不同类别：这本身就是最大的分歧，起止差不用再算
+                label_diff += 1
+                pair_label_diff += 1
+                ds = de = None
+            else:
+                ds = sb.start_ms - sa.start_ms
+                de = sb.end_ms - sa.end_ms
+                # 平均 Δ 要有个正负概念（整体偏早还是偏晚），±2s 占比看的是边界稳不稳
+                n_time_compared += 1
+                d_start.append(ds)
+                d_end.append(de)
+                sample_ds.append(ds)
+                sample_de.append(de)
+                if abs(ds) <= edge_2s_ms and abs(de) <= edge_2s_ms:
+                    within_2s += 1
+                else:
+                    bad += 1
+            seg_rows.append(
+                {
+                    "kind": "both",
+                    "iou": round(v, 3),
+                    "label_a": sa.label,
+                    "label_b": sb.label,
+                    "same_label": same_label,
+                    "a": {"start_ms": sa.start_ms, "end_ms": sa.end_ms},
+                    "b": {"start_ms": sb.start_ms, "end_ms": sb.end_ms},
+                    "d_start_ms": ds,
+                    "d_end_ms": de,
+                }
+            )
+        # A 的事件在 B 那边没配到同类：先看 B 有没有把它认成**别的类别**。
+        # 有 = 类别不一致（"A 说抓挠、B 说活动"），没有才是 B 真的漏了
+        for ia in only_a:
+            sa = seg_a[ia]
+            hit = _best_overlap(sa, all_b, iou_min)
+            if hit is None:
+                n_only_a += 1
+                seg_rows.append(
+                    {
+                        "kind": "only_a",
+                        "label": sa.label,
+                        "a": {"start_ms": sa.start_ms, "end_ms": sa.end_ms},
+                    }
+                )
+                continue
+            sb, v = hit
+            label_diff += 1
+            ious.append(v)
+            seg_rows.append(
+                {
+                    "kind": "both",
+                    "iou": round(v, 3),
+                    "label_a": sa.label,
+                    "label_b": sb.label,
+                    "same_label": False,
+                    "a": {"start_ms": sa.start_ms, "end_ms": sa.end_ms},
+                    "b": {"start_ms": sb.start_ms, "end_ms": sb.end_ms},
+                    "d_start_ms": None,
+                    "d_end_ms": None,
+                }
+            )
+        for ib in only_b:
+            sb = seg_b[ib]
+            hit = _best_overlap(sb, all_a, iou_min)
+            if hit is None:
+                n_only_b += 1
+                seg_rows.append(
+                    {
+                        "kind": "only_b",
+                        "label": sb.label,
+                        "b": {"start_ms": sb.start_ms, "end_ms": sb.end_ms},
+                    }
+                )
+                continue
+            sa, v = hit
+            label_diff += 1
+            ious.append(v)
+            seg_rows.append(
+                {
+                    "kind": "both",
+                    "iou": round(v, 3),
+                    "label_a": sa.label,
+                    "label_b": sb.label,
+                    "same_label": False,
+                    "a": {"start_ms": sa.start_ms, "end_ms": sa.end_ms},
+                    "b": {"start_ms": sb.start_ms, "end_ms": sb.end_ms},
+                    "d_start_ms": None,
+                    "d_end_ms": None,
+                }
+            )
+        n_boundary_bad += bad
+        n_label_diff += label_diff
+        n_pair_label_diff += pair_label_diff
+        seg_rows.sort(key=lambda r: (r.get("a") or r.get("b"))["start_ms"])
+        per_sample.append(
+            {
+                "sample_id": s.id,
+                "sample_code": s.sample_code,
+                "n_a": len(seg_a),
+                "n_b": len(seg_b),
+                "matched": len(pairs),
+                "only_a": len(only_a),
+                "only_b": len(only_b),
+                "label_diff": label_diff,
+                "boundary_bad": bad,
+                # 样本内的平均偏移：正数 = B 比 A 晚（只算类别相同的配对）
+                "d_start_mean_ms": round(sum(sample_ds) / len(sample_ds)) if sample_ds else None,
+                "d_end_mean_ms": round(sum(sample_de) / len(sample_de)) if sample_de else None,
+                "diff_count": len(only_a) + len(only_b) + label_diff + bad,
+                "segments": seg_rows[:80],
+            }
+        )
+
+    diverged = [p for p in per_sample if p["diff_count"] > 0]
+    diverged.sort(key=lambda p: (-p["diff_count"], p["sample_id"]))
+    top = diverged[:max_samples]
+
+    # 只要分歧样本的任务号：全部样本都查一遍在这批三万条时太贵
+    if top:
+        rows = await db.execute(
+            select(Task.sample_id, Task.project_id, Task.id)
+            .where(Task.sample_id.in_([p["sample_id"] for p in top]))
+            .order_by(Task.id)
+        )
+        where: dict[int, tuple[int, int]] = {}
+        for sid, pid, tid in rows.all():
+            where.setdefault(sid, (pid, tid))
+        for p in top:
+            pid, tid = where.get(p["sample_id"], (None, None))
+            p["project_id"] = pid
+            p["task_id"] = tid
+
+    return {
+        "a": {**a, "key": key_a, "n_runs": len(runs_a)},
+        "b": {**b, "key": key_b, "n_runs": len(runs_b)},
+        "n_scope": len(ids),
+        "n_covered": len(covered),
+        "totals": {
+            "n_seg_a": n_seg_a,
+            "n_seg_b": n_seg_b,
+            "matched": n_matched,
+            "only_a": n_only_a,
+            "only_b": n_only_b,
+            # 同一时段两边认的类别不一样：换了模型之后最容易出问题的地方
+            "label_diff": n_label_diff,
+            # 分母 = 类别相同的配对 + 类别不同的配对（包括"一边有事件、另一边认成别的类别"）
+            "label_same_ratio": round(
+                (n_matched - n_pair_label_diff)
+                / (n_matched - n_pair_label_diff + n_label_diff),
+                4,
+            )
+            if (n_matched - n_pair_label_diff + n_label_diff)
+            else None,
+            "boundary_bad": n_boundary_bad,
+            "mean_iou": round(sum(ious) / len(ious), 4) if ious else None,
+            "d_start_mean_ms": round(sum(d_start) / len(d_start)) if d_start else None,
+            "d_end_mean_ms": round(sum(d_end) / len(d_end)) if d_end else None,
+            "d_start_abs_mean_ms": round(sum(abs(x) for x in d_start) / len(d_start)) if d_start else None,
+            "d_end_abs_mean_ms": round(sum(abs(x) for x in d_end) / len(d_end)) if d_end else None,
+            # 分母是类别相同、能比较起止的配对，不是全部配对
+            "within_2s_ratio": round(within_2s / n_time_compared, 4) if n_time_compared else None,
+        },
+        "n_diverged": len(diverged),
+        "diverged_samples": top,
+        "iou_min": iou_min,
+        "edge_2s_ms": edge_2s_ms,
+        "warnings": warnings[:50],
+    }
+
+
 # ── 评测跑批：几个版本对同一批样本各跑一遍，只存结果不写草稿 ──────────────
 
 _eval_progress: dict = {"status": "idle", "total": 0, "done": 0, "failed": 0, "current": None, "detail": []}
@@ -503,7 +809,9 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
                         _eval_progress["detail"].append(f"{s.sample_code}［{mode}］失败：{(r or {}).get('error')}")
                         continue
                     try:
-                        await store_run_only(s, payload)
+                        # strict：入库失败要算失败。不然进度条显示成功，
+                        # 对比页却一条结果都找不到
+                        await store_run_only(s, payload, strict=True)
                         _eval_progress["done"] += 1
                     except Exception as e:  # noqa: BLE001 单个样本存不下不该中断整批
                         _eval_progress["failed"] += 1

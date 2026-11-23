@@ -23,7 +23,13 @@ from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import algo_client, edge_client
-from app.services.model_eval_service import evaluate, eval_run_progress, list_runs, start_eval_run
+from app.services.model_eval_service import (
+    diff_versions,
+    evaluate,
+    eval_run_progress,
+    list_runs,
+    start_eval_run,
+)
 
 router = APIRouter(
     prefix="/model-eval",
@@ -56,6 +62,8 @@ async def _scope_ids(
     sample_ids: list[int] | None,
     date_from: _dt.date | None,
     date_to: _dt.date | None,
+    project_ids: list[int] | None = None,
+    all_projects: bool = False,
 ) -> list[int]:
     if set_id:
         row = await db.get(AuditLog, set_id)
@@ -64,6 +72,16 @@ async def _scope_ids(
         return (json.loads(row.detail or "{}") or {}).get("sample_ids") or []
     if sample_ids:
         return sample_ids
+    # 项目范围：不要求人工审过。两版互比看的是"两个模型对同一批数据答得一样不一样"，
+    # 不需要正确答案，所以待认领的任务也能比——那恰恰是最需要先看一眼的时候
+    if project_ids:
+        rows = await db.execute(
+            select(Task.sample_id).where(Task.project_id.in_(project_ids)).distinct()
+        )
+        return [r[0] for r in rows.all()]
+    if all_projects:
+        rows = await db.execute(select(Task.sample_id).distinct())
+        return [r[0] for r in rows.all()]
     if date_from and date_to:
         return await _reviewed_in_range(db, date_from, date_to)
     return []
@@ -74,14 +92,19 @@ async def available_runs(
     set_id: int | None = None,
     date_from: _dt.date | None = None,
     date_to: _dt.date | None = None,
+    # 逗号分隔："1,2,3"。前端 GET 用 join，避免 axios 把数组拼成 project_ids[]
+    # 而 FastAPI 认的是重复键
+    project_ids: str | None = None,
+    all_projects: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """有哪些 (模型, 版本) 跑过、各覆盖多少样本——对比页的下拉。
 
     给了范围就只数这批样本：下拉里显示的是「这批里跑了几个」，不是全库，
     否则选上一个在这批里根本没跑过的版本，报告里全是漏检。"""
-    if set_id or (date_from and date_to):
-        ids = await _scope_ids(db, set_id, None, date_from, date_to)
+    pids = [int(x) for x in project_ids.split(",") if x.strip().isdigit()] if project_ids else None
+    if set_id or (date_from and date_to) or pids or all_projects:
+        ids = await _scope_ids(db, set_id, None, date_from, date_to, pids, all_projects)
         runs = await list_runs(db, ids) if ids else []
         return ok({"n_scope": len(ids), "runs": runs})
     return ok({"n_scope": None, "runs": await list_runs(db)})
@@ -257,6 +280,10 @@ class EvalRunIn(BaseModel):
     sample_ids: list[int] | None = None
     date_from: _dt.date | None = None
     date_to: _dt.date | None = None
+    # 按项目圈范围：单个项目、多选项目、或者全部项目。两版互比不用人工标注，
+    # 所以这个范围不要求任务已经审过
+    project_ids: list[int] | None = None
+    all_projects: bool = False
     # 要跑哪几个版本，一次可以全跑：["stable", "viterbi", "raw"]。
     # 端侧模型也写在这里，形如 "edge:edge_cnn_i8"——它跟 mode 是平级的，
     # 都是"同一批样本、另一种算法"，对比逻辑完全一样。
@@ -272,9 +299,12 @@ async def run_eval(body: EvalRunIn, db: AsyncSession = Depends(get_db)):
     跟项目页的「批量 AI 预标注」是两回事：那个是给标注员铺草稿（一个任务只能
     有一份），这个纯粹攒对比数据，几个版本并存。
     """
-    ids = await _scope_ids(db, body.set_id, body.sample_ids, body.date_from, body.date_to)
+    ids = await _scope_ids(
+        db, body.set_id, body.sample_ids, body.date_from, body.date_to,
+        body.project_ids, body.all_projects,
+    )
     if not ids:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集，或者换个有人工审核过样本的日期范围")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集、日期范围或者项目")
     started = await start_eval_run(ids, body.modes)
     return ok({"started": started, "n_samples": len(ids), "modes": body.modes})
 
@@ -282,3 +312,47 @@ async def run_eval(body: EvalRunIn, db: AsyncSession = Depends(get_db)):
 @router.get("/run/progress")
 async def run_progress():
     return ok(eval_run_progress())
+
+
+class ABDiffIn(BaseModel):
+    """两版互比：同一批样本，模型 A/B 各跑一遍，看两边答得一样不一样。
+
+    不需要人工标注——A 和 B 互相就是参照物。所以范围可以是任意项目，
+    包括一条都还没审过的项目。
+    """
+    set_id: int | None = None
+    sample_ids: list[int] | None = None
+    date_from: _dt.date | None = None
+    date_to: _dt.date | None = None
+    project_ids: list[int] | None = None
+    all_projects: bool = False
+    a: VersionRef
+    b: VersionRef
+    # 不传 = 比全部类别。只看一个类别的话比不出"类别一不一致"
+    label: str | None = None
+    # 两边片段重叠多少算"同一段"。0.3 宽松；想专门看边界就把这个调高
+    iou_min: float = 0.3
+    # 分歧样本最多列多少个（按分歧数排序）。全部项目三万多个样本全列出来
+    # 浏览器也扛不住
+    max_samples: int = Field(default=30, ge=1, le=200)
+
+
+@router.post("/diff")
+async def diff(body: ABDiffIn, db: AsyncSession = Depends(get_db)):
+    ids = await _scope_ids(
+        db, body.set_id, body.sample_ids, body.date_from, body.date_to,
+        body.project_ids, body.all_projects,
+    )
+    if not ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选项目、评测集或者日期范围")
+    return ok(
+        await diff_versions(
+            db,
+            ids,
+            body.a.model_dump(),
+            body.b.model_dump(),
+            label=body.label,
+            iou_min=body.iou_min,
+            max_samples=body.max_samples,
+        )
+    )

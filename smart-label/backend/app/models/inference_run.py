@@ -32,7 +32,8 @@ class SampleInferenceRun(Base):
     # 模型文件名去掉后缀，比如 scratch_rf_20260901。同一个模型换个路径也算同一个
     model_tag: Mapped[str] = mapped_column(String(120), nullable=False)
     model_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    mode: Mapped[str] = mapped_column(String(20), nullable=False, comment="stable / viterbi / raw")
+    # 版本串可能是完整 spec：srv:train49@viterbi_precise（29 字符），20 装不下
+    mode: Mapped[str] = mapped_column(String(64), nullable=False, comment="stable / viterbi / raw / srv:xxx@yyy")
 
     json_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="NAS 相对路径")
     n_windows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
