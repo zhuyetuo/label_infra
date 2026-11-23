@@ -4,14 +4,18 @@ import { LockOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cleanupMissingFileSamples,
+  cleanRedundancy,
   deleteSamplesBatch,
   getImportScanStatus,
   listMissingFileSamples,
+  scanRedundancy,
   startImportScan,
   listSamples,
   setSamplesDog,
   setSamplesSensitive,
   updateSample,
+  type RedundancyDay,
+  type RedundancyReport,
   type ScanProgress,
   listVisionScans,
   runVisionScan,
@@ -39,6 +43,27 @@ function formatDuration(sec: number): string {
   const s = Math.round(sec % 60);
   return `${m}分${s}秒`;
 }
+
+function formatBytes(n: number): string {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+const redundancyLabels: Record<string, string> = {
+  unpaired_video: "未配对的视频副本",
+  shared_paired_video: "公用机位重复视频",
+  shared_paired_csv: "重复 IMU 流水",
+  meta_csv: "录制元信息",
+  merged_csv: "合并总流水",
+  imu_raw_csv: "未裁剪整段流水",
+};
 
 type DayItem = { key: string; label: React.ReactNode; children: React.ReactNode; count?: number };
 
@@ -94,6 +119,41 @@ export default function Samples() {
       setSharedCam(await sharedCamPlan());
     } finally {
       setSharedCamLoading(false);
+    }
+  };
+  // NAS 冗余检测：现场忘了先跑 cleanup_gouchang.sh 就上传，NAS 上会多出未配对的
+  // 视频副本、meta/合并流水等中间产物。按日期汇总，给单日 / 一键全部清理
+  const [redundancy, setRedundancy] = useState<RedundancyReport | null>(null);
+  const [redundancyLoading, setRedundancyLoading] = useState(false);
+  const [redundancyOpen, setRedundancyOpen] = useState(false);
+  const [redundancyCleaning, setRedundancyCleaning] = useState(false);
+
+  const loadRedundancy = async (open = true) => {
+    setRedundancyLoading(true);
+    try {
+      const r = await scanRedundancy();
+      setRedundancy(r);
+      if (open) setRedundancyOpen(true);
+      if (open && r.total_files === 0) message.success("没有检测到可清理的冗余文件");
+    } finally {
+      setRedundancyLoading(false);
+    }
+  };
+
+  const cleanRedundancyNow = async (dates?: string[]) => {
+    setRedundancyCleaning(true);
+    try {
+      const r = await cleanRedundancy(dates);
+      const tail = r.errors.length ? `；${r.errors.length} 个删不掉：${r.errors[0]}` : "";
+      const kept = r.protected ? `；${r.protected} 个被样本引用已保留` : "";
+      if (r.deleted === 0) {
+        message.info(`没有删除任何文件${kept}${tail}`);
+      } else {
+        message.success(`已删除 ${r.deleted} 个冗余文件，释放 ${formatBytes(r.freed_bytes)}${kept}${tail}`, 8);
+      }
+      await loadRedundancy(false);
+    } finally {
+      setRedundancyCleaning(false);
     }
   };
   const { data, isLoading, refetch } = useQuery({ queryKey: ["samples"], queryFn: listSamples });
@@ -429,6 +489,22 @@ export default function Samples() {
           立即扫描一次
         </Button>
         <Button onClick={() => refetch()}>刷新列表</Button>
+        {/* 采集端忘了先跑 cleanup_gouchang.sh 就上传时，NAS 上会多出未配对的
+            视频副本、meta/合并流水等。检测只读不删；被样本引用的路径不会标记 */}
+        <Tooltip title="扫 NAS 的 data_raw/：采集端忘了先清理就上传时，会多出未配对的视频副本、meta/合并流水等中间文件。只报告，不删任何东西">
+          <Button onClick={() => loadRedundancy()} loading={redundancyLoading}>
+            检测 NAS 冗余
+          </Button>
+        </Tooltip>
+        {redundancy && redundancy.total_files > 0 && (
+          <Tag
+            color="volcano"
+            style={{ cursor: "pointer", marginRight: 0 }}
+            onClick={() => setRedundancyOpen(true)}
+          >
+            {redundancy.total_files} 个冗余 · 可回收 {formatBytes(redundancy.total_reclaim_bytes)}
+          </Tag>
+        )}
         {/* 「看全场的那一路」补挂：狗场两台采集机各自开机、落成两个 session，
             cam7 的文件名带着 2 号机的时间戳，于是只挂给了它那三间——可它拍的是
             全部六间。这里先出报告，核对偏移对不对再谈写库（写库还没开放：
@@ -669,6 +745,24 @@ export default function Samples() {
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {dateKey}（{samples.length} 个样本）
                   <span onClick={(e) => e.stopPropagation()}>
+                    {(() => {
+                      const rd = redundancy?.dates.find((d) => d.date === dateKey);
+                      if (!rd) return null;
+                      const kinds = Object.keys(rd.by_category).map((k) => redundancyLabels[k] ?? k).join("、");
+                      return (
+                        <Tooltip
+                          title={`这一天的采集目录里还有 ${rd.files} 个中间文件（${kinds}）${rd.protected ? `；${rd.protected} 个被样本引用已保留` : ""}。点开看明细并清理`}
+                        >
+                          <Tag
+                            color="volcano"
+                            style={{ cursor: "pointer", marginRight: 8 }}
+                            onClick={() => setRedundancyOpen(true)}
+                          >
+                            可清理 {rd.files} 个 · {formatBytes(rd.reclaim_bytes)}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    })()}
                     <Popconfirm
                       title={`删除 ${dateKey} 这 ${samples.length} 个样本？`}
                       description="连同上面的任务、草稿、审核记录一起删；NAS 上的文件不动。之后点「立即扫描一次」会按 NAS 上现在的文件重新登记。不可恢复"
@@ -925,6 +1019,139 @@ export default function Samples() {
                   {Object.entries(sharedCam.skipped).map(([why, n]) => `${why} ${n}`).join("；")}
                 </>
               )}
+            </Typography.Paragraph>
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        title="NAS 冗余文件检测"
+        open={redundancyOpen}
+        onCancel={() => setRedundancyOpen(false)}
+        width={920}
+        footer={[
+          <Button key="close" onClick={() => setRedundancyOpen(false)}>
+            关闭
+          </Button>,
+          <Popconfirm
+            key="clean-all"
+            title={`清理全部 ${redundancy?.total_files ?? 0} 个冗余文件？`}
+            description={`可回收约 ${formatBytes(redundancy?.total_reclaim_bytes ?? 0)}。只删采集端中间产物；配对的视频/CSV 和被样本引用的文件都不动。删除不可恢复`}
+            okText="全部清理"
+            okButtonProps={{ danger: true }}
+            disabled={!redundancy?.total_files}
+            onConfirm={() => cleanRedundancyNow()}
+          >
+            <Button type="primary" danger loading={redundancyCleaning} disabled={!redundancy?.total_files}>
+              一键清理全部（{redundancy?.total_files ?? 0} 个 · {formatBytes(redundancy?.total_reclaim_bytes ?? 0)}）
+            </Button>
+          </Popconfirm>,
+        ]}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="只删能证明是同一份数据的中间文件"
+          description={
+            <>
+              采集端录完会在目录里留几类中间文件：未配对的 <code>_camN_raw.mp4</code> 副本（一份几 GB）、
+              <code>_meta.csv</code>、合并总流水和未裁剪的整段流水。现场正常会先跑{" "}
+              <code>cleanup_gouchang.sh</code> 清掉再上传；忘了跑就会一起进 NAS。
+              <br />
+              这里按同样的规则识别：只有硬链接同 inode、或大小一致且首尾抽样一致才认。
+              删除前还会查数据库——被样本 / 素材引用的路径一律跳过（表格里的「已保留」）。
+              只有狗场 cam7 那种公用机位的配对副本会整组删（平台只认未配对的
+              <code>cam7_raw.mp4</code>）；其它场地配对的视频/CSV 一概不动。
+            </>
+          }
+        />
+        {redundancy && (
+          <>
+            <Table
+              size="small"
+              rowKey="date"
+              pagination={false}
+              scroll={{ y: 380 }}
+              dataSource={redundancy.dates}
+              columns={[
+                {
+                  title: "日期",
+                  dataIndex: "date",
+                  width: 120,
+                  render: (d: string, r: RedundancyDay) => (
+                    <Tooltip title={r.dirs.join("、")}>
+                      <span>{d}</span>
+                    </Tooltip>
+                  ),
+                },
+                {
+                  title: "冗余文件",
+                  dataIndex: "files",
+                  width: 110,
+                  render: (n: number, r: RedundancyDay) => (
+                    <Space size={4}>
+                      <span>{n} 个</span>
+                      {r.protected > 0 && (
+                        <Tooltip title="识别到是重复副本，但被样本/素材引用着，已主动跳过">
+                          <Tag style={{ marginRight: 0 }}>已保留 {r.protected}</Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  title: "可回收",
+                  dataIndex: "reclaim_bytes",
+                  width: 100,
+                  render: (v: number, r: RedundancyDay) => (
+                    <Tooltip title={`文件总大小 ${formatBytes(r.bytes)}；硬链接删掉不释放空间，所以可回收按实际链接数算`}>
+                      <b>{formatBytes(v)}</b>
+                    </Tooltip>
+                  ),
+                },
+                {
+                  title: "都是哪些",
+                  dataIndex: "by_category",
+                  render: (cats: RedundancyDay["by_category"]) => (
+                    <Space size={[4, 4]} wrap>
+                      {Object.entries(cats).map(
+                        ([k, c]) =>
+                          c && (
+                            <Tooltip key={k} title={`${formatBytes(c.bytes)}，可回收 ${formatBytes(c.reclaim_bytes)}`}>
+                              <Tag style={{ marginRight: 0 }}>
+                                {redundancyLabels[k] ?? k} × {c.files}
+                              </Tag>
+                            </Tooltip>
+                          )
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  title: "",
+                  width: 80,
+                  render: (_: unknown, r: RedundancyDay) => (
+                    <Popconfirm
+                      title={`清理 ${r.date} 的 ${r.files} 个冗余文件？`}
+                      description={`约释放 ${formatBytes(r.reclaim_bytes)}；被样本引用的文件会自动跳过`}
+                      okText="清理"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => cleanRedundancyNow([r.date])}
+                    >
+                      <Button size="small" danger>
+                        清理
+                      </Button>
+                    </Popconfirm>
+                  ),
+                },
+              ]}
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              扫描了 {redundancy.scanned_dirs} 个日期目录
+              {redundancy.dates.length === 0
+                ? "，没有发现可清理的中间文件。"
+                : `，${redundancy.dates.length} 天有冗余。`}
             </Typography.Paragraph>
           </>
         )}

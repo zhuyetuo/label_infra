@@ -131,6 +131,68 @@ export const listMissingFileSamples = () =>
 export const cleanupMissingFileSamples = () =>
   request.post<never, { deleted: number; tasks_deleted: number }>("/samples/missing-files/cleanup");
 
+// ── NAS 冗余文件（采集端中间产物）──────────────────────────────────────
+// 现场正常会先跑 cleanup_gouchang.sh 再上传；忘了跑的时候 NAS 上会多出未配对的
+// 视频副本、meta/合并流水等。检测只读不删，清理只删能证明是同一份数据的中间文件，
+// 被样本引用的路径一律跳过。
+
+export type RedundancyCategory =
+  | "unpaired_video"
+  | "shared_paired_video"
+  | "shared_paired_csv"
+  | "meta_csv"
+  | "merged_csv"
+  | "imu_raw_csv";
+
+export interface RedundancyCategoryStat {
+  files: number;
+  bytes: number;
+  /** 真正能释放的空间：硬链接删掉不释放 */
+  reclaim_bytes: number;
+}
+
+export interface RedundancyDay {
+  /** YYYY-MM-DD */
+  date: string;
+  /** 这一天对应的日期目录（同一天可能有多个场地后缀） */
+  dirs: string[];
+  files: number;
+  bytes: number;
+  reclaim_bytes: number;
+  /** 认出来是冗余、但被数据库引用所以保留下来的文件数 */
+  protected: number;
+  by_category: Partial<Record<RedundancyCategory, RedundancyCategoryStat>>;
+}
+
+export interface RedundancyReport {
+  dates: RedundancyDay[];
+  scanned_dirs: number;
+  total_files: number;
+  total_bytes: number;
+  total_reclaim_bytes: number;
+}
+
+/** 扫一遍 NAS 的 data_raw/，按日期汇总可清理的冗余文件。只报告，不删 */
+export const scanRedundancy = () =>
+  request.get<never, RedundancyReport>("/samples/redundancy", { timeout: 180_000 });
+
+export interface RedundancyCleanResult {
+  deleted: number;
+  freed_bytes: number;
+  /** 被数据库引用、主动跳过的文件数 */
+  protected: number;
+  dirs: { dir: string; deleted: number; freed_bytes: number; protected: number; errors: string[] }[];
+  errors: string[];
+}
+
+/** 真删除。dates 不传 = 全部日期；传了只清这几天 */
+export const cleanRedundancy = (dates?: string[]) =>
+  request.post<never, RedundancyCleanResult>(
+    "/samples/redundancy/clean",
+    { dates: dates ?? null },
+    { timeout: 600_000 },
+  );
+
 // ── 画面扫描：这份样本的视频里有没有狗 ─────────────────────────────────
 
 export type VisionVerdict = "has_dog" | "mostly_empty" | "no_dog" | "unknown" | "unscanned";

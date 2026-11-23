@@ -45,6 +45,7 @@ from app.services.sample_import_service import MISSING_FILES_PREFIX, get_progres
 from app.services.task_service import purge_task_children
 from app.services.task_scope import apply_task_scope
 from app.services import dog_name_service, shared_cam_service, site_layout
+from app.services import nas_cleanup_service as nas_cleanup
 from app.services import vision_sam_client
 from app.services.dog_name_service import dog_names_by_id
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
@@ -804,3 +805,112 @@ async def sample_lowlight_seq(sample_id: int, cam: str = "cam1",
     path = await privacy_mask.pick_video(db, user, path)
     return ok(await vision_sam_client.lowlight_seq(path, start - off, end - off,
                                                    fps=fps, smooth=smooth))
+
+
+# ── NAS 冗余文件（采集端中间产物）────────────────────────────────────────────
+# 现场正常会先跑 cleanup_gouchang.sh 再上传；忘了跑的时候 NAS 上会多出
+# 未配对的视频副本（几 GB）、meta/合并流水等。这里只删能证明是同一份数据的
+# 中间文件，配对的文件一律不动，被数据库引用的也跳过。
+
+
+class RedundancyCleanIn(BaseModel):
+    dates: list[str] | None = None  # 空 = 全部
+
+
+def _date_dirs(root: str) -> list[str]:
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    return sorted(n for n in names
+                  if nas_cleanup.date_of_dir(n) and os.path.isdir(os.path.join(root, n)))
+
+
+async def _refs_for_dir(db: AsyncSession, dirname: str) -> set[str]:
+    """这个日期目录下，被 samples / media_files 引用的相对路径。宁可多留，不可误删。"""
+    from datetime import date as _date
+
+    prefix = f"{settings.data_raw_dir}/{dirname}/"
+    refs: set[str] = set()
+    d = nas_cleanup.date_of_dir(dirname)
+    if d:
+        rows = (await db.execute(
+            select(Sample.video_cam1_path, Sample.video_cam2_path, Sample.video_cam3_path, Sample.imu_csv_path)
+            .where(Sample.session_date == _date.fromisoformat(d))
+        )).all()
+        refs.update(p for r in rows for p in r if p and p.startswith(prefix))
+    refs.update((await db.execute(
+        select(MediaFile.relative_path).where(MediaFile.relative_path.like(prefix + "%"))
+    )).scalars().all())
+    return refs
+
+
+def _merge_reports(reps: list[dict]) -> dict:
+    days: dict[str, dict] = {}
+    for rep in reps:
+        if not rep.get("files"):
+            continue
+        d = rep["date"]
+        agg = days.setdefault(d, {"date": d, "dirs": [], "files": 0, "bytes": 0,
+                                  "reclaim_bytes": 0, "by_category": {}, "protected": 0})
+        agg["dirs"].append(rep["dir"])
+        agg["files"] += rep["files"]
+        agg["bytes"] += rep["bytes"]
+        agg["reclaim_bytes"] += rep["reclaim_bytes"]
+        agg["protected"] += rep["protected"]
+        for cat, c in rep["by_category"].items():
+            a = agg["by_category"].setdefault(cat, {"files": 0, "bytes": 0, "reclaim_bytes": 0})
+            a["files"] += c["files"]
+            a["bytes"] += c["bytes"]
+            a["reclaim_bytes"] += c["reclaim_bytes"]
+    dates = sorted(days.values(), key=lambda x: x["date"], reverse=True)
+    return {"dates": dates,
+            "total_files": sum(x["files"] for x in dates),
+            "total_bytes": sum(x["bytes"] for x in dates),
+            "total_reclaim_bytes": sum(x["reclaim_bytes"] for x in dates)}
+
+
+@router.get("/redundancy")
+async def scan_redundancy(db: AsyncSession = Depends(get_db)):
+    """扫 NAS，按日期汇总可清理的冗余文件（只报告，不删）。"""
+    root = os.path.join(settings.nas_root, settings.data_raw_dir)
+    dirs = _date_dirs(root)
+    # 第一遍只按文件名 / 大小粗筛，绝大多数日期目录会直接跳过
+    coarse = await asyncio.gather(*[
+        asyncio.to_thread(nas_cleanup.scan_day, os.path.join(root, n), set(), settings.nas_root)
+        for n in dirs
+    ])
+    hot = [r["dir"] for r in coarse if r.get("files")]
+    reps = []
+    for name in hot:
+        refs = await _refs_for_dir(db, name)
+        reps.append(await asyncio.to_thread(
+            nas_cleanup.scan_day, os.path.join(root, name), refs, settings.nas_root))
+    out = _merge_reports(reps)
+    out["scanned_dirs"] = len(dirs)
+    return ok(out)
+
+
+@router.post("/redundancy/clean")
+async def clean_redundancy(body: RedundancyCleanIn, db: AsyncSession = Depends(get_db)):
+    """删除能确认是中间产物的冗余文件；被样本引用的不动。"""
+    root = os.path.join(settings.nas_root, settings.data_raw_dir)
+    dirs = _date_dirs(root)
+    if body.dates:
+        want = set(body.dates)
+        dirs = [n for n in dirs if nas_cleanup.date_of_dir(n) in want]
+    deleted = freed = protected = 0
+    per_dir, errors = [], []
+    for name in dirs:
+        refs = await _refs_for_dir(db, name)
+        rep = await asyncio.to_thread(
+            nas_cleanup.clean_day, os.path.join(root, name), refs, settings.nas_root)
+        if not rep["deleted"] and not rep["errors"]:
+            continue
+        deleted += rep["deleted"]
+        freed += rep["freed_bytes"]
+        protected += rep["protected"]
+        per_dir.append(rep)
+        errors.extend(rep["errors"])
+    return ok({"deleted": deleted, "freed_bytes": freed, "protected": protected,
+               "dirs": per_dir, "errors": errors[:20]})
