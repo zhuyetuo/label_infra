@@ -119,15 +119,21 @@ async def models() -> list[dict]:
 
 
 async def infer(
-    imu_csv_path: str, sample_id: int | None = None, mode: str | None = None, device_hz: float | None = None
+    imu_csv_path: str, sample_id: int | None = None, mode: str | None = None, device_hz: float | None = None,
+    mine_neg: bool | None = None,
 ) -> dict:
     """同步调用算法服务 /infer，返回预标注的行为片段列表。mode 见 settings.algo_infer_mode。
 
     device_hz 是这份 CSV 的实际采样率：8-11 之前的数据采集端就已经降到 16Hz 存了，
     8-11 起才是 50Hz 原始流。不传的话 AI 服务用它的全局默认值，对另一种就是错的。
+
+    mine_neg=False 时不要在结果里给「模型判成负例类别」的候选（进食/饮水/嗅闻…）。
+    **只在要关的时候才带这个字段**：老版本 AI 服务没有它，多一个未知字段直接 422。
     """
     url = f"{_base_url()}/api/v1/label/infer"
     payload = {"path": imu_csv_path, "sample_id": sample_id, "mode": _mode(mode), "device_hz": device_hz}
+    if mine_neg is False:
+        payload["mine_neg"] = False
     try:
         async with httpx.AsyncClient(timeout=settings.algo_infer_timeout_sec) as client:
             resp = await client.post(url, json=payload)
@@ -157,7 +163,7 @@ def stamp_spec(rows: list[dict], spec: str) -> list[dict]:
     return rows
 
 
-async def infer_spec(items: list[dict], spec: str) -> list[dict]:
+async def infer_spec(items: list[dict], spec: str, mine_neg: bool | None = None) -> list[dict]:
     """按完整版本串（`srv:<标签>[@后处理]`）跑。
 
     **拆版本串这件事只能有一个地方做。** 调用方自己写 model=model_of(spec)
@@ -165,11 +171,11 @@ async def infer_spec(items: list[dict], spec: str) -> list[dict]:
     后处理默认就是 viterbi，结果看着完全正常，只有选了「调试版」的人
     拿到的其实是稳定版 v2 的结果。跟 edge_client.infer_spec 同一个道理。
     """
-    return await infer_batch(items, mode=post_mode_of(spec), model=model_of(spec))
+    return await infer_batch(items, mode=post_mode_of(spec), model=model_of(spec), mine_neg=mine_neg)
 
 
 async def infer_batch(items: list[dict], mode: str | None = None,
-                      model: str | None = None) -> list[dict]:
+                      model: str | None = None, mine_neg: bool | None = None) -> list[dict]:
     """
     一批文件一次发给 /infer_batch，AI 服务那边进程池并行跑。返回跟 items 一一对应的
     [{sample_id, path, ok, error, result}]，result 结构跟 /infer 一样。单个文件失败
@@ -184,6 +190,9 @@ async def infer_batch(items: list[dict], mode: str | None = None,
                 # AI 服务（没有多模型）会因为多了个未知字段而 422，
                 # 而那是一次纯粹为了"保持接口一致"造成的故障
                 payload["model"] = model
+            if mine_neg is False:
+                # 同 infer：只在要关的时候带，老服务不认这个字段
+                payload["mine_neg"] = False
             resp = await client.post(url, json=payload)
     except httpx.TimeoutException as e:
         raise AlgoServiceError(

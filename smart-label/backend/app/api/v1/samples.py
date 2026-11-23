@@ -21,6 +21,7 @@ from app.models.dog import Dog
 from app.models.clip import ClipJob
 from app.models.inference_run import SampleInferenceRun
 from app.models.media_file import MediaFile
+from app.models.project import Project
 from app.models.sample import Sample
 from app.models.sample_vision_scan import SampleVisionScan
 from app.models.task import Task
@@ -650,12 +651,26 @@ async def ai_prelabel(
         if visible is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该样本")
 
+    # 项目开关：关掉时这次推理不要「模型判成负例类别」（进食/饮水/嗅闻…）的候选。
+    # 工作台是按任务打开的，拿这个任务的所属项目；没带 task_id 就不管（走算法服务默认）
+    mine_neg = None
+    if task_id is not None:
+        proj_id = (
+            await db.execute(select(Task.project_id).where(Task.id == task_id))
+        ).scalar_one_or_none()
+        if proj_id is not None:
+            flag = (
+                await db.execute(select(Project.model_neg).where(Project.id == proj_id))
+            ).scalar_one_or_none()
+            if flag is False:
+                mine_neg = False
+
     # 同步推理要等几十秒，等的时候先把数据库连接还回池子里（下面用到 db 时会自己
     # 重新拿），否则几个人同时点「AI预标注」就能把连接池占满
     await db.close()
     # 推理 + 时间换算 + 原始 JSON 落盘都在 ai_prelabel_service 里，跟项目批量预标注共用
     try:
-        inf = await infer_sample(sample, mode=mode)
+        inf = await infer_sample(sample, mode=mode, mine_neg=mine_neg)
     except PrelabelError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 

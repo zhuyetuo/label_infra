@@ -24,6 +24,9 @@ class Project(Base):
     privacy_mask: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     # 最近一次「一键遮罩」的时间：项目行上标出哪些项目做过遮罩（开关关着也看得出来）
     privacy_mask_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # AI 预标注要不要把「模型判成负例类别」的片段（进食 / 饮水 / 嗅闻 / 啃…）写成正式 AI 片段。
+    # 开着：web 上标注员能顺手补这些类别的负例；关掉：只有抓挠等主类别，端侧不需要负例
+    model_neg: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -129,6 +129,10 @@ class SampleInference:
     n_windows: int
     ai_label_path: str
     candidates: list[CandidateItem] = field(default_factory=list)
+    # 模型判成负例类别（进食 / 饮水 / 啃 / 舔…）的那几段。items 里已经包含它们
+    # （所以整份重写时不用额外处理）；这里单独留一份，「片段一条不动、只补负例」
+    # 那条路要拿它去改草稿（见 _promote_neg_to_draft）
+    neg_items: list[PrelabelItem] = field(default_factory=list)
 
 
 def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str = "抓挠") -> list[CandidateItem]:
@@ -162,7 +166,9 @@ def flatten_candidates(raw: list[dict], csv_start: datetime, scratch_label: str 
 PRELABEL_REASONS = ("low_conf", "spectral", "grooming", "eating", "drinking", "barking", "shaking", "toileting",
                     # 模型单独训了进食 / 饮水 / 嗅闻…这些负例类别时，它判出来的片段（label_service mining.py）
                     "model_neg")
-# 「只补负例候选」时只换这一种：模型单独训了进食 / 饮水 / 嗅闻…时判出来的片段（label_service mining.py）
+# 「只补负例片段」时用这一种：模型单独训了进食 / 饮水 / 嗅闻…时判出来的片段（label_service mining.py）。
+# 现在这些预测直接写成正式片段（_promote_neg_in_memory），候选里不再有它；
+# 留着这个元组是为了重跑时把以前写下的 model_neg 候选清干净
 NEG_REASONS = ("model_neg",)
 
 
@@ -187,7 +193,8 @@ async def replace_candidates(
     新候选跟「已经判过的同类候选」或「已有的同类片段」时间上重叠的不写：人已经看过/标过那一段了，
     再冒出来一条一样的只会让人再判一遍（有人工标注的任务只补候选时尤其要紧）。返回写了几条。
 
-    reasons：只换、只写这几种来源的候选（「只补负例候选」传 NEG_REASONS）。不传 = 全部预标注来源。
+    reasons：只换、只写这几种来源的候选（「只补负例片段」传 NEG_REASONS，现在只用来
+    清掉以前写下的 model_neg 候选）。不传 = 全部预标注来源。
     只补负例的时候疑似抓挠、规则候选（舔 / 甩头 / 吠叫 / 如厕）一条都不能动——它们是另一个模型 / 另一批参数出的，
     换掉就等于让这次的模型顶替了原来的疑似抓挠（2026-11-17 在项目 325 上就这样换掉了 311 条）。"""
     rs = tuple(reasons) if reasons is not None else PRELABEL_REASONS
@@ -315,11 +322,16 @@ def _parse_seg_ts(v):
     return None
 
 
-async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> None:
+async def _record_inference_run(
+    sample: Sample, result: dict, relpath: str, *, strict: bool = False
+) -> None:
     """把这一份结果登记进 sample_inference_runs，同 (样本, 模型, 版本) 覆盖自己那条。
 
     索引单独存一张表，是为了后面"选两个模型对比"能直接查，不用去 NAS 上瞎扫目录。
     登记失败不该影响预标注本身——结果 JSON 已经落盘了，大不了这次没记上。
+
+    strict=True 时把异常抛出去：评测跑批要的是"真有结果可对比"，
+    登记失败再吞掉的话进度会显示成功、实际上一条都查不到（版本名超长踩过一次）。
     """
     segs = result.get("segments") or {}
     label_counts = {k: len(v or []) for k, v in segs.items()}
@@ -354,9 +366,11 @@ async def _record_inference_run(sample: Sample, result: dict, relpath: str) -> N
             await db.commit()
     except Exception:  # noqa: BLE001 记不上不影响预标注本身
         _logger.exception("登记推理结果失败 sample=%s", sample.id)
+        if strict:
+            raise
 
 
-async def store_run_only(sample: Sample, result: dict) -> str:
+async def store_run_only(sample: Sample, result: dict, *, strict: bool = False) -> str:
     """只把这一份结果按 (模型, 版本) 存起来并登记，不动"当前结果"、也不写任何草稿。
 
     评测跑批用：拿几个模型对同一批数据各跑一遍纯粹是为了对比，不该顺手把
@@ -373,7 +387,7 @@ async def store_run_only(sample: Sample, result: dict) -> str:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
     await asyncio.to_thread(_write)
-    await _record_inference_run(sample, result, ver_rel)
+    await _record_inference_run(sample, result, ver_rel, strict=strict)
     return ver_rel
 
 
@@ -403,12 +417,94 @@ async def _store_and_normalize(sample: Sample, result: dict, csv_start: datetime
     await _record_inference_run(sample, result, ver_rel)
     items, skipped = flatten_segments(result.get("segments") or {}, csv_start)
     cands = flatten_candidates(result.get("candidates") or [], csv_start)
+    neg = [c for c in cands if c.reason == NEG_REASONS[0]]
+    neg_items: list[PrelabelItem] = []
+    if neg:
+        # 模型单独训了进食 / 饮水 / 啃 / 舔这些类别，判出来的片段就该是正式片段
+        # （工作台「片段」列里待确认），不该掉进「疑似」让人一条条确认。算法服务
+        # 的做法是把它们并进「活动」再另给候选（label_service/mining.py），这里
+        # 正好反过来：从「活动」里挖出来，标成模型判的类别。
+        targets = _neg_targets(items, neg)
+        items = _promote_neg_in_memory(items, targets)
+        neg_items = [
+            PrelabelItem(label_name=lab, start_time_ms=s, end_time_ms=e,
+                         confidence=conf if conf is not None else 0.0)
+            for lab, s, e, conf in targets
+        ]
+        cands = [c for c in cands if c.reason != NEG_REASONS[0]]
     return SampleInference(items=items, skipped=skipped, n_windows=int(result.get("n_windows") or 0),
-                           ai_label_path=relpath, candidates=cands)
+                           ai_label_path=relpath, candidates=cands, neg_items=neg_items)
 
 
-async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInference:
-    """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。"""
+# 算法服务把负例类别并进哪个类别（label_service 的 MINE_MERGE_TO）
+_ACTIVITY_LABEL = "活动"
+
+
+def _subtract(a: int, b: int, taken: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """[a, b) 去掉 taken 里那些区间后剩下的几段。"""
+    pieces = [(a, b)]
+    for s, e in taken:
+        nxt: list[tuple[int, int]] = []
+        for ps, pe in pieces:
+            if e <= ps or pe <= s:
+                nxt.append((ps, pe))
+                continue
+            if ps < s:
+                nxt.append((ps, min(pe, s)))
+            if pe > e:
+                nxt.append((max(ps, e), pe))
+        pieces = nxt
+    return [(s, e) for s, e in pieces if e > s]
+
+
+def _neg_targets(items: list[PrelabelItem], neg: list[CandidateItem]) -> list[tuple[str, int, int, float | None]]:
+    """负例候选真正能写成片段的那几段。
+
+    负例候选可能跟「抓挠」擦边（算法服务只丢一半以上被盖住的），那些边角上模型
+    已经判了别的类别，照抄过去会跟已有片段叠在一起，所以先剪掉。
+    """
+    blocked = [(it.start_time_ms, it.end_time_ms) for it in items if it.label_name != _ACTIVITY_LABEL]
+    return [
+        (c.label_name, s, e, c.confidence)
+        for c in neg
+        for s, e in _subtract(c.start_time_ms, c.end_time_ms, blocked)
+    ]
+
+
+def _promote_neg_in_memory(items: list[PrelabelItem],
+                           targets: list[tuple[str, int, int, float | None]]) -> list[PrelabelItem]:
+    """把负例片段塞进 items，并把盖住那段时间的「活动」剪开。
+
+    不剪的话同一条记录里两段叠着，提交时会被「同一记录内不允许重叠」拦住。
+    """
+    if not targets:
+        return items
+    spans = [(s, e) for _, s, e, _ in targets]
+    # 「活动」连别的类别也要让开：模型各段本来不重叠，但负例是后加进来的，
+    # 万一哪份数据里有叠着的旧片段，剪完不能留重叠
+    cut = spans + [(it.start_time_ms, it.end_time_ms) for it in items if it.label_name != _ACTIVITY_LABEL]
+    out: list[PrelabelItem] = [it for it in items if it.label_name != _ACTIVITY_LABEL]
+    for it in items:
+        if it.label_name != _ACTIVITY_LABEL:
+            continue
+        out += [
+            PrelabelItem(label_name=it.label_name, start_time_ms=s, end_time_ms=e, confidence=it.confidence)
+            for s, e in _subtract(it.start_time_ms, it.end_time_ms, cut)
+        ]
+    out += [
+        PrelabelItem(label_name=lab, start_time_ms=s, end_time_ms=e,
+                     confidence=conf if conf is not None else 0.0)
+        for lab, s, e, conf in targets
+    ]
+    out.sort(key=lambda x: (x.start_time_ms, x.end_time_ms))
+    return out
+
+
+async def infer_sample(sample: Sample, mode: str | None = None, mine_neg: bool | None = None) -> SampleInference:
+    """单个样本：工作台按钮用。不碰数据库；调用方自己决定怎么存。
+
+    mine_neg=False：不要「模型判成负例类别」的候选（项目里关了这个开关时传）。
+    """
     csv_start = await _csv_start_of(sample)
     try:
         if edge_client.is_edge(mode):
@@ -431,7 +527,7 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
             # 而结果存进库里标着 srv:acc3。**没有任何迹象。**
             rows = algo_client.stamp_spec(await algo_client.infer_spec(
                 [{"path": sample.imu_csv_path, "sample_id": sample.id,
-                  "device_hz": sample.sample_hz}], mode), mode)
+                  "device_hz": sample.sample_hz}], mode, mine_neg=mine_neg), mode)
             if not rows or not rows[0].get("ok"):
                 raise PrelabelError(
                     f"推理失败：{(rows[0] if rows else {}).get('error') or '没有返回结果'}")
@@ -439,7 +535,7 @@ async def infer_sample(sample: Sample, mode: str | None = None) -> SampleInferen
         else:
             result = await algo_client.infer(
                 sample.imu_csv_path, sample_id=sample.id, mode=mode,
-                device_hz=sample.sample_hz
+                device_hz=sample.sample_hz, mine_neg=mine_neg,
             )
     except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
         raise PrelabelError(str(e)) from e
@@ -699,7 +795,7 @@ class _Prepared:
     csv_start: datetime
     # 有人工标注的任务：片段一条不动，只把这次跑出来的疑似片段补进去
     candidates_only: bool = False
-    # 只换、只写这几种来源的候选（「只补负例候选」= NEG_REASONS）；None = 全部预标注来源
+    # 只换这几种来源的候选（「只补负例片段」= NEG_REASONS）；None = 全部预标注来源
     only_reasons: tuple[str, ...] | None = None
 
 
@@ -722,7 +818,8 @@ async def _run_project(
         query = query.where(Task.id.in_(task_ids))
     tasks = (await db.execute(query.order_by(Task.id))).scalars().all()
     if neg_only:
-        progress.log("只补负例候选（模型判成进食 / 饮水 / 嗅闻…的片段）：草稿、疑似抓挠、别的候选一条不动。"
+        progress.log("只补负例片段（模型判成进食 / 饮水 / 啃 / 舔…的片段）直接写成 AI 片段（待确认），"
+                     "草稿里对应时间的「活动」剪掉；别的片段、别的候选一条不动。"
                      "选的模型没单独训这些类别的话，什么都不会写")
 
     # 项目一个标签都没有（建项目时没选标签模板）：先克隆一套，不然模型的片段全被丢掉
@@ -734,6 +831,9 @@ async def _run_project(
         if src:
             await db.commit()
             progress.log(f"这个项目还没有标签，已从「{src}」复制了一套")
+    # 项目开关：模型判成负例类别（进食 / 饮水 / 嗅闻 / 啃…）的片段要不要输出成候选。
+    # 开着（默认）web 上能顺手补负例标注；关掉就只有抓挠这些主类别，端侧不需要负例
+    _mine_neg = bool(_proj.model_neg) if _proj is not None else True
 
     labels = (
         (
@@ -811,7 +911,7 @@ async def _run_project(
             # 铺出来的草稿就是设备实际会报的东西。
             # 走 dispatch_batch，两个分支都在它里面——这里自己分一次的话，
             # 端侧那支很容易漏掉版本串里的 `@后处理`（最初就是这么漏的）
-            results = await edge_client.dispatch_batch(batch, mode)
+            results = await edge_client.dispatch_batch(batch, mode, mine_neg=None if _mine_neg else False)
             progress.ai_wait_sec += time.time() - t0
             progress.batches_done += 1
         except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
@@ -846,7 +946,9 @@ async def _run_project(
                 outcome = await _apply(db, p, inf, by_name, unmatched)
                 if outcome is None:
                     progress.succeeded += 1
-                    if p.candidates_only:
+                    if p.only_reasons == NEG_REASONS:
+                        progress.log(f"任务 #{p.task.id} {code}：片段没动，只补了负例片段（进食 / 饮水 / 啃 / 舔…）")
+                    elif p.candidates_only:
                         progress.log(f"任务 #{p.task.id} {code}：有人工标注，片段没动，只补了疑似片段")
                 else:
                     progress.skipped += 1
@@ -883,7 +985,8 @@ async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrit
             .all()
         )
     if neg_only:
-        # 只补负例候选：不管任务里有没有片段、是人标的还是 AI 的，片段一律不碰，只换「模型判成负例」那一种候选
+        # 只补负例片段：别的片段一律不碰，只把「模型判成负例」的那几段写成 AI 片段
+        # （草稿里对应的「活动」剪开，见 _promote_neg_to_draft），并清掉以前写的 model_neg 候选
         csv_start = await _csv_start_of(sample)
         return _Prepared(task=task, sample=sample, record=record, old_ai_items=existing, csv_start=csv_start,
                          candidates_only=True, only_reasons=NEG_REASONS)
@@ -901,14 +1004,106 @@ async def _prepare(db: AsyncSession, task: Task, sample: Sample | None, overwrit
     return _Prepared(task=task, sample=sample, record=record, old_ai_items=existing, csv_start=csv_start)
 
 
+async def _display_names(db: AsyncSession, items: list[AnnotationLabelItem]) -> dict[int, str]:
+    ids = {i.label_id for i in items}
+    if not ids:
+        return {}
+    return dict((await db.execute(
+        select(LabelDefinition.id, LabelDefinition.display_name).where(LabelDefinition.id.in_(ids))
+    )).all())
+
+
+async def _cut_activity(db: AsyncSession, activity: list[AnnotationLabelItem], a: int, b: int) -> None:
+    """从 AI 生成的「活动」片段里挖掉 [a, b)，两边剩下的各留一条。
+
+    负例类别在算法服务里是并进「活动」的（label_service/mining.py），写回草稿时
+    要把那段时间改标成负例类别。不挖的话草稿里两段叠着，提交会被「同一记录内
+    时间不允许重叠」拦住。
+    """
+    for it in list(activity):
+        s, e = it.start_time_ms, it.end_time_ms
+        if e <= a or b <= s:
+            continue
+        activity.remove(it)
+        await db.delete(it)
+        for ns, ne in ((s, min(e, a)), (max(s, b), e)):
+            if ne <= ns:
+                continue
+            new = AnnotationLabelItem(
+                annotation_record_id=it.annotation_record_id, label_id=it.label_id,
+                start_time_ms=ns, end_time_ms=ne,
+                source_type=LabelItemSource.ai_generated, is_modified=False,
+                ai_confidence=it.ai_confidence, ai_confirmed=False,
+                ai_label_id=it.ai_label_id, ai_start_ms=ns, ai_end_ms=ne,
+            )
+            db.add(new)
+            activity.append(new)
+
+
+async def _promote_neg_to_draft(
+    db: AsyncSession, p: _Prepared, neg_items: list[PrelabelItem], by_name: dict[str, int], unmatched: set[str]
+) -> list[AnnotationLabelItem]:
+    """把负例片段（进食 / 饮水 / 啃 / 舔…）写进草稿，返回新加的片段。
+
+    只在「片段一条不动、只补负例」这条路上用——整份重写的路径直接写 inf.items。
+    跟已有同类片段重叠的不写（重跑时不叠一层）；人工确认过 / 改过的片段一概不碰，
+    负例跟它们重叠时跳过这一条。
+    """
+    record = p.record
+    if record is None:
+        record = AnnotationRecord(task_id=p.task.id, round_no=p.task.round_no, source_type=RecordSourceType.ai_revised)
+        db.add(record)
+        await db.flush()
+        p.record = record
+        if p.task.task_type != TaskType.ai_assisted:
+            p.task.task_type = TaskType.ai_assisted
+    names = await _display_names(db, p.old_ai_items)
+    activity = [
+        i for i in p.old_ai_items
+        if names.get(i.label_id) == _ACTIVITY_LABEL and i.source_type == LabelItemSource.ai_generated
+        and not i.is_modified and not i.ai_confirmed and not i.uncertain
+    ]
+    # 除了「活动」，别的片段一概不能盖：人工标的、AI 判的抓挠、重跑之前写下的
+    # 负例片段都算。负例跟它们叠着就跳过那一段（重跑因此不会叠出第二层）
+    blocked = [(i.start_time_ms, i.end_time_ms) for i in p.old_ai_items if i not in activity]
+    added: list[AnnotationLabelItem] = []
+    for it in neg_items:
+        label_id = model_label_alias.resolve(it.label_name, by_name)
+        if label_id is None:
+            unmatched.add(it.label_name)
+            continue
+        for a, b in _subtract(it.start_time_ms, it.end_time_ms, blocked):
+            await _cut_activity(db, activity, a, b)
+            row = AnnotationLabelItem(
+                annotation_record_id=record.id, label_id=label_id,
+                start_time_ms=a, end_time_ms=b,
+                source_type=LabelItemSource.ai_generated, is_modified=False,
+                ai_confidence=it.confidence, ai_confirmed=False,
+                ai_label_id=label_id, ai_start_ms=a, ai_end_ms=b, created_by=None,
+            )
+            db.add(row)
+            added.append(row)
+    return added
+
+
 async def _apply(
     db: AsyncSession, p: _Prepared, inf: SampleInference, by_name: dict[str, int], unmatched: set[str]
 ) -> str | None:
     """把一个样本的推理结果写进任务草稿。返回 None = 成功；字符串 = 跳过原因。"""
     if p.candidates_only:
-        # 有人工标注的任务：草稿、样本上的 AI 结果路径都不动，只换没判的疑似片段。
-        # 跟已有片段 / 已判候选重叠的同类候选不写（见 replace_candidates）
-        await replace_candidates(db, p.task, inf.candidates, existing_items=p.old_ai_items, reasons=p.only_reasons)
+        # 片段一条不动：只换没判的疑似片段。负例片段（进食 / 饮水 / 啃 / 舔…）
+        # 要写成正式片段——那几段在草稿里是「活动」，得先把那段时间剪掉
+        if inf.neg_items:
+            await _promote_neg_to_draft(db, p, inf.neg_items, by_name, unmatched)
+        existing = p.old_ai_items
+        if p.record is not None:
+            # 重新读一遍：刚写的负例片段要算进「已占用的时间段」，剪掉的「活动」
+            # 也不该再拿去挡候选
+            await db.flush()
+            existing = list((await db.execute(
+                select(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id == p.record.id)
+            )).scalars().all())
+        await replace_candidates(db, p.task, inf.candidates, existing_items=existing, reasons=p.only_reasons)
         await db.commit()
         return None
     record = p.record

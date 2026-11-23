@@ -188,6 +188,7 @@ async def infer_spec(items: list[dict], spec: str, **edge_kw) -> list[dict]:
 
 
 async def dispatch_batch(items: list[dict], mode: str | None,
+                         mine_neg: bool | None = None,
                          **edge_kw) -> list[dict]:
     """按版本字符串选 client：`edge:<标签>` 走端侧，其余走 algo_service。
 
@@ -204,7 +205,8 @@ async def dispatch_batch(items: list[dict], mode: str | None,
     from app.services import algo_client
 
     if is_edge(mode):
+        # 端侧只烧了要报的类别，没有负例候选这回事；多传字段反而可能 422
         return await infer_spec(items, mode, **edge_kw)
     if algo_client.is_srv(mode):
-        return algo_client.stamp_spec(await algo_client.infer_spec(items, mode), mode)
-    return await algo_client.infer_batch(items, mode=mode)
+        return algo_client.stamp_spec(await algo_client.infer_spec(items, mode, mine_neg=mine_neg), mode)
+    return await algo_client.infer_batch(items, mode=mode, mine_neg=mine_neg)

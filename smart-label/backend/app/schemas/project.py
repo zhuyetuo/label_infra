@@ -12,6 +12,7 @@ class ProjectOut(BaseModel):
     is_active: bool
     privacy_mask: bool = False
     privacy_mask_at: datetime | None = None
+    model_neg: bool = True
     created_by: int
     created_at: datetime
 
@@ -25,6 +26,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     is_active: bool | None = None
+    model_neg: bool | None = None
 
 
 class ProjectAssignRequest(BaseModel):
@@ -52,8 +54,9 @@ class ProjectPrelabelRequest(BaseModel):
     # 有人工标注/确认过片段的任务（实习生做了一半的）：不跳过，片段一条不动，只把这次跑出来的
     # 疑似片段补进去（新加的进食 / 饮水 / 吠叫这类）。跟已有片段、已判候选重叠的同类候选不写
     keep_human: bool = False
-    # 只补负例候选：所有待认领 / 标注中的任务，只换「模型判成负例」（进食 / 饮水 / 嗅闻…）那一种候选，
-    # 草稿、疑似抓挠、别的候选一条不动。要配一个单独训了这些类别的模型（负例挖掘模型）
+    # 只补负例片段：所有待认领 / 标注中的任务，模型判成负例（进食 / 饮水 / 嗅闻…）的那几段
+    # 直接写成 AI 片段（草稿里对应的「活动」剪掉），别的片段、疑似抓挠、别的候选一条不动。
+    # 要配一个单独训了这些类别的模型（负例挖掘模型）
     neg_only: bool = False
 
 
