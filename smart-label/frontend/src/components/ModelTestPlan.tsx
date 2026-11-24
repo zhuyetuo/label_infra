@@ -184,17 +184,22 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
 
   // ── 输入总段数，自动配比 ──
   const [wantTotal, setWantTotal] = useState<number | null>(200);
-  const [autoMode, setAutoMode] = useState<"scale" | "even" | "avail">("scale");
+  // 计划还空着就默认「平均」：「现在比例」要有一版计划才能缩放
+  const [autoMode, setAutoMode] = useState<"scale" | "even" | "avail">(() => (initial?.dogs?.length ? "scale" : "even"));
   const autoAllocate = () => {
     const N = Math.max(0, Math.round(wantTotal ?? 0));
     if (!N) return message.warning("先填总段数");
     const durs = plan.durations;
-    if (autoMode === "scale") {
+    let mode = autoMode;
+    if (mode === "scale" && !plan.dogs.some((x) => durs.some((d) => qOf(x, d)[0] + qOf(x, d)[1] > 0))) {
+      mode = "even";
+      setAutoMode("even");
+      message.info("计划还是空的，先按「平均」配；之后改总数可以用「现在比例」");
+    }
+    if (mode === "scale") {
       // 现在的计划等比缩放：每只狗 × 时长 × 有/无 一格一格按比例，最大余数补齐，正好 N
       const cells: { id: number; d: number; k: 0 | 1; v: number }[] = [];
       plan.dogs.forEach((x) => durs.forEach((d) => ([0, 1] as const).forEach((k) => cells.push({ id: x.dog_id, d, k, v: qOf(x, d)[k] }))));
-      const old = cells.reduce((a, c) => a + c.v, 0);
-      if (!old) return message.warning("现在的计划是空的：选「平均」或「按可用量」");
       const nv = splitByRatio(N, cells.map((c) => c.v));
       update((p) => ({
         ...p,
@@ -217,9 +222,9 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       }));
     } else {
       // 平均 / 按可用量：分给当前场所里的狗（按可用量时没数据的狗不分），每只狗再平均分到各时长、有无各半、各部位均分
-      const pool = scopeDogs.filter((d) => autoMode === "even" || availOf(d.id) > 0);
+      const pool = scopeDogs.filter((d) => mode === "even" || availOf(d.id) > 0);
       if (!pool.length) return message.warning("这个范围里没有可分的狗");
-      const perDog = splitByRatio(N, pool.map((d) => (autoMode === "even" ? 1 : availOf(d.id))));
+      const perDog = splitByRatio(N, pool.map((d) => (mode === "even" ? 1 : availOf(d.id))));
       update((p) => {
         const keep = p.dogs.filter((x) => !pool.some((d) => d.id === x.dog_id) && !scopeDogs.some((d) => d.id === x.dog_id));
         const made = pool.map((d, i) => {
