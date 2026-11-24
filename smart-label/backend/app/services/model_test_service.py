@@ -74,6 +74,33 @@ async def task_segments(db: AsyncSession, task_id: int) -> list[dict]:
              "uncertain": bool(u)} for i, lid, s, e, u in rows]
 
 
+EXCLUDE_MARGIN_MS = 60_000   # 测试窗口前后各多挖 60 秒不进训练：训练窗口 4~8 秒，留够余量防「相邻几秒」漏进去
+
+
+async def test_exclusion(db: AsyncSession) -> tuple[dict[int, list[tuple[int, int]] | None], set[int]]:
+    """训练导出要避开的测试数据。
+    返回 ({样本 id: [(起, 止) 已加余量] 或 None=整个样本}, 测试集自己的任务 id)。
+    片段给了窗口（或任务本身是短任务）就只挖窗口 ±60 秒；整个任务加进来的才整个样本不要——
+    第一批从 1 小时的样本里挑 1 分钟，按整个样本排除的话最新几天几百小时数据都进不了训练"""
+    rows = (await db.execute(
+        select(ModelTestItem.task_id, ModelTestItem.sample_id, ModelTestItem.start_ms, ModelTestItem.end_ms,
+               Task.segment_start_ms, Task.segment_end_ms)
+        .join(Task, Task.id == ModelTestItem.task_id))).all()
+    excl: dict[int, list[tuple[int, int]] | None] = {}
+    tasks: set[int] = set()
+    for tid, sid, s, e, ts, te in rows:
+        tasks.add(tid)
+        if s is None or e is None:
+            s, e = ts, te
+        if s is None or e is None:
+            excl[sid] = None
+            continue
+        if sid in excl and excl[sid] is None:
+            continue
+        excl.setdefault(sid, []).append((max(0, s - EXCLUDE_MARGIN_MS), e + EXCLUDE_MARGIN_MS))
+    return excl, tasks
+
+
 async def test_sample_ids(db: AsyncSession) -> set[int]:
     """所有测试集（冻结没冻结都算）里的样本。训练导出要排除它们。"""
     return set((await db.execute(select(ModelTestItem.sample_id).distinct())).scalars().all())

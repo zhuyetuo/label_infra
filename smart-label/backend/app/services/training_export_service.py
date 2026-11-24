@@ -395,13 +395,18 @@ async def export_dataset(
         # 核对完停用它——不跳过的话同一段标注（原项目 + 拆出来的）会算两遍
         q = q.where(Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True))))
     rows = (await db.execute(q)).all()
-    # 模型测试集里的样本一律不进训练（哪个项目里的同一个样本都算、整个样本都不要）：
-    # 测试数据被训练吃进去，测试就作废了。见 model_test_service
-    from app.services.model_test_service import test_sample_ids
-    _test_ids = await test_sample_ids(db)
-    n_skipped_test = sum(1 for _t, smp in rows if smp.id in _test_ids)
+    # 模型测试数据不进训练（测试数据被训练吃进去，测试就作废了），见 model_test_service.test_exclusion：
+    # 测试集自己的任务、整个任务加进测试集的样本 → 整份不要；只挑了窗口的 → 窗口 ±60 秒挖洞（哪个项目里的同一个样本都挖）
+    from app.services.model_test_service import test_exclusion
+    _excl, _test_tasks = await test_exclusion(db)
+
+    def _whole_out(t, smp) -> bool:
+        return t.id in _test_tasks or (smp.id in _excl and _excl[smp.id] is None)
+    n_skipped_test = sum(1 for t, smp in rows if _whole_out(t, smp))
     if n_skipped_test:
-        rows = [(t, smp) for t, smp in rows if smp.id not in _test_ids]
+        rows = [(t, smp) for t, smp in rows if not _whole_out(t, smp)]
+    test_holes = {sid: w for sid, w in _excl.items() if w}
+    n_test_holed = sum(1 for _t, smp in rows if smp.id in test_holes)
     if sample_hz:
         # 按样本的原始采样率挑（训 31.25 Hz 只能用 50 Hz 采的；老的 16 Hz 数据升不上去）
         # 按名义档位比（设备实际报 51 / 57 / 66Hz，选「50Hz」要都算上），见 data_pool.nominal_hz
@@ -582,7 +587,8 @@ async def export_dataset(
         # 「待定」和「采集时掉数据」都要挖掉，合成一组洞一起处理
         missing = _missing_holes(raw_missing, csv_start)
         n_missing_ms += sum(b - a for a, b in missing)
-        holes = _merge((holes_by_task.get(task.id) or []) + (cand_holes.get(task.id) or []) + missing)
+        holes = _merge((holes_by_task.get(task.id) or []) + (cand_holes.get(task.id) or []) + missing
+                       + (test_holes.get(sample.id) or []))
 
         # 同一类别里压在一起的段先并掉。会出现是因为「疑似抓挠」补上来的段常常跟
         # 已有的 AI 段覆盖同一次抓挠，只是起止差几百毫秒——不并的话重叠那部分的
@@ -762,6 +768,8 @@ async def export_dataset(
     warnings[:0] = w_reduce
     if n_skipped_test:
         warnings.insert(0, f"模型测试集里的 {n_skipped_test} 个任务没导出（测试数据不进训练）")
+    if n_test_holed:
+        warnings.insert(0, f"{n_test_holed} 个任务里挖掉了模型测试窗口（前后各 60 秒）")
     if reduced:
         ls_tasks = [t for t in ls_tasks if t["annotations"][0]["result"]]
     label_counter, label_sec, n_segments, total_sec, label_tree = _tally(ls_tasks)
@@ -799,6 +807,7 @@ async def export_dataset(
         "include_submitted": include_submitted,
         "scope": scope,
         "n_skipped_test": n_skipped_test,
+        "n_test_holed": n_test_holed,
         **({"pool_filters": {"dog_ids": dog_ids or [], "sample_hz": sample_hz or [], "label_names": only_labels or [],
                              "n_skipped_not_pool": n_skipped_not_pool}} if only_pool else {}),
         **({"min_seg_sec": min_seg_sec, "n_skipped_short": n_skipped_short} if min_seg_sec else {}),

@@ -177,7 +177,7 @@ function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean;
     <Modal title="加到测试集" open={open} onCancel={onClose} onOk={submit} confirmLoading={busy} width={900} okText="加进去">
       <Space direction="vertical" style={{ width: "100%" }}>
         <Alert type="info" showIcon message={
-          <span>加进来的样本<b>以后不进任何训练导出</b>（整个样本都不要，防相邻几秒漏进去）。
+          <span>加进来的窗口<b>前后各 60 秒以后不进任何训练导出</b>（防相邻几秒漏进去；不给窗口 = 整个样本都不要）。
             挑的时候照顾多样性：体型、狗、场地、白天 / 夜里、不同日期都摊开，一只狗别超过总量 15%。
             标注要对着视频复核过，别直接用某个模型的预标（测试会偏向那个模型）。</span>} />
         <Space wrap>
@@ -585,7 +585,7 @@ export default function ModelTest() {
       <Typography.Title level={4} style={{ marginTop: 0 }}>模型测试</Typography.Title>
       <Alert type="info" showIcon style={{ marginBottom: 12 }} message={
         <span>
-          测试集是给模型「考试」的数据：<b>里面的样本以后不进任何训练导出</b>（现在共 {data?.n_excluded_samples ?? 0} 个样本被排除）。
+          测试集是给模型「考试」的数据：<b>测试窗口前后各 60 秒以后不进任何训练导出</b>（整个任务加进来的，整个样本都不进；现在涉及 {data?.n_excluded_samples ?? 0} 个样本）。
           正式成绩只算模型<b>没见过</b>的；多样性优先（体型、狗、场地、白天 / 夜里、日期），数量按批补。
           一版定下来就「冻结」，补数据「复制成新版本」再加——报告注明用的哪一版，前后才比得了。
         </span>} />

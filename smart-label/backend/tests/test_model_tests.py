@@ -44,14 +44,17 @@ def test_测试集里的样本不进训练导出(db, run, tmp_path, monkeypatch)
 
     s = run(api.create_set(api.SetIn(name="测试集v1"), db, w.admin))["data"]
     t = run(db.execute(select(Task))).scalars().first()
-    r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=0, end_ms=60000)]), db, w.admin))
+    # 窗口远在样本外：只挖那一段 ±60 秒，任务照常导出，片段一条不少
+    r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=50_000_000, end_ms=50_060_000)]), db, w.admin))
     assert r["data"]["added"] == 1
-    # 只挑了 1 分钟的窗口，整个样本也不进训练（防相邻几秒漏进去）
+    excl, tasks = run(mts.test_exclusion(db))
+    assert excl == {t.sample_id: [(50_000_000 - 60_000, 50_060_000 + 60_000)]} and tasks == {t.id}
+    # 测试集自己的任务一律不导出（这里测试片段挂在唯一的任务上 → 没有可导出的）
     with pytest.raises(te.TrainingExportError):
         run(te.export_dataset(db, "after", project_ids=[w.p.id], scope="pool", dry_run=True))
 
     # 重复加跳过；起止不对跳过
-    r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=0, end_ms=60000),
+    r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=50_000_000, end_ms=50_060_000),
                                                      api.ItemIn(task_id=t.id, start_ms=5, end_ms=None)]), db, w.admin))
     assert r["data"]["added"] == 0 and len(r["data"]["skipped"]) == 2
 
@@ -60,6 +63,29 @@ def test_测试集里的样本不进训练导出(db, run, tmp_path, monkeypatch)
     run(api.delete_item(item_id, db))
     out = run(te.export_dataset(db, "again", project_ids=[w.p.id], scope="pool", dry_run=True))
     assert out["n_tasks"] == 1
+
+
+def test_别的项目里同一个样本_窗口挖洞_整任务整份不要(db, run, tmp_path, monkeypatch):
+    from app.models.task import TaskStatus, TaskType
+    w = _world(db, run)
+    _prep_export(db, run, tmp_path, monkeypatch, w)
+    t = run(db.execute(select(Task))).scalars().first()
+    before = run(te.export_dataset(db, "b", project_ids=[w.p.id], scope="pool", dry_run=True))
+    # 测试用的短任务建在别的项目里（同一个样本），窗口盖住整个时间轴
+    t2 = Task(project_id=w.p.id, sample_id=t.sample_id, task_type=TaskType.from_scratch, status=TaskStatus.PENDING_ASSIGN,
+              segment_start_ms=0, segment_end_ms=100_000_000, created_by=w.admin.id)
+    db.add(t2)
+    run(db.commit())
+    s = run(api.create_set(api.SetIn(name="v1"), db, w.admin))["data"]
+    run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t2.id)]), db, w.admin))
+    excl, _ = run(mts.test_exclusion(db))
+    assert excl[t.sample_id] == [(0, 100_000_000 + 60_000)]
+    # 原任务还导出，但片段全被挖掉
+    try:
+        out = run(te.export_dataset(db, "a", project_ids=[w.p.id], scope="pool", dry_run=True))
+        assert out["n_segments"] < before["n_segments"] and out["n_test_holed"] == 1
+    except te.TrainingExportError:
+        pass   # 全挖光了没东西可导，也对
 
 
 def test_冻结后不能增删_复制成新版本(db, run):
