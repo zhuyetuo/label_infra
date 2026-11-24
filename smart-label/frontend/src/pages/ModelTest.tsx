@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Alert, Button, Checkbox, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tabs, Tag, Tooltip, TreeSelect, Typography, message,
+  Alert, Button, Checkbox, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Popover, Radio, Select, Space, Table, Tabs, Tag, Tooltip, TreeSelect, Typography, message,
 } from "antd";
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +16,7 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs } from "@/api/dogs";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import { PlusOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, getTask, listTasks } from "@/api/tasks";
@@ -768,7 +768,7 @@ function SetDetail({ setId }: { setId: number }) {
   return (
     <>
       <Tabs defaultActiveKey="plan" items={[
-        { key: "plan", label: "选样", children: (
+        { key: "plan", label: "配比", children: (
           <ModelTestPlan setId={setId} initial={data.set.plan ?? null} frozen={frozen} existing={data.items.length}
             accent={colors[data.set.plan?.target ?? "抓挠"] ?? "#27AE60"} />) },
         { key: "cov", label: "配额表", children: data.items.length ? <CoverageView cov={data.coverage} /> : <Empty description="还没有片段：点「片段」→「加片段」" /> },
@@ -886,51 +886,71 @@ export default function ModelTest() {
     setCopyOf(null); setCopyName(""); refresh(); setCur(s.id);
   };
 
+  // 一个测试集的操作：顶上那一行和「全部测试集」列表共用
+  const actions = (s: TestSet) => (
+    <Space size={12} onClick={(e) => e.stopPropagation()}>
+      <a onClick={() => { setEditOf(s); setEditName(s.name); setEditNote(s.note ?? ""); }}>编辑</a>
+      {!s.frozen && (
+        <Popconfirm title="冻结后这一版不能再增删，确定？" onConfirm={async () => { await freezeTestSet(s.id); refresh(); }}>
+          <a>冻结</a>
+        </Popconfirm>)}
+      <a onClick={() => { setCopyOf(s); setCopyName(`${s.name} 补充`); }}>复制成新版本</a>
+      <Popconfirm
+        title={`删除测试集「${s.name}」？`}
+        description={<div style={{ maxWidth: 300 }}>
+          会删掉这个测试集和它的 {s.n_items} 条片段记录{s.frozen ? "（这一版已冻结，删了以后用它做的成绩就对不上版本了）" : ""}。
+          任务、标注、疑似片段都不动；这些窗口以后不再挡训练导出（别的测试集里还有的照样挡）。删了不能恢复。</div>}
+        okText="删除" okButtonProps={{ danger: true }}
+        onConfirm={async () => {
+          const r = await deleteTestSet(s.id);
+          message.success(`已删除「${s.name}」（${r.deleted_items} 条片段记录）`);
+          if (cur === s.id) setCur(null);
+          refresh();
+        }}>
+        <a style={{ color: "#ff4d4f" }}>删除</a>
+      </Popconfirm>
+    </Space>
+  );
+  const curSet = sets.find((s) => s.id === cur) ?? null;
+
   return (
     <div>
       <Tabs items={[
         {
           key: "sets", label: "测试集", children: (
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Space>
-                <Input style={{ width: 240 }} placeholder="新测试集名字，如「测试集 v1」" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={create} />
-                <Button onClick={create}>新建</Button>
+            <Space direction="vertical" style={{ width: "100%" }} size={12}>
+              {/* 选一个测试集：几十个也不用滚 */}
+              <Space wrap size={[12, 8]}>
+                <Select showSearch optionFilterProp="label" style={{ minWidth: 320 }} value={cur ?? undefined} onChange={setCur}
+                  placeholder="选测试集"
+                  options={sets.map((s) => ({ value: s.id, label: `${s.name} · ${s.n_items} 段${s.frozen ? " · 已冻结" : ""}` }))} />
+                {curSet && actions(curSet)}
+                <Popover trigger="click" placement="bottom" content={
+                  <Space>
+                    <Input style={{ width: 220 }} placeholder="新测试集名字" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={create} />
+                    <Button type="primary" onClick={create}>新建</Button>
+                  </Space>}>
+                  <Button size="small" icon={<PlusOutlined />}>新建测试集</Button>
+                </Popover>
               </Space>
-              <Table<TestSet>
-                size="small" rowKey="id" pagination={false} dataSource={sets}
-                rowClassName={(s) => (s.id === cur ? "ant-table-row-selected" : "")}
-                onRow={(s) => ({ onClick: () => setCur(s.id), style: { cursor: "pointer" } })}
-                columns={[
-                  { title: "名字", dataIndex: "name" },
-                  { title: "片段", dataIndex: "n_items", width: 70 },
-                  { title: "样本", dataIndex: "n_samples", width: 70 },
-                  { title: "状态", width: 170, render: (_, s) => (s.frozen ? <Tag color="blue">已冻结 {s.frozen_at?.slice(0, 16).replace("T", " ")}</Tag> : <Tag>可编辑</Tag>) },
-                  { title: "备注", dataIndex: "note", ellipsis: true },
-                  { title: "", width: 200, render: (_, s) => (
-                    <Space onClick={(e) => e.stopPropagation()}>
-                      {!s.frozen && (
-                        <Popconfirm title="冻结后这一版不能再增删，确定？" onConfirm={async () => { await freezeTestSet(s.id); refresh(); }}>
-                          <a>冻结</a>
-                        </Popconfirm>)}
-                      <a onClick={() => { setEditOf(s); setEditName(s.name); setEditNote(s.note ?? ""); }}>编辑</a>
-                      <a onClick={() => { setCopyOf(s); setCopyName(`${s.name} 补充`); }}>复制成新版本</a>
-                      <Popconfirm
-                        title={`删除测试集「${s.name}」？`}
-                        description={<div style={{ maxWidth: 300 }}>
-                          会删掉这个测试集和它的 {s.n_items} 条片段记录{s.frozen ? "（这一版已冻结，删了以后用它做的成绩就对不上版本了）" : ""}。
-                          任务、标注、疑似片段都不动；这些窗口以后不再挡训练导出（别的测试集里还有的照样挡）。删了不能恢复。</div>}
-                        okText="删除" okButtonProps={{ danger: true }}
-                        onConfirm={async () => {
-                          const r = await deleteTestSet(s.id);
-                          message.success(`已删除「${s.name}」（${r.deleted_items} 条片段记录）`);
-                          if (cur === s.id) setCur(null);
-                          refresh();
-                        }}>
-                        <a style={{ color: "#ff4d4f" }}>删除</a>
-                      </Popconfirm>
-                    </Space>) },
-                ]}
-              />
+              {curSet?.note && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{curSet.note}</Typography.Text>}
+              <Collapse size="small" items={[{
+                key: "all", label: `全部测试集（${sets.length}）`,
+                children: (
+                  <Table<TestSet>
+                    size="small" rowKey="id" pagination={sets.length > 15 ? { pageSize: 15 } : false} dataSource={sets}
+                    rowClassName={(s) => (s.id === cur ? "ant-table-row-selected" : "")}
+                    onRow={(s) => ({ onClick: () => setCur(s.id), style: { cursor: "pointer" } })}
+                    columns={[
+                      { title: "名字", dataIndex: "name" },
+                      { title: "片段", dataIndex: "n_items", width: 70 },
+                      { title: "样本", dataIndex: "n_samples", width: 70 },
+                      { title: "状态", width: 170, render: (_, s) => (s.frozen ? <Tag color="blue">已冻结 {s.frozen_at?.slice(0, 16).replace("T", " ")}</Tag> : <Tag>可编辑</Tag>) },
+                      { title: "备注", dataIndex: "note", ellipsis: true },
+                      { title: "", width: 240, render: (_, s) => actions(s) },
+                    ]}
+                  />),
+              }]} />
               {cur != null && sets.some((s) => s.id === cur) && <SetDetail key={cur} setId={cur} />}
             </Space>
           ),

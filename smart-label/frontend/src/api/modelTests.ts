@@ -142,6 +142,8 @@ export interface Plan {
   alloc?: {
     site?: Record<string, number>; dur?: Record<string, number>; pos?: number; neg?: number;
     part?: Record<string, number>; dog?: "even" | "avail"; size?: Record<string, number>;
+    /** 总段数；不纳入的狗 */
+    total?: number; exclude?: number[];
   } | null;
   dogs: PlanDog[];
   date_from?: string | null;
