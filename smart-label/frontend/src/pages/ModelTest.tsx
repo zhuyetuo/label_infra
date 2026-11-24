@@ -16,6 +16,7 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs } from "@/api/dogs";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, getTask, listTasks } from "@/api/tasks";
@@ -887,13 +888,6 @@ export default function ModelTest() {
 
   return (
     <div>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>模型测试</Typography.Title>
-      <Alert type="info" showIcon style={{ marginBottom: 12 }} message={
-        <span>
-          测试集是给模型「考试」的数据：<b>测试窗口前后各 60 秒以后不进任何训练导出</b>（整个任务加进来的，整个样本都不进；现在涉及 {data?.n_excluded_samples ?? 0} 个样本）。
-          正式成绩只算模型<b>没见过</b>的；多样性优先（体型、狗、场地、白天 / 夜里、日期），数量按批补。
-          一版定下来就「冻结」，补数据「复制成新版本」再加——报告注明用的哪一版，前后才比得了。
-        </span>} />
       <Tabs items={[
         {
           key: "sets", label: "测试集", children: (
@@ -942,6 +936,18 @@ export default function ModelTest() {
           ),
         },
         { key: "cross", label: "多批交叉对比", children: <CrossTab sets={sets} /> },
+        {
+          // 说明收进问号：不占地方，鼠标移上去才看
+          key: "help", disabled: true, label: (
+            <Tooltip placement="bottomLeft" overlayStyle={{ maxWidth: 420 }} title={<div>
+              测试集是给模型「考试」的数据：<b>测试窗口前后各 60 秒以后不进任何训练导出</b>（整个任务加进来的，整个样本都不进；现在涉及 {data?.n_excluded_samples ?? 0} 个样本）。
+              <br />正式成绩只算模型<b>没见过</b>的；多样性优先（体型、狗、场地、白天 / 夜里、日期），数量按批补。
+              <br />一版定下来就「冻结」，补数据「复制成新版本」再加——报告注明用的哪一版，前后才比得了。
+            </div>}>
+              <QuestionCircleOutlined style={{ cursor: "help", fontSize: 15 }} />
+            </Tooltip>
+          ),
+        },
       ]} />
       <Modal title="编辑测试集" open={!!editOf} onCancel={() => setEditOf(null)} onOk={doEdit} okText="保存">
         <Space direction="vertical" style={{ width: "100%" }}>
