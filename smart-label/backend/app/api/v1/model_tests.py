@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -42,6 +43,27 @@ class ItemIn(BaseModel):
 
 class ItemsIn(BaseModel):
     items: list[ItemIn] = Field(min_length=1, max_length=2000)
+
+
+class ComposeIn(BaseModel):
+    """按条件挑：从已有的标注片段（人工标过的 / AI 预标的）里挑，凑窗口"""
+    label_names: list[str] = Field(min_length=1)          # 类别（含细类：选「抓挠」就含抓挠-头颈耳…）
+    sites: list[str] | None = None                        # 场地全称
+    dog_ids: list[int] | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    source: Literal["any", "human", "ai"] = "any"
+    seen_mode: Literal["any", "unseen", "seen"] = "any"
+    model_ids: list[int] | None = None
+    per_group: int = Field(default=10, ge=1, le=500)      # 每只狗 × 每个细类最多几段
+    max_total: int = Field(default=200, ge=1, le=3000)
+    pad_sec: float = Field(default=60, ge=0, le=3600)
+    min_sec: float = Field(default=0, ge=0, le=3600)      # 片段至少多长
+    seed: int = 1
+
+
+class CheckIn(BaseModel):
+    checked: bool = True
 
 
 async def _set_or_404(db: AsyncSession, set_id: int) -> ModelTestSet:
@@ -154,6 +176,49 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
         added += 1
     await db.commit()
     return ok({"added": added, "skipped": skipped})
+
+
+@router.get("/label-tree")
+async def get_label_tree(db: AsyncSession = Depends(get_db)):
+    return ok(await svc.label_tree_names(db))
+
+
+@router.post("/sets/{set_id}/compose/preview")
+async def compose_preview(set_id: int, body: ComposeIn, db: AsyncSession = Depends(get_db)):
+    """按条件挑：只看会挑出什么（配比），不写库"""
+    await _set_or_404(db, set_id)
+    r = await svc.compose(db, set_id=set_id, **body.model_dump())
+    return ok({**r, "picks": r["picks"][:300]})
+
+
+@router.post("/sets/{set_id}/compose")
+async def compose_apply(set_id: int, body: ComposeIn, db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """按条件挑，加进测试集（挂在原任务上，窗口 = 片段凑够 N 秒）。同样的条件和种子，跟预览挑的一样"""
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
+    r = await svc.compose(db, set_id=set_id, **body.model_dump())
+    for p in r["picks"]:
+        db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
+                             end_ms=p["end_ms"], added_by=user.id,
+                             note=f"按条件挑·{p['label']}·{'人工标过' if p['human'] else 'AI 预标'}"))
+    await db.commit()
+    return ok({"added": len(r["picks"]), "stats": r["stats"], "warnings": r["warnings"]})
+
+
+@router.post("/items/{item_id}/check")
+async def check_item(item_id: int, body: CheckIn, db: AsyncSession = Depends(get_db),
+                     user: User = Depends(get_current_user)):
+    """人工核对过这一段（看了窗口里的片段，该调的调了）/ 取消"""
+    it = await db.get(ModelTestItem, item_id)
+    if it is None:
+        raise HTTPException(404, "不存在")
+    if (await _set_or_404(db, it.set_id)).frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，核对状态不能再改")
+    it.checked_by, it.checked_at = (user.id, datetime.now()) if body.checked else (None, None)
+    await db.commit()
+    return ok({"checked": body.checked})
 
 
 @router.get("/task-segments")

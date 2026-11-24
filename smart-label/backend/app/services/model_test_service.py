@@ -89,7 +89,8 @@ async def test_exclusion(db: AsyncSession) -> tuple[dict[int, list[tuple[int, in
     excl: dict[int, list[tuple[int, int]] | None] = {}
     tasks: set[int] = set()
     for tid, sid, s, e, ts, te in rows:
-        tasks.add(tid)
+        if ts is not None:
+            tasks.add(tid)      # 专门为测试建的短任务整份不导出；挂在原任务上的（按条件挑的）只挖窗口
         if s is None or e is None:
             s, e = ts, te
         if s is None or e is None:
@@ -174,6 +175,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         return n if n in TOPS else "其他"
 
     segs: dict[int, list[tuple[str, int, int, bool]]] = defaultdict(list)
+    leaf_segs: dict[int, list[tuple[str, int, int]]] = defaultdict(list)
     for tid, lid, s, e, unc in (await db.execute(
         select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.start_time_ms,
                AnnotationLabelItem.end_time_ms, AnnotationLabelItem.uncertain)
@@ -182,6 +184,8 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         .where(AnnotationRecord.task_id.in_(tids), AnnotationRecord.round_no == Task.round_no)
     )).all():
         segs[tid].append((top(lid), int(s), int(e), bool(unc)))
+        if not unc and parent.get(lid) is not None:
+            leaf_segs[tid].append((lname.get(lid, "?"), int(s), int(e)))   # 细类（抓挠-头颈耳…），配额表按部位看
 
     # 疑似片段（提示窗口里写的那几段）：按任务 / 状态数，列表上显示「疑似 抓挠 1 待判」
     from app.models.ai_candidate import AiCandidate
@@ -248,6 +252,10 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             "labels": labels, "n_uncertain": n_uncertain, "note": it.note,
             # 窗口里的疑似片段：{类别: {状态: 条数}}
             "cands": {k: dict(v) for k, v in _cand_count(cands.get(it.task_id, []), ws, we).items()},
+            "leaf": dict(Counter(n for n, a, b in leaf_segs.get(it.task_id, []) if a < we and b > ws)),
+            # 人工核对过这一段（看过窗口里的片段、该调的调了）。打分可以只用核对过的
+            "checked": it.checked_at is not None,
+            "checked_at": it.checked_at.isoformat(timespec="minutes") if it.checked_at else None,
         })
     return out
 
@@ -294,6 +302,191 @@ def coverage(rows: list[dict]) -> dict:
     n_unsure = sum(1 for r in rows if r["dog_unsure"])
     if n_unsure:
         warns.append(f"{n_unsure} 段的狗是按设备号推断、而且是老影棚数据（常对不上），按狗/体型统计时不可靠")
+    leaf: Counter = Counter()
+    for r in rows:
+        leaf.update(r.get("leaf") or {})
     return {"n_items": len(rows), "total_sec": round(total, 1), "matrix": matrix, "kinds": dict(kinds),
             "dogs": dogs, "n_dogs": len(dogs), "sites": dict(sites), "dates": dict(sorted(dates.items())),
+            "leaf": dict(leaf.most_common()), "n_checked": sum(1 for r in rows if r.get("checked")),
             "warnings": warns}
+
+
+# ───────────── 按条件挑：从已有的标注片段（人工标过的 / AI 预标的）里挑，凑窗口，加进测试集 ─────────────
+
+async def label_tree_names(db: AsyncSession) -> list[dict]:
+    """各项目同名的标签合成一个：[{name, parent}]，给「按条件挑」的类别树用"""
+    rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
+    name = {i: n for i, n, _ in rows}
+    seen: dict[str, str | None] = {}
+    for i, n, p in rows:
+        if n not in seen or (seen[n] is None and p is not None):
+            seen[n] = name.get(p) if p is not None else None
+    return [{"name": n, "parent": p} for n, p in sorted(seen.items(), key=lambda x: ((x[1] or x[0]), x[1] is not None, x[0]))]
+
+
+async def seen_codes_of(model_ids: list[int], db: AsyncSession) -> set[str]:
+    from app.models.model_version import ModelVersion
+    import asyncio
+    codes: set[str] = set()
+    for mid in model_ids:
+        mv = await db.get(ModelVersion, mid)
+        if mv is None:
+            continue
+        for n in datasets_of_spec(mv.dataset_spec):
+            c = await asyncio.to_thread(dataset_sample_codes, n)
+            if c:
+                codes |= c
+    return codes
+
+
+COMPOSE_ROW_CAP = 400_000
+
+
+async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] | None = None,
+                  dog_ids: list[int] | None = None, date_from=None, date_to=None, source: str = "any",
+                  seen_mode: str = "any", model_ids: list[int] | None = None, per_group: int = 10,
+                  max_total: int = 200, pad_sec: float = 60, min_sec: float = 0, set_id: int | None = None,
+                  seed: int = 1) -> dict:
+    """按条件从已有片段里挑。返回 {picks: [...], stats, warnings}；不写库（写库见 compose_apply）。
+
+    source：human = 人工标过的（任务已提交/通过，或片段是人加 / 人确认 / 人改过的）；ai = 只要 AI 预标的；any = 都要。
+    seen_mode：unseen / seen / any，相对 model_ids 的训练数据集（样本级）。
+    每组（狗 × 细类）最多 per_group 段，按日期轮着挑；总数最多 max_total（各组轮着取）。
+    窗口 = 片段前后延长凑够 pad_sec（碰头尾往另一边补），同一个样本里窗口不重叠，也不跟这个测试集里已有的重叠。"""
+    import random
+    from app.models.annotation import LabelItemSource
+    from app.models.task import TaskStatus
+    from app.services import label_tree
+
+    warnings: list[str] = []
+    ids = set((await db.execute(select(LabelDefinition.id).where(LabelDefinition.display_name.in_(label_names)))).scalars().all())
+    ids = await label_tree.expand_ids(db, ids) if ids else set()
+    if not ids:
+        return {"picks": [], "stats": {}, "warnings": ["没选类别，或者选的类别没有对应的标签"]}
+    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
+    lname = {i: n for i, n, _ in lrows}
+
+    it = AnnotationLabelItem
+    q = (select(it.label_id, it.start_time_ms, it.end_time_ms, it.source_type, it.ai_confirmed, it.is_modified,
+                Task.id, Task.status, Sample.id, Sample.sample_code, Sample.video_cam1_path, Sample.imu_csv_path,
+                Sample.dog_id, Sample.video_duration_sec, Sample.session_date)
+         .join(AnnotationRecord, it.annotation_record_id == AnnotationRecord.id)
+         .join(Task, Task.id == AnnotationRecord.task_id)
+         .join(Sample, Sample.id == Task.sample_id)
+         .where(it.label_id.in_(ids), AnnotationRecord.round_no == Task.round_no, it.uncertain.is_(False),
+                Task.segment_start_ms.is_(None),
+                Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True)))))
+    if date_from is not None:
+        q = q.where(Sample.session_date >= date_from)
+    if date_to is not None:
+        q = q.where(Sample.session_date <= date_to)
+    if min_sec:
+        q = q.where(it.end_time_ms - it.start_time_ms >= int(min_sec * 1000))
+    rows = (await db.execute(q.limit(COMPOSE_ROW_CAP))).all()
+    if len(rows) >= COMPOSE_ROW_CAP:
+        warnings.append(f"符合的片段超过 {COMPOSE_ROW_CAP} 条，只看了前 {COMPOSE_ROW_CAP} 条：缩小日期范围更准")
+
+    codes = await seen_codes_of(model_ids or [], db) if seen_mode != "any" and model_ids else None
+    if seen_mode != "any" and not model_ids:
+        warnings.append("选了「见过 / 没见过」但没选模型，这一条没生效")
+    idx = await DN.dog_index(db)
+    prof = await DN.dog_profiles(db)
+    dogs = {d.id: d for d in (await db.execute(select(Dog))).scalars().all()}
+    want_sites = set(sites or [])
+    want_dogs = set(dog_ids or [])
+    dog_cache: dict[int, tuple[int | None, str | None]] = {}
+
+    taken: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    if set_id is not None:
+        for sid, s, e, ts, te in (await db.execute(
+            select(ModelTestItem.sample_id, ModelTestItem.start_ms, ModelTestItem.end_ms, Task.segment_start_ms,
+                   Task.segment_end_ms).join(Task, Task.id == ModelTestItem.task_id)
+            .where(ModelTestItem.set_id == set_id))).all():
+            a, b = (s, e) if s is not None else (ts, te)
+            taken[sid].append((a if a is not None else 0, b if b is not None else 10 ** 12))
+
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    n_in = Counter()
+    for lid, a, b, src, conf, mod, tid, tst, sid, code, cam, csv, sdog, dur, sday in rows:
+        human = tst in (TaskStatus.SUBMITTED, TaskStatus.APPROVED) or src != LabelItemSource.ai_generated or conf or mod
+        if (source == "human" and not human) or (source == "ai" and human):
+            continue
+        if codes is not None and ((code in codes) != (seen_mode == "seen")):
+            continue
+        if sid not in dog_cache:
+            site_key = SL.site_of(code, csv, cam)
+            did = await DN.sample_dog_id(db, code, sdog, cam, idx=idx, profiles=prof)
+            site_name = (dogs[did].site if did in dogs else None) or SL.SITES.get(site_key or "", {}).get("name")
+            # 9 月中以前文件名不带场地的老影棚数据：按设备号认狗常认错，不参与按狗挑
+            if site_key is None and not sdog:
+                did = None
+            dog_cache[sid] = (did, site_name)
+        did, site_name = dog_cache[sid]
+        if want_sites and site_name not in want_sites:
+            continue
+        if want_dogs and did not in want_dogs:
+            continue
+        if did is None and (want_dogs or want_sites):
+            continue
+        leaf = lname.get(lid, "?")
+        n_in[(did, leaf)] += 1
+        groups[(did, leaf)].append({"task_id": tid, "sample_id": sid, "a": int(a), "b": int(b), "human": bool(human),
+                                    "dur_ms": int((dur or 0) * 1000), "date": sday, "label": leaf,
+                                    "dog_id": did, "site": site_name})
+
+    rng = random.Random(seed)
+    pad_ms = int(pad_sec * 1000)
+    picked_by_group: dict[tuple, list[dict]] = {}
+    for key, segs in groups.items():
+        rng.shuffle(segs)
+        segs.sort(key=lambda x: not x["human"])           # 人工标过的优先
+        per_day: dict = defaultdict(list)
+        for x in segs:
+            per_day[x["date"]].append(x)
+        days = sorted(per_day, key=lambda d: str(d))
+        for d in days:
+            per_day[d].reverse()
+        got: list[dict] = []
+        while len(got) < per_group and any(per_day.values()):
+            for d in days:
+                if len(got) >= per_group or not per_day[d]:
+                    continue
+                x = per_day[d].pop()
+                s, e = pad_window(x["a"], x["b"], pad_ms, 0, x["dur_ms"] or None)
+                if all(e <= p or s >= q2 for p, q2 in taken[x["sample_id"]]):
+                    taken[x["sample_id"]].append((s, e))
+                    got.append({**x, "start_ms": s, "end_ms": e})
+        picked_by_group[key] = got
+
+    # 总数上限：各组轮着取，谁都不独占
+    picks: list[dict] = []
+    order = sorted(picked_by_group, key=lambda k: (dogs[k[0]].name if k[0] in dogs else "~", k[1]))
+    i = 0
+    while len(picks) < max_total and any(picked_by_group[k] for k in order):
+        k = order[i % len(order)]
+        if picked_by_group[k]:
+            picks.append(picked_by_group[k].pop(0))
+        i += 1
+
+    mat: dict[str, Counter] = defaultdict(Counter)
+    avail: dict[str, Counter] = defaultdict(Counter)
+    for (did, leaf), n in n_in.items():
+        avail[dogs[did].name if did in dogs else "未知狗"][leaf] += n
+    for p in picks:
+        mat[dogs[p["dog_id"]].name if p["dog_id"] in dogs else "未知狗"][p["label"]] += 1
+    dog_meta = {(dogs[d].name if d in dogs else "未知狗"): {"site": dogs[d].site if d in dogs else None,
+                                                          "size": dogs[d].size if d in dogs else None}
+                for d, _l in n_in}
+    stats = {
+        "n_found": sum(n_in.values()), "n_picked": len(picks),
+        "video_hours": round(sum(p["end_ms"] - p["start_ms"] for p in picks) / 3600_000, 2),
+        "by_dog_label": {k: dict(v) for k, v in mat.items()},
+        "available": {k: dict(v) for k, v in avail.items()},
+        "dogs": dog_meta,
+        "by_site": dict(Counter(p["site"] or "未知" for p in picks)),
+        "by_source": dict(Counter("人工标过" if p["human"] else "AI 预标" for p in picks)),
+        "by_date": dict(sorted(Counter(str(p["date"]) for p in picks).items())),
+    }
+    for p in picks:
+        p["date"] = str(p["date"])
+    return {"picks": picks, "stats": stats, "warnings": warnings}

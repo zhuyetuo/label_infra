@@ -40,8 +40,47 @@ export interface TestItem {
   label_cover: number;
   /** 窗口里的疑似片段：{类别: {pending/confirmed/rejected/uncertain: 条数}} */
   cands?: Record<string, Record<string, number>>;
+  /** 窗口里的细类（抓挠-头颈耳…）：段数 */
+  leaf?: Record<string, number>;
+  /** 人工核对过这一段 */
+  checked?: boolean;
+  checked_at?: string | null;
   note: string | null;
 }
+
+export interface ComposeBody {
+  label_names: string[];
+  sites?: string[];
+  dog_ids?: number[];
+  date_from?: string | null;
+  date_to?: string | null;
+  source?: "any" | "human" | "ai";
+  seen_mode?: "any" | "unseen" | "seen";
+  model_ids?: number[];
+  per_group?: number;
+  max_total?: number;
+  pad_sec?: number;
+  min_sec?: number;
+  seed?: number;
+}
+export interface ComposeStats {
+  n_found: number;
+  n_picked: number;
+  video_hours: number;
+  by_dog_label: Record<string, Record<string, number>>;
+  available: Record<string, Record<string, number>>;
+  dogs: Record<string, { site: string | null; size: string | null }>;
+  by_site: Record<string, number>;
+  by_source: Record<string, number>;
+  by_date: Record<string, number>;
+}
+export const getLabelTree = () => request.get<never, { name: string; parent: string | null }[]>("/model-tests/label-tree");
+export const composePreview = (setId: number, body: ComposeBody) =>
+  request.post<never, { stats: ComposeStats; warnings: string[] }>(`/model-tests/sets/${setId}/compose/preview`, body, { timeout: 300_000 });
+export const composeApply = (setId: number, body: ComposeBody) =>
+  request.post<never, { added: number; stats: ComposeStats; warnings: string[] }>(`/model-tests/sets/${setId}/compose`, body, { timeout: 300_000 });
+export const checkTestItem = (itemId: number, checked: boolean) =>
+  request.post<never, { checked: boolean }>(`/model-tests/items/${itemId}/check`, { checked });
 
 export interface Coverage {
   n_items: number;
@@ -53,6 +92,9 @@ export interface Coverage {
   n_dogs: number;
   sites: Record<string, number>;
   dates: Record<string, number>;
+  /** 细类（部位）段数 */
+  leaf?: Record<string, number>;
+  n_checked?: number;
   warnings: string[];
 }
 

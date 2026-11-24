@@ -48,10 +48,10 @@ def test_测试集里的样本不进训练导出(db, run, tmp_path, monkeypatch)
     r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=50_000_000, end_ms=50_060_000)]), db, w.admin))
     assert r["data"]["added"] == 1
     excl, tasks = run(mts.test_exclusion(db))
-    assert excl == {t.sample_id: [(50_000_000 - 60_000, 50_060_000 + 60_000)]} and tasks == {t.id}
-    # 测试集自己的任务一律不导出（这里测试片段挂在唯一的任务上 → 没有可导出的）
-    with pytest.raises(te.TrainingExportError):
-        run(te.export_dataset(db, "after", project_ids=[w.p.id], scope="pool", dry_run=True))
+    # 挂在原任务（整段样本）上：原任务照常导出，只挖窗口；专门建的短任务才整份不导出
+    assert excl == {t.sample_id: [(50_000_000 - 60_000, 50_060_000 + 60_000)]} and tasks == set()
+    out = run(te.export_dataset(db, "after", project_ids=[w.p.id], scope="pool", dry_run=True))
+    assert out["n_tasks"] == 1 and out["n_test_holed"] == 1
 
     # 重复加跳过；起止不对跳过
     r = run(api.add_items(s["id"], api.ItemsIn(items=[api.ItemIn(task_id=t.id, start_ms=50_000_000, end_ms=50_060_000),

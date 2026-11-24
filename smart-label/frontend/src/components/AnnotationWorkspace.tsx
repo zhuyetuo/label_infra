@@ -105,6 +105,8 @@ interface Props {
   approveText?: string;
   /** 打开就跳到这个时刻（相对 CSV 起点的毫秒）。从别处点「去修」进来时用 */
   initialSeekMs?: number | null;
+  /** 只看 / 只标样本里的这一段（模型测试挂在原任务上的窗口）；短任务自己的窗口优先 */
+  focusWindow?: { startMs: number; endMs: number } | null;
   /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
   initialCandFilter?: "similar" | "all" | null;
   /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
@@ -203,6 +205,7 @@ export default function AnnotationWorkspace({
   approveText,
   onClaim,
   initialSeekMs,
+  focusWindow,
   initialCandFilter,
   initialSimilar,
   initialSimilarLabel,
@@ -305,6 +308,10 @@ export default function AnnotationWorkspace({
   };
   // 疑似片段候选：不在草稿里，单独一张表，人工逐条确认/排除
   const [candidates, setCandidates] = useState<AiCandidate[]>([]);
+  // 这次只标的那一段：短任务自己的窗口，或者外面传进来的（模型测试挂在原任务上的窗口）
+  const win = task?.segment_start_ms != null && task?.segment_end_ms != null
+    ? { s: task.segment_start_ms, e: task.segment_end_ms }
+    : focusWindow ? { s: focusWindow.startMs, e: focusWindow.endMs } : null;
   // 现在这份 AI 结果是哪个版本/哪个模型跑的
   const [aiInfo, setAiInfo] = useState<AiLabelInfo | null>(null);
   // 重跑之后，跟人工已定片段撞上的那些新片段：标出来方便逐条对比
@@ -672,7 +679,7 @@ export default function AnnotationWorkspace({
       // 从别处点「去修」进来的：直接停在出问题的那一刻，不用自己拖进度条找
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
       // 短任务（只标样本里的一段，比如模型测试的 1 分钟窗口）：没指定位置就停在窗口开头
-      else if (task?.segment_start_ms != null) bus.seek(task.segment_start_ms / 1000);
+      else if (win) bus.seek(win.s / 1000);
       // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
       // 类别也带过来了。人在那边已经判断过一次了，不该到这儿再选一遍
       if (initialSimilar && initialSeekMs != null) {
@@ -3169,11 +3176,11 @@ export default function AnnotationWorkspace({
               <Button size="small" onClick={openCamFix}>机位纠正</Button>
             </Tooltip>
           )}
-          {task?.segment_start_ms != null && task?.segment_end_ms != null && (
+          {win && (
             <Tooltip title="这个任务只标样本里的这一段：窗口外不用标，窗口里要全标（休息、活动也标）。点一下循环播放这一段">
               <Tag color="orange" style={{ cursor: "pointer", fontWeight: 600 }}
-                onClick={() => { bus.seek(task.segment_start_ms! / 1000); setLoop({ startMs: task.segment_start_ms!, endMs: task.segment_end_ms! }); }}>
-                只标 {formatMs(task.segment_start_ms)} ~ {formatMs(task.segment_end_ms)}
+                onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>
+                只标 {formatMs(win.s)} ~ {formatMs(win.e)}
               </Tag>
             </Tooltip>
           )}
@@ -3322,7 +3329,7 @@ export default function AnnotationWorkspace({
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
             「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
-        {task?.segment_start_ms != null && task?.segment_end_ms != null && (
+        {win && (
           // 短任务：说清楚只标哪一段。不写的话人看到的是整个样本（比如 1 小时），不知道该标哪一分钟
           <Alert
             type="warning"
@@ -3330,12 +3337,12 @@ export default function AnnotationWorkspace({
             style={{ marginBottom: 6 }}
             message={
               <span>
-                这个任务只标 <b>{formatMs(task.segment_start_ms)} ~ {formatMs(task.segment_end_ms)}</b>
-                （{Math.round((task.segment_end_ms - task.segment_start_ms) / 1000)} 秒）：窗口外不用标；
+                这个任务只标 <b>{formatMs(win.s)} ~ {formatMs(win.e)}</b>
+                （{Math.round((win.e - win.s) / 1000)} 秒）：窗口外不用标；
                 窗口里<b>从头到尾都要标</b>（休息、活动也标）。
                 {(() => {
                   const n = candidates.filter((c) => c.status === "pending"
-                    && c.start_time_ms < task.segment_end_ms! && c.end_time_ms > task.segment_start_ms!).length;
+                    && c.start_time_ms < win.e && c.end_time_ms > win.s).length;
                   return n
                     ? <>窗口里有 <b>{n}</b> 条疑似片段，往下滚到「疑似片段」面板判（确认 / 排除 / 调起止），其余时间自己补标。</>
                     : "没有现成的片段，从零标。";
@@ -3344,8 +3351,8 @@ export default function AnnotationWorkspace({
             }
             action={
               <Space size={4}>
-                <Button size="small" onClick={() => bus.seek(task.segment_start_ms! / 1000)}>跳到窗口</Button>
-                <Button size="small" onClick={() => { bus.seek(task.segment_start_ms! / 1000); setLoop({ startMs: task.segment_start_ms!, endMs: task.segment_end_ms! }); }}>循环窗口</Button>
+                <Button size="small" onClick={() => bus.seek(win.s / 1000)}>跳到窗口</Button>
+                <Button size="small" onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>循环窗口</Button>
                 {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
               </Space>
             }

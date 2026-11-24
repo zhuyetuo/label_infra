@@ -6,13 +6,16 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Alert, Button, Checkbox, Empty, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message,
+  Alert, Button, Checkbox, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Table, Tabs, Tag, Tooltip, TreeSelect, Typography, message,
 } from "antd";
+import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getTaskSegments, getTestItems, getTestSeen, listTestSets,
-  type Coverage, type TaskSeg, type TestItem, type TestSet,
+  addTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getLabelTree,
+  getTaskSegments, getTestItems, getTestSeen, listTestSets,
+  type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
+import { listDogs } from "@/api/dogs";
 import { listProjects } from "@/api/projects";
 import { claimTask, getTask, listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
@@ -102,6 +105,11 @@ function CoverageView({ cov }: { cov: Coverage }) {
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         数事件数，不是段数：抓挠每种体型 30 次左右，召回率的误差约 ±15%；100 次左右才稳到 ±8%。红色「缺」的格子是下一批要补的。
       </Typography.Text>
+      <Space wrap>
+        <span>人工核对过 <b>{cov.n_checked ?? 0}</b> / {cov.n_items} 段</span>
+        {Object.keys(cov.leaf ?? {}).length > 0 && <span style={{ color: "#888" }}>细类（部位）：</span>}
+        {Object.entries(cov.leaf ?? {}).slice(0, 30).map(([k, n]) => <Tag key={k}>{k} {n}</Tag>)}
+      </Space>
       <Table
         size="small" pagination={false} rowKey={(r) => `${r.site}-${r.dog}`}
         dataSource={cov.dogs}
@@ -253,6 +261,144 @@ function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean;
   );
 }
 
+// ───────────────────────── 按条件挑 ─────────────────────────
+const SITE_NAMES = ["公司影棚", "佛山博朗旺狗场", "深圳雷诺狗场"];
+/** 从已有的标注片段（人工标过的 / AI 预标的）里按条件挑，凑窗口，先看配比再加进来 */
+function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: tree } = useQuery({ queryKey: ["mt-label-tree"], queryFn: getLabelTree, enabled: open });
+  const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs, enabled: open });
+  const { data: mvs } = useQuery({ queryKey: ["model-versions"], queryFn: listModelVersions, enabled: open });
+  const [labels, setLabels] = useState<string[]>(["抓挠"]);
+  const [sites, setSites] = useState<string[]>([]);
+  const [dogIds, setDogIds] = useState<number[]>([]);
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const [source, setSource] = useState<"any" | "human" | "ai">("any");
+  const [seenMode, setSeenMode] = useState<"any" | "unseen" | "seen">("any");
+  const [modelIds, setModelIds] = useState<number[]>([56, 61, 62]);
+  const [perGroup, setPerGroup] = useState(10);
+  const [maxTotal, setMaxTotal] = useState(200);
+  const [padSec, setPadSec] = useState(60);
+  const [minSec, setMinSec] = useState(0);
+  const [seed, setSeed] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ stats: ComposeStats; warnings: string[] } | null>(null);
+
+  const treeData = useMemo(() => {
+    const kids = new Map<string | null, { name: string; parent: string | null }[]>();
+    (tree ?? []).forEach((x) => kids.set(x.parent, [...(kids.get(x.parent) ?? []), x]));
+    type Node = { title: string; value: string; children: Node[] };
+    const build = (p: string | null, depth = 0): Node[] =>
+      depth > 4 ? [] : (kids.get(p) ?? []).map((x) => ({ title: x.name, value: x.name, children: build(x.name, depth + 1) }));
+    return build(null);
+  }, [tree]);
+
+  const body = (): ComposeBody => ({
+    label_names: labels, sites: sites.length ? sites : undefined, dog_ids: dogIds.length ? dogIds : undefined,
+    date_from: range?.[0]?.format("YYYY-MM-DD") ?? null, date_to: range?.[1]?.format("YYYY-MM-DD") ?? null,
+    source, seen_mode: seenMode, model_ids: seenMode === "any" ? undefined : modelIds,
+    per_group: perGroup, max_total: maxTotal, pad_sec: padSec, min_sec: minSec, seed,
+  });
+  const preview = async () => {
+    if (!labels.length) return message.warning("至少选一个类别");
+    setBusy(true);
+    try { setRes(await composePreview(setId, body())); } finally { setBusy(false); }
+  };
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await composeApply(setId, body());
+      message.success(`加了 ${r.added} 段`);
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+      qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  const st = res?.stats;
+  const leafs = st ? Array.from(new Set(Object.values(st.by_dog_label).flatMap((m) => Object.keys(m)))).sort() : [];
+  const dogRows = st ? Object.keys({ ...st.available }).sort() : [];
+  return (
+    <Modal title="按条件挑片段" open={open} onCancel={onClose} width={1100}
+      footer={<Space>
+        <Button onClick={onClose}>取消</Button>
+        <Button onClick={preview} loading={busy}>预览配比</Button>
+        <Button type="primary" disabled={!st?.n_picked} loading={busy} onClick={apply}>加进测试集（{st?.n_picked ?? 0} 段）</Button>
+      </Space>}>
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Alert type="info" showIcon message={
+          <span>从<b>已有的标注片段</b>里挑（以前人工标过的，或 AI 预标的），片段前后延长凑成窗口，挂在原任务上——不建新任务、不用从零标。
+            加进来以后在「片段」里点「看 / 标」核对：片段起止、类别不对就调，窗口里漏的补上，然后勾「核对」。打分可以只用核对过的。</span>} />
+        <Space wrap>
+          <span>类别：</span>
+          <TreeSelect style={{ minWidth: 360 }} treeData={treeData} value={labels} onChange={(v) => setLabels(v as string[])}
+            treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} placeholder="比如 抓挠 / 抓挠-头颈耳 / 抓挠-躯干" maxTagCount={6} />
+          <Tooltip title="选上一级就含下面所有细类；只要某个部位就只勾那个部位">
+            <span style={{ color: "#888" }}>（勾大类 = 含全部部位）</span>
+          </Tooltip>
+        </Space>
+        <Space wrap>
+          <span>场地：</span>
+          <Select mode="multiple" style={{ minWidth: 260 }} placeholder="全部" value={sites} onChange={setSites}
+            options={SITE_NAMES.map((x) => ({ value: x, label: x }))} />
+          <span>狗：</span>
+          <Select mode="multiple" style={{ minWidth: 320 }} placeholder="全部" value={dogIds} onChange={setDogIds} optionFilterProp="label"
+            options={(dogs ?? []).filter((d) => !sites.length || sites.includes(d.site ?? ""))
+              .map((d) => ({ value: d.id, label: `${d.name ?? d.dog_code}（${d.size ?? "?"}·${(d.site ?? "").slice(0, 2)}）` }))} />
+          <span>日期：</span>
+          <DatePicker.RangePicker value={range as never} onChange={(v) => setRange(v as never)} allowEmpty={[true, true]} />
+        </Space>
+        <Space wrap>
+          <span>片段来源：</span>
+          <Radio.Group value={source} onChange={(e) => setSource(e.target.value)} optionType="button" size="small"
+            options={[{ value: "any", label: "都要（人工优先）" }, { value: "human", label: "只要人工标过的" }, { value: "ai", label: "只要 AI 预标的" }]} />
+          <span>模型见没见过：</span>
+          <Radio.Group value={seenMode} onChange={(e) => setSeenMode(e.target.value)} optionType="button" size="small"
+            options={[{ value: "any", label: "不管" }, { value: "unseen", label: "没见过" }, { value: "seen", label: "见过" }]} />
+          {seenMode !== "any" && (
+            <Select mode="multiple" style={{ minWidth: 260 }} value={modelIds} onChange={setModelIds} placeholder="相对哪些模型"
+              options={(mvs ?? []).filter((m) => m.status === "done").map((m) => ({ value: m.id, label: `#${m.id} train${m.algo_job_id}` }))} />
+          )}
+        </Space>
+        <Space wrap>
+          <span>每只狗 × 每个细类最多 <InputNumber size="small" min={1} max={500} value={perGroup} onChange={(v) => setPerGroup(v ?? 10)} /> 段</span>
+          <span>总共最多 <InputNumber size="small" min={1} max={3000} value={maxTotal} onChange={(v) => setMaxTotal(v ?? 200)} /> 段</span>
+          <span>窗口凑够 <InputNumber size="small" min={0} max={3600} value={padSec} onChange={(v) => setPadSec(v ?? 60)} /> 秒</span>
+          <span>片段至少 <InputNumber size="small" min={0} max={3600} value={minSec} onChange={(v) => setMinSec(v ?? 0)} /> 秒</span>
+          <Tooltip title="同样的条件和种子挑出来的一样；换个数字就换一批">
+            <span>随机种子 <InputNumber size="small" min={1} value={seed} onChange={(v) => setSeed(v ?? 1)} /></span>
+          </Tooltip>
+        </Space>
+        {res?.warnings.map((w) => <Alert key={w} type="warning" showIcon message={w} />)}
+        {st && (
+          <>
+            <Space wrap>
+              <span>符合条件的片段 <b>{st.n_found}</b> 条，挑出 <b>{st.n_picked}</b> 段，视频 <b>{st.video_hours}</b> 小时</span>
+              {Object.entries(st.by_site).map(([k, n]) => <Tag key={k} color="blue">{k} {n}</Tag>)}
+              {Object.entries(st.by_source).map(([k, n]) => <Tag key={k} color={k === "人工标过" ? "green" : "orange"}>{k} {n}</Tag>)}
+              <span style={{ color: "#888" }}>日期 {Object.keys(st.by_date).length} 天</span>
+            </Space>
+            <Table size="small" bordered pagination={false} rowKey="dog" scroll={{ x: true }}
+              dataSource={dogRows.map((dog) => ({ dog }))}
+              columns={[
+                { title: "狗", dataIndex: "dog", fixed: "left", render: (v: string) => `${v}${st.dogs[v]?.size ? `（${st.dogs[v].size}）` : ""}` },
+                ...leafs.map((lf) => ({
+                  title: lf, key: lf,
+                  render: (_: unknown, r: { dog: string }) => {
+                    const n = st.by_dog_label[r.dog]?.[lf] ?? 0, a = st.available[r.dog]?.[lf] ?? 0;
+                    return <Tooltip title={`挑了 ${n} 段 / 符合条件 ${a} 条`}><span style={{ color: n ? undefined : "#ccc" }}>{n}<span style={{ color: "#888", fontSize: 11 }}> /{a}</span></span></Tooltip>;
+                  },
+                })),
+                { title: "合计", key: "sum", render: (_: unknown, r: { dog: string }) => <b>{Object.values(st.by_dog_label[r.dog] ?? {}).reduce((a, b) => a + b, 0)}</b> },
+              ]} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>格子里「挑了 / 符合条件」。不满意就改条件再预览；同样的条件和种子，加进去的就是预览这批。</Typography.Text>
+          </>
+        )}
+      </Space>
+    </Modal>
+  );
+}
+
 // ───────────────────────── 打分 ─────────────────────────
 type EvalRow = { key: string; group: string; n: number; version: string; r: VersionResult };
 
@@ -262,12 +408,13 @@ function useEvalPicker() {
   const [picked, setPicked] = useState<string[]>([]);
   const [scope, setScope] = useState<SeenScope>("unseen");
   const [iou, setIou] = useState(0.3);
+  const [checkedOnly, setCheckedOnly] = useState(true);
   const { data: runs, refetch } = useQuery({ queryKey: ["eval-runs-all"], queryFn: () => listEvalRuns() });
   const options = (runs?.runs ?? []).map((r) => ({
     value: `${r.model_tag}::${r.mode}`, label: `${r.model_tag} · ${modeLabelOf(r.mode)}（跑过 ${r.n_samples} 个样本）`,
   }));
   const versions = picked.map((p) => { const [model_tag, mode] = p.split("::"); return { model_tag, mode }; });
-  return { label, setLabel, picked, setPicked, scope, setScope, iou, setIou, options, versions, refetchRuns: refetch };
+  return { label, setLabel, picked, setPicked, scope, setScope, iou, setIou, checkedOnly, setCheckedOnly, options, versions, refetchRuns: refetch };
 }
 
 /** 打分用哪些样本：选中的模型都没见过的 / 至少一个见过的 / 全部 / 两部分分开各打一次 */
@@ -319,6 +466,9 @@ function EvalPickerBar({ p, extra }: { p: ReturnType<typeof useEvalPicker>; extr
       <Tooltip title="见过 = 样本在选中的任一模型的训练数据里。正式成绩看「没见过」；跟「见过」差得多说明模型在背答案">
         <Select style={{ width: 210 }} value={p.scope} onChange={(v) => p.setScope(v as SeenScope)} options={SCOPE_OPTIONS} />
       </Tooltip>
+      <Tooltip title="正确答案只认人工核对过的片段（看过窗口、该调的调了）。没核对的里面可能还是没改过的 AI 预标">
+        <Checkbox checked={p.checkedOnly} onChange={(e) => p.setCheckedOnly(e.target.checked)}>只用核对过的</Checkbox>
+      </Tooltip>
       {extra}
     </Space>
   );
@@ -336,8 +486,9 @@ const evalColumns = (groupTitle: string) => [
     <span style={{ color: x.r.n_samples_with_result < x.n ? "#ff4d4f" : undefined }}>{x.r.n_samples_with_result}/{x.n}</span>) },
 ];
 
-function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
+function EvalTab({ setId, items: allItems }: { setId: number; items: TestItem[] }) {
   const p = useEvalPicker();
+  const items = useMemo(() => (p.checkedOnly ? allItems.filter((i) => i.checked) : allItems), [allItems, p.checkedOnly]);
   const { options: modeOptions } = useInferModes();
   const [runModes, setRunModes] = useState<string[]>([]);
   const [bySize, setBySize] = useState(true);
@@ -350,7 +501,8 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
   });
   useEffect(() => { if (prog?.status === "done") p.refetchRuns(); }, [prog?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allSamples = useMemo(() => Array.from(new Set(items.map((i) => i.sample_id))), [items]);
+  // 跑推理按全部片段的样本跑（核对没核对都先跑上），打分时再按核对筛
+  const allSamples = useMemo(() => Array.from(new Set(allItems.map((i) => i.sample_id))), [allItems]);
 
   const run = async () => {
     if (!runModes.length) return message.warning("选要跑的版本");
@@ -361,9 +513,11 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
 
   const score = async () => {
     if (!p.versions.length) return message.warning("选要比的版本");
+    if (!items.length) return message.warning(p.checkedOnly ? "还没有核对过的片段：先在「片段」里看 / 标并勾「核对」，或者去掉「只用核对过的」" : "没有片段");
     setBusy(true);
     try {
       const ns: string[] = [];
+      if (p.checkedOnly) ns.push(`只用核对过的 ${items.length} / ${allItems.length} 段`);
       const parts = await scopeParts(setId, items, p.versions.map((v) => v.model_tag), p.scope, ns);
       const groups: [string, number[]][] = [];
       for (const [pname, use] of parts) {
@@ -429,7 +583,10 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
       const ns: string[] = [];
       for (const sid of setIds) {
         const s = sets.find((x) => x.id === sid)!;
-        const { items } = await getTestItems(sid);
+        const got = await getTestItems(sid);
+        const items = p.checkedOnly ? got.items.filter((i) => i.checked) : got.items;
+        if (p.checkedOnly) ns.push(`「${s.name}」只用核对过的 ${items.length} / ${got.items.length} 段`);
+        if (!items.length) continue;
         const parts = await scopeParts(sid, items, p.versions.map((v) => v.model_tag), p.scope, ns, `「${s.name}」`);
         for (const [pname, use] of parts) {
           if (!use.length) { ns.push(`${pname}没有可用样本`); continue; }
@@ -524,6 +681,8 @@ function SeenTab({ setId }: { setId: number }) {
 function SetDetail({ setId }: { setId: number }) {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [wsWin, setWsWin] = useState<{ startMs: number; endMs: number } | null>(null);
   const { data, isLoading } = useQuery({ queryKey: ["model-test-items", setId], queryFn: () => getTestItems(setId) });
   // 在这一页直接打开工作台看 / 标：开在窗口开头。没认领时只读，工作台里点「认领」就能标
   const userId = useAuthStore((st) => st.userInfo?.id);
@@ -534,12 +693,14 @@ function SetDetail({ setId }: { setId: number }) {
   const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
   const [wsSeekMs, setWsSeekMs] = useState<number | null>(null);
   const [opening, setOpening] = useState<number | null>(null);
-  const openTask = async (taskId: number, seekMs: number) => {
+  const openTask = async (taskId: number, seekMs: number, endMs?: number) => {
     setOpening(taskId);
     try {
       const t = await getTask(taskId);
       setWsLabels(await listLabels(t.project_id));
       setWsSeekMs(seekMs);
+      // 挂在原任务（整段样本）上的窗口：工作台顶上提示只看这一段
+      setWsWin(endMs != null ? { startMs: seekMs, endMs } : null);
       setWsTask(t);
     } finally {
       setOpening(null);
@@ -557,6 +718,10 @@ function SetDetail({ setId }: { setId: number }) {
     qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
     qc.invalidateQueries({ queryKey: ["model-test-sets"] });
   };
+  const toggleCheck = async (id: number, checked: boolean) => {
+    await checkTestItem(id, checked);
+    qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+  };
   return (
     <>
       <Tabs items={[
@@ -565,12 +730,17 @@ function SetDetail({ setId }: { setId: number }) {
           key: "items", label: `片段 ${data.items.length}`, children: (
             <Space direction="vertical" style={{ width: "100%" }}>
               <Space>
-                <Button type="primary" disabled={frozen} onClick={() => setAdding(true)}>加片段</Button>
+                <Tooltip title="按场地 / 狗 / 日期 / 类别（含部位）从已有的标注片段里挑，先看配比再加">
+                  <Button type="primary" disabled={frozen} onClick={() => setComposing(true)}>按条件挑</Button>
+                </Tooltip>
+                <Button disabled={frozen} onClick={() => setAdding(true)}>手动加</Button>
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
               </Space>
               <Table<TestItem>
                 size="small" rowKey="id" dataSource={data.items} pagination={{ pageSize: 50 }} scroll={{ x: 1200 }}
                 columns={[
+                  { title: <Tooltip title="人工看过这段窗口、片段该调的调了，就勾上。打分默认只用核对过的">核对</Tooltip>, width: 60,
+                    render: (_, r) => <Checkbox checked={!!r.checked} disabled={frozen} onChange={(e) => toggleCheck(r.id, e.target.checked)} /> },
                   { title: "任务", dataIndex: "task_id", width: 80 },
                   { title: "项目", dataIndex: "project_name", width: 160, ellipsis: true },
                   { title: "日期", dataIndex: "date", width: 100 },
@@ -600,7 +770,7 @@ function SetDetail({ setId }: { setId: number }) {
                     <Space size={8}>
                       <Tooltip title="打开工作台，从窗口开头放。管理员不用认领、直接改（已通过的要先「继续编辑」）；其他人认领了才能标">
                         <Button size="small" type="link" style={{ padding: 0 }} loading={opening === r.task_id}
-                          onClick={() => openTask(r.task_id, r.start_ms)}>看 / 标</Button>
+                          onClick={() => openTask(r.task_id, r.start_ms, r.end_ms)}>看 / 标</Button>
                       </Tooltip>
                       {!frozen && <Popconfirm title="从测试集拿掉这段？" onConfirm={() => del(r.id)}><a>拿掉</a></Popconfirm>}
                     </Space>) },
@@ -613,10 +783,12 @@ function SetDetail({ setId }: { setId: number }) {
         { key: "eval", label: "打分", children: <EvalTab setId={setId} items={data.items} /> },
       ]} />
       {adding && <AddItemsModal setId={setId} open={adding} onClose={() => setAdding(false)} />}
+      {composing && <ComposeModal setId={setId} open={composing} onClose={() => setComposing(false)} />}
       <AnnotationWorkspace
         task={wsTask}
         labels={wsLabels}
         initialSeekMs={wsSeekMs}
+        focusWindow={wsWin}
         readOnly={!((isAdmin && wsTask?.status !== "APPROVED") || (wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId))}
         onClaim={
           wsTask && wsTask.status !== "APPROVED" && !isAdmin
