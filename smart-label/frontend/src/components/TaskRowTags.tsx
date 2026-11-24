@@ -32,6 +32,7 @@ export function CandKindTags({
   onPick,
   only,
   specialOnly,
+  fillOnly,
 }: {
   task: Task;
   labels?: { display_name: string; color?: string | null }[];
@@ -41,12 +42,14 @@ export function CandKindTags({
   only?: string[];
   /** 专项模式：只显示「专项·xx 待判」，别的疑似片段类别都不显示 */
   specialOnly?: boolean;
+  /** 补标模式：只显示「补标·抓挠 待判」，别的疑似片段类别都不显示 */
+  fillOnly?: boolean;
 }) {
-  const kinds = specialOnly ? [] : Object.entries(task.cand_labels ?? {}).filter(([name, v]) => v.n > 0 && (!only || only.includes(name)));
+  const kinds = specialOnly || fillOnly ? [] : Object.entries(task.cand_labels ?? {}).filter(([name, v]) => v.n > 0 && (!only || only.includes(name)));
   if (!kinds.length && !(task.cand_spot_pending ?? 0) && !(task.cand_fill_pending ?? 0)) return null;
   // 还有待判的排前面，同样按条数多的在前
   kinds.sort(([, a], [, b]) => Number(b.pending > 0) - Number(a.pending > 0) || b.n - a.n);
-  const spot = task.cand_spot_pending ?? 0;
+  const spot = fillOnly ? 0 : task.cand_spot_pending ?? 0;
   const spotWhat = (task.cand_spot_labels ?? []).join("/") || "抓挠";
   const fill = specialOnly ? 0 : task.cand_fill_pending ?? 0;
   return (

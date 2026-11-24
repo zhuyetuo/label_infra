@@ -68,8 +68,8 @@ interface Props {
   onFindSimilar?: (atSec?: number, labelName?: string) => void;
   /** 从找相似的结果/链接跳进来：起点是这个毫秒的那条排最前并高亮 */
   focusMs?: number | null;
-  /** 打开时先筛哪一档（从找相似的链接进来默认只看「画面相似」） */
-  initialFilter?: "pending" | "all" | "similar";
+  /** 打开时先筛哪一档（从找相似进来默认看「画面相似」，从补标模式进来默认只看「补标」） */
+  initialFilter?: "pending" | "all" | "similar" | "fill";
   /** 打开时先只看这几类候选（从列表页按「疑似饮水」之类筛进来的） */
   initialLabelFilter?: string[];
   /** 清掉全部还没判过的「画面相似」候选；返回删了几条。给了才显示按钮 */
@@ -181,7 +181,7 @@ export default function CandidatePanel({
   reviewNoteClearOnly,
   initialFlaggedOnly,
 }: Props) {
-  const [filter, setFilter] = useState<"pending" | "all" | "similar" | "flagged" | "spot">(
+  const [filter, setFilter] = useState<"pending" | "all" | "similar" | "flagged" | "spot" | "fill">(
     initialFlaggedOnly ? "flagged" : initialFilter ?? "pending");
   useEffect(() => {
     if (initialFlaggedOnly) setFilter("flagged");
@@ -193,16 +193,17 @@ export default function CandidatePanel({
     if (initialFilter) setFilter(initialFilter);
   }, [initialFilter]);
   const similarCount = candidates.filter((c) => c.reason === "similar" && c.status === "pending").length;
+  const fillCount = candidates.filter((c) => c.reason === "unl_fill" && c.status === "pending").length;
   // 抽查（reason=spot）还没判的：有就默认先只看它们（打开一次只自动切一次，人切走了不再拽回来）
   const isSpecial = isSpecialReason;
   const spotCount = candidates.filter((c) => isSpecial(c.reason) && c.status === "pending").length;
   const autoSpot = useRef(false);
   useEffect(() => {
-    if (!autoSpot.current && spotCount > 0 && !initialFlaggedOnly) {
+    if (!autoSpot.current && spotCount > 0 && !initialFlaggedOnly && initialFilter !== "fill") {
       autoSpot.current = true;
       setFilter("spot");
     }
-  }, [spotCount, initialFlaggedOnly]);
+  }, [spotCount, initialFlaggedOnly, initialFilter]);
   // 只看某一类：找相似 / 找片段常常一次落好几个类别，混在一起没法逐类核对
   const [labelFilter, setLabelFilter] = useState<string[]>(initialLabelFilter ?? []);
   useEffect(() => {
@@ -257,6 +258,8 @@ export default function CandidatePanel({
           ? c.reason === "similar" && (c.status === "pending" || justDecided.has(c.id))
         : filter === "spot"
           ? isSpecial(c.reason) && (c.status === "pending" || justDecided.has(c.id))
+        : filter === "fill"
+          ? c.reason === "unl_fill" && (c.status === "pending" || justDecided.has(c.id))
           : c.status === "pending" || justDecided.has(c.id)
     );
     if (labelFilter.length) list = list.filter((c) => labelFilter.includes(c.label_name));
@@ -415,6 +418,7 @@ export default function CandidatePanel({
         options={[
           { label: `待确认 ${pendingCount}`, value: "pending" },
           ...(flaggedCount > 0 || filter === "flagged" ? [{ label: `有问题 ${flaggedCount}`, value: "flagged" }] : []),
+          ...(fillCount > 0 || filter === "fill" ? [{ label: `补标 ${fillCount}`, value: "fill" }] : []),
           ...(spotCount > 0 || filter === "spot" ? [{ label: `专项 ${spotCount}`, value: "spot" }] : []),
           ...(similarCount > 0 ? [{ label: `画面相似 ${similarCount}`, value: "similar" }] : []),
           { label: `全部 ${candidates.length}`, value: "all" },

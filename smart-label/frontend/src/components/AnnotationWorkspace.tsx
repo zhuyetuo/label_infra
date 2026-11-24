@@ -116,8 +116,8 @@ interface Props {
     /** 从模型打分错例跳来：展示评测模型预测时段与人工标注时段的一键定位 */
     evalHint?: EvalWindowHint;
   } | null;
-  /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
-  initialCandFilter?: "similar" | "all" | null;
+  /** 从找相似 / 补标模式进来：候选面板默认只看「画面相似」或「补标」 */
+  initialCandFilter?: "similar" | "all" | "fill" | null;
   /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
   initialSimilar?: boolean;
   /** 跳过来时「标成」预选哪个类别：第一阶段已经判断过是什么动作了，不该再让人选一遍 */

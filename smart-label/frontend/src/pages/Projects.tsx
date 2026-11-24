@@ -2452,6 +2452,14 @@ export default function Projects() {
                           </Space>
                         );
                       }
+                      // 只看补标（补标模式 / 点了「补标·抓挠 待判」）：片段这一列只留补标那个标签，别的片段、疑似片段都是干扰
+                      if (f.fill || fillOnly) {
+                        return (
+                          <Space size={2} wrap>
+                            <CandKindTags task={task} labels={projLabels} fillOnly />
+                          </Space>
+                        );
+                      }
                       const candOnly = !focus && f.cand && f.candLabels.length > 0 && !f.showAllLabels;
                       const sameKind = (name: string) =>
                         f.candLabels.some((c) => name === c || currentName(name) === currentName(c)
@@ -2992,7 +3000,7 @@ export default function Projects() {
                     </Tag>
                   ))}
                 </Space>
-                {(() => {
+                {!fillOnly && (() => {
                   // 🔖 备忘：全部通过了也可能还有几段留着以后处理（复合要拆、画面看不清…），不用展开就看得到
                   const mk = scratchReview?.marks?.[String(p.id)];
                   if (!mk || !mk.n) return null;
@@ -3009,7 +3017,7 @@ export default function Projects() {
                     </div>
                   );
                 })()}
-                {(() => {
+                {!fillOnly && (() => {
                   // 这一类待判的疑似片段：负例多半还停在「疑似」（确认了才变成片段），这是现在要去判的
                   const cn = scratchReview?.candidates?.[String(p.id)] ?? 0;
                   if (!cn) return null;
@@ -3035,7 +3043,7 @@ export default function Projects() {
                     </div>
                   );
                 })()}
-                {(() => {
+                {!fillOnly && (() => {
                   // 抽查：新模型报了、人工没标的片段，请人对着视频判（不管当前重点是什么都显示）
                   const sn = scratchReview?.spot?.[String(p.id)] ?? 0;
                   if (!sn) return null;
@@ -3073,7 +3081,7 @@ export default function Projects() {
                     </div>
                   );
                 })()}
-                {(() => {
+                {!fillOnly && (() => {
                   const sr = scratchReview?.projects[String(p.id)];
                   if (!sr || !sr.n) return null;
                   // 打了备忘的「先放着」，不算没通过（项目行上的 🔖 备忘单独列）
@@ -4348,6 +4356,7 @@ export default function Projects() {
         })()}
         focusLabelIds={workspaceFocusLabels}
         focusCandLabels={workspaceFocusCands}
+        initialCandFilter={fillOnly || (workspaceTask && filterOf(workspaceTask.project_id).fill) ? "fill" : undefined}
         labels={workspaceLabels}
         readOnly={workspaceReadOnly}
         jumpToFocus={workspaceJump}
