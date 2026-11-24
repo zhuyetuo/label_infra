@@ -286,6 +286,8 @@ def _append_boundary_edit(raw: str | None, old: tuple[int, int], new: tuple[int,
 
 async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     """只有当前锁定人能续期，推迟 lock_expires_at。"""
+    # 角色先读出来：下面失败会 rollback，rollback 之后 user 的属性过期，异步里再读会 MissingGreenlet
+    is_admin = user.role in (UserRole.admin, UserRole.super_admin)
     ttl_hours = settings.annotation_timeout_hours
     lock_expires = datetime.now(UTC) + timedelta(hours=ttl_hours)
 
@@ -298,9 +300,9 @@ async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     if result.rowcount != 1:
         await db.rollback()
         # 管理员 / 超管不用认领就能直接改没通过的任务（见 save_draft），没有锁可续，心跳当作成功
-        if user.role in (UserRole.admin, UserRole.super_admin):
-            task = await db.get(Task, task_id)
-            if task is not None and task.status != TaskStatus.APPROVED:
+        if is_admin:
+            status = (await db.execute(select(Task.status).where(Task.id == task_id))).scalar_one_or_none()
+            if status is not None and status != TaskStatus.APPROVED:
                 return
         raise TaskConflictError("任务不在你名下或已不在进行中，心跳失败")
     await db.commit()
