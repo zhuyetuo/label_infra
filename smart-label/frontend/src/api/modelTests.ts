@@ -118,7 +118,9 @@ export const freezeTestSet = (id: number) => request.post<never, TestSet>(`/mode
 export const copyTestSet = (id: number, body: { name: string; note?: string }) =>
   request.post<never, TestSet>(`/model-tests/sets/${id}/copy`, body);
 export const getTestItems = (id: number) =>
-  request.get<never, { set: TestSet; items: TestItem[]; coverage: Coverage }>(`/model-tests/sets/${id}/items`);
+  request.get<never, { set: TestSet; items: TestItem[]; coverage: Coverage; colors?: Record<string, string> }>(`/model-tests/sets/${id}/items`);
+/** 删测试集：只删测试集和条目，任务 / 标注不动 */
+export const deleteTestSet = (id: number) => request.delete<never, { deleted_items: number }>(`/model-tests/sets/${id}`);
 /** 任务当前轮的标注片段（挑事件用） */
 export interface TaskSeg { id: number; top: string; label: string; start_ms: number; end_ms: number; uncertain: boolean }
 export const getTaskSegments = (taskId: number) =>

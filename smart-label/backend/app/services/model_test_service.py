@@ -313,6 +313,16 @@ def coverage(rows: list[dict]) -> dict:
 
 # ───────────── 按条件挑：从已有的标注片段（人工标过的 / AI 预标的）里挑，凑窗口，加进测试集 ─────────────
 
+async def label_colors(db: AsyncSession) -> dict[str, str]:
+    """标签名 → 颜色（跟工作台一样那套，各项目同名取第一个有颜色的）。列表上「标了什么」按它上色"""
+    out: dict[str, str] = {}
+    for n, c in (await db.execute(select(LabelDefinition.display_name, LabelDefinition.color)
+                                  .order_by(LabelDefinition.id))).all():
+        if c and n not in out:
+            out[n] = c
+    return out
+
+
 async def label_tree_names(db: AsyncSession) -> list[dict]:
     """各项目同名的标签合成一个：[{name, parent}]，给「按条件挑」的类别树用"""
     rows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()

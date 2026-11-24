@@ -50,3 +50,20 @@ def test_核对标记_冻结后不能改(db, run):
         run(api.check_item(iid, api.CheckIn(checked=False), db, w.admin))
     with pytest.raises(HTTPException):
         run(api.compose_apply(s["id"], api.ComposeIn(label_names=["抓挠"]), db, w.admin))
+
+
+def test_删测试集_任务和标注不动(db, run):
+    from app.models.annotation import AnnotationLabelItem
+    w = _world(db, run)
+    n_items_before = len(run(db.execute(select(AnnotationLabelItem))).scalars().all())
+    s = run(api.create_set(api.SetIn(name="v1"), db, w.admin))["data"]
+    run(api.compose_apply(s["id"], api.ComposeIn(label_names=["抓挠"]), db, w.admin))
+    assert run(api.get_items(s["id"], db))["data"]["colors"] is not None
+    r = run(api.delete_set(s["id"], db))["data"]
+    assert r["deleted_items"] >= 1
+    assert run(api.list_sets(db))["data"]["sets"] == []
+    assert run(mts.test_exclusion(db)) == ({}, set())                         # 不再挡训练导出
+    assert len(run(db.execute(select(AnnotationLabelItem))).scalars().all()) == n_items_before
+    assert run(db.execute(select(Task))).scalars().first() is not None
+    with pytest.raises(HTTPException):
+        run(api.delete_set(s["id"], db))

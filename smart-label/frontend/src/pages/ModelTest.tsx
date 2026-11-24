@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getLabelTree,
+  addTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -29,6 +29,8 @@ import { modeLabelOf } from "@/utils/inferMode";
 import type { Task } from "@/types";
 
 const TOPS = ["抓挠", "活动", "静止/休息", "未佩戴"];
+/** 「标了什么」的标签：实心色块、加粗，一眼看得出是哪类 */
+const TAG_SOLID = { fontWeight: 600, fontSize: 13, padding: "2px 8px", borderRadius: 6, marginInlineEnd: 0 } as const;
 const SIZES = ["小", "中", "大"];
 const EVAL_LABELS = ["抓挠", "活动", "静止/休息", "未佩戴"];
 
@@ -713,6 +715,10 @@ function SetDetail({ setId }: { setId: number }) {
   };
   if (isLoading || !data) return <Table loading />;
   const frozen = data.set.frozen;
+  const colors = data.colors ?? {};
+  // 没配颜色的（「其他」之类）给个中性灰，免得一片白看不出来
+  const colorOf = (k: string): string | undefined => colors[k] ?? (k === "其他" ? "#8c8c8c" : undefined);
+  const labelRank = (k: string) => { const i = TOPS.indexOf(k); return i < 0 ? 99 : i; };
   const del = async (id: number) => {
     await deleteTestItem(id);
     qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
@@ -753,14 +759,18 @@ function SetDetail({ setId }: { setId: number }) {
                   { title: "窗口", width: 140, render: (_, r) => `${fmtMs(r.start_ms)}–${fmtMs(r.end_ms)}` },
                   { title: "长短", dataIndex: "kind", width: 80 },
                   { title: "标了什么", render: (_, r) => (
-                    <Space size={2} wrap>
-                      {Object.entries(r.labels).map(([k, v]) => <Tag key={k} color={k === "抓挠" ? "volcano" : undefined}>{k} {v.n}次 {fmtSec(v.sec)}</Tag>)}
-                      {r.n_uncertain > 0 && <Tag color="gold">待定 {r.n_uncertain}</Tag>}
+                    <Space size={4} wrap>
+                      {/* 颜色跟工作台里的标签一样；抓挠排最前。实心 = 已有片段，虚线框 = 疑似片段待判 */}
+                      {Object.entries(r.labels).sort(([a], [b]) => labelRank(a) - labelRank(b)).map(([k, v]) => (
+                        <Tag key={k} color={colorOf(k)} style={TAG_SOLID}>{k} {v.n}次 · {fmtSec(v.sec)}</Tag>))}
+                      {r.n_uncertain > 0 && <Tag color="gold" style={TAG_SOLID}>待定 {r.n_uncertain}</Tag>}
                       {Object.entries(r.cands ?? {}).map(([k, v]) => (v.pending ?? 0) > 0 && (
-                        <Tooltip key={`c-${k}`} title="提示窗口里的疑似片段：工作台往下滚到「疑似片段」面板，确认 / 排除 / 调起止">
-                          <Tag color="geekblue">疑似 {k} {v.pending} 待判</Tag>
+                        <Tooltip key={`c-${k}`} title="疑似片段（还没判）：工作台往下滚到「疑似片段」面板，确认 / 排除 / 调起止">
+                          <Tag style={{ ...TAG_SOLID, background: "transparent", color: colorOf(k) ?? "#2f54eb",
+                            border: `1.5px dashed ${colorOf(k) ?? "#2f54eb"}` }}>？疑似{k} {v.pending} 待判</Tag>
                         </Tooltip>))}
-                      {!Object.keys(r.labels).length && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
+                      {!Object.keys(r.labels).length && !Object.values(r.cands ?? {}).some((v) => (v.pending ?? 0) > 0)
+                        && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
                     </Space>) },
                   { title: <Tooltip title="窗口里有多少时间标了东西。测试数据要窗口内全标，低于 80% 标红">标注覆盖</Tooltip>, width: 90,
                     render: (_, r) => <span style={{ color: r.label_cover < 0.8 ? "#ff4d4f" : undefined }}>{pct(r.label_cover)}</span> },
@@ -860,6 +870,20 @@ export default function ModelTest() {
                           <a>冻结</a>
                         </Popconfirm>)}
                       <a onClick={() => { setCopyOf(s); setCopyName(`${s.name} 补充`); }}>复制成新版本</a>
+                      <Popconfirm
+                        title={`删除测试集「${s.name}」？`}
+                        description={<div style={{ maxWidth: 300 }}>
+                          会删掉这个测试集和它的 {s.n_items} 条片段记录{s.frozen ? "（这一版已冻结，删了以后用它做的成绩就对不上版本了）" : ""}。
+                          任务、标注、疑似片段都不动；这些窗口以后不再挡训练导出（别的测试集里还有的照样挡）。删了不能恢复。</div>}
+                        okText="删除" okButtonProps={{ danger: true }}
+                        onConfirm={async () => {
+                          const r = await deleteTestSet(s.id);
+                          message.success(`已删除「${s.name}」（${r.deleted_items} 条片段记录）`);
+                          if (cur === s.id) setCur(null);
+                          refresh();
+                        }}>
+                        <a style={{ color: "#ff4d4f" }}>删除</a>
+                      </Popconfirm>
                     </Space>) },
                 ]}
               />

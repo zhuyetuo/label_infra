@@ -136,7 +136,20 @@ async def get_items(set_id: int, db: AsyncSession = Depends(get_db)):
                               .order_by(ModelTestItem.id))).scalars().all()
     rows = await svc.describe_items(db, list(items))
     return ok({"set": _set_out(s, len(items), len({i.sample_id for i in items})),
-               "items": rows, "coverage": svc.coverage(rows)})
+               "items": rows, "coverage": svc.coverage(rows), "colors": await svc.label_colors(db)})
+
+
+@router.delete("/sets/{set_id}")
+async def delete_set(set_id: int, db: AsyncSession = Depends(get_db)):
+    """删测试集：只删测试集和它的条目，任务、标注、疑似片段都不动。删了以后这些窗口不再挡训练导出"""
+    s = await _set_or_404(db, set_id)
+    items = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id))).scalars().all()
+    for it in items:
+        await db.delete(it)
+    await db.flush()
+    await db.delete(s)
+    await db.commit()
+    return ok({"deleted_items": len(items)})
 
 
 @router.post("/sets/{set_id}/items")
