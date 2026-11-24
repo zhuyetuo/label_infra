@@ -108,6 +108,18 @@ def test_无这类按分类摊():
     assert mts.split_by_ratio(3, [0, 0]) == [0, 0]
 
 
+def test_整批摊():
+    rows = [6, 7, 7, 7, 6, 7, 3, 2, 2, 1, 1, 1]           # 参考方案 1 分钟版每只狗的「无抓挠」，合计 50
+    cols = mts.split_by_ratio(sum(rows), [4, 2, 3, 1])
+    assert cols == [20, 10, 15, 5]
+    g = mts.split_grid(rows, cols)
+    assert [sum(r) for r in g] == rows                    # 每只狗段数不变
+    assert [sum(r[j] for r in g) for j in range(4)] == cols   # 各类正好是整批目标
+    assert mts.split_grid([0, 0], [0, 0]) == [[0, 0], [0, 0]]
+    g = mts.split_grid([3], [1, 1, 1])
+    assert g == [[1, 1, 1]]
+
+
 def test_选样计划_无这类按分类挑(db, run):
     from app.models.dog import Dog
     from app.models.sample import Sample

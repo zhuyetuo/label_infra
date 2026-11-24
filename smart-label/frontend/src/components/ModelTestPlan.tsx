@@ -30,6 +30,34 @@ const NEG_TIPS: Record<string, string> = {
   休息睡眠: "趴着、侧躺睡，偶尔翻身也算：一动不动时报抓挠肯定是错的",
   未佩戴: "项圈摘下来、设备还在录：没戴还报抓挠算硬伤",
 };
+/** 整批摊（跟后端 split_grid 同一套）：行 = 每只狗的「无」段数，列 = 整批各类目标数 */
+const splitGrid = (rows: number[], cols: number[]): number[][] => {
+  const total = rows.reduce((a, b) => a + b, 0);
+  if (total <= 0 || !cols.length) return rows.map(() => cols.map(() => 0));
+  const grid = rows.map((r) => cols.map((c) => Math.floor((r * c) / total)));
+  const usedR = grid.map((g) => g.reduce((a, b) => a + b, 0));
+  const usedC = cols.map((_, j) => grid.reduce((a, g) => a + g[j], 0));
+  const extra: [number, number, number][] = [];
+  rows.forEach((r, i) => cols.forEach((c, j) => extra.push([(r * c) / total - Math.floor((r * c) / total), i, j])));
+  extra.sort((a, b) => b[0] - a[0] || a[1] - b[1] || a[2] - b[2]);
+  let left = total - usedR.reduce((a, b) => a + b, 0);
+  for (let pass = 0; pass < 20 && left > 0; pass++) {
+    let moved = false;
+    for (const [, i, j] of extra) {
+      if (left <= 0) break;
+      if (usedR[i] < rows[i] && usedC[j] < cols[j]) { grid[i][j]++; usedR[i]++; usedC[j]++; left--; moved = true; }
+    }
+    if (!moved) break;
+  }
+  rows.forEach((r, i) => {
+    while (usedR[i] < r) {
+      let best = 0;
+      cols.forEach((c, j) => { if (c - usedC[j] > cols[best] - usedC[best]) best = j; });
+      grid[i][best]++; usedR[i]++; usedC[best]++;
+    }
+  });
+  return grid;
+};
 /** n 段按比例摊（最大余数法，跟后端同一套），加起来正好是 n */
 const splitByRatio = (n: number, ratios: number[]): number[] => {
   const tot = ratios.reduce((a, b) => a + b, 0);
@@ -125,11 +153,22 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const hours = plan.dogs.reduce((a, x) => a + plan.durations.reduce((b, d) => b + (qOf(x, d)[0] + qOf(x, d)[1]) * d, 0), 0) / 3600;
   const posTotal = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[0], 0));
   const negTotal = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[1], 0));
-  // 「无」按分类摊：每只狗每种时长各摊各的再加起来（跟后端挑的时候一样）
+  // 「无」按分类整批摊：每种时长先按比例定各类总数，再分到计划里的每只狗（跟后端挑的时候一样）；
+  // 看某个场所 / 某只狗时，把那几只狗的那几行加起来
   const negCats = plan.neg_cats ?? [];
+  const negGrid = useMemo(() => {
+    const out = new Map<number, Map<number, number[]>>();
+    const ratios = (plan.neg_cats ?? []).map((c) => c.ratio);
+    plan.durations.forEach((d) => {
+      const rows = plan.dogs.map((x) => ((x.q[String(d)] as [number, number]) ?? [0, 0])[1]);
+      const grid = splitGrid(rows, splitByRatio(rows.reduce((a, b) => a + b, 0), ratios));
+      out.set(d, new Map(plan.dogs.map((x, i) => [x.dog_id, grid[i]])));
+    });
+    return out;
+  }, [plan]);
   const negSplit = (d: number): number[] => {
     const tot = negCats.map(() => 0);
-    selected.forEach((dog) => splitByRatio(qOf(dp(dog.id), d)[1], negCats.map((c) => c.ratio)).forEach((k, j) => { tot[j] += k; }));
+    selected.forEach((dog) => (negGrid.get(d)?.get(dog.id) ?? []).forEach((k, j) => { tot[j] += k; }));
     return tot;
   };
   const gotCat = (d: number, name: string) => (result

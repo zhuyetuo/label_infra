@@ -609,6 +609,42 @@ def split_by_ratio(n: int, ratios: list[float]) -> list[int]:
     return base
 
 
+def split_grid(row_totals: list[int], col_targets: list[int]) -> list[list[int]]:
+    """整批摊：行 = 每只狗这一版的「无」段数，列 = 整批各类目标数（split_by_ratio 出来的）。
+    先按比例取整，再按余数大小补，补的时候行、列都不超；万一补不满（目标冲突）再按行补齐，保证每只狗段数不变。"""
+    import math
+    total = sum(row_totals)
+    if total <= 0 or not col_targets:
+        return [[0] * len(col_targets) for _ in row_totals]
+    grid = [[math.floor(r * c / total) for c in col_targets] for r in row_totals]
+    used_r = [sum(g) for g in grid]
+    used_c = [sum(grid[i][j] for i in range(len(row_totals))) for j in range(len(col_targets))]
+    extra = sorted(((r * c / total - math.floor(r * c / total), i, j)
+                    for i, r in enumerate(row_totals) for j, c in enumerate(col_targets)),
+                   key=lambda x: (-x[0], x[1], x[2]))
+    left = total - sum(used_r)
+    for _ in range(20):
+        moved = False
+        for _p, i, j in extra:
+            if left <= 0:
+                break
+            if used_r[i] < row_totals[i] and used_c[j] < col_targets[j]:
+                grid[i][j] += 1
+                used_r[i] += 1
+                used_c[j] += 1
+                left -= 1
+                moved = True
+        if not moved or left <= 0:
+            break
+    for i, r in enumerate(row_totals):
+        while used_r[i] < r:
+            j = max(range(len(col_targets)), key=lambda j: (col_targets[j] - used_c[j], -j))
+            grid[i][j] += 1
+            used_r[i] += 1
+            used_c[j] += 1
+    return grid
+
+
 async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
     """按计划挑。plan：
       target 类别（如 抓挠）；durations [秒]；parts [细类]；anchor_names（无这类时以哪类为中心，可空）；
@@ -627,7 +663,18 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
     picks: list[dict] = []
     report: dict[str, dict] = {}
     warnings: list[str] = []
-    for dg in plan.get("dogs", []):
+    # 「无」的分类按整批摊：每种时长先按比例定各类总数（50 段 → 20/10/15/5），再分到每只狗
+    neg_cats = [c for c in (plan.get("neg_cats") or []) if float(c.get("ratio") or 0) > 0 and c.get("anchors")]
+    dogs_in = plan.get("dogs", [])
+    neg_grid: dict[int, dict[int, list[int]]] = defaultdict(dict)    # 时长 → 狗 → 各类段数
+    if neg_cats:
+        durs = {int(k) for dg in dogs_in for k in (dg.get("q") or {})}
+        for d in durs:
+            rows = [int(((dg.get("q") or {}).get(str(d)) or [0, 0])[1] or 0) for dg in dogs_in]
+            grid = split_grid(rows, split_by_ratio(sum(rows), [float(c["ratio"]) for c in neg_cats]))
+            for dg, g in zip(dogs_in, grid):
+                neg_grid[d][int(dg["dog_id"])] = g
+    for dg in dogs_in:
         did = int(dg["dog_id"])
         q = {int(k): v for k, v in (dg.get("q") or {}).items()}
         pq = {k: int(v) for k, v in (dg.get("p") or {}).items() if int(v) > 0}
@@ -649,15 +696,14 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
                 if part in rep["p"]:
                     rep["p"][part] += 1
             picks += r["picks"]
-        # 无这类：有分类（像抓挠的动作 / 活动 / 休息 / 未佩戴…）就按比例摊到各类，逐类以那类片段为中心挑
-        neg_cats = [c for c in (plan.get("neg_cats") or []) if float(c.get("ratio") or 0) > 0 and c.get("anchors")]
+        # 无这类：有分类（像抓挠的动作 / 活动 / 休息 / 未佩戴…）就用整批摊好的数，逐类以那类片段为中心挑
         rep["n"] = {}
         for d in sorted(q):
             n = int(q[d][1] or 0)
             if not n:
                 continue
             if neg_cats:
-                parts = split_by_ratio(n, [float(c["ratio"]) for c in neg_cats])
+                parts = neg_grid[d].get(did) or split_by_ratio(n, [float(c["ratio"]) for c in neg_cats])
                 jobs = [(c["name"], c["anchors"], k) for c, k in zip(neg_cats, parts) if k > 0]
             else:
                 jobs = [(None, plan.get("anchor_names") or None, n)]
