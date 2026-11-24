@@ -351,6 +351,18 @@ export default function Projects() {
     }
     setFillOnly(on);
   };
+  // 项目分组：名字就是日期的是日常标注；「模型测试…」是测试集用的；其余是老数据 / 临时项目。
+  // 测试项目的「未通过 / 未审」对日常标注没意义，分开看不干扰。记在这台浏览器
+  type ProjGroup = "date" | "test" | "other" | "all";
+  const projGroupOf = (name: string): Exclude<ProjGroup, "all"> =>
+    /^\d{4}-\d{2}-\d{2}$/.test(name) ? "date" : name.startsWith("模型测试") ? "test" : "other";
+  const [projGroup, setProjGroupState] = useState<ProjGroup>(() => {
+    try { return (localStorage.getItem("projects-group") as ProjGroup) || "date"; } catch { return "date"; }
+  });
+  const setProjGroup = (g: ProjGroup) => {
+    setProjGroupState(g);
+    try { localStorage.setItem("projects-group", g); } catch { /* 隐私模式 */ }
+  };
   const [maskOnly, setMaskOnly] = useState(() => {
     try { return localStorage.getItem("projects-mask-only") === "1"; } catch { return false; }
   });
@@ -1659,6 +1671,19 @@ export default function Projects() {
         点左侧箭头可以展开看项目下的任务；「指派」可以把整个项目的任务一次性分给某个人。
       </Typography.Paragraph>
 
+      {!specialOnly && !fillOnly && (
+        <Segmented
+          style={{ marginBottom: 8 }}
+          value={projGroup}
+          onChange={(v) => { setProjGroup(v as ProjGroup); setPager({ current: 1 }); }}
+          options={([
+            ["date", "日期项目"], ["test", "模型测试"], ["other", "老数据·其他"], ["all", "全部"],
+          ] as [ProjGroup, string][]).map(([k, label]) => ({
+            value: k,
+            label: `${label} ${(data ?? []).filter((p) => k === "all" || projGroupOf(p.name) === k).length}`,
+          }))}
+        />
+      )}
       <ResizableTable
         storageKey="projects"
         rowKey="id"
@@ -1668,7 +1693,9 @@ export default function Projects() {
         scroll={{ x: 1210 }}
         dataSource={(PRIVACY_MASK && maskOnly ? (data ?? []).filter((p) => p.privacy_mask || p.privacy_mask_at) : data ?? [])
           .filter((p) => !specialOnly || specialOf(p.id) > 0)
-          .filter((p) => !fillOnly || fillOf(p.id) > 0)}
+          .filter((p) => !fillOnly || fillOf(p.id) > 0)
+          // 专项 / 补标模式下不分组：要处理的项目别被藏起来
+          .filter((p) => specialOnly || fillOnly || projGroup === "all" || projGroupOf(p.name) === projGroup)}
         rowSelection={isAdmin ? {
           selectedRowKeys: dedupeSel,
           onChange: (keys) => setDedupeSel(keys as number[]),
