@@ -4,7 +4,7 @@
  * 「预览」按计划试挑，每格显示挑到几段（不够标红）；「生成」写进测试集，计划随测试集保存。
  */
 import { useMemo, useState, type CSSProperties } from "react";
-import { Button, DatePicker, InputNumber, Popconfirm, Popover, Segmented, Select, Space, Tooltip, TreeSelect, message, theme } from "antd";
+import { Button, DatePicker, Input, InputNumber, Popconfirm, Popover, Segmented, Select, Space, Tooltip, TreeSelect, message, theme } from "antd";
 import { CloseOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,13 +15,43 @@ const SITE_ORDER = ["佛山博朗旺狗场", "公司影棚", "深圳雷诺狗场
 const SITE_SHORT: Record<string, string> = { 佛山博朗旺狗场: "佛山博朗旺", 公司影棚: "公司影棚", 深圳雷诺狗场: "深圳雷诺" };
 const durLabel = (s: number) => (s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`);
 const emptyDog = (id: number): PlanDog => ({ dog_id: id, q: {}, p: {} });
+const NEG_BLUE = "#4a6fa5";
+/** 没抓挠的四类（参考测试说明：4:2:3:1）。颜色、挑什么、为什么 */
+const DEFAULT_NEG = [
+  { name: "像抓挠的动作", anchors: ["舔", "啃", "蹭", "甩头/抖身"], ratio: 4 },
+  { name: "正常活动", anchors: ["活动"], ratio: 2 },
+  { name: "休息睡眠", anchors: ["静止/休息"], ratio: 3 },
+  { name: "未佩戴", anchors: ["未佩戴"], ratio: 1 },
+];
+const NEG_COLORS = ["#b0762a", "#3f7f95", "#2f7d72", "#6b7280", "#8e7cc3", "#a3474c"];
+const NEG_TIPS: Record<string, string> = {
+  像抓挠的动作: "舔、啃、蹭、甩头：项圈也会反复晃，最容易被报成抓挠。模型行不行主要看这一类，凑不齐时优先保它",
+  正常活动: "走、跑、转圈、玩：看狗一动起来会不会乱报",
+  休息睡眠: "趴着、侧躺睡，偶尔翻身也算：一动不动时报抓挠肯定是错的",
+  未佩戴: "项圈摘下来、设备还在录：没戴还报抓挠算硬伤",
+};
+/** n 段按比例摊（最大余数法，跟后端同一套），加起来正好是 n */
+const splitByRatio = (n: number, ratios: number[]): number[] => {
+  const tot = ratios.reduce((a, b) => a + b, 0);
+  if (n <= 0 || tot <= 0) return ratios.map(() => 0);
+  const raw = ratios.map((r) => (n * r) / tot);
+  const base = raw.map(Math.floor);
+  let left = n - base.reduce((a, b) => a + b, 0);
+  raw.map((x, j) => [x - Math.floor(x), j] as const).sort((a, b) => b[0] - a[0] || a[1] - b[1])
+    .forEach(([, j]) => { if (left > 0) { base[j]++; left--; } });
+  return base;
+};
 
 export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE60", existing = 0, onApplied }: {
   setId: number; initial?: Plan | null; frozen?: boolean; accent?: string; existing?: number; onApplied?: () => void;
 }) {
   const { token } = theme.useToken();
   const qc = useQueryClient();
-  const [plan, setPlan] = useState<Plan>(() => initial ?? { target: "抓挠", durations: [60, 600], parts: [], dogs: [] });
+  const [plan, setPlan] = useState<Plan>(() => {
+    const p = initial ?? { target: "抓挠", durations: [60, 600], parts: [], dogs: [] };
+    // 老计划没有分类：抓挠默认四类；用户清空过（[]）就尊重
+    return p.neg_cats === undefined || p.neg_cats === null ? { ...p, neg_cats: p.target === "抓挠" ? DEFAULT_NEG : [] } : p;
+  });
   const [site, setSite] = useState<string | null>(null);
   const [selDog, setSelDog] = useState<number | null>(null);
   const [result, setResult] = useState<PlanResult | null>(null);
@@ -94,6 +124,24 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const allTotal = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[0] + qOf(x, d)[1], 0), allDogs.map((d) => d.id));
   const hours = plan.dogs.reduce((a, x) => a + plan.durations.reduce((b, d) => b + (qOf(x, d)[0] + qOf(x, d)[1]) * d, 0), 0) / 3600;
   const posTotal = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[0], 0));
+  const negTotal = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[1], 0));
+  // 「无」按分类摊：每只狗每种时长各摊各的再加起来（跟后端挑的时候一样）
+  const negCats = plan.neg_cats ?? [];
+  const negSplit = (d: number): number[] => {
+    const tot = negCats.map(() => 0);
+    selected.forEach((dog) => splitByRatio(qOf(dp(dog.id), d)[1], negCats.map((c) => c.ratio)).forEach((k, j) => { tot[j] += k; }));
+    return tot;
+  };
+  const gotCat = (d: number, name: string) => (result
+    ? selected.reduce((a, x) => a + (result.report?.[String(x.id)]?.n?.[String(d)]?.[name] ?? 0), 0) : null);
+  const setCat = (j: number, patch: Partial<{ name: string; anchors: string[]; ratio: number }>) =>
+    update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).map((c, i) => (i === j ? { ...c, ...patch } : c)) }));
+  const otherTree = useMemo(() => {
+    type Node = { title: string; value: string; children: Node[] };
+    const build = (p: string, d: number): Node[] => (d > 3 ? [] : (kids.get(p) ?? []).map((n) => ({ title: n, value: n, children: build(n, d + 1) })));
+    return (kids.get(null) ?? []).filter((t) => t !== plan.target).map((t) => ({ title: t, value: t, children: build(t, 0) }));
+  }, [kids, plan.target]);
+  const [newCat, setNewCat] = useState<{ name: string; anchors: string[] }>({ name: "", anchors: [] });
   const multi = selected.length > 1;
 
   const run = async (kind: "preview" | "apply" | "save") => {
@@ -139,7 +187,8 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       {/* 条件：一行 */}
       <Space wrap size={[12, 8]} style={{ fontSize: 13 }}>
         <Select size="small" style={{ width: 110 }} value={plan.target} options={tops.map((t) => ({ value: t, label: t }))}
-          onChange={(v) => update((p) => ({ ...p, target: v, parts: [], dogs: p.dogs.map((x) => ({ ...x, p: {} })) }))} />
+          onChange={(v) => update((p) => ({ ...p, target: v, parts: [], neg_cats: v === "抓挠" ? DEFAULT_NEG : [],
+            dogs: p.dogs.map((x) => ({ ...x, p: {} })) }))} />
         <DatePicker.RangePicker size="small" allowEmpty={[true, true]}
           value={[plan.date_from ? dayjs(plan.date_from) : null, plan.date_to ? dayjs(plan.date_to) : null] as [Dayjs | null, Dayjs | null]}
           onChange={(v) => update((p) => ({ ...p, date_from: v?.[0]?.format("YYYY-MM-DD") ?? null, date_to: v?.[1]?.format("YYYY-MM-DD") ?? null }))} />
@@ -149,12 +198,6 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
           <Segmented size="small" value={plan.seen_mode ?? "any"}
             onChange={(v) => update((p) => ({ ...p, seen_mode: v as Plan["seen_mode"], model_ids: v === "any" ? null : p.model_ids ?? [56, 61, 62] }))}
             options={[{ value: "any", label: "见没见过都行" }, { value: "unseen", label: "模型没见过" }, { value: "seen", label: "模型见过" }]} />
-        </Tooltip>
-        <Tooltip title={`「无${plan.target}」窗口以哪类片段为中心（比如相似动作 舔 / 甩头）；不选 = 任何别的类别`}>
-          <TreeSelect size="small" style={{ minWidth: 200 }} treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} allowClear maxTagCount={2}
-            placeholder={`无${plan.target}：以什么为中心`} value={plan.anchor_names ?? []}
-            treeData={tops.filter((t) => t !== plan.target).map((t) => ({ title: t, value: t }))}
-            onChange={(v) => update((p) => ({ ...p, anchor_names: (v as string[]).length ? (v as string[]) : null }))} />
         </Tooltip>
       </Space>
 
@@ -221,7 +264,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             <div style={h3}>③ 时长</div>
             <Space size={14} style={{ fontSize: 12, color: muted }}>
               <span><i style={{ display: "inline-block", width: 9, height: 9, background: accent, borderRadius: 2, marginRight: 4 }} />有{plan.target}</span>
-              <span><i style={{ display: "inline-block", width: 9, height: 9, background: token.colorFillSecondary, borderRadius: 2, marginRight: 4 }} />无{plan.target}</span>
+              <span><i style={{ display: "inline-block", width: 9, height: 9, background: NEG_BLUE, borderRadius: 2, marginRight: 4 }} />无{plan.target}{negCats.length ? "（按⑤分类上色）" : ""}</span>
               {!frozen && (
                 <Popover trigger="click" content={<Space>
                   <InputNumber size="small" min={1} max={60} value={newDur ?? undefined} onChange={(v) => setNewDur(v)} addonAfter="分钟" style={{ width: 120 }} />
@@ -249,7 +292,9 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
                   </div>
                   <div style={{ height: 12, display: "flex", borderRadius: 3, overflow: "hidden", background: token.colorFillTertiary }}>
                     <div style={{ width: `${t ? (yes / t) * 100 : 0}%`, background: accent }} />
-                    <div style={{ width: `${t ? (no / t) * 100 : 0}%`, background: token.colorFillSecondary }} />
+                    {negCats.length
+                      ? negSplit(d).map((k, j) => <div key={j} style={{ width: `${t ? (k / t) * 100 : 0}%`, background: NEG_COLORS[j % NEG_COLORS.length] }} />)
+                      : <div style={{ width: `${t ? (no / t) * 100 : 0}%`, background: NEG_BLUE }} />}
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: muted, gap: 6 }}>
                     <Space size={4}>有 {num(`y${d}`, same((x) => qOf(x, d)[0]), (v) => setK(0, v))}
@@ -301,6 +346,64 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
                       <span style={{ display: "block", height: "100%", width: `${Math.min(100, pct)}%`, background: colors[i % colors.length], borderRadius: 4 }} />
                     </div>
                     <div style={{ fontSize: 12, color: muted, marginTop: 5 }}>占 {pct.toFixed(0)}% · 可用 {a}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{ borderTop: `1px solid ${line}`, margin: "18px 0" }} />
+
+          {/* ⑤ 没这类的分类 */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+            <div style={h3}>⑤ 没{plan.target}的分类</div>
+            <Space size={12} style={{ fontSize: 12, color: muted }}>
+              <span>无{plan.target} {negTotal} 段按比例摊</span>
+              {!frozen && (
+                <Popover trigger="click" content={<Space direction="vertical">
+                  <Input size="small" placeholder="分类名，如 进食饮水" value={newCat.name} onChange={(e) => setNewCat({ ...newCat, name: e.target.value })} />
+                  <TreeSelect size="small" style={{ width: 240 }} treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} maxTagCount={3}
+                    placeholder="以哪些片段为中心" treeData={otherTree} value={newCat.anchors} onChange={(v) => setNewCat({ ...newCat, anchors: v as string[] })} />
+                  <Button size="small" type="primary" disabled={!newCat.name.trim() || !newCat.anchors.length} onClick={() => {
+                    update((p) => ({ ...p, neg_cats: [...(p.neg_cats ?? []), { name: newCat.name.trim(), anchors: newCat.anchors, ratio: 1 }] }));
+                    setNewCat({ name: "", anchors: [] });
+                  }}>加</Button>
+                </Space>}>
+                  <a><PlusOutlined /> 分类</a>
+                </Popover>
+              )}
+            </Space>
+          </div>
+          {negCats.length === 0 ? (
+            <div style={{ fontSize: 12, color: muted }}>不分类（无{plan.target}的段以任何别的片段为中心）</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+              {negCats.map((c, j) => {
+                const color = NEG_COLORS[j % NEG_COLORS.length];
+                const per = plan.durations.map((d) => negSplit(d)[j]);
+                const n = per.reduce((a, b) => a + b, 0);
+                const g = result ? plan.durations.reduce((a, d) => a + (gotCat(d, c.name) ?? 0), 0) : null;
+                return (
+                  <div key={c.name} style={{ border: `1px solid ${line}`, borderTop: `5px solid ${color}`, background: `${color}14`, borderRadius: 9, padding: "10px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <Tooltip title={NEG_TIPS[c.name] ?? `以 ${c.anchors.join(" / ")} 为中心`}>
+                        <b style={{ color, fontSize: 14 }}>{c.name}</b>
+                      </Tooltip>
+                      {!frozen && <CloseOutlined style={{ fontSize: 11, color: muted, cursor: "pointer" }}
+                        onClick={() => update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).filter((_, i) => i !== j) }))} />}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ fontSize: 24, fontWeight: 700 }}>{n}</span><span style={{ fontSize: 12, color: muted }}>段</span>
+                      <Got want={n} have={g} />
+                    </div>
+                    <div style={{ fontSize: 12, color: muted }}>{plan.durations.map((d, i) => `${durLabel(d)} ${per[i]}`).join(" / ")}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: muted }}>
+                      比例 <InputNumber size="small" min={0} max={20} value={c.ratio} disabled={frozen} style={{ width: 56 }}
+                        onChange={(v) => setCat(j, { ratio: Number(v ?? 0) })} />
+                      <span>{negTotal ? `${((n / Math.max(1, negTotal)) * 100).toFixed(0)}%` : ""}</span>
+                    </div>
+                    <TreeSelect size="small" style={{ width: "100%", marginTop: 6 }} treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT}
+                      maxTagCount={2} disabled={frozen} treeData={otherTree} value={c.anchors}
+                      onChange={(v) => setCat(j, { anchors: v as string[] })} />
                   </div>
                 );
               })}

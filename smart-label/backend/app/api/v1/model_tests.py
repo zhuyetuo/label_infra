@@ -77,12 +77,20 @@ class PlanDogIn(BaseModel):
     p: dict[str, int] = {}                # {部位: 段数}（有这类各时长合计）
 
 
+class NegCatIn(BaseModel):
+    """「无这类」窗口的一个分类：以哪些片段为中心、占多少比例"""
+    name: str
+    anchors: list[str]
+    ratio: float = Field(default=1, ge=0)
+
+
 class PlanIn(BaseModel):
-    """选样计划：每只狗 × 时长 × 有/无 × 部位"""
+    """选样计划：每只狗 × 时长 × 有/无 × 部位；「无」再按分类摊"""
     target: str = "抓挠"
     durations: list[int] = [60, 600]
     parts: list[str] = []
     anchor_names: list[str] | None = None
+    neg_cats: list[NegCatIn] | None = None
     dogs: list[PlanDogIn] = []
     date_from: date | None = None
     date_to: date | None = None
@@ -290,6 +298,7 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
     for p in r["picks"]:
         c = p["cell"]
         note = f"选样·{round(c['dur'] / 60, 1):g}分钟·{c['kind']}{body.target}" + (f"·{c['part']}" if c.get("part") else "") \
+            + (f"·{c['cat']}" if c.get("cat") else "") \
             + (f"·以{p['anchor']}为中心" if p.get("anchor") else "") + f"·{'人工标过' if p['human'] else 'AI 预标'}"
         db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
                              end_ms=p["end_ms"], added_by=user.id, note=note[:300]))

@@ -134,6 +134,8 @@ export interface Plan {
   durations: number[];
   parts: string[];
   anchor_names?: string[] | null;
+  /** 「无这类」的分类：以哪些片段为中心、占多少比例（每只狗每种时长的「无」按比例摊） */
+  neg_cats?: { name: string; anchors: string[]; ratio: number }[] | null;
   dogs: PlanDog[];
   date_from?: string | null;
   date_to?: string | null;
@@ -143,7 +145,7 @@ export interface Plan {
   seed?: number;
 }
 export interface PlanResult {
-  report: Record<string, { q: Record<string, [number, number]>; p: Record<string, number> }>;
+  report: Record<string, { q: Record<string, [number, number]>; p: Record<string, number>; n?: Record<string, Record<string, number>> }>;
   n_picked: number;
   video_hours: number;
   by_source: Record<string, number>;

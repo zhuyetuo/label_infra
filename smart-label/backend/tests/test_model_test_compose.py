@@ -101,6 +101,34 @@ def test_选样计划_预览生成_计划保存(db, run):
             assert "抓挠" not in it["labels"]
 
 
+def test_无这类按分类摊():
+    assert mts.split_by_ratio(50, [4, 2, 3, 1]) == [20, 10, 15, 5]
+    assert sum(mts.split_by_ratio(7, [4, 2, 3, 1])) == 7
+    assert mts.split_by_ratio(0, [1, 1]) == [0, 0]
+    assert mts.split_by_ratio(3, [0, 0]) == [0, 0]
+
+
+def test_选样计划_无这类按分类挑(db, run):
+    from app.models.dog import Dog
+    from app.models.sample import Sample
+    w = _world(db, run)
+    d = Dog(dog_code="d1", name="阿黄", site="公司影棚", size="中")
+    db.add(d)
+    run(db.flush())
+    run(db.execute(select(Sample))).scalar_one().dog_id = d.id
+    run(db.commit())
+    s = run(api.create_set(api.SetIn(name="v1"), db, w.admin))["data"]
+    plan = api.PlanIn(target="抓挠", durations=[60], dogs=[api.PlanDogIn(dog_id=d.id, q={"60": [0, 2]})],
+                      neg_cats=[api.NegCatIn(name="活动类", anchors=[w.other.display_name], ratio=1),
+                                api.NegCatIn(name="不存在的类", anchors=["不存在"], ratio=1)])
+    pv = run(api.plan_preview(s["id"], plan, db))["data"]
+    rep = pv["report"][str(d.id)]
+    assert rep["n"]["60"].get("活动类", 0) == rep["q"]["60"][1] and rep["q"]["60"][1] <= 1
+    r = run(api.plan_apply(s["id"], plan, db, w.admin))["data"]
+    items = run(api.get_items(s["id"], db))["data"]["items"]
+    assert all("活动类" in (it["note"] or "") for it in items) and len(items) == r["added"]
+
+
 def test_删测试集_任务和标注不动(db, run):
     from app.models.annotation import AnnotationLabelItem
     w = _world(db, run)

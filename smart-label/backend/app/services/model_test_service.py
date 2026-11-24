@@ -596,6 +596,19 @@ async def plan_availability(db: AsyncSession, plan: dict) -> dict:
     return {"by_dog": r["stats"].get("available_by_id", {}), "warnings": r["warnings"]}
 
 
+def split_by_ratio(n: int, ratios: list[float]) -> list[int]:
+    """n 段按比例摊（最大余数法，跟前端显示的同一套），加起来正好是 n"""
+    tot = sum(ratios)
+    if n <= 0 or tot <= 0:
+        return [0] * len(ratios)
+    raw = [n * r / tot for r in ratios]
+    base = [int(x) for x in raw]
+    left = n - sum(base)
+    for j in sorted(range(len(raw)), key=lambda j: (-(raw[j] - base[j]), j))[:left]:
+        base[j] += 1
+    return base
+
+
 async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
     """按计划挑。plan：
       target 类别（如 抓挠）；durations [秒]；parts [细类]；anchor_names（无这类时以哪类为中心，可空）；
@@ -636,18 +649,29 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
                 if part in rep["p"]:
                     rep["p"][part] += 1
             picks += r["picks"]
-        # 无这类
+        # 无这类：有分类（像抓挠的动作 / 活动 / 休息 / 未佩戴…）就按比例摊到各类，逐类以那类片段为中心挑
+        neg_cats = [c for c in (plan.get("neg_cats") or []) if float(c.get("ratio") or 0) > 0 and c.get("anchors")]
+        rep["n"] = {}
         for d in sorted(q):
             n = int(q[d][1] or 0)
             if not n:
                 continue
-            r = await compose(db, label_names=[target], dog_ids=[did], pad_sec=d, per_group=n, max_total=n,
-                              mode="negative", anchor_names=plan.get("anchor_names") or None, seed=seed, **common)
-            for p in r["picks"]:
-                p["cell"] = {"dur": d, "kind": "无", "part": None}
-                taken[p["sample_id"]].append((p["start_ms"], p["end_ms"]))
-                rep["q"][str(d)][1] += 1
-            picks += r["picks"]
+            if neg_cats:
+                parts = split_by_ratio(n, [float(c["ratio"]) for c in neg_cats])
+                jobs = [(c["name"], c["anchors"], k) for c, k in zip(neg_cats, parts) if k > 0]
+            else:
+                jobs = [(None, plan.get("anchor_names") or None, n)]
+            rep["n"][str(d)] = {}
+            for cat, anchors, k in jobs:
+                r = await compose(db, label_names=[target], dog_ids=[did], pad_sec=d, per_group=k, max_total=k,
+                                  mode="negative", anchor_names=anchors, seed=seed, **common)
+                for p in r["picks"]:
+                    p["cell"] = {"dur": d, "kind": "无", "part": None, "cat": cat}
+                    taken[p["sample_id"]].append((p["start_ms"], p["end_ms"]))
+                    rep["q"][str(d)][1] += 1
+                    if cat:
+                        rep["n"][str(d)][cat] = rep["n"][str(d)].get(cat, 0) + 1
+                picks += r["picks"]
         report[str(did)] = rep
     for w in cache.get("_warn", []):
         if w not in warnings:
