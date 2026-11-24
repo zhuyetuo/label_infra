@@ -5,7 +5,7 @@
  * 「检查够不够」按这份配比在真实数据里试挑一遍（不写库）；「生成」写进测试集。
  */
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { Button, Checkbox, Collapse, DatePicker, Input, InputNumber, Popconfirm, Popover, Segmented, Select, Space, Spin, Table, Tooltip, TreeSelect, message, theme } from "antd";
+import { Button, Collapse, DatePicker, Input, InputNumber, Popconfirm, Popover, Segmented, Select, Space, Spin, Tooltip, TreeSelect, message, theme } from "antd";
 import { CloseOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -283,8 +283,8 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
     const t = segs.reduce((a, s) => a + s.count, 0);
     let acc = 0;
     return (
-      <div style={{ position: "relative", width: 128, height: 128, flex: "none" }}>
-        <svg viewBox="0 0 120 120" width={128} height={128} style={{ transform: "rotate(-90deg)" }}>
+      <div style={{ position: "relative", width: 108, height: 108, flex: "none" }}>
+        <svg viewBox="0 0 120 120" width={108} height={108} style={{ transform: "rotate(-90deg)" }}>
           <circle cx={60} cy={60} r={R} fill="none" stroke={token.colorFillTertiary} strokeWidth={16} />
           {t > 0 && segs.map((s) => {
             const len = (s.count / t) * C;
@@ -310,15 +310,15 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
     const tgtSum = segs.reduce((a, s) => a + (s.onTarget ? s.target ?? 0 : 0), 0);
     const hasT = segs.some((s) => s.onTarget);
     return (
-      <div style={card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <div style={{ ...card, display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>
             {hint ? <Tooltip title={hint}><span style={{ borderBottom: `1px dashed ${muted}` }}>{title}</span></Tooltip> : title}
           </span>
           {extra}
         </div>
-        <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-          {donut(segs, <><b style={{ fontSize: 22, lineHeight: 1 }}>{t}</b><span style={{ fontSize: 11, color: muted }}>段</span></>)}
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flex: 1 }}>
+          {donut(segs, <><b style={{ fontSize: 20, lineHeight: 1 }}>{t}</b><span style={{ fontSize: 11, color: muted }}>段</span></>)}
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
             {segs.map((s) => {
               const act = t ? (s.count / t) * 100 : 0;
@@ -328,45 +328,111 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
                 <div key={s.key}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
                     <i style={{ width: 10, height: 10, borderRadius: 2, background: s.color, flex: "none" }} />
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={typeof s.label === "string" || (s.label as { type?: unknown })?.type === "b"
+                      ? { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+                      : { flex: 1, minWidth: "fit-content", display: "flex", alignItems: "center" }}>
                       {s.tip ? <Tooltip title={s.tip}>{s.label}</Tooltip> : s.label}
                     </span>
-                    <b style={{ fontSize: 15 }}>{s.count}</b>
+                    <b style={{ fontSize: 15, flex: "none" }}>{s.count}</b>
                     <Tooltip title={off ? `目标 ${want!.toFixed(0)}%，受别的维度或可用数据限制，实际 ${act.toFixed(0)}%` : "实际占比"}>
-                      <span style={{ width: 36, textAlign: "right", fontSize: 12, color: off ? token.colorWarning : muted }}>{act.toFixed(0)}%</span>
+                      <span style={{ width: 34, textAlign: "right", fontSize: 12, color: off ? token.colorWarning : muted, flex: "none" }}>{act.toFixed(0)}%</span>
                     </Tooltip>
                     {s.onTarget && (
                       <Tooltip title="目标 %：改了圆环立刻变">
-                        <InputNumber size="small" min={0} max={100} value={s.target ?? 0} disabled={frozen} style={{ width: 66 }}
-                          addonAfter={null} suffix="%" onChange={(v) => s.onTarget!(Number(v ?? 0))} />
+                        <InputNumber size="small" min={0} max={100} value={s.target ?? 0} disabled={frozen}
+                          style={{ width: 88, flex: "none" }} addonAfter="%"
+                          onChange={(v) => s.onTarget!(Number(v ?? 0))} />
                       </Tooltip>
                     )}
                     <Got want={s.count} have={s.got} />
-                    {s.onRemove && !frozen && <CloseOutlined style={{ fontSize: 10, color: muted, cursor: "pointer" }} onClick={s.onRemove} />}
+                    {s.onRemove && !frozen && <CloseOutlined style={{ fontSize: 10, color: muted, cursor: "pointer", flex: "none" }} onClick={s.onRemove} />}
                   </div>
                   {s.empty && <div style={{ fontSize: 12, color: token.colorError, marginLeft: 16 }}>{s.empty}</div>}
-                  {s.sub && <div style={{ fontSize: 12, color: muted, marginLeft: 16 }}>{s.sub}</div>}
+                  {s.sub && <div style={{ fontSize: 12, color: muted, marginLeft: 16, lineHeight: 1.4 }}>{s.sub}</div>}
                 </div>
               );
             })}
-            {hasT && tgtSum !== 100 && (
-              <div style={{ fontSize: 12, color: token.colorWarning }}>目标合计 {tgtSum}%，按比例换算</div>
-            )}
             {foot}
           </div>
         </div>
+        {hasT && (
+          <div style={{ fontSize: 12, color: token.colorWarning, marginTop: 8, minHeight: 18, textAlign: "right",
+            visibility: tgtSum !== 100 ? "visible" : "hidden" }}>
+            目标合计 {tgtSum}%，按比例换算
+          </div>
+        )}
       </div>
     );
   };
 
-  const anchorEditor = (j: number, anchors: string[]) => (
-    <Popover trigger="click" content={
-      <TreeSelect size="small" style={{ width: 260 }} treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} maxTagCount={4}
-        disabled={frozen} treeData={otherTree} value={anchors}
-        onChange={(v) => update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).map((x, i) => (i === j ? { ...x, anchors: v as string[] } : x)) }))} />}>
-      <span style={{ cursor: "pointer" }}>以 {anchors.join(" / ") || "（未选）"} 为中心 {!frozen && <EditOutlined style={{ fontSize: 11 }} />}</span>
-    </Popover>
-  );
+  type NegCat = { name: string; anchors: string[]; ratio: number; anchor_ratios?: Record<string, number> | null };
+  /** 分类内各中心动作的比例：没填过的均分 */
+  const anchorPct = (cat: NegCat, a: string) => cat.anchor_ratios?.[a] ?? Math.round(100 / Math.max(1, cat.anchors.length));
+  const setCat = (j: number, fn: (c: NegCat) => NegCat) =>
+    update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).map((x, i) => (i === j ? fn(x as NegCat) : x)) }));
+  /** 分类内各动作占比：一根堆叠条，块里写「舔 10」，同一分类颜色深浅区分 */
+  const anchorBar = (cat: NegCat, count: number, color: string) => {
+    const ws = cat.anchors.map((a) => anchorPct(cat, a));
+    const sum = ws.reduce((a, b) => a + b, 0);
+    const ns = splitByRatio(count, ws);
+    return (
+      <div style={{ flex: 1, minWidth: 0, display: "flex", height: 18, borderRadius: 4, overflow: "hidden", background: token.colorFillQuaternary }}>
+        {cat.anchors.map((a, i) => ws[i] > 0 && (
+          <Tooltip key={a} title={`${a}：${sum ? Math.round((ws[i] / sum) * 100) : 0}% · ${ns[i]} 段`}>
+            <div style={{ flex: ws[i], minWidth: 0, background: color, opacity: 1 - (i * 0.55) / Math.max(1, cat.anchors.length - 1),
+              color: "#fff", fontSize: 11, lineHeight: "18px", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden",
+              textOverflow: "ellipsis", padding: "0 3px", borderRight: i < cat.anchors.length - 1 ? `1px solid ${token.colorBgContainer}` : undefined }}>
+              {a} {ns[i]}
+            </div>
+          </Tooltip>
+        ))}
+      </div>
+    );
+  };
+  const anchorEditor = (j: number, cat: NegCat, count: number, color: string) => {
+    const ws = cat.anchors.map((a) => anchorPct(cat, a));
+    const sum = ws.reduce((a, b) => a + b, 0);
+    const ns = splitByRatio(count, ws);
+    return (
+      <Popover trigger="click" title="编辑分类：类别和各自比例" content={
+        <div style={{ width: 340, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Input size="small" placeholder="分类名称" value={cat.name} disabled={frozen} style={{ flex: 1 }}
+              onChange={(e) => setCat(j, (c) => ({ ...c, name: e.target.value }))} />
+            <InputNumber size="small" min={0} max={100} value={cat.ratio} disabled={frozen} addonAfter="%" style={{ width: 96, flex: "none" }}
+              onChange={(v) => setCat(j, (c) => ({ ...c, ratio: Number(v ?? 0) }))} />
+          </div>
+          <div style={{ fontSize: 12, color: muted }}>这一类 {count} 段，按下面的比例分给各个动作（某个动作不够时用同类别的动作补）</div>
+          {cat.anchors.length > 0 && <div style={{ display: "flex" }}>{anchorBar(cat, count, color)}</div>}
+          {cat.anchors.map((a, i) => (
+            <div key={a} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>{a}</span>
+              <b style={{ width: 32, textAlign: "right" }}>{ns[i]}</b>
+              <InputNumber size="small" min={0} max={100} value={ws[i]} disabled={frozen} addonAfter="%" style={{ width: 96, flex: "none" }}
+                onChange={(v) => setCat(j, (c) => ({ ...c, anchor_ratios: { ...Object.fromEntries(c.anchors.map((x) => [x, anchorPct(c, x)])), [a]: Number(v ?? 0) } }))} />
+              {!frozen && <CloseOutlined style={{ fontSize: 10, color: muted, cursor: "pointer" }}
+                onClick={() => setCat(j, (c) => ({ ...c, anchors: c.anchors.filter((x) => x !== a) }))} />}
+            </div>
+          ))}
+          {cat.anchors.length > 1 && sum !== 100 && (
+            <div style={{ fontSize: 12, color: token.colorWarning }}>合计 {sum}%，按比例换算</div>
+          )}
+          <TreeSelect size="small" style={{ width: "100%" }} treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} maxTagCount={0}
+            maxTagPlaceholder={() => <span><PlusOutlined /> 增减类别（已选 {cat.anchors.length}）</span>}
+            disabled={frozen} treeData={otherTree} value={cat.anchors} placeholder="选择包含的动作类别"
+            onChange={(v) => setCat(j, (c) => {
+              const anchors = v as string[];
+              const keep = Object.fromEntries(anchors.filter((a) => c.anchor_ratios?.[a] != null).map((a) => [a, c.anchor_ratios![a]]));
+              return { ...c, anchors, anchor_ratios: Object.keys(keep).length ? keep : null };
+            })} />
+        </div>}>
+        <div style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+          {cat.anchors.length ? anchorBar(cat, count, color) : <span>（未选类别）</span>}
+          {!frozen && <EditOutlined style={{ fontSize: 11, flex: "none" }} />}
+        </div>
+      </Popover>
+    );
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -428,7 +494,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       )}
 
       {/* 六个圆环 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))", gap: 14 }}>
         {donutCard({
           title: "场所", segs: SITE_ORDER.map((s) => ({
             key: s, label: SITE_SHORT[s], count: bySite[s] ?? 0, color: SITE_COLORS[s], target: alloc.site?.[s] ?? 0,
@@ -452,9 +518,10 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             label: (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
                 {/* 分钟数输完（回车 / 点别处）才生效 */}
-                <InputNumber key={`m${d}`} size="small" min={0.5} max={60} defaultValue={d / 60} disabled={frozen} style={{ width: 54 }}
+                <InputNumber key={`m${d}`} size="small" min={0.5} max={60} defaultValue={d / 60} disabled={frozen} style={{ width: 104 }}
+                  addonAfter="分钟"
                   onPressEnter={(e) => changeDur(d, Number((e.target as HTMLInputElement).value))}
-                  onBlur={(e) => changeDur(d, Number(e.target.value))} />分钟
+                  onBlur={(e) => changeDur(d, Number(e.target.value))} />
               </span>),
             onTarget: (v) => setAlloc({ dur: { ...(alloc.dur ?? {}), [String(d)]: v } }),
             onRemove: durs.length > 1 ? () => update((p) => ({ ...p, durations: p.durations.filter((x) => x !== d) })) : undefined,
@@ -505,7 +572,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             count: negByCat[j], color: NEG_COLORS[j % NEG_COLORS.length], target: c.ratio,
             onTarget: (v) => update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).map((x, i) => (i === j ? { ...x, ratio: v } : x)) })),
             onRemove: () => update((p) => ({ ...p, neg_cats: (p.neg_cats ?? []).filter((_, i) => i !== j) })),
-            got: gotCat(c.name), sub: anchorEditor(j, c.anchors),
+            got: gotCat(c.name), sub: anchorEditor(j, c, negByCat[j], NEG_COLORS[j % NEG_COLORS.length]),
           })) : [{ key: "all", label: "不分类", count: negTotal, color: NEG_BLUE }],
           extra: !frozen && (
             <Popover trigger="click" content={<Space direction="vertical">
@@ -521,29 +588,80 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
         })}
       </div>
 
-      {/* 按狗明细（可展开） */}
+      {/* 按狗明细（可展开）：每只狗一个小块——名字 + 段数 + 一根细条（有 / 无 占比）；细节放悬停里，点一下去掉 / 纳入 */}
       <Collapse size="small" items={[{
         key: "dogs",
         label: <span>按狗明细 · {derived.length} 只狗分到了段数{excluded.size ? ` · 去掉了 ${excluded.size} 只` : ""}</span>,
-        children: (
-          <Table size="small" rowKey="id" pagination={false} scroll={{ x: true }}
-            dataSource={allDogs.map((d) => ({ id: d.id, d, x: derived.find((x) => x.dog_id === d.id) }))}
-            columns={[
-              { title: "纳入", width: 56, render: (_, r) => <Checkbox checked={!excluded.has(r.id)} disabled={frozen}
-                onChange={(e) => setAlloc({ exclude: e.target.checked ? (alloc.exclude ?? []).filter((i) => i !== r.id) : [...(alloc.exclude ?? []), r.id] })} /> },
-              { title: "狗", render: (_, r) => <span>{r.d.name}<span style={{ color: muted, fontSize: 12 }}> {SITE_SHORT[r.d.site ?? ""]} · {r.d.size ?? "?"}型</span></span> },
-              { title: "可用", render: (_, r) => { const a = availOf(r.id); return <span style={{ color: a ? undefined : token.colorTextQuaternary }}>{a}</span>; } },
-              ...durs.flatMap((d) => ([0, 1] as const).map((k) => ({
-                title: `${durLabel(d)}·${k === 0 ? "有" : "无"}`, key: `${d}-${k}`,
-                render: (_: unknown, r: { id: number; x?: PlanDog }) => {
-                  const want = r.x ? qOf(r.x, d)[k] : 0, have = result ? rep[String(r.id)]?.q?.[String(d)]?.[k] ?? 0 : null;
-                  return want ? <span>{want}{have != null && have < want && <span style={{ color: token.colorError, fontSize: 12 }}> 挑到{have}</span>}</span> : <span style={{ color: token.colorTextQuaternary }}>-</span>;
-                },
-              }))),
-              ...plan.parts.map((k) => ({ title: k.replace(`${plan.target}-`, ""), key: k, render: (_: unknown, r: { x?: PlanDog }) => r.x?.p[k] || "-" })),
-              { title: "合计", render: (_, r) => <b>{r.x ? dogSum(r.x) : 0}</b> },
-            ]} />
-        ),
+        children: (() => {
+          const rows = allDogs.map((d) => ({ d, x: derived.find((x) => x.dog_id === d.id) }));
+          const maxSum = Math.max(1, ...rows.map((r) => (r.x ? dogSum(r.x) : 0)));
+          const toggle = (id: number) => !frozen &&
+            setAlloc({ exclude: excluded.has(id) ? (alloc.exclude ?? []).filter((i) => i !== id) : [...(alloc.exclude ?? []), id] });
+          const dot = (c: string) => <i style={{ width: 8, height: 8, borderRadius: 4, background: c, display: "inline-block" }} />;
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", gap: 14, fontSize: 12, color: muted }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>{dot(accent)}有{plan.target}</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>{dot(NEG_BLUE)}无{plan.target}</span>
+                <span style={{ color: token.colorTextQuaternary }}>点狗可去掉 / 纳入</span>
+              </div>
+              {SITE_ORDER.map((site) => {
+                const rs = rows.filter((r) => r.d.site === site);
+                if (!rs.length) return null;
+                const siteSum = rs.reduce((a, r) => a + (r.x ? dogSum(r.x) : 0), 0);
+                return (
+                  <div key={site}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 13, marginBottom: 6 }}>
+                      <b style={{ color: SITE_COLORS[site] }}>{SITE_SHORT[site]}</b>
+                      <span style={{ color: muted }}>{siteSum}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 6 }}>
+                      {rs.map(({ d, x }) => {
+                        const on = !excluded.has(d.id);
+                        const sum = x ? dogSum(x) : 0;
+                        const pos = x ? durs.reduce((a, dd) => a + qOf(x, dd)[0], 0) : 0;
+                        const r = rep[String(d.id)];
+                        const lack = result && x ? durs.some((dd) => ([0, 1] as const).some((k) => (r?.q?.[String(dd)]?.[k] ?? 0) < qOf(x, dd)[k])) : false;
+                        const tip = (
+                          <div style={{ fontSize: 12 }}>
+                            <div>{d.name} · {d.size ?? "?"}型{d.breed ? ` · ${d.breed}` : ""}</div>
+                            <div>可用 {availOf(d.id)} 段</div>
+                            {x && durs.map((dd) => (
+                              <div key={dd}>{durLabel(dd)}：有 {qOf(x, dd)[0]} / 无 {qOf(x, dd)[1]}
+                                {result && ` （挑到 ${r?.q?.[String(dd)]?.[0] ?? 0} / ${r?.q?.[String(dd)]?.[1] ?? 0}）`}</div>
+                            ))}
+                            {x && plan.parts.some((k) => x.p[k]) && <div>部位：{plan.parts.filter((k) => x.p[k]).map((k) => `${k.replace(`${plan.target}-`, "")} ${x.p[k]}`).join(" · ")}</div>}
+                            <div style={{ opacity: 0.6, marginTop: 2 }}>{on ? "点一下去掉" : "点一下纳入"}</div>
+                          </div>
+                        );
+                        return (
+                          <Tooltip key={d.id} title={tip}>
+                            <div onClick={() => toggle(d.id)} style={{ cursor: frozen ? "default" : "pointer", padding: "6px 8px", borderRadius: 6,
+                              background: token.colorFillQuaternary, opacity: on ? (sum ? 1 : 0.45) : 0.25,
+                              outline: lack ? `1px solid ${token.colorError}` : undefined,
+                              textDecoration: on ? undefined : "line-through" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{d.name}</span>
+                                <span style={{ fontSize: 11, color: SIZE_COLORS[d.size ?? ""] ?? muted }}>{d.size}</span>
+                                <b style={{ fontSize: 15, minWidth: 18, textAlign: "right" }}>{sum || "–"}</b>
+                              </div>
+                              <div style={{ height: 4, marginTop: 5, borderRadius: 2, background: token.colorFillTertiary, overflow: "hidden" }}>
+                                <div style={{ width: `${(sum / maxSum) * 100}%`, height: "100%", display: "flex" }}>
+                                  <div style={{ flex: pos, background: accent }} />
+                                  <div style={{ flex: sum - pos, background: NEG_BLUE }} />
+                                </div>
+                              </div>
+                            </div>
+                          </Tooltip>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })(),
       }]} />
     </div>
   );

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date, datetime
 from typing import Literal
 
@@ -13,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
+from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+from app.models.audit_log import AuditLog
 from app.models.model_test import ModelTestItem, ModelTestSet
 from app.models.model_version import ModelTrainStatus, ModelVersion
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.envelope import ok
 from app.services import model_test_service as svc
@@ -82,6 +85,8 @@ class NegCatIn(BaseModel):
     name: str
     anchors: list[str]
     ratio: float = Field(default=1, ge=0)
+    # 分类内各中心动作的比例（如 舔 40 / 啃 20 / 蹭 20 / 甩头 20）；不填 = 不分，几类混着挑
+    anchor_ratios: dict[str, float] | None = None
 
 
 class PlanIn(BaseModel):
@@ -204,6 +209,7 @@ async def get_items(set_id: int, db: AsyncSession = Depends(get_db)):
 @router.delete("/sets/{set_id}")
 async def delete_set(set_id: int, db: AsyncSession = Depends(get_db)):
     """删测试集：只删测试集和它的条目，任务、标注、疑似片段都不动。删了以后这些窗口不再挡训练导出"""
+    from app.services.model_eval_service import remove_test_set_run
     s = await _set_or_404(db, set_id)
     items = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id))).scalars().all()
     for it in items:
@@ -211,6 +217,7 @@ async def delete_set(set_id: int, db: AsyncSession = Depends(get_db)):
     await db.flush()
     await db.delete(s)
     await db.commit()
+    await remove_test_set_run(db, set_id)
     return ok({"deleted_items": len(items)})
 
 
@@ -350,6 +357,21 @@ async def check_item(item_id: int, body: CheckIn, db: AsyncSession = Depends(get
     return ok({"checked": body.checked})
 
 
+@router.post("/sets/{set_id}/check-all")
+async def check_all_items(set_id: int, body: CheckIn, db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """一键全部核对通过 / 取消全部核对（只改测试集核对状态，不动原标注任务状态）"""
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，核对状态不能再改")
+    items = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id))).scalars().all()
+    now = datetime.now()
+    for it in items:
+        it.checked_by, it.checked_at = (user.id, now) if body.checked else (None, None)
+    await db.commit()
+    return ok({"updated": len(items), "checked": body.checked})
+
+
 @router.get("/task-segments")
 async def get_task_segments(task_id: int, db: AsyncSession = Depends(get_db)):
     """挑事件：任务当前轮的标注片段"""
@@ -369,6 +391,105 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(it)
     await db.commit()
     return ok({"deleted": 1})
+
+
+class PromoteIn(BaseModel):
+    # 如果打开前原任务本身是 APPROVED、管理员点「继续编辑」临时解锁修改，完成后恢复回 APPROVED
+    restore_approved: bool = False
+
+
+@router.post("/items/{item_id}/promote-to-pool")
+async def promote_item_to_pool(
+    item_id: int,
+    body: PromoteIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """纠偏完成后：将本测试窗口内标注视为人工审核通过并直接入数据池，同时从当前测试集剥离"""
+    it = await db.get(ModelTestItem, item_id)
+    if it is None:
+        raise HTTPException(404, "测试集片段不存在")
+    s = await _set_or_404(db, it.set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，无法剥离片段；请先复制成新版本再操作")
+
+    task = await db.get(Task, it.task_id)
+    now = datetime.now()
+    segs: list[AnnotationLabelItem] = []
+    if task is not None:
+        rec = (await db.execute(
+            select(AnnotationRecord).where(
+                AnnotationRecord.task_id == task.id,
+                AnnotationRecord.round_no == task.round_no,
+            )
+        )).scalar_one_or_none()
+        if rec is not None:
+            q = select(AnnotationLabelItem).where(
+                AnnotationLabelItem.annotation_record_id == rec.id,
+                AnnotationLabelItem.uncertain.is_(False),
+            )
+            if it.start_ms is not None and it.end_ms is not None:
+                q = q.where(
+                    AnnotationLabelItem.start_time_ms < it.end_ms,
+                    AnnotationLabelItem.end_time_ms > it.start_ms,
+                )
+            segs = list((await db.execute(q)).scalars().all())
+            for seg in segs:
+                seg.seg_status = "approved"
+                seg.seg_reviewed_by = user.id
+                seg.seg_reviewed_at = now
+                seg.review_note = seg.review_flag_by = seg.review_flag_at = None
+                seg.seg_claimed_by = seg.seg_claim_expires_at = None
+                if seg.source_type == LabelItemSource.ai_generated and not seg.is_modified:
+                    seg.ai_confirmed = True
+                seg.pool_state = "in"
+                seg.pool_at = now
+                seg.pool_review = "in"
+                seg.pool_review_by = user.id
+                seg.pool_review_at = now
+                seg.touched_at = now
+                seg.touched_by = user.id
+        if body.restore_approved and task.status == TaskStatus.IN_PROGRESS:
+            task.status = TaskStatus.APPROVED
+            task.locked_by = None
+            task.lock_expires_at = None
+
+    sample_id, task_id, start_ms, end_ms, set_id = it.sample_id, it.task_id, it.start_ms, it.end_ms, it.set_id
+    await db.delete(it)
+    await db.flush()
+
+    # 检查其他测试集是否仍包含同一/重叠时段（训练导出会排除所有测试集的窗口，需如实告知用户）
+    other_rows = (await db.execute(
+        select(ModelTestSet.name, ModelTestItem.start_ms, ModelTestItem.end_ms)
+        .join(ModelTestSet, ModelTestSet.id == ModelTestItem.set_id)
+        .where(ModelTestItem.sample_id == sample_id, ModelTestItem.set_id != set_id)
+    )).all()
+    still_in_other_sets: list[str] = []
+    for sname, os_ms, oe_ms in other_rows:
+        overlaps = (
+            start_ms is None or end_ms is None or os_ms is None or oe_ms is None
+            or (os_ms < end_ms and oe_ms > start_ms)
+        )
+        if overlaps and sname not in still_in_other_sets:
+            still_in_other_sets.append(sname)
+
+    db.add(AuditLog(
+        user_id=user.id,
+        action="model_test.promote_to_pool",
+        target_type="model_test_set",
+        target_id=set_id,
+        detail=json.dumps({
+            "item_id": item_id,
+            "task_id": task_id,
+            "sample_id": sample_id,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "n_pooled": len(segs),
+            "restore_approved": body.restore_approved,
+        }, ensure_ascii=False),
+    ))
+    await db.commit()
+    return ok({"n_pooled": len(segs), "removed": 1, "still_in_other_sets": still_in_other_sets})
 
 
 @router.get("/sets/{set_id}/seen")

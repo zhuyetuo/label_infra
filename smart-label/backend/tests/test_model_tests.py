@@ -13,8 +13,9 @@ from app.api.v1 import data_pool as pool_api
 from app.api.v1 import model_tests as api
 from app.api.v1 import segment_review as seg_api
 from app.models.sample import Sample
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.services import model_test_service as mts
+from app.services import task_service
 from app.services import training_export_service as te
 
 from tests.test_segment_review import _world
@@ -136,3 +137,55 @@ def test_模型见过没见过按训练数据集算(tmp_path, monkeypatch):
     (d / "merged_tmp.json").write_text(json.dumps([{"id": 1, "data": {"sample_code": "s1"}}]), encoding="utf-8")
     assert mts.dataset_sample_codes("pool_a") == frozenset({"s1"})
     assert mts.dataset_sample_codes("pool_b") is None
+
+
+def test_测试集纠偏审核入池并剥离(db, run, tmp_path, monkeypatch):
+    w = _world(db, run)
+    _prep_export(db, run, tmp_path, monkeypatch, w)
+    # _prep_export 会整项目入池；把 items[1] 还原成「未审核且未入池」，验证纠偏后的入池与剥离效果
+    w.items[1].pool_state = None
+    w.items[1].pool_at = None
+    w.items[1].pool_review = None
+    # 模拟原任务本是已通过，管理员通过「继续编辑」临时解锁修改
+    w.t.status = TaskStatus.APPROVED
+    run(db.commit())
+    run(task_service.edit_again(db, w.t.id, w.admin))
+    assert w.t.status == TaskStatus.IN_PROGRESS and w.t.locked_by == w.admin.id
+
+    s = run(api.create_set(api.SetIn(name="纠偏测试集"), db, w.admin))["data"]
+    run(api.add_items(s["id"], api.ItemsIn(items=[
+        api.ItemIn(task_id=w.t.id, start_ms=10000, end_ms=15000),
+    ]), db, w.admin))
+    item_id = run(api.get_items(s["id"], db))["data"]["items"][0]["id"]
+
+    # 剥离并入池前：items[1] 尚未审核入池，且该测试窗口(±60s余量)会被训练导出排除
+    assert w.items[1].seg_status is None and w.items[1].pool_state is None
+    out_before = run(te.export_dataset(db, "before_promote", project_ids=[w.p.id], scope="pool", dry_run=True))
+    assert out_before["n_test_holed"] == 1 and out_before["n_segments"] == 0
+
+    res = run(api.promote_item_to_pool(item_id, api.PromoteIn(restore_approved=True), db, w.admin))["data"]
+    assert res["n_pooled"] == 1 and res["removed"] == 1 and res["still_in_other_sets"] == []
+
+    # 窗口内片段已审核通过并入数据池；测试集里已剥离；原任务恢复 APPROVED 且清锁
+    run(db.refresh(w.items[1]))
+    run(db.refresh(w.t))
+    assert w.items[1].seg_status == "approved"
+    assert w.items[1].pool_state == "in"
+    assert w.items[1].pool_review == "in"
+    assert w.items[1].seg_reviewed_by == w.admin.id
+    assert w.t.status == TaskStatus.APPROVED and w.t.locked_by is None
+    assert run(api.get_items(s["id"], db))["data"]["items"] == []
+
+    # 训练导出不再被该测试窗口挖洞，且能导出刚刚入池的 items[1]
+    out = run(te.export_dataset(db, "after_promote", project_ids=[w.p.id], scope="pool", dry_run=True))
+    assert out["n_test_holed"] == 0 and out["n_segments"] >= 4
+
+    # 冻结后的测试集不能剥离
+    run(api.add_items(s["id"], api.ItemsIn(items=[
+        api.ItemIn(task_id=w.t.id, start_ms=20000, end_ms=25000),
+    ]), db, w.admin))
+    frozen_item_id = run(api.get_items(s["id"], db))["data"]["items"][0]["id"]
+    run(api.freeze_set(s["id"], db))
+    with pytest.raises(HTTPException) as exc:
+        run(api.promote_item_to_pool(frozen_item_id, api.PromoteIn(restore_approved=False), db, w.admin))
+    assert exc.value.status_code == 400

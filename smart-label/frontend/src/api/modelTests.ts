@@ -87,6 +87,13 @@ export const composeApply = (setId: number, body: ComposeBody) =>
   request.post<never, { added: number; stats: ComposeStats; warnings: string[] }>(`/model-tests/sets/${setId}/compose`, body, { timeout: 300_000 });
 export const checkTestItem = (itemId: number, checked: boolean) =>
   request.post<never, { checked: boolean }>(`/model-tests/items/${itemId}/check`, { checked });
+export const checkAllTestItems = (setId: number, checked: boolean) =>
+  request.post<never, { updated: number; checked: boolean }>(`/model-tests/sets/${setId}/check-all`, { checked });
+export const promoteTestItemToPool = (itemId: number, restoreApproved = false) =>
+  request.post<never, { n_pooled: number; removed: number; still_in_other_sets: string[] }>(
+    `/model-tests/items/${itemId}/promote-to-pool`,
+    { restore_approved: restoreApproved },
+  );
 
 export interface Coverage {
   n_items: number;
@@ -137,7 +144,7 @@ export interface Plan {
   parts: string[];
   anchor_names?: string[] | null;
   /** 「无这类」的分类：以哪些片段为中心、占多少比例（每只狗每种时长的「无」按比例摊） */
-  neg_cats?: { name: string; anchors: string[]; ratio: number }[] | null;
+  neg_cats?: { name: string; anchors: string[]; ratio: number; anchor_ratios?: Record<string, number> | null }[] | null;
   /** 按比例自动配用的比例（只是记下来，下次打开还在） */
   alloc?: {
     site?: Record<string, number>; dur?: Record<string, number>; pos?: number; neg?: number;

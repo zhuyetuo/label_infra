@@ -598,6 +598,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         markProgrammatic();
         for (const o of others()) o.playbackRate = self.playbackRate;
         setSpeed(self.playbackRate);
+        bus.reportSpeed(self.playbackRate);
       };
 
       self.addEventListener("play", onPlay);
@@ -973,6 +974,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   const handleSpeedChange = (rate: number) => {
     setSpeed(rate);
+    bus.reportSpeed(rate);
     markProgrammatic();
     const wasPlaying = refs.current.some((v) => v && !v.paused);
     for (const v of refs.current) {
@@ -1071,14 +1073,19 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   };
   const setPlayStateRef = useRef(setPlayState);
   const stepFramesRef = useRef(stepFrames);
+  const speedChangeRef = useRef(handleSpeedChange);
   setPlayStateRef.current = setPlayState;
   stepFramesRef.current = stepFrames;
+  speedChangeRef.current = handleSpeedChange;
   useEffect(() => {
     bus.setPlayHandler((a) => setPlayStateRef.current(a));
     bus.setStepHandler((n) => stepFramesRef.current(n));
+    bus.setSpeedHandler((r) => speedChangeRef.current(r));
+    bus.reportSpeed(speedRef.current);
     return () => {
       bus.setPlayHandler(null);
       bus.setStepHandler(null);
+      bus.setSpeedHandler(null);
     };
   }, [bus]);
 
@@ -1295,7 +1302,24 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
               })}
             </div>
           )}
-          <span style={{ flex: 1, textShadow: "0 1px 2px #000" }}>{flt.locked ? "已锁定位置" : "拖这里移动 · 拖边角改大小 · 双击放回"}</span>
+          <span style={{ flex: 1, textShadow: "0 1px 2px #000", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {flt.locked ? "已锁定位置" : "拖这里移动 · 双击放回"}
+          </span>
+          <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 2 }}>
+            {[0.5, 1, 1.5, 2].map((s) => (
+              <span
+                key={s}
+                onClick={() => handleSpeedChange(s)}
+                title={`播放倍速 ${s}x`}
+                style={{
+                  cursor: "pointer", padding: "0 5px", borderRadius: 3, fontSize: 11, lineHeight: "20px",
+                  background: Math.abs(speed - s) < 0.01 ? "rgba(22,119,255,.9)" : "rgba(255,255,255,.16)", color: "#fff",
+                }}
+              >
+                {s}x
+              </span>
+            ))}
+          </div>
           <Tooltip title={flt.locked ? "解锁：可以拖动 / 改大小" : "锁住位置和大小，免得误拖"}>
             <Button size="small" type="text" style={{ color: "#fff" }} icon={flt.locked ? <LockOutlined /> : <UnlockOutlined />}
               onMouseDown={(e) => e.stopPropagation()} onClick={() => setFlt({ locked: !flt.locked })} />

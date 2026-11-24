@@ -27,7 +27,9 @@ from app.services.model_eval_service import (
     diff_versions,
     evaluate,
     eval_run_progress,
+    get_test_set_recorded_runs,
     list_runs,
+    remove_test_set_run,
     start_eval_run,
 )
 
@@ -90,6 +92,8 @@ async def _scope_ids(
 @router.get("/runs")
 async def available_runs(
     set_id: int | None = None,
+    test_set_id: int | None = None,
+    test_set_ids: str | None = None,
     date_from: _dt.date | None = None,
     date_to: _dt.date | None = None,
     # 逗号分隔："1,2,3"。前端 GET 用 join，避免 axios 把数组拼成 project_ids[]
@@ -99,15 +103,37 @@ async def available_runs(
     db: AsyncSession = Depends(get_db),
 ):
     """有哪些 (模型, 版本) 跑过、各覆盖多少样本——对比页的下拉。
-
-    给了范围就只数这批样本：下拉里显示的是「这批里跑了几个」，不是全库，
-    否则选上一个在这批里根本没跑过的版本，报告里全是漏检。"""
+    test_set_id / test_set_ids：严格只返回用户在该测试集上明确跑过并记录的模型，未操作过的一概不列。"""
+    tids = (
+        [test_set_id]
+        if test_set_id
+        else ([int(x) for x in test_set_ids.split(",") if x.strip().isdigit()] if test_set_ids else [])
+    )
+    if tids:
+        from app.models.model_test import ModelTestItem
+        ids = list((await db.execute(
+            select(ModelTestItem.sample_id).where(ModelTestItem.set_id.in_(tids)).distinct()
+        )).scalars().all())
+        recorded = await get_test_set_recorded_runs(db, tids)
+        runs = await list_runs(db, ids, allowed_keys=recorded) if (ids and recorded) else []
+        return ok({"n_scope": len(ids), "runs": runs})
     pids = [int(x) for x in project_ids.split(",") if x.strip().isdigit()] if project_ids else None
     if set_id or (date_from and date_to) or pids or all_projects:
         ids = await _scope_ids(db, set_id, None, date_from, date_to, pids, all_projects)
         runs = await list_runs(db, ids) if ids else []
         return ok({"n_scope": len(ids), "runs": runs})
     return ok({"n_scope": None, "runs": await list_runs(db)})
+
+
+@router.delete("/runs/test-set/{test_set_id}")
+async def delete_test_set_run(
+    test_set_id: int,
+    version_key: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """从某测试集的已跑记录中移除某个（或全部）模型，不再出现在对比下拉里。"""
+    remaining = await remove_test_set_run(db, test_set_id, version_key)
+    return ok({"runs": remaining})
 
 
 @router.get("/edge-models")
@@ -266,6 +292,7 @@ class CompareIn(BaseModel):
     windows: list[WindowIn] | None = None
     # 给了就只拿这些任务的标注当正确答案（模型测试集自己的任务；同一个样本在别的项目里的不算）
     task_ids: list[int] | None = None
+    include_curve: bool = True
 
 
 def _windows_of(ws: list[WindowIn] | None) -> dict[int, list[tuple[int, int]]] | None:
@@ -293,12 +320,14 @@ async def compare(body: CompareIn, db: AsyncSession = Depends(get_db)):
             conf_min=body.conf_min,
             windows=_windows_of(body.windows),
             truth_task_ids=body.task_ids,
+            include_curve=body.include_curve,
         )
     )
 
 
 class EvalRunIn(BaseModel):
     set_id: int | None = None
+    test_set_id: int | None = None
     sample_ids: list[int] | None = None
     date_from: _dt.date | None = None
     date_to: _dt.date | None = None
@@ -314,7 +343,11 @@ class EvalRunIn(BaseModel):
 
 
 @router.post("/run")
-async def run_eval(body: EvalRunIn, db: AsyncSession = Depends(get_db)):
+async def run_eval(
+    body: EvalRunIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """
     几个版本对同一批样本各跑一遍，结果按 (模型, 版本) 分开存，不写任何草稿。
 
@@ -325,9 +358,14 @@ async def run_eval(body: EvalRunIn, db: AsyncSession = Depends(get_db)):
         db, body.set_id, body.sample_ids, body.date_from, body.date_to,
         body.project_ids, body.all_projects,
     )
+    if not ids and body.test_set_id:
+        from app.models.model_test import ModelTestItem
+        ids = list((await db.execute(
+            select(ModelTestItem.sample_id).where(ModelTestItem.set_id == body.test_set_id).distinct()
+        )).scalars().all())
     if not ids:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集、日期范围或者项目")
-    started = await start_eval_run(ids, body.modes)
+    started = await start_eval_run(ids, body.modes, test_set_id=body.test_set_id, user_id=user.id)
     return ok({"started": started, "n_samples": len(ids), "modes": body.modes})
 
 

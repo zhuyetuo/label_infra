@@ -8,6 +8,8 @@ export interface EvalRunOption {
   n_samples: number;
   n_segments: number;
   last_run_at: string | null;
+  /** 该运行版本 JSON 输出里包含的类别（已按模板别名归一） */
+  classes?: string[];
 }
 
 /** 评测集：冻结下来的一批样本，每次训完模型都拿它跑，指标才可比 */
@@ -30,6 +32,44 @@ export interface PrfPoint {
   f1: number;
 }
 
+export interface WindowMetrics {
+  n_windows: number;
+  tp: number;
+  fp: number;
+  fn: number;
+  tn: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  accuracy: number;
+}
+
+export interface WindowDiag {
+  code: string;
+  title: string;
+  detail: string;
+  tip: string;
+}
+
+export interface WindowDetail {
+  sample_id: number;
+  start_ms: number;
+  end_ms: number;
+  verdict: "tp" | "tn" | "fp" | "fn";
+  truth_n: number;
+  pred_n: number;
+  event_tp: number;
+  event_fp: number;
+  event_fn: number;
+  max_conf: number | null;
+  mean_iou?: number | null;
+  max_edge_err_ms?: number | null;
+  edge_aligned?: boolean | null;
+  truth_segs: [number, number][];
+  pred_segs: [number, number, number | null][];
+  diag?: WindowDiag | null;
+}
+
 export interface VersionResult {
   model_tag: string;
   mode: string;
@@ -41,7 +81,12 @@ export interface VersionResult {
   precision: number;
   recall: number;
   f1: number;
+  window?: WindowMetrics | null;
+  window_details?: WindowDetail[] | null;
   mean_iou: number | null;
+  d_start_abs_mean_ms?: number | null;
+  d_end_abs_mean_ms?: number | null;
+  within_2s_ratio?: number | null;
   hit_conf_mean: number | null;
   fp_conf_mean: number | null;
   curve: PrfPoint[];
@@ -72,12 +117,15 @@ export interface EvalRunProgress {
   failed: number;
   current: string | null;
   detail: string[];
+  produced?: string[];
 }
 
 /** 评测范围：评测集 / 日期 / 样本 / 项目（单个、多选、全部）。
  *  项目范围不要求人工审过——两版互比不需要正确答案。 */
 export interface ScopeParams {
   set_id?: number;
+  test_set_id?: number;
+  test_set_ids?: number[];
   sample_ids?: number[];
   date_from?: string;
   date_to?: string;
@@ -89,7 +137,16 @@ export interface ScopeParams {
 export const listEvalRuns = (params: ScopeParams = {}) =>
   request.get<never, { n_scope: number | null; runs: EvalRunOption[] }>("/model-eval/runs", {
     // axios 默认把数组拼成 project_ids[]=1，FastAPI 认的是重复键 / 逗号分隔
-    params: { ...params, project_ids: params.project_ids?.join(",") },
+    params: {
+      ...params,
+      project_ids: params.project_ids?.join(","),
+      test_set_ids: params.test_set_ids?.join(","),
+    },
+  });
+
+export const deleteTestSetEvalRun = (testSetId: number, versionKey?: string) =>
+  request.delete<never, { runs: Record<string, string> }>(`/model-eval/runs/test-set/${testSetId}`, {
+    params: versionKey ? { version_key: versionKey } : {},
   });
 export const listEvalSets = () => request.get<never, EvalSet[]>("/model-eval/sets");
 export const createEvalSet = (body: {
@@ -113,6 +170,8 @@ export const compareModels = (body: {
   windows?: { sample_id: number; start_ms: number; end_ms: number }[];
   /** 只拿这些任务的标注当正确答案（模型测试集自己的任务） */
   task_ids?: number[];
+  /** 不需要阈值曲线时传 false 可跳过 20 次重复配对计算 */
+  include_curve?: boolean;
 }) => request.post<never, CompareResult>("/model-eval/compare", body, { timeout: 600_000 });
 
 export const startEvalRun = (body: ScopeParams & { modes: string[] }) =>

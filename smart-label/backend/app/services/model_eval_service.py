@@ -24,17 +24,20 @@ import asyncio
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord
+from app.models.audit_log import AuditLog
 from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
 from app.services import label_tree
+from app.services.model_label_alias import ALIASES
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
 from app.services.ai_prelabel_service import PrelabelError, _csv_start_of, parse_ts
@@ -153,6 +156,67 @@ def _read_json(relpath: str) -> dict | None:
         return None
 
 
+# 评测只需 segments 和 missing（约几 KB），丢弃约 1.8MB 的逐秒 windows/candidates，并缓存到内存避免反复读 NAS
+_JSON_CACHE: OrderedDict[tuple[str, str], dict] = OrderedDict()
+_JSON_CACHE_MAX = 3000
+_JSON_INFLIGHT: dict[tuple[str, str], asyncio.Task] = {}
+
+_CSV_START_CACHE: OrderedDict[str, datetime] = OrderedDict()
+_CSV_START_CACHE_MAX = 10000
+_CSV_INFLIGHT: dict[str, asyncio.Task] = {}
+
+
+async def _read_json_cached(relpath: str, ver_tag: str, sem: asyncio.Semaphore) -> dict | None:
+    key = (relpath, ver_tag)
+    cached = _JSON_CACHE.get(key)
+    if cached is not None:
+        _JSON_CACHE.move_to_end(key)
+        return cached
+    task = _JSON_INFLIGHT.get(key)
+    if task is None:
+        async def _load() -> dict | None:
+            async with sem:
+                raw = await asyncio.to_thread(_read_json, relpath)
+            if raw is None:
+                return None
+            slim = {"segments": raw.get("segments") or {}, "missing": raw.get("missing") or []}
+            _JSON_CACHE[key] = slim
+            _JSON_CACHE.move_to_end(key)
+            while len(_JSON_CACHE) > _JSON_CACHE_MAX:
+                _JSON_CACHE.popitem(last=False)
+            return slim
+
+        task = asyncio.create_task(_load())
+        _JSON_INFLIGHT[key] = task
+        task.add_done_callback(lambda t: _JSON_INFLIGHT.pop(key, None) if _JSON_INFLIGHT.get(key) is t else None)
+    return await asyncio.shield(task)
+
+
+async def _csv_start_cached(s: Sample, sem: asyncio.Semaphore) -> datetime:
+    if not s.imu_csv_path:
+        raise PrelabelError("该样本没有 IMU CSV，无法做 AI 预标注")
+    ckey = s.imu_csv_path
+    cached = _CSV_START_CACHE.get(ckey)
+    if cached is not None:
+        _CSV_START_CACHE.move_to_end(ckey)
+        return cached
+    task = _CSV_INFLIGHT.get(ckey)
+    if task is None:
+        async def _load_csv() -> datetime:
+            async with sem:
+                dt = await _csv_start_of(s)
+            _CSV_START_CACHE[ckey] = dt
+            _CSV_START_CACHE.move_to_end(ckey)
+            while len(_CSV_START_CACHE) > _CSV_START_CACHE_MAX:
+                _CSV_START_CACHE.popitem(last=False)
+            return dt
+
+        task = asyncio.create_task(_load_csv())
+        _CSV_INFLIGHT[ckey] = task
+        task.add_done_callback(lambda t: _CSV_INFLIGHT.pop(ckey, None) if _CSV_INFLIGHT.get(ckey) is t else None)
+    return await asyncio.shield(task)
+
+
 async def _human_by_sample(
     db: AsyncSession, sample_ids: list[int], label_names: list[str], task_ids: list[int] | None = None
 ) -> tuple[dict[int, list[Seg]], dict[int, list[tuple[int, int]]]]:
@@ -220,13 +284,13 @@ async def _run_segments(
         run = runs.get(s.id)
         if run is None:
             return
-        async with sem:
-            data = await asyncio.to_thread(_read_json, run.json_path)
+        ver_tag = str(run.updated_at or run.created_at or "")
+        data = await _read_json_cached(run.json_path, ver_tag, sem)
         if not data:
             warnings.append(f"样本 {s.sample_code} 的结果文件读不到：{run.json_path}")
             return
         try:
-            csv_start = await _csv_start_of(s)
+            csv_start = await _csv_start_cached(s, sem)
         except PrelabelError as e:
             warnings.append(f"样本 {s.sample_code}：{e}")
             return
@@ -270,26 +334,446 @@ async def _run_segments(
     return preds, missing, warnings
 
 
-async def list_runs(db: AsyncSession, sample_ids: list[int] | None = None) -> list[dict]:
-    """有哪些 (模型, 版本) 可选，各跑了多少个样本——对比页的下拉靠它。"""
+def _merge_sub_segs(segs: list[Seg]) -> list[Seg]:
+    """同一父类别下，不同细类紧贴段（如抓挠-头颈耳 + 抓挠-躯干）或重叠段合并为一段再配对。"""
+    if len(segs) < 2:
+        return segs
+    ordered = sorted(segs, key=lambda x: (x.start_ms, x.end_ms))
+    out: list[Seg] = [ordered[0]]
+    for s in ordered[1:]:
+        prev = out[-1]
+        same_label = prev.label is not None and prev.label == s.label
+        if s.start_ms < prev.end_ms or (not same_label and s.start_ms <= prev.end_ms):
+            confs = [c for c in (prev.conf, s.conf) if c is not None]
+            out[-1] = Seg(
+                prev.start_ms,
+                max(prev.end_ms, s.end_ms),
+                max(confs) if confs else None,
+                prev.label,
+            )
+        else:
+            out.append(s)
+    return out
+
+
+async def _expand_eval_names(db: AsyncSession, label: str) -> list[str]:
+    """把目标类别展开为「自身 + 老模板/模型别名 + 标签树子类别名 + 子类别别名」。"""
+    canon = ALIASES.get(label, label)
+    seed = {label, canon, *(k for k, v in ALIASES.items() if v in (label, canon))}
+    base_ids = set(
+        (
+            await db.execute(
+                select(LabelDefinition.id).where(
+                    LabelDefinition.display_name.in_(seed) | LabelDefinition.code.in_(seed)
+                )
+            )
+        ).scalars().all()
+    )
+    if base_ids:
+        all_ids = await label_tree.expand_ids(db, base_ids)
+        child_names = set(
+            (
+                await db.execute(
+                    select(LabelDefinition.display_name).where(LabelDefinition.id.in_(all_ids))
+                )
+            ).scalars().all()
+        )
+        seed |= child_names
+        seed |= {k for k, v in ALIASES.items() if v in child_names}
+    return sorted(seed)
+
+
+TEST_SET_RUN_ACTION = "model_test.eval_run"
+
+
+async def get_test_set_recorded_runs(db: AsyncSession, test_set_ids: list[int]) -> dict[str, str]:
+    """查询用户在这些测试集上明确点击跑过的模型版本集合：{ 'model_tag::mode': 'YYYY-MM-DD HH:MM:SS' }。"""
+    if not test_set_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.action == TEST_SET_RUN_ACTION,
+                AuditLog.target_type == "model_test_set",
+                AuditLog.target_id.in_(test_set_ids),
+            )
+            .order_by(AuditLog.id)
+        )
+    ).scalars().all()
+    merged: dict[str, str] = {}
+    for r in rows:
+        try:
+            d = json.loads(r.detail or "{}")
+        except ValueError:
+            continue
+        for k, ts in (d.get("runs") or {}).items():
+            if isinstance(k, str):
+                s_ts = str(ts or "")
+                if k not in merged or s_ts > merged[k]:
+                    merged[k] = s_ts
+    return merged
+
+
+async def record_test_set_runs(
+    db: AsyncSession,
+    test_set_id: int,
+    version_keys: list[str],
+    user_id: int | None = None,
+    ran_at: str | None = None,
+) -> dict[str, str]:
+    """记录某测试集跑过的模型版本（同测试集只维护一条记录，反复跑更新时间戳）。"""
+    if not version_keys:
+        return await get_test_set_recorded_runs(db, [test_set_id])
+    rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.action == TEST_SET_RUN_ACTION,
+                AuditLog.target_type == "model_test_set",
+                AuditLog.target_id == test_set_id,
+            )
+            .order_by(AuditLog.id)
+        )
+    ).scalars().all()
+    runs: dict[str, str] = {}
+    for r in rows:
+        try:
+            runs.update((json.loads(r.detail or "{}") or {}).get("runs") or {})
+        except ValueError:
+            pass
+    stamp = ran_at or datetime.now().isoformat(sep=" ", timespec="seconds")
+    for vk in version_keys:
+        if vk:
+            runs[vk] = stamp
+    if rows:
+        rows[0].detail = json.dumps({"runs": runs}, ensure_ascii=False)
+        if user_id is not None:
+            rows[0].user_id = user_id
+        for extra in rows[1:]:
+            await db.delete(extra)
+    else:
+        db.add(
+            AuditLog(
+                user_id=user_id,
+                action=TEST_SET_RUN_ACTION,
+                target_type="model_test_set",
+                target_id=test_set_id,
+                detail=json.dumps({"runs": runs}, ensure_ascii=False),
+            )
+        )
+    await db.commit()
+    return runs
+
+
+async def remove_test_set_run(
+    db: AsyncSession, test_set_id: int, version_key: str | None = None
+) -> dict[str, str]:
+    """从测试集已跑记录中移除某个（或全部）模型版本记录（不动底层推理 JSON）。"""
+    rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.action == TEST_SET_RUN_ACTION,
+                AuditLog.target_type == "model_test_set",
+                AuditLog.target_id == test_set_id,
+            )
+            .order_by(AuditLog.id)
+        )
+    ).scalars().all()
+    if not rows:
+        return {}
+    if version_key is None:
+        for r in rows:
+            await db.delete(r)
+        await db.commit()
+        return {}
+    runs: dict[str, str] = {}
+    for r in rows:
+        try:
+            runs.update((json.loads(r.detail or "{}") or {}).get("runs") or {})
+        except ValueError:
+            pass
+    runs.pop(version_key, None)
+    if not runs:
+        for r in rows:
+            await db.delete(r)
+    else:
+        rows[0].detail = json.dumps({"runs": runs}, ensure_ascii=False)
+        for extra in rows[1:]:
+            await db.delete(extra)
+    await db.commit()
+    return runs
+
+
+async def list_runs(
+    db: AsyncSession,
+    sample_ids: list[int] | None = None,
+    allowed_keys: dict[str, str] | None = None,
+) -> list[dict]:
+    """有哪些 (模型, 版本) 可选，各跑了多少个样本，以及 JSON 输出里实际有哪些类别。
+    allowed_keys 传入时只保留该字典里登记过的 'model_tag::mode'（测试集严格只看本集跑过的模型）。"""
+    if allowed_keys is not None and not allowed_keys:
+        return []
     q = select(SampleInferenceRun)
     if sample_ids:
         q = q.where(SampleInferenceRun.sample_id.in_(sample_ids))
+    if allowed_keys is not None:
+        tags = {vk.split("::", 1)[0] for vk in allowed_keys if "::" in vk}
+        if tags:
+            q = q.where(SampleInferenceRun.model_tag.in_(tags))
     rows = (await db.execute(q)).scalars().all()
     agg: dict[tuple[str, str], dict] = {}
+    sample_run: dict[tuple[str, str], SampleInferenceRun] = {}
     for r in rows:
+        vkey = f"{r.model_tag}::{r.mode}"
+        if allowed_keys is not None and vkey not in allowed_keys:
+            continue
         key = (r.model_tag, r.mode)
         cur = agg.setdefault(
             key,
             {"model_tag": r.model_tag, "mode": r.mode, "model_path": r.model_path, "n_samples": 0,
-             "n_segments": 0, "last_run_at": None},
+             "n_segments": 0, "last_run_at": None, "classes": []},
         )
         cur["n_samples"] += 1
         cur["n_segments"] += r.n_segments or 0
         ts = r.updated_at or r.created_at
         if ts and (cur["last_run_at"] is None or ts.isoformat() > cur["last_run_at"]):
             cur["last_run_at"] = ts.isoformat(sep=" ", timespec="seconds")
+            sample_run[key] = r
+        elif key not in sample_run:
+            sample_run[key] = r
+    if allowed_keys is not None:
+        for (mtag, mode), cur in agg.items():
+            rec_ts = allowed_keys.get(f"{mtag}::{mode}")
+            if rec_ts:
+                cur["last_run_at"] = rec_ts
+
+    sem = asyncio.Semaphore(16)
+
+    async def _fill_classes(key: tuple[str, str], r: SampleInferenceRun) -> None:
+        if not r.json_path:
+            return
+        ver_tag = str(r.updated_at or r.created_at or "")
+        data = await _read_json_cached(r.json_path, ver_tag, sem)
+        if not data:
+            return
+        seen: list[str] = []
+        for raw_name in (data.get("segments") or {}).keys():
+            cname = ALIASES.get(raw_name, raw_name)
+            if cname not in seen:
+                seen.append(cname)
+        agg[key]["classes"] = seen
+
+    if sample_run:
+        await asyncio.gather(*(_fill_classes(k, r) for k, r in sample_run.items()))
     return sorted(agg.values(), key=lambda x: (x["model_tag"], x["mode"]))
+
+
+_BG_LABELS = {"活动", "静止/休息", "未佩戴"}
+
+
+async def _diagnose_window_errors(
+    db: AsyncSession,
+    samples_by_id: dict[int, Sample],
+    runs: dict[int, SampleInferenceRun],
+    label: str,
+    label_names: list[str],
+    mode: str,
+    w_details: list[dict],
+    truth_task_ids: list[int] | None,
+) -> None:
+    """为误报（FP）/ 漏报（FN）窗口自动补充归因诊断（窗口类别识别错 / 置信度不足 / 后处理拦截 / 疑似人工漏标 / 相似动作混淆）。
+    只读取有错误窗口的那几个样本 JSON（上限 40 个文件），不把逐秒 windows 常驻内存缓存，兼顾速度与内存。"""
+    err_items = [d for d in w_details if d.get("verdict") in ("fp", "fn")]
+    if not err_items:
+        return
+    err_sids = sorted({d["sample_id"] for d in err_items})
+    target_set = set(label_names)
+
+    # 1) 一次 SQL 拉出错误样本上的全部非待定人工标注，用于精确核对 FP 时段人工实际标了什么
+    h_rows = await db.execute(
+        select(
+            Task.sample_id,
+            LabelDefinition.display_name,
+            AnnotationLabelItem.start_time_ms,
+            AnnotationLabelItem.end_time_ms,
+        )
+        .join(AnnotationRecord, AnnotationRecord.task_id == Task.id)
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .join(LabelDefinition, LabelDefinition.id == AnnotationLabelItem.label_id)
+        .where(
+            Task.sample_id.in_(err_sids),
+            AnnotationRecord.round_no == Task.round_no,
+            AnnotationLabelItem.uncertain.is_(False),
+            *([Task.id.in_(truth_task_ids)] if truth_task_ids is not None else [Task.status.in_(_REVIEWED)]),
+        )
+    )
+    human_all: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
+    for sid, lname, s_ms, e_ms in h_rows.all():
+        human_all[sid].append((int(s_ms), int(e_ms), ALIASES.get(lname, lname)))
+
+    # 2) 仅对有错误窗口的样本按需并发读原始 JSON 的 windows 与 candidates（上限 40 个文件）
+    err_spans_by_sid: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for d in err_items:
+        segs = d["truth_segs"] if d["verdict"] == "fn" else d["pred_segs"]
+        if segs:
+            s0 = d["start_ms"] + segs[0][0]
+            e0 = d["start_ms"] + segs[0][1]
+            err_spans_by_sid[d["sample_id"]].append((s0 - 2500, e0 + 2500))
+
+    raw_by_sid: dict[int, tuple[list[tuple[int, str, float, str | None, float]], list[tuple[int, int, str]]]] = {}
+    sem = asyncio.Semaphore(16)
+
+    async def _load_one(sid: int) -> None:
+        s = samples_by_id.get(sid)
+        run = runs.get(sid)
+        spans = err_spans_by_sid.get(sid)
+        if not s or not run or not run.json_path or not spans:
+            return
+        try:
+            csv_start = await _csv_start_cached(s, sem)
+        except PrelabelError:
+            return
+        async with sem:
+            raw = await asyncio.to_thread(_read_json, run.json_path)
+        if not raw:
+            return
+        win_list: list[tuple[int, str, float, str | None, float]] = []
+        for w in raw.get("windows") or []:
+            ts = parse_ts(w.get("ts") or w.get("start_ts"))
+            if ts is None:
+                continue
+            ms = int(round((ts - csv_start).total_seconds() * 1000))
+            if not any(lo <= ms <= hi for lo, hi in spans):
+                continue
+            probs = w.get("probs") or {}
+            t_p = max((float(probs.get(nm, 0.0)) for nm in target_set), default=0.0)
+            other_lbl: str | None = None
+            other_p = 0.0
+            for k, v in probs.items():
+                if k in target_set:
+                    continue
+                fv = float(v)
+                if fv > other_p:
+                    other_p = fv
+                    other_lbl = ALIASES.get(k, k)
+            pred_lbl = str(w.get("label") or "")
+            win_list.append((ms, pred_lbl, t_p, other_lbl, other_p))
+        cand_list: list[tuple[int, int, str]] = []
+        for c in raw.get("candidates") or []:
+            a, b = parse_ts(c.get("start_ts")), parse_ts(c.get("end_ts"))
+            if a and b and b > a:
+                ca = int(round((a - csv_start).total_seconds() * 1000))
+                cb = int(round((b - csv_start).total_seconds() * 1000))
+                if any(ca <= hi and cb >= lo for lo, hi in spans):
+                    cand_list.append((ca, cb, str(c.get("reason") or "")))
+        raw_by_sid[sid] = (win_list, cand_list)
+
+    await asyncio.gather(*(_load_one(sid) for sid in err_sids[:40]))
+
+    is_strict = "strict" in (mode or "")
+    strict_thr = 0.70 if is_strict else 0.45
+
+    for d in err_items:
+        sid = d["sample_id"]
+        verdict = d["verdict"]
+        segs = d["truth_segs"] if verdict == "fn" else d["pred_segs"]
+        if not segs:
+            continue
+        span_s = d["start_ms"] + segs[0][0]
+        span_e = d["start_ms"] + segs[0][1]
+        dur_s = max(0.0, (span_e - span_s) / 1000.0)
+        win_list, cand_list = raw_by_sid.get(sid, ([], []))
+        near_w = [w for w in win_list if span_s - 1500 <= w[0] <= span_e + 1500]
+        raw_max_p = max((w[2] for w in near_w), default=0.0)
+        hi_ps = [w[2] for w in near_w if w[2] >= 0.30]
+        raw_mean_p = (sum(hi_ps) / len(hi_ps)) if hi_ps else 0.0
+        n_pred_target = sum(1 for w in near_w if w[1] in target_set)
+
+        if verdict == "fn":
+            in_low_cand = any(r == "low_conf" and a <= span_e + 2000 and b >= span_s - 2000 for a, b, r in cand_list)
+            # 找最强的非目标预测类别
+            top_other_lbl: str | None = None
+            top_other_p = 0.0
+            for _, pred_lbl, _, o_lbl, o_p in near_w:
+                if o_lbl and o_p > top_other_p:
+                    top_other_p = o_p
+                    top_other_lbl = o_lbl
+                elif pred_lbl and pred_lbl not in target_set and top_other_lbl is None:
+                    top_other_lbl = ALIASES.get(pred_lbl, pred_lbl)
+
+            if n_pred_target >= 2 and raw_max_p >= 0.70 and raw_mean_p >= strict_thr:
+                d["diag"] = {
+                    "code": "post_filter",
+                    "title": "后处理拦截",
+                    "detail": f"模型已高置信识别（峰值 {raw_max_p:.0%} / 均值 {raw_mean_p:.0%}，{n_pred_target} 窗），但被后处理规则过滤",
+                    "tip": "调优方向：模型本身已认出，检查后处理物理门限（节律/陀螺仪/最短时长）或平滑参数",
+                }
+            elif raw_max_p >= 0.30 or in_low_cand:
+                short_note = f"（动作仅 {dur_s:.1f}s，易被滑窗稀释）" if dur_s < 2.5 else ""
+                d["diag"] = {
+                    "code": "low_conf",
+                    "title": "置信度不足 / 门槛偏严",
+                    "detail": f"模型有响应（峰值 {raw_max_p:.0%} / 均值 {raw_mean_p:.0%}，{len(hi_ps)} 窗），未达输出门槛{short_note}",
+                    "tip": "调优方向：可对比普通「稳定版v2」门槛，或扩充短/弱样本训练提升置信度",
+                }
+            elif near_w:
+                other_s = f"主要判成了「{top_other_lbl}」（峰值 {top_other_p:.0%}），" if top_other_lbl else ""
+                d["diag"] = {
+                    "code": "misclass",
+                    "title": "窗口类别识别错",
+                    "detail": f"{other_s}目标类「{label}」最高仅 {raw_max_p:.0%}",
+                    "tip": f"调优方向：模型特征区分度不足，需补充此类正样本与「{top_other_lbl or '干扰类'}」对比训练",
+                }
+            else:
+                d["diag"] = {
+                    "code": "low_conf",
+                    "title": "窗口未检出",
+                    "detail": f"该段（{dur_s:.1f}s）无逐窗口原始概率明细（端侧或精简输出）",
+                    "tip": "调优方向：看视频核对动作强弱与起止，必要时补充此类训练样本",
+                }
+        else:  # verdict == "fp"
+            seg_conf = float(segs[0][2]) if len(segs[0]) > 2 and segs[0][2] is not None else 0.0
+            peak_p = max(float(d.get("max_conf") or 0.0), seg_conf, raw_max_p)
+            ov_labels: list[str] = []
+            for hs, he, hname in human_all.get(sid, []):
+                if hs < span_e and he > span_s and hname not in target_set and hname not in ov_labels:
+                    ov_labels.append(hname)
+            specific_ov = [x for x in ov_labels if x not in _BG_LABELS]
+
+            if specific_ov:
+                ov_s = "、".join(specific_ov[:3])
+                d["diag"] = {
+                    "code": "confuse_similar",
+                    "title": "相似动作混淆",
+                    "detail": f"模型误报（峰值 {peak_p:.0%} / {dur_s:.1f}s），该时段人工实际标的是「{ov_s}」",
+                    "tip": f"调优方向：把「{ov_s}」作为困难负样本加入训练或负例挖掘",
+                }
+            elif peak_p >= 0.85 and dur_s >= 3.0 and (not ov_labels or all(x == "活动" for x in ov_labels)):
+                bg_s = "仅粗标「活动」" if ov_labels else "未标任何动作"
+                d["diag"] = {
+                    "code": "suspect_human_miss",
+                    "title": "疑似人工漏标",
+                    "detail": f"模型极高置信（峰值 {peak_p:.0%} / 持续 {dur_s:.1f}s），且该时段{bg_s}，建议优先看视频核对",
+                    "tip": "调优方向：先看视频确认；若确为人工漏标，可在工作台一键补标并「审核入池剥离测试集」",
+                }
+            elif peak_p < 0.75 or dur_s < 2.5:
+                ov_s = "、".join(ov_labels[:2]) if ov_labels else "无标注"
+                d["diag"] = {
+                    "code": "low_conf_fp",
+                    "title": "低置信 / 边界误报",
+                    "detail": f"置信度偏低或偏短（峰值 {peak_p:.0%} / {dur_s:.1f}s，原标注：{ov_s}），可由后处理阈值滤除",
+                    "tip": "调优方向：可提高段均值置信度或最短时长门槛（如使用「抓挠严格」版本）",
+                }
+            else:
+                ov_s = "、".join(ov_labels[:2]) if ov_labels else "无标注"
+                d["diag"] = {
+                    "code": "model_fp",
+                    "title": "窗口误判",
+                    "detail": f"模型高置信误判为「{label}」（峰值 {peak_p:.0%} / {dur_s:.1f}s），原标注为「{ov_s}」",
+                    "tip": "调优方向：看视频确认非目标动作后，将该类干扰动作纳入负样本训练",
+                }
 
 
 async def evaluate(
@@ -301,6 +785,7 @@ async def evaluate(
     conf_min: float = 0.0,
     windows: dict[int, list[tuple[int, int]]] | None = None,
     truth_task_ids: list[int] | None = None,
+    include_curve: bool = True,
 ) -> dict:
     """
     一批样本、若干个 (模型, 版本)，各跟人工标注比一遍。
@@ -309,7 +794,7 @@ async def evaluate(
     versions: [{"model_tag": ..., "mode": ...}, ...]
     返回每个版本的 P/R/F1、阈值曲线，以及两两之间的回归对照。
     """
-    label_names = [label]
+    label_names = await _expand_eval_names(db, label)
     warnings: list[str] = []
 
     def _empty(msg: str, n_samples: int = 0) -> dict:
@@ -383,13 +868,19 @@ async def evaluate(
             ).scalars().all()
         }
         preds, missing, warn = await _run_segments(samples, runs, label_names)
+        preds = {sid: _merge_sub_segs(v) for sid, v in preds.items()}
         if windows is not None:
             preds = {sid: clip_to_windows(v, windows.get(sid, [])) for sid, v in preds.items()}
         warnings.extend(warn)
         pred_cache[key] = preds
 
         tp = fp = fn = 0
+        wtp = wfp = wfn = wtn = 0
+        w_details: list[dict] = []
         ious: list[float] = []
+        d_start_abs: list[int] = []
+        d_end_abs: list[int] = []
+        within_2s = 0
         hits: set[tuple[int, int]] = set()
         # 阈值曲线：每个阈值下重新数一遍 TP/FP（漏检数随阈值升高而增加）
         curve_tp = [0] * len(_THRESHOLDS)
@@ -415,20 +906,77 @@ async def evaluate(
             for pi, ti, v_iou in pairs:
                 ious.append(v_iou)
                 hits.add((s.id, ti))
+                ds = abs(p_list[pi].start_ms - t_list[ti].start_ms)
+                de = abs(p_list[pi].end_ms - t_list[ti].end_ms)
+                d_start_abs.append(ds)
+                d_end_abs.append(de)
+                if ds <= 2000 and de <= 2000:
+                    within_2s += 1
                 if p_list[pi].conf is not None:
                     hit_confs.append(p_list[pi].conf)
             for pi in fps:
                 if p_list[pi].conf is not None:
                     fp_confs.append(p_list[pi].conf)
+            # 窗口级：每个测试窗口看「有/无」该类别（标注有 vs 预测有），并记录逐窗口明细供前端可视化分析
+            if windows is not None:
+                for ws, we in windows.get(s.id, []):
+                    wt = [t for t in t_list if t.start_ms < we and t.end_ms > ws]
+                    wp = [p for p in p_list if p.start_ms < we and p.end_ms > ws]
+                    if wt and wp:
+                        wtp += 1
+                        verdict = "tp"
+                    elif wp:
+                        wfp += 1
+                        verdict = "fp"
+                    elif wt:
+                        wfn += 1
+                        verdict = "fn"
+                    else:
+                        wtn += 1
+                        verdict = "tn"
+                    w_pairs, w_fps, w_fns = match(wp, wt, iou_min)
+                    confs = [p.conf for p in wp if p.conf is not None]
+                    w_ious = [v for _, _, v in w_pairs]
+                    w_errs = [
+                        max(abs(wp[pi].start_ms - wt[ti].start_ms), abs(wp[pi].end_ms - wt[ti].end_ms))
+                        for pi, ti, _ in w_pairs
+                    ]
+                    w_details.append({
+                        "sample_id": s.id,
+                        "start_ms": ws,
+                        "end_ms": we,
+                        "verdict": verdict,
+                        "truth_n": len(wt),
+                        "pred_n": len(wp),
+                        "event_tp": len(w_pairs),
+                        "event_fp": len(w_fps),
+                        "event_fn": len(w_fns),
+                        "max_conf": round(max(confs), 3) if confs else None,
+                        "mean_iou": round(sum(w_ious) / len(w_ious), 3) if w_ious else None,
+                        "max_edge_err_ms": max(w_errs) if w_errs else None,
+                        "edge_aligned": (max(w_errs) <= 2000) if w_errs else None,
+                        "truth_segs": [[max(ws, t.start_ms) - ws, min(we, t.end_ms) - ws] for t in wt],
+                        "pred_segs": [
+                            [max(ws, p.start_ms) - ws, min(we, p.end_ms) - ws, round(p.conf, 2) if p.conf is not None else None]
+                            for p in wp
+                        ],
+                    })
             # 阈值曲线：按每个阈值过滤预测后重新配对
-            for k, th in enumerate(_THRESHOLDS):
-                p_th = [p for p in p_list if p.conf is None or p.conf >= th]
-                pr, fpi, fni = match(p_th, t_list, iou_min)
-                curve_tp[k] += len(pr)
-                curve_fp[k] += len(fpi)
-                curve_fn[k] += len(fni)
+            if include_curve:
+                for k, th in enumerate(_THRESHOLDS):
+                    p_th = [p for p in p_list if p.conf is None or p.conf >= th]
+                    pr, fpi, fni = match(p_th, t_list, iou_min)
+                    curve_tp[k] += len(pr)
+                    curve_fp[k] += len(fpi)
+                    curve_fn[k] += len(fni)
+
+        if windows is not None and w_details:
+            await _diagnose_window_errors(
+                db, {s.id: s for s in samples}, runs, label, label_names, mode or "", w_details, truth_task_ids,
+            )
 
         hit_sets[key] = hits
+        w_total = wtp + wfp + wfn + wtn
         out_versions.append(
             {
                 "model_tag": model_tag,
@@ -436,7 +984,21 @@ async def evaluate(
                 "key": key,
                 "n_samples_with_result": len(runs),
                 **_prf(tp, fp, fn),
+                "window": (
+                    {
+                        "n_windows": w_total,
+                        "tn": wtn,
+                        "accuracy": round((wtp + wtn) / w_total, 4) if w_total else 0.0,
+                        **_prf(wtp, wfp, wfn),
+                    }
+                    if windows is not None
+                    else None
+                ),
+                "window_details": w_details if windows is not None else None,
                 "mean_iou": round(sum(ious) / len(ious), 4) if ious else None,
+                "d_start_abs_mean_ms": round(sum(d_start_abs) / len(d_start_abs)) if d_start_abs else None,
+                "d_end_abs_mean_ms": round(sum(d_end_abs) / len(d_end_abs)) if d_end_abs else None,
+                "within_2s_ratio": round(within_2s / len(d_start_abs), 4) if d_start_abs else None,
                 # 命中的和误报的置信度分布：误报的整体往上漂，说明"靠阈值过滤误报"
                 # 这条路变难了，阈值得重新定
                 "hit_conf_mean": round(sum(hit_confs) / len(hit_confs), 4) if hit_confs else None,
@@ -444,7 +1006,7 @@ async def evaluate(
                 "curve": [
                     {"threshold": th, **_prf(curve_tp[k], curve_fp[k], curve_fn[k])}
                     for k, th in enumerate(_THRESHOLDS)
-                ],
+                ] if include_curve else [],
             }
         )
 
@@ -764,7 +1326,7 @@ async def diff_versions(
 
 # ── 评测跑批：几个版本对同一批样本各跑一遍，只存结果不写草稿 ──────────────
 
-_eval_progress: dict = {"status": "idle", "total": 0, "done": 0, "failed": 0, "current": None, "detail": []}
+_eval_progress: dict = {"status": "idle", "total": 0, "done": 0, "failed": 0, "current": None, "detail": [], "produced": []}
 _eval_running = False
 
 
@@ -772,30 +1334,38 @@ def eval_run_progress() -> dict:
     return dict(_eval_progress)
 
 
-async def start_eval_run(sample_ids: list[int], modes: list[str]) -> bool:
+async def start_eval_run(
+    sample_ids: list[int],
+    modes: list[str],
+    test_set_id: int | None = None,
+    user_id: int | None = None,
+) -> bool:
     """
     后台把这批样本按每个版本各跑一遍。返回 False = 已经有一批在跑。
-
-    跟项目页那个「批量 AI 预标注」的区别：那个是为了给标注员铺草稿，一个任务
-    只能有一份；这个纯粹是为了攒对比数据，几个版本的结果并存，谁也不写草稿。
+    若传了 test_set_id，跑出结果后会自动登记到该测试集的已跑记录中。
     """
     global _eval_running
     if _eval_running:
         return False
     _eval_running = True
-    asyncio.create_task(_run_eval(sample_ids, modes))
+    asyncio.create_task(_run_eval(sample_ids, modes, test_set_id=test_set_id, user_id=user_id))
     return True
 
 
-async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
+async def _run_eval(
+    sample_ids: list[int],
+    modes: list[str],
+    test_set_id: int | None = None,
+    user_id: int | None = None,
+) -> None:
     global _eval_running
     from app.db.session import SessionLocal
     from app.services import algo_client, edge_client
-    from app.services.ai_prelabel_service import store_run_only
+    from app.services.ai_prelabel_service import model_tag_of, store_run_only
 
     _eval_progress.update(
         {"status": "running", "total": len(sample_ids) * len(modes), "done": 0, "failed": 0,
-         "current": None, "detail": []}
+         "current": None, "detail": [], "produced": []}
     )
     try:
         async with SessionLocal() as db:
@@ -813,10 +1383,6 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
                 _eval_progress["current"] = f"{mode} · {i + 1}~{i + len(part)} / {len(samples)}"
                 batch = [{"path": s.imu_csv_path, "sample_id": s.id} for s in part]
                 try:
-                    # "版本"可以是 algo_service 的 mode（raw/stable/viterbi），
-                    # 也可以是端侧模型（edge:<标签>）。两者在这张表里是平级的
-                    # ——都是"同一批样本、另一种算法"，对比逻辑完全一样。
-                    # 分派跟项目预标注那边共用一份，免得抄两份漏改其中一份
                     results = await edge_client.dispatch_batch(batch, mode)
                 except (algo_client.AlgoServiceError, edge_client.EdgeServiceError) as e:
                     _eval_progress["failed"] += len(part)
@@ -831,14 +1397,21 @@ async def _run_eval(sample_ids: list[int], modes: list[str]) -> None:
                         _eval_progress["detail"].append(f"{s.sample_code}［{mode}］失败：{(r or {}).get('error')}")
                         continue
                     try:
-                        # strict：入库失败要算失败。不然进度条显示成功，
-                        # 对比页却一条结果都找不到
                         await store_run_only(s, payload, strict=True)
                         _eval_progress["done"] += 1
+                        pkey = f"{model_tag_of(payload.get('model_path'))}::{payload.get('mode') or 'raw'}"
+                        if pkey not in _eval_progress["produced"]:
+                            _eval_progress["produced"].append(pkey)
+                            if test_set_id is not None:
+                                async with SessionLocal() as rdb:
+                                    await record_test_set_runs(rdb, test_set_id, [pkey], user_id=user_id)
                     except Exception as e:  # noqa: BLE001 单个样本存不下不该中断整批
                         _eval_progress["failed"] += 1
                         _eval_progress["detail"].append(f"{s.sample_code}［{mode}］存不下：{type(e).__name__}: {e}")
                     del _eval_progress["detail"][:-60]
+        if test_set_id is not None and _eval_progress["produced"]:
+            async with SessionLocal() as rdb:
+                await record_test_set_runs(rdb, test_set_id, list(_eval_progress["produced"]), user_id=user_id)
         _eval_progress["status"] = "done"
     except Exception as e:  # noqa: BLE001
         _logger.exception("评测跑批失败")

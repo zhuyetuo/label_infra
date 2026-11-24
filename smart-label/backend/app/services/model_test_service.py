@@ -24,6 +24,7 @@ from app.models.project import Project
 from app.models.sample import Sample
 from app.models.task import Task
 from app.services import dog_name_service as DN
+from app.services.model_label_alias import ALIASES
 from app.services import site_layout as SL
 
 # 测试关心的四类（按标签树最顶层的名字归），其余归「其他」
@@ -172,7 +173,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             seen.add(cur)
             cur = parent[cur]
         n = lname.get(cur, "?")
-        return n if n in TOPS else "其他"
+        return ALIASES.get(n, n)
 
     segs: dict[int, list[tuple[str, int, int, bool]]] = defaultdict(list)
     leaf_segs: dict[int, list[tuple[str, int, int]]] = defaultdict(list)
@@ -704,11 +705,12 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
                 continue
             if neg_cats:
                 parts = neg_grid[d].get(did) or split_by_ratio(n, [float(c["ratio"]) for c in neg_cats])
-                jobs = [(c["name"], c["anchors"], k) for c, k in zip(neg_cats, parts) if k > 0]
+                jobs = [(c["name"], c["anchors"], k, c.get("anchor_ratios")) for c, k in zip(neg_cats, parts) if k > 0]
             else:
-                jobs = [(None, plan.get("anchor_names") or None, n)]
+                jobs = [(None, plan.get("anchor_names") or None, n, None)]
             rep["n"][str(d)] = {}
-            for cat, anchors, k in jobs:
+
+            async def _neg(cat, anchors, k):
                 r = await compose(db, label_names=[target], dog_ids=[did], pad_sec=d, per_group=k, max_total=k,
                                   mode="negative", anchor_names=anchors, seed=seed, **common)
                 for p in r["picks"]:
@@ -717,7 +719,21 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
                     rep["q"][str(d)][1] += 1
                     if cat:
                         rep["n"][str(d)][cat] = rep["n"][str(d)].get(cat, 0) + 1
-                picks += r["picks"]
+                picks.extend(r["picks"])
+                return len(r["picks"])
+
+            for cat, anchors, k, ar in jobs:
+                # 分类内按各中心动作的比例再摊（舔 / 啃 / 蹭 / 甩头 各多少）；某个动作不够的，用这类里别的动作补上
+                ws = [float((ar or {}).get(a, 0) or 0) for a in (anchors or [])]
+                if anchors and len(anchors) > 1 and sum(ws) > 0:
+                    got = 0
+                    for a, ka in zip(anchors, split_by_ratio(k, ws)):
+                        if ka > 0:
+                            got += await _neg(cat, [a], ka)
+                    if got < k:
+                        await _neg(cat, anchors, k - got)
+                else:
+                    await _neg(cat, anchors, k)
         report[str(did)] = rep
     for w in cache.get("_warn", []):
         if w not in warnings:

@@ -14,9 +14,12 @@ export class TimeBus {
   // 是视频 timeupdate 里高频读的东西，不该走渲染循环。
   private loop: { start: number; end: number } | null = null;
   private loopListeners: ((loop: { start: number; end: number } | null) => void)[] = [];
-  // 总播放/暂停 和 逐帧：由 SyncedVideoGroup 注册，别处（候选面板的「暂停」）通过这里调
+  // 总播放/暂停、逐帧、播放倍速：由 SyncedVideoGroup 注册，波形浮窗 / 浮窗视频等共用同步
   private playHandler: ((action: "toggle" | "play" | "pause") => void) | null = null;
   private stepHandler: ((frames: number) => void) | null = null;
+  private speed = 1;
+  private speedHandler: ((rate: number) => void) | null = null;
+  private speedListeners: ((rate: number) => void)[] = [];
 
   onTime(cb: (sec: number) => void): () => void {
     this.timeListeners.push(cb);
@@ -113,6 +116,33 @@ export class TimeBus {
     this.loopListeners.push(cb);
     return () => {
       this.loopListeners = this.loopListeners.filter((c) => c !== cb);
+    };
+  }
+
+  getSpeed(): number {
+    return this.speed;
+  }
+
+  setSpeedHandler(fn: ((rate: number) => void) | null): void {
+    this.speedHandler = fn;
+  }
+
+  setSpeed(rate: number): void {
+    this.speed = rate;
+    this.speedHandler?.(rate);
+    for (const cb of this.speedListeners) cb(rate);
+  }
+
+  reportSpeed(rate: number): void {
+    if (this.speed === rate) return;
+    this.speed = rate;
+    for (const cb of this.speedListeners) cb(rate);
+  }
+
+  onSpeedChange(cb: (rate: number) => void): () => void {
+    this.speedListeners.push(cb);
+    return () => {
+      this.speedListeners = this.speedListeners.filter((c) => c !== cb);
     };
   }
 }

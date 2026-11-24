@@ -671,7 +671,12 @@ export default function LoopWaveform({
     info?.itemId != null ? { kind: "item", id: info.itemId } : info?.candId != null ? { kind: "cand", id: info.candId } : null;
   const editable = !!(target && onAdjust && (!canAdjust || canAdjust(target)));
   const [resetKey, setResetKey] = useState(0);
+  const [speed, setSpeed] = useState(() => bus.getSpeed());
   useEffect(() => bus.onTime((sec) => { lastSec.current = sec; }), [bus]);
+  useEffect(() => {
+    setSpeed(bus.getSpeed());
+    return bus.onSpeedChange(setSpeed);
+  }, [bus]);
 
   const key = info ? `${info.startMs}-${info.endMs}` : null;
   useEffect(() => {
@@ -934,6 +939,17 @@ export default function LoopWaveform({
               <Tooltip title="视图回到这一段（取消 Shift+滚轮 的缩放 / Shift+拖 的平移）">
                 <Button size="small" type="text" icon={<AimOutlined />} onClick={() => setResetKey((k) => k + 1)} />
               </Tooltip>
+              {[0.5, 1, 2].map((s) => (
+                <Tooltip key={s} title={`视频播放倍速 ${s}x`}>
+                  <Tag
+                    color={Math.abs(speed - s) < 0.01 ? "blue" : undefined}
+                    style={{ cursor: "pointer", margin: 0, paddingInline: 4, fontSize: 11 }}
+                    onClick={() => bus.setSpeed(s)}
+                  >
+                    {s}x
+                  </Tag>
+                </Tooltip>
+              ))}
             </>
           )}
           {cfg.follow && cur && (cur.info.endMs - cur.info.startMs) / 1000 > winEff * 1.2 && (

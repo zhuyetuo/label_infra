@@ -103,10 +103,19 @@ interface Props {
   onReject?: () => void;
   /** 「通过」按钮上写什么（皮肤复看那边叫「确认无误」，语义更贴那个场景） */
   approveText?: string;
+  /** 「通过」二次确认弹窗提示（不填用默认文案） */
+  approveConfirmTitle?: string;
   /** 打开就跳到这个时刻（相对 CSV 起点的毫秒）。从别处点「去修」进来时用 */
   initialSeekMs?: number | null;
   /** 只看 / 只标样本里的这一段（模型测试挂在原任务上的窗口）；短任务自己的窗口优先 */
-  focusWindow?: { startMs: number; endMs: number } | null;
+  focusWindow?: {
+    startMs: number;
+    endMs: number;
+    /** 打开时优先循环该事件子区间（如 5 分钟测试窗口中具体几秒的抓挠 / 误报段） */
+    loopRange?: { startMs: number; endMs: number };
+    /** 从模型打分错例跳来：展示评测模型预测时段与人工标注时段的一键定位 */
+    evalHint?: EvalWindowHint;
+  } | null;
   /** 从找相似的链接进来：候选面板默认只看「画面相似」，并把 initialSeekMs 那条排最前 */
   initialCandFilter?: "similar" | "all" | null;
   /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
@@ -126,6 +135,15 @@ interface Props {
   /** 片段审核：打开就循环这一条，波形浮窗里给「通过 / 退回 / 下一条」（或标注员的「改好了」），
    *  起止在浮窗里直接改（走 /segments 接口，不用认领整个任务） */
   segReview?: SegReviewCtx;
+}
+
+export interface EvalWindowHint {
+  label: string;
+  version: string;
+  verdict: "tp" | "tn" | "fp" | "fn";
+  iouMin?: number;
+  truthSegs: [number, number][];
+  predSegs: [number, number, number | null][];
 }
 
 export interface SegReviewCtx {
@@ -203,6 +221,7 @@ export default function AnnotationWorkspace({
   onApprove,
   onReject,
   approveText,
+  approveConfirmTitle,
   onClaim,
   initialSeekMs,
   focusWindow,
@@ -682,8 +701,9 @@ export default function AnnotationWorkspace({
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
       // 短任务（只标样本里的一段，比如模型测试的 1 分钟窗口）：没指定位置就停在窗口开头
       else if (win) bus.seek(win.s / 1000);
-      // 有窗口：打开就循环播放这一段
-      if (win) setLoop({ startMs: win.s, endMs: win.e });
+      // 有窗口：指定了事件子区间（如评测错例点进具体几秒）优先循环该事件；否则循环整段窗口
+      if (focusWindow?.loopRange) setLoop(focusWindow.loopRange);
+      else if (win) setLoop({ startMs: win.s, endMs: win.e });
       // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
       // 类别也带过来了。人在那边已经判断过一次了，不该到这儿再选一遍
       if (initialSimilar && initialSeekMs != null) {
@@ -857,9 +877,19 @@ export default function AnnotationWorkspace({
     ];
     if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id), itemId: it.id, neighbors };
     if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors };
+    const ep = focusWindow?.evalHint?.predSegs.find(([ps, pe]) => near(ps, startMs) && near(pe, endMs));
+    if (ep && focusWindow?.evalHint) {
+      return {
+        startMs,
+        endMs,
+        title: `模型预测 · ${focusWindow.evalHint.label}${ep[2] != null ? ` (${ep[2]})` : ""}`,
+        color: "#faad14",
+        neighbors,
+      };
+    }
     return { startMs, endMs, title: "循环区间", neighbors };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewRange, items, candidates, labelById]);
+  }, [viewRange, items, candidates, labelById, focusWindow?.evalHint]);
 
   // 分了互斥轨的项目：波形上的色块按轨分成几条横带（行为 / 运动 / 姿态 / 设备），
   // 同一时刻「卧 + 静止 + 舔」三条各占一带，不互相盖住。没分轨的项目照旧整高一条
@@ -2088,8 +2118,10 @@ export default function AnnotationWorkspace({
   // 面板标题右边有「上移 / 下移 / 隐藏」三个小按钮；隐藏了的在面板区上方留一个
   // 「已隐藏」标签，点一下恢复。顺序、隐藏、展开状态都记在 localStorage 里。
   const hasCross = !!(cross && (cross.items.length || cross.note));
-  // 当前任务里实际存在的面板（没跑过画面对照就没有那一块），按用户顺序
-  const presentPanels: PanelKey[] = panelOrder.filter((k) => k !== "cross" || hasCross);
+  const hasEval = !!focusWindow?.evalHint;
+  const [evalOnlyErr, setEvalOnlyErr] = useState(true);
+  // 当前任务里实际存在的面板（没跑过画面对照 / 不是从模型测试打分进来的就不显示对应面板），按用户顺序
+  const presentPanels: PanelKey[] = panelOrder.filter((k) => (k !== "cross" || hasCross) && (k !== "eval" || hasEval));
   const shownPanels = presentPanels.filter((k) => !panelHidden.includes(k));
   /** 折叠掉的面板标签。查看模式下跟「新建片段」挤一行，不单独占一行把下面的面板区往下压 */
   const hiddenPanelKeys = panelHidden.filter((k) => presentPanels.includes(k));
@@ -2136,6 +2168,14 @@ export default function AnnotationWorkspace({
     if (!isPanelOpen(k)) setPanelOpen(k, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, jumpToFocus]);
+  // 从模型测试打分进来：确保底部的「识别错误对照」面板自动展开可见
+  useEffect(() => {
+    if (!hasEval || taskId == null) return;
+    if (panelHidden.includes("eval")) showPanel("eval");
+    if (!isPanelOpen("eval")) setPanelOpen("eval", true);
+    setEvalOnlyErr(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, hasEval]);
   const panelTools = (k: PanelKey) => {
     const i = shownPanels.indexOf(k);
     return (
@@ -2615,6 +2655,207 @@ export default function AnnotationWorkspace({
     ),
   } : null;
 
+  const evalItem = (() => {
+    const eh = focusWindow?.evalHint;
+    if (!eh) return null;
+    const iouMin = eh.iouMin ?? 0.3;
+    const calcIou = (a0: number, a1: number, b0: number, b1: number) => {
+      const inter = Math.min(a1, b1) - Math.max(a0, b0);
+      if (inter <= 0) return 0;
+      const u = Math.max(0, a1 - a0) + Math.max(0, b1 - b0) - inter;
+      return u > 0 ? inter / u : 0;
+    };
+    const candPairs: [number, number, number][] = [];
+    eh.predSegs.forEach(([ps, pe], pi) => {
+      eh.truthSegs.forEach(([ts, te], ti) => {
+        const v = calcIou(ps, pe, ts, te);
+        if (v >= iouMin) candPairs.push([v, pi, ti]);
+      });
+    });
+    candPairs.sort((a, b) => b[0] - a[0]);
+    const usedP = new Set<number>();
+    const usedT = new Set<number>();
+    const pairs: [number, number, number][] = [];
+    for (const [v, pi, ti] of candPairs) {
+      if (usedP.has(pi) || usedT.has(ti)) continue;
+      usedP.add(pi);
+      usedT.add(ti);
+      pairs.push([pi, ti, v]);
+    }
+    type EvalCmpRow = {
+      key: string;
+      kind: "fp" | "fn" | "edge" | "tp";
+      sortMs: number;
+      ps: number | null;
+      pe: number | null;
+      conf: number | null;
+      ts: number | null;
+      te: number | null;
+      iou: number | null;
+    };
+    const allEvalRows: EvalCmpRow[] = [];
+    eh.predSegs.forEach(([ps, pe, conf], pi) => {
+      if (!usedP.has(pi)) allEvalRows.push({ key: `fp-${pi}`, kind: "fp", sortMs: ps, ps, pe, conf, ts: null, te: null, iou: null });
+    });
+    eh.truthSegs.forEach(([ts, te], ti) => {
+      if (!usedT.has(ti)) allEvalRows.push({ key: `fn-${ti}`, kind: "fn", sortMs: ts, ps: null, pe: null, conf: null, ts, te, iou: null });
+    });
+    for (const [pi, ti, v] of pairs) {
+      const [ps, pe, conf] = eh.predSegs[pi];
+      const [ts, te] = eh.truthSegs[ti];
+      const edgeBad = Math.abs(ps - ts) > 2000 || Math.abs(pe - te) > 2000;
+      allEvalRows.push({ key: `pr-${pi}-${ti}`, kind: edgeBad ? "edge" : "tp", sortMs: Math.min(ps, ts), ps, pe, conf, ts, te, iou: v });
+    }
+    allEvalRows.sort((a, b) => a.sortMs - b.sortMs);
+    const errRows = allEvalRows.filter((r) => r.kind !== "tp");
+    const shownEvalRows = evalOnlyErr && errRows.length > 0 ? errRows : allEvalRows;
+    const vLabel = eh.verdict === "fp" ? "误报窗口" : eh.verdict === "fn" ? "漏报窗口" : eh.verdict === "tp" ? "命中窗口" : "正常通过";
+    const vColor = eh.verdict === "fp" ? "orange" : eh.verdict === "fn" ? "red" : eh.verdict === "tp" ? "green" : "default";
+    const targetDef = labels.find((l) => l.display_name === eh.label) ?? labels.find((l) => l.display_name.startsWith(eh.label));
+    const isLoopAt = (s: number, e: number) => !!(loopRange && Math.abs(loopRange.startMs - s) <= 20 && Math.abs(loopRange.endMs - e) <= 20);
+    const toggleSegLoop = (s: number, e: number) => {
+      if (isLoopAt(s, e)) setLoop(null);
+      else setLoop({ startMs: s, endMs: e });
+    };
+
+    return {
+      key: "eval",
+      label: (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>识别错误对照</span>
+          <Tag color={vColor} style={{ marginInlineEnd: 0 }}>【{eh.label}】{vLabel}</Tag>
+          <span style={{ fontSize: 12, color: "#888" }}>{eh.version}</span>
+          {allEvalRows.length > 0 && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <Segmented
+                size="small"
+                value={evalOnlyErr && errRows.length > 0 ? "err" : "all"}
+                onChange={(v) => setEvalOnlyErr(v === "err")}
+                options={[
+                  { value: "err", label: `识别错误 (${errRows.length})`, disabled: errRows.length === 0 },
+                  { value: "all", label: `全部对照 (${allEvalRows.length})` },
+                ]}
+              />
+            </span>
+          )}
+          {win && (
+            <Space size={4} onClick={(e) => e.stopPropagation()}>
+              <Button size="small" onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>
+                循环整段窗口 ({formatMs(win.s)}~{formatMs(win.e)})
+              </Button>
+              {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
+            </Space>
+          )}
+        </span>
+      ),
+      children: shownEvalRows.length === 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          当前窗口内人工与模型均无「{eh.label}」事件记录。
+        </Typography.Text>
+      ) : (
+        <Table
+          size="small"
+          rowKey="key"
+          pagination={false}
+          dataSource={shownEvalRows}
+          columns={[
+            {
+              title: "错误类型",
+              width: 125,
+              render: (_: unknown, r: EvalCmpRow) => (
+                r.kind === "fp" ? <Tag color="orange">误报（模型多报）</Tag>
+                  : r.kind === "fn" ? <Tag color="red">漏报（模型未报）</Tag>
+                  : r.kind === "edge" ? <Tag color="purple">起止偏差 &gt;2s</Tag>
+                  : <Tag color="green">命中</Tag>
+              ),
+            },
+            {
+              title: "模型预测时段",
+              width: 220,
+              render: (_: unknown, r: EvalCmpRow) => r.ps != null && r.pe != null ? (
+                <span>
+                  <b>{formatMs(r.ps)} ~ {formatMs(r.pe)}</b>
+                  <span style={{ color: "#888", fontSize: 12, marginLeft: 6 }}>
+                    {((r.pe - r.ps) / 1000).toFixed(2)}s{r.conf != null ? ` · 置信度 ${r.conf}` : ""}
+                  </span>
+                </span>
+              ) : <span style={{ color: "#888" }}>—（未报出）</span>,
+            },
+            {
+              title: "人工标注时段",
+              width: 210,
+              render: (_: unknown, r: EvalCmpRow) => r.ts != null && r.te != null ? (
+                <span>
+                  <b>{formatMs(r.ts)} ~ {formatMs(r.te)}</b>
+                  <span style={{ color: "#888", fontSize: 12, marginLeft: 6 }}>
+                    {((r.te - r.ts) / 1000).toFixed(2)}s
+                  </span>
+                  {r.iou != null && (
+                    <span style={{ color: r.kind === "edge" ? "#b37feb" : "#52c41a", fontSize: 12, marginLeft: 6 }}>
+                      IoU {Math.round(r.iou * 100)}%
+                    </span>
+                  )}
+                </span>
+              ) : <span style={{ color: "#888" }}>—（无「{eh.label}」）</span>,
+            },
+            {
+              title: "该时段当前标注（排查原因）",
+              render: (_: unknown, r: EvalCmpRow) => {
+                const lo = r.ps ?? r.ts ?? 0;
+                const hi = r.pe ?? r.te ?? 0;
+                const ov = items.filter((x) => x.start_time_ms < hi && x.end_time_ms > lo);
+                return ov.length ? (
+                  <Space size={4} wrap>
+                    {ov.map((x) => (
+                      <Tag key={x.id} color={colorOf(x.label_id)} style={{ marginInlineEnd: 0 }}>
+                        {nameOf(x.label_id)}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : <span style={{ color: "#ff4d4f", fontSize: 12 }}>未标任何动作</span>;
+              },
+            },
+            {
+              title: "操作",
+              width: 240,
+              render: (_: unknown, r: EvalCmpRow) => {
+                const matchIt = r.ts != null && r.te != null
+                  ? items.find((x) => Math.abs(x.start_time_ms - r.ts!) <= 500 && Math.abs(x.end_time_ms - r.te!) <= 500)
+                  : undefined;
+                const s0 = r.kind === "fp" ? r.ps! : (matchIt?.start_time_ms ?? r.ts ?? r.ps ?? 0);
+                const e0 = r.kind === "fp" ? r.pe! : (matchIt?.end_time_ms ?? r.te ?? r.pe ?? 0);
+                const looping = isLoopAt(s0, e0);
+                const adopted = r.kind === "fp" && targetDef != null && items.some(
+                  (x) => (x.label_id === targetDef.id || nameOf(x.label_id).startsWith(eh.label))
+                    && x.start_time_ms < r.pe! && x.end_time_ms > r.ps!,
+                );
+                return (
+                  <Space size={8} wrap>
+                    <a onClick={() => bus.seek(s0 / 1000)}>跳转</a>
+                    <a style={{ color: looping ? "#ff4d4f" : undefined }} onClick={() => toggleSegLoop(s0, e0)}>
+                      {looping ? "停止播放" : "循环播放"}
+                    </a>
+                    {(r.kind === "edge" || r.kind === "tp") && r.ps != null && r.pe != null && (
+                      <a style={{ color: isLoopAt(r.ps, r.pe) ? "#ff4d4f" : "#faad14" }}
+                        onClick={() => toggleSegLoop(r.ps!, r.pe!)}>
+                        {isLoopAt(r.ps, r.pe) ? "停止预测段" : "循环预测段"}
+                      </a>
+                    )}
+                    {r.kind === "fp" && targetDef != null && (canCreate || roCreateAllowed) && (
+                      adopted
+                        ? <Tag color="green" style={{ marginInlineEnd: 0 }}>已补标</Tag>
+                        : <a style={{ color: "#52c41a" }} onClick={() => appendItem(r.ps!, r.pe!, targetDef.id)}>+ 补标为{eh.label}</a>
+                    )}
+                  </Space>
+                );
+              },
+            },
+          ]}
+        />
+      ),
+    };
+  })();
+
   const segsItem = {
     key: "segs",
     label: (
@@ -2769,7 +3010,7 @@ export default function AnnotationWorkspace({
   };
 
   const renderPanel = (k: PanelKey) => {
-    const item = k === "imu" ? imuItem : k === "cross" ? crossItem : k === "segs" ? segsItem : candsItem;
+    const item = k === "imu" ? imuItem : k === "eval" ? evalItem : k === "cross" ? crossItem : k === "segs" ? segsItem : candsItem;
     if (!item) return null;
     const el = (
       <Collapse
@@ -3263,7 +3504,7 @@ export default function AnnotationWorkspace({
                   「整份通过」退成次要——它认的是全部类别，在这个场景下高亮会误导 */}
               {onApprove && (
                 <Popconfirm
-                  title="确认通过这份标注？（连活动/睡觉等全部类别一起认）"
+                  title={approveConfirmTitle ?? "确认通过这份标注？（连活动/睡觉等全部类别一起认）"}
                   onConfirm={onApprove}
                   disabled={!!onClaim}
                 >
@@ -3305,7 +3546,7 @@ export default function AnnotationWorkspace({
                 先落草稿再交给外面走审核链，不然刚改的几段不算数 */}
             {onApprove && (
               <Popconfirm
-                title="存草稿并直接通过？（连活动/睡觉等全部类别一起认，不再进审核队列）"
+                title={approveConfirmTitle ?? "存草稿并直接通过？（连活动/睡觉等全部类别一起认，不再进审核队列）"}
                 onConfirm={handleSubmitAndApprove}
               >
                 <Button type={onConfirmScratch ? "default" : "primary"} loading={saving}>
@@ -3334,11 +3575,12 @@ export default function AnnotationWorkspace({
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
             「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
-        {win && (
-          // 短任务：说清楚只标哪一段。不写的话人看到的是整个样本（比如 1 小时），不知道该标哪一分钟
+        {/* 从模型测试打分进来时，底部已有专门的「识别错误对照」面板，顶部不再叠两条大提示框抢占视频与浮窗空间 */}
+        {win && !hasEval && (
           <Alert
             type="warning"
             showIcon
+            closable
             style={{ marginBottom: 6 }}
             message={
               <span>
@@ -3350,7 +3592,7 @@ export default function AnnotationWorkspace({
                     && c.start_time_ms < win.e && c.end_time_ms > win.s).length;
                   return n
                     ? <>窗口里有 <b>{n}</b> 条疑似片段，往下滚到「疑似片段」面板判（确认 / 排除 / 调起止），其余时间自己补标。</>
-                    : "没有现成的片段，从零标。";
+                    : null;
                 })()}
               </span>
             }

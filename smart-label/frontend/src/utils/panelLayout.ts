@@ -6,10 +6,11 @@ import { getSavedKeys, saveKeys } from "@/utils/persistedSize";
 export const PANEL_ORDER_KEY = "smart-label:ws-panel-order";
 export const PANEL_HIDDEN_KEY = "smart-label:ws-panel-hidden";
 
-export type PanelKey = "imu" | "cross" | "segs" | "cands";
-export const DEFAULT_PANEL_ORDER: PanelKey[] = ["imu", "cross", "segs", "cands"];
+export type PanelKey = "imu" | "eval" | "cross" | "segs" | "cands";
+export const DEFAULT_PANEL_ORDER: PanelKey[] = ["imu", "eval", "cross", "segs", "cands"];
 export const PANEL_TITLES: Record<PanelKey, string> = {
   imu: "IMU 波形",
+  eval: "识别错误对照",
   cross: "画面对照",
   segs: "已标注片段",
   cands: "疑似片段",
@@ -19,7 +20,7 @@ function isPanelKey(k: string): k is PanelKey {
   return (DEFAULT_PANEL_ORDER as string[]).includes(k);
 }
 
-/** 存的顺序可能缺项（以后加了新面板）或有脏值：认识的按存的顺序，没提到的按默认顺序补在后面 */
+/** 存的顺序可能缺项（以后加了新面板）或有脏值：认识的按存的顺序，没提到的按默认顺序补上（eval 插在 segs 前方便先看错例） */
 export function normalizeOrder(raw: string[]): PanelKey[] {
   const seen = new Set<PanelKey>();
   const out: PanelKey[] = [];
@@ -29,7 +30,19 @@ export function normalizeOrder(raw: string[]): PanelKey[] {
       out.push(k);
     }
   }
-  for (const k of DEFAULT_PANEL_ORDER) if (!seen.has(k)) out.push(k);
+  for (const k of DEFAULT_PANEL_ORDER) {
+    if (!seen.has(k)) {
+      if (k === "eval") {
+        const si = out.indexOf("segs");
+        if (si >= 0) {
+          out.splice(si, 0, "eval");
+          seen.add("eval");
+          continue;
+        }
+      }
+      out.push(k);
+    }
+  }
   return out;
 }
 

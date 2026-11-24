@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { recentLabels, rememberLabel } from "@/utils/recentLabels";
 import LabelTreeSelect from "@/components/LabelTreeSelect";
-import { Button, Checkbox, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Checkbox, Dropdown, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography, type MenuProps } from "antd";
 import { BarChartOutlined, CheckOutlined, DownOutlined, QuestionCircleOutlined, RetweetOutlined, WarningOutlined } from "@ant-design/icons";
 import type { LabelDefinition, LabelItem } from "@/types";
 import { TRACK_NAME, byId, descendantIds, trackOf } from "@/utils/labelTree";
@@ -290,12 +290,12 @@ export default function SegmentPanel({
   const loopButton = (startMs: number, endMs: number) =>
     onLoop ? (
       isLooping(startMs, endMs) ? (
-        <Button size="small" type="link" danger icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
-          停止播放
+        <Button size="small" type="link" danger style={{ paddingInline: 4 }} icon={<RetweetOutlined />} onClick={() => onLoop(null)}>
+          停止
         </Button>
       ) : (
-        <Button size="small" type="link" icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
-          循环播放
+        <Button size="small" type="link" style={{ paddingInline: 4 }} icon={<RetweetOutlined />} onClick={() => onLoop({ startMs, endMs })}>
+          循环
         </Button>
       )
     ) : null;
@@ -1196,176 +1196,178 @@ export default function SegmentPanel({
                 <QuestionCircleOutlined style={{ color: "#999", cursor: "help" }} />
               </Tooltip></span>
             ),
-            // 多了「改成 X」「改类别」「标记」三个，原来 300 放不下，后面的删除被挤出去
-            width: 460,
+            // 高频操作保留在行内（跳转 / 循环 / 改类别 / 通过 / 更多 / 删除），低频项收进「更多」下拉，避免挤出右边界
+            width: 340,
             render: (_, i: LabelItem) => {
               const st = aiState(i);
+              const showSegApprove = !!(onSegApprove && i.id > 0 && !i.review_note);
+              const moreItems: NonNullable<MenuProps["items"]> = [];
+              if (canMark && (i.id > 0 || !readOnly)) {
+                moreItems.push({
+                  key: "mark",
+                  label: `🔖 备忘${i.marks ? `（${marksOf(i).length}）` : ""}`,
+                  onClick: () => openMarks(i),
+                });
+              }
+              if (onReviewNote && i.id > 0) {
+                if (i.review_note) {
+                  moreItems.push({
+                    key: "clear-note",
+                    label: reviewNoteClearOnly ? "已改好" : "清除问题",
+                    onClick: () => onReviewNote(i, null),
+                  });
+                } else if (!reviewNoteClearOnly) {
+                  moreItems.push({
+                    key: "review-note",
+                    label: <span style={{ color: "#ff4d4f" }}>有问题</span>,
+                    children: [
+                      ...REVIEW_NOTE_PRESETS.map((t) => ({
+                        key: `note:${t}`,
+                        label: t,
+                        onClick: () => onReviewNote(i, t),
+                      })),
+                      {
+                        key: "note:__other",
+                        label: "其他原因…",
+                        onClick: () => { setNoteFor(i); setNoteText(""); },
+                      },
+                    ],
+                  });
+                }
+              }
+              if (showSegApprove && i.seg_status === "approved" && onSendBackReviewer && i.seg_reviewed_by != null) {
+                moreItems.push({
+                  key: "send-back",
+                  label: <span style={{ color: "#ff4d4f" }}>退回给通过人</span>,
+                  children: [
+                    ...REVIEW_NOTE_PRESETS.map((t) => ({
+                      key: `sb:${t}`,
+                      label: t,
+                      onClick: () => onSendBackReviewer(i, t),
+                    })),
+                    {
+                      key: "sb:__none",
+                      label: "不写原因，直接退回",
+                      onClick: () => onSendBackReviewer(i, null),
+                    },
+                  ],
+                });
+              }
+              if (!readOnly && showSegApprove && st === "pending") {
+                moreItems.push({
+                  key: "ai-confirm",
+                  label: "✓ 仅确认 AI 预测",
+                  onClick: () => update([i.id], { ai_confirmed: true }),
+                });
+              }
+              if (!readOnly && showSegApprove && st === "confirmed") {
+                moreItems.push({
+                  key: "ai-unconfirm",
+                  label: "撤销 AI 确认",
+                  onClick: () => update([i.id], { ai_confirmed: false }),
+                });
+              }
+              if (!readOnly) {
+                if (i.uncertain) {
+                  moreItems.push({
+                    key: "uncertain-off",
+                    label: "取消待定",
+                    onClick: () => update([i.id], { uncertain: false, uncertain_reason: null }),
+                  });
+                } else {
+                  moreItems.push({
+                    key: "uncertain",
+                    label: "待定",
+                    children: UNCERTAIN_KINDS.map((k) => ({
+                      key: `unc:${k.value}`,
+                      label: k.label,
+                      onClick: () => update([i.id], { uncertain: true, uncertain_reason: k.value }),
+                    })),
+                  });
+                }
+              }
+              if (!readOnly && onSplit) {
+                moreItems.push({
+                  key: "split",
+                  label: "✂ 拆开",
+                  onClick: () => onSplit(i.id),
+                });
+              }
+              if (!readOnly && i.from_candidate_id != null && onReturnToCandidate) {
+                moreItems.push({
+                  key: "return-cand",
+                  label: "退回候选重新判断",
+                  onClick: () => {
+                    Modal.confirm({
+                      title: "退回候选重新判断？",
+                      content: "删掉这条片段，对应的「疑似片段」回到待确认",
+                      onOk: () => onReturnToCandidate(i),
+                    });
+                  },
+                });
+              }
+              if (onLowlight) {
+                moreItems.push({
+                  key: "lowlight",
+                  label: "夜视对比",
+                  onClick: () => onLowlight(i.start_time_ms, i.end_time_ms),
+                });
+              }
+
               return (
-                <Space size={0}>
-                  <Button size="small" type="link" onClick={() => onSeek(i.start_time_ms)}>
+                <Space size={0} wrap={false}>
+                  <Button size="small" type="link" style={{ paddingInline: 4 }} onClick={() => onSeek(i.start_time_ms)}>
                     跳转
                   </Button>
                   {loopButton(i.start_time_ms, i.end_time_ms)}
-                  {/* 改类别：猜一个最可能的（同一个原类别以前改成什么最多 / 最近常改成什么），点一下直接改，
-                      不用再确认；猜得不对就点右边的下拉选别的 */}
                   {canRelabel && (() => {
                     const g = guessRelabel(relabelHist, i.label_id);
                     const ok = g != null && labels.some((l) => l.id === g);
                     return (
                       <Space.Compact size="small">
                         {ok && (
-                          <>
-                            <Button size="small" type="link" style={{ color: colorOf(g!), paddingRight: 2 }} onClick={() => relabel(i, g!)}>
-                              改成{nameOf(g!)}
-                            </Button>
-                          </>
+                          <Button size="small" type="link" style={{ color: colorOf(g!), paddingInline: "4px 2px" }} onClick={() => relabel(i, g!)}>
+                            改成{nameOf(g!)}
+                          </Button>
                         )}
                         <Popover trigger="click" placement="bottomRight" destroyTooltipOnHide
                           title="改成哪个类别" content={
                             <LabelTreeSelect labels={labels} value={i.label_id} style={{ width: 240 }} recent={recent}
                               onChange={(v) => relabel(i, v)} title="改类别" />
                           }>
-                          <Button size="small" type="link" style={{ paddingLeft: ok ? 2 : undefined }}>
+                          <Button size="small" type="link" style={{ paddingInline: ok ? "2px 4px" : 4 }}>
                             {ok ? <DownOutlined style={{ fontSize: 10 }} /> : <>改类别 <DownOutlined style={{ fontSize: 10 }} /></>}
                           </Button>
                         </Popover>
                       </Space.Compact>
                     );
                   })()}
-                  {canMark && (i.id > 0 || !readOnly) ? (
-                    <>
-                      <Button size="small" type="link" style={{ color: i.marks ? "#d48806" : undefined }} onClick={() => openMarks(i)}
-                        title="备忘：留着以后处理（不退回、不挡通过）。要标注员改的点「有问题」">
-                        🔖{i.marks ? marksOf(i).length : "备忘"}
-                      </Button>
-                    </>
-                  ) : null}
-                  {/* 片段级「通过」：一条条认可，有问题的点右边「有问题」一条条退回。
-                      已经标了有问题的先「清除问题」再通过 */}
-                  {onSegApprove && i.id > 0 && !i.review_note && (i.seg_status === "approved" ? (
-                    <>
-                      <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onSegApprove(i, false)}>
+                  {showSegApprove ? (
+                    i.seg_status === "approved" ? (
+                      <Button size="small" type="link" style={{ color: "#999", paddingInline: 4 }} onClick={() => onSegApprove!(i, false)}>
                         撤销通过
                       </Button>
-                      {onSendBackReviewer && i.seg_reviewed_by != null && (
-                        <Dropdown
-                          menu={{
-                            items: [...REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__none", label: "不写原因，直接退回" }],
-                            onClick: ({ key }) => onSendBackReviewer(i, key === "__none" ? null : key),
-                          }}
-                        >
-                          <Button size="small" type="link" danger title="撤销通过，领给原来通过它的人重审（原因写进这条的备忘备注）">
-                            退回给通过人 <DownOutlined style={{ fontSize: 10 }} />
-                          </Button>
-                        </Dropdown>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <Button size="small" type="link" style={{ color: "#52c41a" }} onClick={() => onSegApprove(i, true)}>
+                    ) : (
+                      <Button size="small" type="link" style={{ color: "#52c41a", paddingInline: 4 }} onClick={() => onSegApprove!(i, true)}>
                         通过
                       </Button>
-                    </>
-                  ))}
-                  {/* 审核：看到哪条不对就标哪条，退回时标注员只需要改这几条。
-                      还没存进库的新片段（id 为负）标不了——先存草稿 */}
-                  {onReviewNote && i.id > 0 && (i.review_note ? (
-                    <>
-                      <Button size="small" type="link" style={{ color: "#999" }} onClick={() => onReviewNote(i, null)}>
-                        {reviewNoteClearOnly ? "已改好" : "清除问题"}
-                      </Button>
-                    </>
-                  ) : !reviewNoteClearOnly && (
-                    <Dropdown
-                      menu={{
-                        items: [...REVIEW_NOTE_PRESETS.map((t) => ({ key: t, label: t })), { key: "__other", label: "其他原因…" }],
-                        onClick: ({ key }) => {
-                          if (key === "__other") { setNoteFor(i); setNoteText(""); }
-                          else onReviewNote(i, key);
-                        },
-                      }}
-                    >
-                      <Button size="small" type="link" danger>
-                        有问题 <DownOutlined style={{ fontSize: 10 }} />
-                      </Button>
-                    </Dropdown>
-                  ))}
-                  {/* 夜里那几路黑得看不出狗在干嘛。按这一段的中点取一刻，
-                      三张并排（原样 / 拉伸 / 多帧堆栈）让人自己判断 */}
-                  {onLowlight && (
-                    <>
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => onLowlight(i.start_time_ms, i.end_time_ms)}
-                      >
-                        夜视
-                      </Button>
-                    </>
-                  )}
-                  {!readOnly && st === "pending" && (
-                    <>
-                      <Button size="small" type="link" icon={<CheckOutlined />} onClick={() => update([i.id], { ai_confirmed: true })}>
-                        通过
-                      </Button>
-                    </>
-                  )}
-                  {!readOnly && st === "confirmed" && (
-                    <Button size="small" type="link" style={{ color: "#999" }} onClick={() => update([i.id], { ai_confirmed: false })}>
+                    )
+                  ) : !readOnly && st === "pending" ? (
+                    <Button size="small" type="link" style={{ paddingInline: 4 }} icon={<CheckOutlined />} onClick={() => update([i.id], { ai_confirmed: true })}>
+                      通过
+                    </Button>
+                  ) : !readOnly && st === "confirmed" ? (
+                    <Button size="small" type="link" style={{ color: "#999", paddingInline: 4 }} onClick={() => update([i.id], { ai_confirmed: false })}>
                       撤销
                     </Button>
-                  )}
-                  {/* 拿不准（画面里没拍到狗、动作看不清）：既不能确认成这个类别，
-                      删掉又可惜。标成「待定」留着，导出训练集时这段时间会被整个
-                      挖掉，不会被当成负样本用 */}
-                  {/* 定不下来的两种情况分开记，都不进训练集 */}
-                  {!readOnly && !i.uncertain && (
-                    <Dropdown
-                      menu={{
-                        items: UNCERTAIN_KINDS.map((k) => ({ key: k.value, label: k.label })),
-                        onClick: ({ key }) => update([i.id], { uncertain: true, uncertain_reason: key }),
-                      }}
-                    >
-                      <Button size="small" type="link">
-                        待定 <DownOutlined style={{ fontSize: 10 }} />
+                  ) : null}
+                  {moreItems.length > 0 && (
+                    <Dropdown menu={{ items: moreItems }} trigger={["click"]}>
+                      <Button size="small" type="link" style={{ paddingInline: 4, color: (i.review_note || i.marks) ? "#faad14" : undefined }}>
+                        更多 <DownOutlined style={{ fontSize: 10 }} />
                       </Button>
                     </Dropdown>
                   )}
-                  {!readOnly && i.uncertain && (
-                    <Button
-                      size="small"
-                      type="link"
-                      style={{ color: "#999" }}
-                      onClick={() => update([i.id], { uncertain: false, uncertain_reason: null })}
-                    >
-                      取消待定
-                    </Button>
-                  )}
-                  {/* 从候选确认上来的：可能当时看走神点错了，回头发现不对，退回去
-                      比直接删好——那条候选会回到「待确认」重新判断，直接删的话
-                      它就永远消失了 */}
-                  {!readOnly && i.from_candidate_id != null && onReturnToCandidate && (
-                    <Popconfirm
-                      title="退回候选重新判断？"
-                      description="删掉这条片段，对应的「疑似片段」回到待确认"
-                      onConfirm={() => onReturnToCandidate(i)}
-                    >
-                      <Button size="small" type="link">
-                        退回候选
-                      </Button>
-                    </Popconfirm>
-                  )}
-                  {!readOnly && onSplit && (
-                    <>
-                      <Button size="small" type="link" onClick={() => onSplit(i.id)}>
-                        ✂ 拆开
-                      </Button>
-                    </>
-                  )}
-                  {/* 直接删是个坑：片段没了，生它的那条候选还留在「已确认」里。
-                      「找相似 / 一句话找画面」再碰到同一段时间，会以为早写过了而跳过，
-                      于是这一段**再也写不回来**。所以从候选来的行，删之前先说清楚，
-                      并把人推到上面那个「退回候选」——那个会把候选也一起还原。 */}
                   {readOnly && canDeleteReadOnly && (
                     <Popconfirm
                       title="删掉这一段？"
@@ -1374,7 +1376,7 @@ export default function SegmentPanel({
                       okButtonProps={{ danger: true }}
                       onConfirm={() => onDelete(i.id)}
                     >
-                      <Button size="small" danger type="link">删除</Button>
+                      <Button size="small" danger type="link" style={{ paddingInline: 4 }}>删除</Button>
                     </Popconfirm>
                   )}
                   {!readOnly &&
@@ -1387,7 +1389,7 @@ export default function SegmentPanel({
                             之后「找相似 / 一句话找画面」再找到同一段会当成写过了而跳过，
                             这一段就写不回来了。
                             <br />
-                            想重新判断的话，用左边的「退回候选」。
+                            想重新判断的话，点「更多 → 退回候选重新判断」。
                           </div>
                         }
                         okText="还是直接删"
@@ -1395,12 +1397,10 @@ export default function SegmentPanel({
                         okButtonProps={{ danger: true }}
                         onConfirm={() => onDelete(i.id)}
                       >
-                        <Button size="small" danger type="link">
-                          删除
-                        </Button>
+                        <Button size="small" danger type="link" style={{ paddingInline: 4 }}>删除</Button>
                       </Popconfirm>
                     ) : (
-                      <Button size="small" danger type="link" onClick={() => onDelete(i.id)}>
+                      <Button size="small" danger type="link" style={{ paddingInline: 4 }} onClick={() => onDelete(i.id)}>
                         删除
                       </Button>
                     ))}
