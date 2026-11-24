@@ -38,6 +38,8 @@ export interface TestItem {
   n_uncertain: number;
   /** 窗口里有多少时间标了东西（0~1）。测试数据要窗口内全标 */
   label_cover: number;
+  /** 窗口里的疑似片段：{类别: {pending/confirmed/rejected/uncertain: 条数}} */
+  cands?: Record<string, Record<string, number>>;
   note: string | null;
 }
 

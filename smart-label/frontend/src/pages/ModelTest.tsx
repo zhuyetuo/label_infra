@@ -586,6 +586,10 @@ function SetDetail({ setId }: { setId: number }) {
                     <Space size={2} wrap>
                       {Object.entries(r.labels).map(([k, v]) => <Tag key={k} color={k === "抓挠" ? "volcano" : undefined}>{k} {v.n}次 {fmtSec(v.sec)}</Tag>)}
                       {r.n_uncertain > 0 && <Tag color="gold">待定 {r.n_uncertain}</Tag>}
+                      {Object.entries(r.cands ?? {}).map(([k, v]) => (v.pending ?? 0) > 0 && (
+                        <Tooltip key={`c-${k}`} title="提示窗口里的疑似片段：工作台往下滚到「疑似片段」面板，确认 / 排除 / 调起止">
+                          <Tag color="geekblue">疑似 {k} {v.pending} 待判</Tag>
+                        </Tooltip>))}
                       {!Object.keys(r.labels).length && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
                     </Space>) },
                   { title: <Tooltip title="窗口里有多少时间标了东西。测试数据要窗口内全标，低于 80% 标红">标注覆盖</Tooltip>, width: 90,

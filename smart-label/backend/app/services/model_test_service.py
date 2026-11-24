@@ -34,73 +34,6 @@ DOG_SHARE_WARN = 0.15        # 一只狗占总时长超过这个比例就提醒�
 LABEL_COVER_MIN = 0.8        # 窗口里标注覆盖低于这个比例就提醒（没标的时间会把模型的报告冤成误报）
 
 
-def pad_window(start_ms: int, end_ms: int, pad_ms: int, lo: int, hi: int | None) -> tuple[int, int]:
-    """把 [start, end] 前后各延长一半凑够 pad_ms（本来就更长就不动）；碰到头尾就往另一边补。
-    选了一段 10 秒的抓挠凑成 1 分钟：窗口里有事件前后的上下文，模型报早报晚、起止准不准（交并比）才测得出来"""
-    length = end_ms - start_ms
-    if pad_ms <= length:
-        return start_ms, end_ms
-    s = start_ms - (pad_ms - length) // 2
-    e = s + pad_ms
-    if s < lo:
-        s, e = lo, lo + pad_ms
-    if hi is not None and e > hi:
-        s, e = max(lo, hi - pad_ms), hi
-    return s, e
-
-
-async def task_segments(db: AsyncSession, task_id: int) -> list[dict]:
-    """任务当前轮的标注片段（挑事件用）：大类、细类、起止、待定"""
-    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
-    lname = {i: n for i, n, _p in lrows}
-    parent = {i: p for i, _n, p in lrows}
-
-    def top(lid: int) -> str:
-        cur, seen = lid, set()
-        while parent.get(cur) is not None and cur not in seen:
-            seen.add(cur)
-            cur = parent[cur]
-        return lname.get(cur, "?")
-
-    rows = (await db.execute(
-        select(AnnotationLabelItem.id, AnnotationLabelItem.label_id, AnnotationLabelItem.start_time_ms,
-               AnnotationLabelItem.end_time_ms, AnnotationLabelItem.uncertain)
-        .join(AnnotationRecord, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
-        .join(Task, Task.id == AnnotationRecord.task_id)
-        .where(AnnotationRecord.task_id == task_id, AnnotationRecord.round_no == Task.round_no)
-        .order_by(AnnotationLabelItem.start_time_ms)
-    )).all()
-    return [{"id": i, "top": top(lid), "label": lname.get(lid, "?"), "start_ms": int(s), "end_ms": int(e),
-             "uncertain": bool(u)} for i, lid, s, e, u in rows]
-
-
-EXCLUDE_MARGIN_MS = 60_000   # 测试窗口前后各多挖 60 秒不进训练：训练窗口 4~8 秒，留够余量防「相邻几秒」漏进去
-
-
-async def test_exclusion(db: AsyncSession) -> tuple[dict[int, list[tuple[int, int]] | None], set[int]]:
-    """训练导出要避开的测试数据。
-    返回 ({样本 id: [(起, 止) 已加余量] 或 None=整个样本}, 测试集自己的任务 id)。
-    片段给了窗口（或任务本身是短任务）就只挖窗口 ±60 秒；整个任务加进来的才整个样本不要——
-    第一批从 1 小时的样本里挑 1 分钟，按整个样本排除的话最新几天几百小时数据都进不了训练"""
-    rows = (await db.execute(
-        select(ModelTestItem.task_id, ModelTestItem.sample_id, ModelTestItem.start_ms, ModelTestItem.end_ms,
-               Task.segment_start_ms, Task.segment_end_ms)
-        .join(Task, Task.id == ModelTestItem.task_id))).all()
-    excl: dict[int, list[tuple[int, int]] | None] = {}
-    tasks: set[int] = set()
-    for tid, sid, s, e, ts, te in rows:
-        tasks.add(tid)
-        if s is None or e is None:
-            s, e = ts, te
-        if s is None or e is None:
-            excl[sid] = None
-            continue
-        if sid in excl and excl[sid] is None:
-            continue
-        excl.setdefault(sid, []).append((max(0, s - EXCLUDE_MARGIN_MS), e + EXCLUDE_MARGIN_MS))
-    return excl, tasks
-
-
 async def test_sample_ids(db: AsyncSession) -> set[int]:
     """所有测试集（冻结没冻结都算）里的样本。训练导出要排除它们。"""
     return set((await db.execute(select(ModelTestItem.sample_id).distinct())).scalars().all())
@@ -183,6 +116,16 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
     )).all():
         segs[tid].append((top(lid), int(s), int(e), bool(unc)))
 
+    # 疑似片段（提示窗口里写的那几段）：按任务 / 状态数，列表上显示「疑似 抓挠 1 待判」
+    from app.models.ai_candidate import AiCandidate
+    cands: dict[int, list[tuple[str, str, int, int]]] = defaultdict(list)
+    for tid, name, st, a, b in (await db.execute(
+        select(AiCandidate.task_id, AiCandidate.label_name, AiCandidate.status, AiCandidate.start_time_ms,
+               AiCandidate.end_time_ms)
+        .join(Task, Task.id == AiCandidate.task_id)
+        .where(AiCandidate.task_id.in_(tids), AiCandidate.round_no == Task.round_no))).all():
+        cands[tid].append((name, getattr(st, "value", str(st)), int(a), int(b)))
+
     out: list[dict] = []
     for it in items:
         t, s = tasks.get(it.task_id), samples.get(it.sample_id)
@@ -236,7 +179,17 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             "start_ms": ws, "end_ms": we, "dur_sec": round(dur, 1),
             "kind": "短片段" if dur <= SHORT_MAX_SEC else "长片段",
             "labels": labels, "n_uncertain": n_uncertain, "note": it.note,
+            # 窗口里的疑似片段：{类别: {状态: 条数}}
+            "cands": {k: dict(v) for k, v in _cand_count(cands.get(it.task_id, []), ws, we).items()},
         })
+    return out
+
+
+def _cand_count(cs: list[tuple[str, str, int, int]], ws: int, we: int) -> dict[str, Counter]:
+    out: dict[str, Counter] = defaultdict(Counter)
+    for name, st, a, b in cs:
+        if a < we and b > ws:
+            out[name][st] += 1
     return out
 
 

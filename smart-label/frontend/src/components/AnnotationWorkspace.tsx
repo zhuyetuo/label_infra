@@ -3332,7 +3332,14 @@ export default function AnnotationWorkspace({
               <span>
                 这个任务只标 <b>{formatMs(task.segment_start_ms)} ~ {formatMs(task.segment_end_ms)}</b>
                 （{Math.round((task.segment_end_ms - task.segment_start_ms) / 1000)} 秒）：窗口外不用标；
-                窗口里<b>从头到尾都要标</b>（休息、活动也标），没有现成的片段，从零标。
+                窗口里<b>从头到尾都要标</b>（休息、活动也标）。
+                {(() => {
+                  const n = candidates.filter((c) => c.status === "pending"
+                    && c.start_time_ms < task.segment_end_ms! && c.end_time_ms > task.segment_start_ms!).length;
+                  return n
+                    ? <>窗口里有 <b>{n}</b> 条疑似片段，往下滚到「疑似片段」面板判（确认 / 排除 / 调起止），其余时间自己补标。</>
+                    : "没有现成的片段，从零标。";
+                })()}
               </span>
             }
             action={
