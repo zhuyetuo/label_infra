@@ -111,6 +111,8 @@ export const compareModels = (body: {
   conf_min?: number;
   /** 只算这些时间窗口里的（模型测试集） */
   windows?: { sample_id: number; start_ms: number; end_ms: number }[];
+  /** 只拿这些任务的标注当正确答案（模型测试集自己的任务） */
+  task_ids?: number[];
 }) => request.post<never, CompareResult>("/model-eval/compare", body, { timeout: 600_000 });
 
 export const startEvalRun = (body: ScopeParams & { modes: string[] }) =>

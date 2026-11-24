@@ -264,6 +264,8 @@ class CompareIn(BaseModel):
     conf_min: float = 0.0
     # 给了就只算这些时间窗口里的（模型测试集：挑的是样本里的一段）
     windows: list[WindowIn] | None = None
+    # 给了就只拿这些任务的标注当正确答案（模型测试集自己的任务；同一个样本在别的项目里的不算）
+    task_ids: list[int] | None = None
 
 
 def _windows_of(ws: list[WindowIn] | None) -> dict[int, list[tuple[int, int]]] | None:
@@ -290,6 +292,7 @@ async def compare(body: CompareIn, db: AsyncSession = Depends(get_db)):
             iou_min=body.iou_min,
             conf_min=body.conf_min,
             windows=_windows_of(body.windows),
+            truth_task_ids=body.task_ids,
         )
     )
 

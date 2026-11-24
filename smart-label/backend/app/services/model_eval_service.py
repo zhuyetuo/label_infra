@@ -154,7 +154,7 @@ def _read_json(relpath: str) -> dict | None:
 
 
 async def _human_by_sample(
-    db: AsyncSession, sample_ids: list[int], label_names: list[str]
+    db: AsyncSession, sample_ids: list[int], label_names: list[str], task_ids: list[int] | None = None
 ) -> tuple[dict[int, list[Seg]], dict[int, list[tuple[int, int]]]]:
     """
     人工标注（当前轮）按样本取。返回 (正确答案, 不算数的区间)。
@@ -187,6 +187,8 @@ async def _human_by_sample(
             AnnotationRecord.round_no == Task.round_no,
             AnnotationLabelItem.label_id.in_(label_ids),
             Task.status.in_(_REVIEWED),
+            # 给了任务就只认这些任务的标注（模型测试集：同一个样本在别的项目里还有预标 / 别人标的）
+            *([Task.id.in_(task_ids)] if task_ids is not None else []),
         )
     )
     truths: dict[int, list[Seg]] = defaultdict(list)
@@ -299,6 +301,7 @@ async def evaluate(
     iou_min: float = 0.3,
     conf_min: float = 0.0,
     windows: dict[int, list[tuple[int, int]]] | None = None,
+    truth_task_ids: list[int] | None = None,
 ) -> dict:
     """
     一批样本、若干个 (模型, 版本)，各跟人工标注比一遍。
@@ -316,13 +319,11 @@ async def evaluate(
                 "iou_min": iou_min, "warnings": [*warnings, msg]}
 
     # 只评人工审过的样本：没审过的没有正确答案，模型在上面标的每一段都会算成误报
-    reviewed = set(
-        (
-            await db.execute(
-                select(Task.sample_id).where(Task.sample_id.in_(sample_ids), Task.status.in_(_REVIEWED))
-            )
-        ).scalars().all()
-    )
+    # truth_task_ids：只拿这些任务当正确答案（模型测试集）；它们审过了，样本才算审过
+    rq = select(Task.sample_id).where(Task.sample_id.in_(sample_ids), Task.status.in_(_REVIEWED))
+    if truth_task_ids is not None:
+        rq = rq.where(Task.id.in_(truth_task_ids))
+    reviewed = set((await db.execute(rq)).scalars().all())
     if len(reviewed) < len(set(sample_ids)):
         warnings.append(f"{len(set(sample_ids)) - len(reviewed)} 个样本还没人工审过，不计分")
     if not reviewed:
@@ -354,7 +355,7 @@ async def evaluate(
         warnings.append(f"只在 {len(covered)} 个所有版本都跑过的样本上比，其余不计分")
 
     samples = (await db.execute(select(Sample).where(Sample.id.in_(covered)))).scalars().all()
-    truths, uncertain_holes = await _human_by_sample(db, [s.id for s in samples], label_names)
+    truths, uncertain_holes = await _human_by_sample(db, [s.id for s in samples], label_names, truth_task_ids)
     if windows is not None:
         truths = {sid: clip_to_windows(v, windows.get(sid, [])) for sid, v in truths.items()}
         truths = {sid: v for sid, v in truths.items() if v}

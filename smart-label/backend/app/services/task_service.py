@@ -331,9 +331,13 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
     task = await db.get(Task, task_id)
     if task is None:
         raise TaskConflictError("任务不存在")
-    # 管理员 / 超管不受锁限制：别人标到一半的任务也能直接进去改，存草稿不用先抢锁
+    # 管理员 / 超管不受锁限制，也不用先认领：没通过的任务（待分配 / 进行中 / 已提交 / 被驳回）都能直接改。
+    # 已通过的还是要先「继续编辑」——通过的片段已经进了数据池，悄悄改了没人知道
     is_admin = user.role in (UserRole.admin, UserRole.super_admin)
-    if task.status != TaskStatus.IN_PROGRESS or (task.locked_by != user.id and not is_admin):
+    if is_admin:
+        if task.status == TaskStatus.APPROVED:
+            raise TaskConflictError("任务已通过，先点「继续编辑」再改")
+    elif task.status != TaskStatus.IN_PROGRESS or task.locked_by != user.id:
         raise TaskConflictError("任务不在你名下或已不在进行中，无法保存")
 
     record = await _get_or_create_record(db, task)

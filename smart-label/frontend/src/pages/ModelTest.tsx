@@ -49,6 +49,11 @@ const windowsOf = (items: TestItem[], sampleIds: number[]) => {
   return items.filter((i) => keep.has(i.sample_id) && i.end_ms > i.start_ms)
     .map((i) => ({ sample_id: i.sample_id, start_ms: i.start_ms, end_ms: i.end_ms }));
 };
+/** 正确答案只取测试集自己的任务（同一个样本在别的项目里还有预标 / 别人标的） */
+const taskIdsOf = (items: TestItem[], sampleIds: number[]) => {
+  const keep = new Set(sampleIds);
+  return Array.from(new Set(items.filter((i) => keep.has(i.sample_id)).map((i) => i.task_id)));
+};
 const f1 = (p: number, r: number) => (p + r > 0 ? (2 * p * r) / (p + r) : 0);
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
@@ -355,7 +360,7 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
       const out: EvalRow[] = [];
       for (const [g, ids] of groups) {
         if (!ids.length) continue;
-        const r = await compareModels({ sample_ids: ids, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, ids) });
+        const r = await compareModels({ sample_ids: ids, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, ids), task_ids: taskIdsOf(items, ids) });
         r.warnings.forEach((w) => ns.push(`${g}：${w}`));
         r.versions.forEach((v) => out.push({ key: `${g}-${v.key}`, group: g, n: ids.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
       }
@@ -415,7 +420,7 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
           if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
         }
         if (!use.length) { ns.push(`「${s.name}」没有可用样本`); continue; }
-        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, use) });
+        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, use), task_ids: taskIdsOf(items, use) });
         r.versions.forEach((v) => out.push({ key: `${sid}-${v.key}`, group: s.name, n: use.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
       }
       setRows(out);
@@ -506,6 +511,9 @@ function SetDetail({ setId }: { setId: number }) {
   const { data, isLoading } = useQuery({ queryKey: ["model-test-items", setId], queryFn: () => getTestItems(setId) });
   // 在这一页直接打开工作台看 / 标：开在窗口开头。没认领时只读，工作台里点「认领」就能标
   const userId = useAuthStore((st) => st.userInfo?.id);
+  const role = useAuthStore((st) => st.userInfo?.role);
+  // 管理员 / 超管不用认领，没通过的任务直接改（后端 save_draft 放行）；已通过的要先「继续编辑」
+  const isAdmin = role === "admin" || role === "super_admin";
   const [wsTask, setWsTask] = useState<Task | null>(null);
   const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
   const [wsSeekMs, setWsSeekMs] = useState<number | null>(null);
@@ -570,7 +578,7 @@ function SetDetail({ setId }: { setId: number }) {
                   { title: "备注", dataIndex: "note", width: 140, ellipsis: true },
                   { title: "", width: 130, fixed: "right", render: (_, r) => (
                     <Space size={8}>
-                      <Tooltip title="打开工作台，从窗口开头放。没认领时只能看；工作台里点「认领」就能标">
+                      <Tooltip title="打开工作台，从窗口开头放。管理员不用认领、直接改（已通过的要先「继续编辑」）；其他人认领了才能标">
                         <Button size="small" type="link" style={{ padding: 0 }} loading={opening === r.task_id}
                           onClick={() => openTask(r.task_id, r.start_ms)}>看 / 标</Button>
                       </Tooltip>
@@ -589,9 +597,9 @@ function SetDetail({ setId }: { setId: number }) {
         task={wsTask}
         labels={wsLabels}
         initialSeekMs={wsSeekMs}
-        readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
+        readOnly={!((isAdmin && wsTask?.status !== "APPROVED") || (wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId))}
         onClaim={
-          wsTask && wsTask.status !== "APPROVED"
+          wsTask && wsTask.status !== "APPROVED" && !isAdmin
             ? async () => setWsTask(await claimTask(wsTask.id))
             : undefined
         }
