@@ -60,6 +60,11 @@ class ComposeIn(BaseModel):
     pad_sec: float = Field(default=60, ge=0, le=3600)
     min_sec: float = Field(default=0, ge=0, le=3600)      # 片段至少多长
     seed: int = 1
+    # positive = 有这类（以这类片段为中心）；negative = 无这类（整个窗口里这类一次都没有）
+    mode: Literal["positive", "negative"] = "positive"
+    # 无这类时以哪类片段为中心（比如相似动作 舔 / 甩头，或 活动 / 休息）；不给 = 任何别的类别
+    anchor_names: list[str] | None = None
+    per_dog: int | None = Field(default=None, ge=1, le=3000)   # 每只狗最多几段
 
 
 class CheckIn(BaseModel):
@@ -215,7 +220,8 @@ async def compose_apply(set_id: int, body: ComposeIn, db: AsyncSession = Depends
     for p in r["picks"]:
         db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
                              end_ms=p["end_ms"], added_by=user.id,
-                             note=f"按条件挑·{p['label']}·{'人工标过' if p['human'] else 'AI 预标'}"))
+                             note=(f"按条件挑·{p['label']}" + (f"（以{p['anchor']}为中心）" if p.get("anchor") else "")
+                                   + f"·{round((p['end_ms'] - p['start_ms']) / 60000, 1)}分钟·{'人工标过' if p['human'] else 'AI 预标'}")[:300]))
     await db.commit()
     return ok({"added": len(r["picks"]), "stats": r["stats"], "warnings": r["warnings"]})
 

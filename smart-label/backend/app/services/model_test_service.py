@@ -268,6 +268,11 @@ def _cand_count(cs: list[tuple[str, str, int, int]], ws: int, we: int) -> dict[s
     return out
 
 
+def _dur_key(label: str) -> float:
+    n = float(label.split()[0])
+    return n * 60 if "分钟" in label else n
+
+
 def coverage(rows: list[dict]) -> dict:
     """配额表：体型 × 四类 的段数 / 事件数 / 秒数，加上长短、狗、场地、日期的分布和多样性提醒。"""
     matrix = {sz: {tp: {"items": 0, "n": 0, "sec": 0.0} for tp in TOPS} for sz in SIZES + ("未知",)}
@@ -303,11 +308,18 @@ def coverage(rows: list[dict]) -> dict:
     if n_unsure:
         warns.append(f"{n_unsure} 段的狗是按设备号推断、而且是老影棚数据（常对不上），按狗/体型统计时不可靠")
     leaf: Counter = Counter()
+    by_dur: dict[str, Counter] = defaultdict(Counter)
     for r in rows:
         leaf.update(r.get("leaf") or {})
+        # 按实际时长（1 分钟 / 5 分钟 / 10 分钟…）× 有没有抓挠（已有片段或待判的疑似片段都算有）
+        d = r["dur_sec"]
+        dl = f"{round(d / 60)} 分钟" if d >= 50 else f"{int(d)} 秒"
+        has = bool(r["labels"].get("抓挠")) or any((v.get("pending") or 0) for k, v in (r.get("cands") or {}).items() if k.startswith("抓挠"))
+        by_dur[dl]["有抓挠" if has else "无抓挠"] += 1
     return {"n_items": len(rows), "total_sec": round(total, 1), "matrix": matrix, "kinds": dict(kinds),
             "dogs": dogs, "n_dogs": len(dogs), "sites": dict(sites), "dates": dict(sorted(dates.items())),
             "leaf": dict(leaf.most_common()), "n_checked": sum(1 for r in rows if r.get("checked")),
+            "by_dur": {k: dict(v) for k, v in sorted(by_dur.items(), key=lambda kv: _dur_key(kv[0]))},
             "warnings": warns}
 
 
@@ -356,13 +368,17 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
                   dog_ids: list[int] | None = None, date_from=None, date_to=None, source: str = "any",
                   seen_mode: str = "any", model_ids: list[int] | None = None, per_group: int = 10,
                   max_total: int = 200, pad_sec: float = 60, min_sec: float = 0, set_id: int | None = None,
-                  seed: int = 1) -> dict:
+                  seed: int = 1, mode: str = "positive", anchor_names: list[str] | None = None,
+                  per_dog: int | None = None) -> dict:
     """按条件从已有片段里挑。返回 {picks: [...], stats, warnings}；不写库（写库见 compose_apply）。
 
     source：human = 人工标过的（任务已提交/通过，或片段是人加 / 人确认 / 人改过的）；ai = 只要 AI 预标的；any = 都要。
     seen_mode：unseen / seen / any，相对 model_ids 的训练数据集（样本级）。
-    每组（狗 × 细类）最多 per_group 段，按日期轮着挑；总数最多 max_total（各组轮着取）。
-    窗口 = 片段前后延长凑够 pad_sec（碰头尾往另一边补），同一个样本里窗口不重叠，也不跟这个测试集里已有的重叠。"""
+    每组（狗 × 细类）最多 per_group 段，按日期轮着挑；每只狗最多 per_dog 段；总数最多 max_total（各组轮着取）。
+    窗口 = 片段前后延长凑够 pad_sec（碰头尾往另一边补），同一个样本里窗口不重叠，也不跟这个测试集里已有的重叠。
+    mode=positive：以选的类别的片段为中心（事件比窗口长不截，留完整过程）；
+    mode=negative：「无这类」窗口——以别的片段（anchor_names，比如相似动作舔 / 甩头，或活动 / 休息；不给 = 任何别的类别）
+    为中心，窗口里这个样本所有任务都不能有选的类别（待定的也不行）；中心片段比窗口长就在里面截。"""
     import random
     from app.models.annotation import LabelItemSource
     from app.models.task import TaskStatus
@@ -375,15 +391,30 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
         return {"picks": [], "stats": {}, "warnings": ["没选类别，或者选的类别没有对应的标签"]}
     lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
     lname = {i: n for i, n, _ in lrows}
+    negative = mode == "negative"
+    neg_name = "无" + "/".join(label_names)
+    anchor_ids: set[int] | None = None
+    if negative and anchor_names:
+        anchor_ids = set((await db.execute(select(LabelDefinition.id).where(LabelDefinition.display_name.in_(anchor_names)))).scalars().all())
+        anchor_ids = (await label_tree.expand_ids(db, anchor_ids)) - ids if anchor_ids else set()
+        if not anchor_ids:
+            return {"picks": [], "stats": {}, "warnings": ["选的「以哪类片段为中心」没有对应的标签"]}
 
     it = AnnotationLabelItem
+    # 有这类：以这类片段为中心；没有这类：以别的类别的片段为中心（窗口里一次这类都不能有，下面再查）
+    if not negative:
+        label_cond = it.label_id.in_(ids)
+    elif anchor_ids is not None:
+        label_cond = it.label_id.in_(anchor_ids)
+    else:
+        label_cond = it.label_id.notin_(ids)
     q = (select(it.label_id, it.start_time_ms, it.end_time_ms, it.source_type, it.ai_confirmed, it.is_modified,
                 Task.id, Task.status, Sample.id, Sample.sample_code, Sample.video_cam1_path, Sample.imu_csv_path,
                 Sample.dog_id, Sample.video_duration_sec, Sample.session_date)
          .join(AnnotationRecord, it.annotation_record_id == AnnotationRecord.id)
          .join(Task, Task.id == AnnotationRecord.task_id)
          .join(Sample, Sample.id == Task.sample_id)
-         .where(it.label_id.in_(ids), AnnotationRecord.round_no == Task.round_no, it.uncertain.is_(False),
+         .where(label_cond, AnnotationRecord.round_no == Task.round_no, it.uncertain.is_(False),
                 Task.segment_start_ms.is_(None),
                 Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True)))))
     if date_from is not None:
@@ -438,14 +469,37 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
             continue
         if did is None and (want_dogs or want_sites):
             continue
-        leaf = lname.get(lid, "?")
+        leaf = neg_name if negative else lname.get(lid, "?")
         n_in[(did, leaf)] += 1
         groups[(did, leaf)].append({"task_id": tid, "sample_id": sid, "a": int(a), "b": int(b), "human": bool(human),
                                     "dur_ms": int((dur or 0) * 1000), "date": sday, "label": leaf,
+                                    "anchor": lname.get(lid, "?") if negative else None,
                                     "dog_id": did, "site": site_name})
+
+    # 没有这类：这些样本里（任何任务、待定的也算）这类片段的时间，窗口一点都不能碰
+    avoid: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    if negative and groups:
+        sids = list({x["sample_id"] for g in groups.values() for x in g})
+        for i in range(0, len(sids), 2000):
+            for sid, a, b in (await db.execute(
+                select(Task.sample_id, it.start_time_ms, it.end_time_ms)
+                .join(AnnotationRecord, it.annotation_record_id == AnnotationRecord.id)
+                .join(Task, Task.id == AnnotationRecord.task_id)
+                .where(Task.sample_id.in_(sids[i:i + 2000]), it.label_id.in_(ids),
+                       AnnotationRecord.round_no == Task.round_no))).all():
+                avoid[sid].append((int(a), int(b)))
 
     rng = random.Random(seed)
     pad_ms = int(pad_sec * 1000)
+
+    def window_of(x: dict) -> tuple[int, int]:
+        hi = x["dur_ms"] or None
+        if negative and pad_ms and x["b"] - x["a"] > pad_ms:
+            # 没有这类：中心片段比窗口长（比如半小时的休息）就在里面随机截一段，窗口就是设定的长度
+            s = rng.randrange(x["a"], x["b"] - pad_ms + 1, 1000)
+            return s, s + pad_ms
+        # 有这类：事件比窗口长（长时间抓挠）不截，留完整过程
+        return pad_window(x["a"], x["b"], pad_ms, 0, hi)
     picked_by_group: dict[tuple, list[dict]] = {}
     for key, segs in groups.items():
         rng.shuffle(segs)
@@ -462,20 +516,27 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
                 if len(got) >= per_group or not per_day[d]:
                     continue
                 x = per_day[d].pop()
-                s, e = pad_window(x["a"], x["b"], pad_ms, 0, x["dur_ms"] or None)
+                s, e = window_of(x)
+                if negative and any(a < e and b > s for a, b in avoid.get(x["sample_id"], [])):
+                    continue
                 if all(e <= p or s >= q2 for p, q2 in taken[x["sample_id"]]):
                     taken[x["sample_id"]].append((s, e))
                     got.append({**x, "start_ms": s, "end_ms": e})
         picked_by_group[key] = got
 
-    # 总数上限：各组轮着取，谁都不独占
+    # 总数上限 / 每只狗上限：各组轮着取，谁都不独占
     picks: list[dict] = []
     order = sorted(picked_by_group, key=lambda k: (dogs[k[0]].name if k[0] in dogs else "~", k[1]))
+    per_dog_n: Counter = Counter()
     i = 0
     while len(picks) < max_total and any(picked_by_group[k] for k in order):
         k = order[i % len(order)]
         if picked_by_group[k]:
-            picks.append(picked_by_group[k].pop(0))
+            if per_dog and per_dog_n[k[0]] >= per_dog:
+                picked_by_group[k].clear()
+            else:
+                picks.append(picked_by_group[k].pop(0))
+                per_dog_n[k[0]] += 1
         i += 1
 
     mat: dict[str, Counter] = defaultdict(Counter)

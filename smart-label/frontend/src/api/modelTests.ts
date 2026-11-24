@@ -62,6 +62,12 @@ export interface ComposeBody {
   pad_sec?: number;
   min_sec?: number;
   seed?: number;
+  /** positive = 有这类（以这类片段为中心）；negative = 无这类（整个窗口一次都没有） */
+  mode?: "positive" | "negative";
+  /** 无这类时以哪类片段为中心；不给 = 任何别的类别 */
+  anchor_names?: string[];
+  /** 每只狗最多几段 */
+  per_dog?: number | null;
 }
 export interface ComposeStats {
   n_found: number;
@@ -95,6 +101,8 @@ export interface Coverage {
   /** 细类（部位）段数 */
   leaf?: Record<string, number>;
   n_checked?: number;
+  /** 按实际时长（「1 分钟」「10 分钟」…）× 有抓挠 / 无抓挠 的段数 */
+  by_dur?: Record<string, Record<string, number>>;
   warnings: string[];
 }
 

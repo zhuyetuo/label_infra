@@ -52,6 +52,27 @@ def test_核对标记_冻结后不能改(db, run):
         run(api.compose_apply(s["id"], api.ComposeIn(label_names=["抓挠"]), db, w.admin))
 
 
+def test_无这类窗口_每只狗上限(db, run):
+    w = _world(db, run)
+    s = run(api.create_set(api.SetIn(name="v1"), db, w.admin))["data"]
+    t = run(db.execute(select(Task))).scalars().first()
+    scr = [x for x in run(mts.task_segments(db, t.id)) if x["top"] == "抓挠"]
+    pv = run(api.compose_preview(s["id"], api.ComposeIn(label_names=["抓挠"], mode="negative", pad_sec=0), db))["data"]
+    for p in pv["picks"]:
+        assert p["label"] == "无抓挠" and p["anchor"] and not p["anchor"].startswith("抓挠")
+        assert not any(x["start_ms"] < p["end_ms"] and x["end_ms"] > p["start_ms"] for x in scr)   # 窗口里一次抓挠都没有
+    # 每只狗最多 1 段
+    pv = run(api.compose_preview(s["id"], api.ComposeIn(label_names=["抓挠"], per_dog=1), db))["data"]
+    assert pv["stats"]["n_picked"] <= 1
+    # 指定的中心类别没有对应标签
+    pv = run(api.compose_preview(s["id"], api.ComposeIn(label_names=["抓挠"], mode="negative", anchor_names=["不存在的类"]), db))["data"]
+    assert pv["picks"] == [] and pv["warnings"]
+    # 配额表按时长 × 有无抓挠
+    run(api.compose_apply(s["id"], api.ComposeIn(label_names=["抓挠"], pad_sec=600), db, w.admin))
+    cov = run(api.get_items(s["id"], db))["data"]["coverage"]
+    assert cov["by_dur"].get("10 分钟", {}).get("有抓挠", 0) >= 1
+
+
 def test_删测试集_任务和标注不动(db, run):
     from app.models.annotation import AnnotationLabelItem
     w = _world(db, run)

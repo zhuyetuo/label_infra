@@ -107,6 +107,16 @@ function CoverageView({ cov }: { cov: Coverage }) {
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         数事件数，不是段数：抓挠每种体型 30 次左右，召回率的误差约 ±15%；100 次左右才稳到 ±8%。红色「缺」的格子是下一批要补的。
       </Typography.Text>
+      {Object.keys(cov.by_dur ?? {}).length > 0 && (
+        <Table size="small" bordered pagination={false} rowKey="dur" style={{ maxWidth: 520 }}
+          dataSource={Object.entries(cov.by_dur ?? {}).map(([dur, m]) => ({ dur, yes: m["有抓挠"] ?? 0, no: m["无抓挠"] ?? 0 }))}
+          columns={[
+            { title: "时长", dataIndex: "dur" },
+            { title: "有抓挠", dataIndex: "yes", render: (v: number) => <b style={{ color: "#27AE60" }}>{v}</b> },
+            { title: "无抓挠", dataIndex: "no", render: (v: number) => <b style={{ color: "#5D6D7E" }}>{v}</b> },
+            { title: "合计", render: (_, r) => r.yes + r.no },
+          ]} />
+      )}
       <Space wrap>
         <span>人工核对过 <b>{cov.n_checked ?? 0}</b> / {cov.n_items} 段</span>
         {Object.keys(cov.leaf ?? {}).length > 0 && <span style={{ color: "#888" }}>细类（部位）：</span>}
@@ -283,6 +293,9 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
   const [padSec, setPadSec] = useState(60);
   const [minSec, setMinSec] = useState(0);
   const [seed, setSeed] = useState(1);
+  const [mode, setMode] = useState<"positive" | "negative">("positive");
+  const [anchors, setAnchors] = useState<string[]>([]);
+  const [perDog, setPerDog] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ stats: ComposeStats; warnings: string[] } | null>(null);
 
@@ -300,6 +313,7 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
     date_from: range?.[0]?.format("YYYY-MM-DD") ?? null, date_to: range?.[1]?.format("YYYY-MM-DD") ?? null,
     source, seen_mode: seenMode, model_ids: seenMode === "any" ? undefined : modelIds,
     per_group: perGroup, max_total: maxTotal, pad_sec: padSec, min_sec: minSec, seed,
+    mode, anchor_names: mode === "negative" && anchors.length ? anchors : undefined, per_dog: perDog,
   });
   const preview = async () => {
     if (!labels.length) return message.warning("至少选一个类别");
@@ -338,6 +352,27 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
           <Tooltip title="选上一级就含下面所有细类；只要某个部位就只勾那个部位">
             <span style={{ color: "#888" }}>（勾大类 = 含全部部位）</span>
           </Tooltip>
+          <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)} optionType="button" buttonStyle="solid"
+            options={[{ value: "positive", label: "有这类" }, { value: "negative", label: "无这类" }]} />
+        </Space>
+        {mode === "negative" && (
+          <Space wrap>
+            <Tooltip title="「无抓挠」窗口以哪类片段为中心：选相似动作（舔、甩头、啃）就是考模型会不会把它们误当抓挠；选活动 / 休息就是一般情况。不选 = 任何别的类别。窗口里这个样本所有任务都不能有选的类别（待定的也不行）">
+              <span>以哪类片段为中心：</span>
+            </Tooltip>
+            <TreeSelect style={{ minWidth: 360 }} treeData={treeData} value={anchors} onChange={(v) => setAnchors(v as string[])}
+              treeCheckable showCheckedStrategy={TreeSelect.SHOW_PARENT} allowClear placeholder="不选 = 任何别的类别（比如 舔 / 甩头/抖身 / 活动）" maxTagCount={6} />
+          </Space>
+        )}
+        <Space wrap>
+          <span>窗口时长：</span>
+          <Radio.Group value={[60, 300, 600].includes(padSec) ? padSec : -1} optionType="button"
+            onChange={(e) => { if (e.target.value > 0) setPadSec(e.target.value); }}
+            options={[{ value: 60, label: "1 分钟" }, { value: 300, label: "5 分钟" }, { value: 600, label: "10 分钟" }, { value: -1, label: "自定义" }]} />
+          <InputNumber min={5} max={3600} value={padSec} onChange={(v) => setPadSec(v ?? 60)} addonAfter="秒" style={{ width: 130 }} />
+          <span style={{ color: "#888", fontSize: 12 }}>
+            {mode === "positive" ? "事件比窗口短就前后延长；长时间的事件不截，留完整过程" : "中心片段比窗口长就在里面截一段"}
+          </span>
         </Space>
         <Space wrap>
           <span>场地：</span>
@@ -364,8 +399,8 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
         </Space>
         <Space wrap>
           <span>每只狗 × 每个细类最多 <InputNumber size="small" min={1} max={500} value={perGroup} onChange={(v) => setPerGroup(v ?? 10)} /> 段</span>
+          <span>每只狗最多 <InputNumber size="small" min={1} max={3000} value={perDog} placeholder="不限" onChange={(v) => setPerDog(v)} /> 段</span>
           <span>总共最多 <InputNumber size="small" min={1} max={3000} value={maxTotal} onChange={(v) => setMaxTotal(v ?? 200)} /> 段</span>
-          <span>窗口凑够 <InputNumber size="small" min={0} max={3600} value={padSec} onChange={(v) => setPadSec(v ?? 60)} /> 秒</span>
           <span>片段至少 <InputNumber size="small" min={0} max={3600} value={minSec} onChange={(v) => setMinSec(v ?? 0)} /> 秒</span>
           <Tooltip title="同样的条件和种子挑出来的一样；换个数字就换一批">
             <span>随机种子 <InputNumber size="small" min={1} value={seed} onChange={(v) => setSeed(v ?? 1)} /></span>
