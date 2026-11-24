@@ -19,6 +19,7 @@ from app.api.v1 import (
     daily_stats,
     model_eval,
     model_versions,
+    model_tests,
     projects,
     reviews,
     samples,
@@ -60,6 +61,7 @@ api_router.include_router(dogs.router)
 api_router.include_router(dogs.stream_router)
 api_router.include_router(model_eval.router)
 api_router.include_router(model_versions.router)
+api_router.include_router(model_tests.router)
 api_router.include_router(model_versions.callback_router)
 api_router.include_router(tooth.router)
 api_router.include_router(tooth.stream_router)

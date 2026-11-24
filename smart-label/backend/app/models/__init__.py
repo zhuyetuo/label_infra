@@ -16,6 +16,7 @@ from app.models.local_model_stat import LocalModelSnapshot, LocalModelStat
 from app.models.llm_provider import LlmProvider
 from app.models.media_file import MediaFile
 from app.models.model_version import ModelVersion
+from app.models.model_test import ModelTestItem, ModelTestSet
 from app.models.project import Project
 from app.models.review import ReviewRecord
 from app.models.sample import Sample

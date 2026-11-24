@@ -395,6 +395,13 @@ async def export_dataset(
         # 核对完停用它——不跳过的话同一段标注（原项目 + 拆出来的）会算两遍
         q = q.where(Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True))))
     rows = (await db.execute(q)).all()
+    # 模型测试集里的样本一律不进训练（哪个项目里的同一个样本都算、整个样本都不要）：
+    # 测试数据被训练吃进去，测试就作废了。见 model_test_service
+    from app.services.model_test_service import test_sample_ids
+    _test_ids = await test_sample_ids(db)
+    n_skipped_test = sum(1 for _t, smp in rows if smp.id in _test_ids)
+    if n_skipped_test:
+        rows = [(t, smp) for t, smp in rows if smp.id not in _test_ids]
     if sample_hz:
         # 按样本的原始采样率挑（训 31.25 Hz 只能用 50 Hz 采的；老的 16 Hz 数据升不上去）
         # 按名义档位比（设备实际报 51 / 57 / 66Hz，选「50Hz」要都算上），见 data_pool.nominal_hz
@@ -753,6 +760,8 @@ async def export_dataset(
     tree_before = _tally(ls_tasks)[4] if (reduce_labels or reduce_targets) else None
     reduced, w_reduce = _reduce(ls_tasks, reduce_labels or [], reduce_factor, reduce_targets)
     warnings[:0] = w_reduce
+    if n_skipped_test:
+        warnings.insert(0, f"模型测试集里的 {n_skipped_test} 个任务没导出（测试数据不进训练）")
     if reduced:
         ls_tasks = [t for t in ls_tasks if t["annotations"][0]["result"]]
     label_counter, label_sec, n_segments, total_sec, label_tree = _tally(ls_tasks)
@@ -789,6 +798,7 @@ async def export_dataset(
         },
         "include_submitted": include_submitted,
         "scope": scope,
+        "n_skipped_test": n_skipped_test,
         **({"pool_filters": {"dog_ids": dog_ids or [], "sample_hz": sample_hz or [], "label_names": only_labels or [],
                              "n_skipped_not_pool": n_skipped_not_pool}} if only_pool else {}),
         **({"min_seg_sec": min_seg_sec, "n_skipped_short": n_skipped_short} if min_seg_sec else {}),
