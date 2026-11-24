@@ -756,6 +756,11 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         return ok({"label": label, "projects": {}, "total": {"n": 0, "approved": 0, "returned": 0, "unreviewed": 0, "marked": 0},
                    "marks": {}, "candidates": {}, "cand_total": 0, "spot": {}, "spot_total": 0, "spot_labels": {}})
     label_ids = await label_tree.expand_ids(db, root_ids)
+    # 模型测试项目（名字以「模型测试」开头）：每个项目那一行照常算，合计（左边菜单角标）不算——
+    # 测试集用的窗口不是日常要补的标注
+    from app.models.project import Project as _Project
+    test_pids = {str(i) for i in (await db.execute(
+        select(_Project.id).where(_Project.name.like("模型测试%")))).scalars().all()}
     scope = apply_task_scope(select(Task.id), user).subquery()
     ok_c = case(((AnnotationLabelItem.seg_status == "approved") & AnnotationLabelItem.review_note.is_(None), 1), else_=0)
     ret_c = case(((AnnotationLabelItem.seg_status == "returned") | AnnotationLabelItem.review_note.is_not(None), 1), else_=0)
@@ -776,6 +781,8 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
         r = {"n": n, "approved": n_ok, "returned": n_ret, "marked": n_mk,
              "unreviewed": max(0, n - n_ok - n_ret - n_mk)}
         projects[str(pid)] = r
+        if str(pid) in test_pids:
+            continue
         for k in total:
             total[k] += r[k]
     # 🔖 备忘（片段上打的 marks：复合类别要拆 / 边界拿不准 / 画面≠IMU…）：所有类别都算，不只这个 label。
@@ -832,9 +839,9 @@ async def label_review_progress(label: str = "抓挠", db: AsyncSession = Depend
     )
     fill = {str(pid): int(n) for pid, n in fill_rows.all()}
     return ok({"label": label, "projects": projects, "total": total, "marks": marks,
-               "candidates": candidates, "cand_total": sum(candidates.values()),
-               "spot": spot, "spot_total": sum(spot.values()), "spot_labels": spot_labels,
-               "fill": fill, "fill_total": sum(fill.values())})
+               "candidates": candidates, "cand_total": sum(v for k, v in candidates.items() if k not in test_pids),
+               "spot": spot, "spot_total": sum(v for k, v in spot.items() if k not in test_pids), "spot_labels": spot_labels,
+               "fill": fill, "fill_total": sum(v for k, v in fill.items() if k not in test_pids)})
 
 
 class LabelFocusIn(BaseModel):
