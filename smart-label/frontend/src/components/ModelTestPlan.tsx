@@ -181,6 +181,60 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
     return (kids.get(null) ?? []).filter((t) => t !== plan.target).map((t) => ({ title: t, value: t, children: build(t, 0) }));
   }, [kids, plan.target]);
   const [newCat, setNewCat] = useState<{ name: string; anchors: string[] }>({ name: "", anchors: [] });
+
+  // ── 输入总段数，自动配比 ──
+  const [wantTotal, setWantTotal] = useState<number | null>(200);
+  const [autoMode, setAutoMode] = useState<"scale" | "even" | "avail">("scale");
+  const autoAllocate = () => {
+    const N = Math.max(0, Math.round(wantTotal ?? 0));
+    if (!N) return message.warning("先填总段数");
+    const durs = plan.durations;
+    if (autoMode === "scale") {
+      // 现在的计划等比缩放：每只狗 × 时长 × 有/无 一格一格按比例，最大余数补齐，正好 N
+      const cells: { id: number; d: number; k: 0 | 1; v: number }[] = [];
+      plan.dogs.forEach((x) => durs.forEach((d) => ([0, 1] as const).forEach((k) => cells.push({ id: x.dog_id, d, k, v: qOf(x, d)[k] }))));
+      const old = cells.reduce((a, c) => a + c.v, 0);
+      if (!old) return message.warning("现在的计划是空的：选「平均」或「按可用量」");
+      const nv = splitByRatio(N, cells.map((c) => c.v));
+      update((p) => ({
+        ...p,
+        dogs: p.dogs.map((x) => {
+          const q: Record<string, [number, number]> = {};
+          cells.forEach((c, i) => {
+            if (c.id !== x.dog_id) return;
+            const cur = q[String(c.d)] ?? [0, 0];
+            cur[c.k] = nv[i];
+            q[String(c.d)] = cur;
+          });
+          const oldPos = durs.reduce((a, d) => a + qOf(x, d)[0], 0);
+          const newPos = durs.reduce((a, d) => a + (q[String(d)]?.[0] ?? 0), 0);
+          const ps = Object.keys(x.p);
+          const oldPart = ps.reduce((a, k) => a + (x.p[k] ?? 0), 0);
+          const partTotal = oldPos ? Math.min(newPos, Math.round((oldPart / oldPos) * newPos)) : 0;
+          const pv = splitByRatio(partTotal, ps.map((k) => x.p[k] ?? 0));
+          return { ...x, q, p: Object.fromEntries(ps.map((k, i) => [k, pv[i]])) };
+        }).filter((x) => Object.values(x.q).some(([a, b]) => a || b)),
+      }));
+    } else {
+      // 平均 / 按可用量：分给当前场所里的狗（按可用量时没数据的狗不分），每只狗再平均分到各时长、有无各半、各部位均分
+      const pool = scopeDogs.filter((d) => autoMode === "even" || availOf(d.id) > 0);
+      if (!pool.length) return message.warning("这个范围里没有可分的狗");
+      const perDog = splitByRatio(N, pool.map((d) => (autoMode === "even" ? 1 : availOf(d.id))));
+      update((p) => {
+        const keep = p.dogs.filter((x) => !pool.some((d) => d.id === x.dog_id) && !scopeDogs.some((d) => d.id === x.dog_id));
+        const made = pool.map((d, i) => {
+          const byDur = splitByRatio(perDog[i], durs.map(() => 1));
+          const q: Record<string, [number, number]> = {};
+          durs.forEach((dd, j) => { const [a, b] = splitByRatio(byDur[j], [1, 1]); q[String(dd)] = [a, b]; });
+          const pos = durs.reduce((a, dd) => a + q[String(dd)][0], 0);
+          const pv = splitByRatio(p.parts.length ? pos : 0, p.parts.map(() => 1));
+          return { dog_id: d.id, q, p: Object.fromEntries(p.parts.map((k, j) => [k, pv[j]])) };
+        }).filter((x) => Object.values(x.q).some(([a, b]) => a || b));
+        return { ...p, dogs: [...keep, ...made] };
+      });
+    }
+    setSelDog(null);
+  };
   const multi = selected.length > 1;
 
   const run = async (kind: "preview" | "apply" | "save") => {
@@ -239,6 +293,23 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             options={[{ value: "any", label: "见没见过都行" }, { value: "unseen", label: "模型没见过" }, { value: "seen", label: "模型见过" }]} />
         </Tooltip>
       </Space>
+
+      {/* 输入总段数，自动配比 */}
+      {!frozen && (
+        <Space wrap size={[10, 8]} style={{ fontSize: 13, padding: "10px 14px", border: `1px dashed ${line}`, borderRadius: 8 }}>
+          <span style={{ fontWeight: 700 }}>总数</span>
+          <InputNumber size="small" min={1} max={5000} value={wantTotal ?? undefined} onChange={(v) => setWantTotal(v)} addonAfter="段" style={{ width: 120 }} />
+          {[200, 300, 500].map((n) => <Button key={n} size="small" type={wantTotal === n ? "primary" : "default"} ghost={wantTotal === n} onClick={() => setWantTotal(n)}>{n}</Button>)}
+          <span style={{ color: muted }}>按</span>
+          <Tooltip title={autoMode === "scale" ? "把现在的计划等比放大 / 缩小，每只狗、每个时长、有无、部位的比例都不变"
+            : autoMode === "even" ? `平均分给${site ? SITE_SHORT[site] : "全部场所"}的狗，每只狗再平均分到各时长，有无各半，部位均分`
+              : `按每只狗可用的${plan.target}片段多少分（${site ? SITE_SHORT[site] : "全部场所"}，没数据的狗不分），每只狗内部同「平均」`}>
+            <Segmented size="small" value={autoMode} onChange={(v) => setAutoMode(v as typeof autoMode)}
+              options={[{ value: "scale", label: "现在比例" }, { value: "even", label: "平均" }, { value: "avail", label: "按可用量" }]} />
+          </Tooltip>
+          <Button size="small" type="primary" onClick={autoAllocate}>自动配</Button>
+        </Space>
+      )}
 
       {/* ① 场所 */}
       <div>
