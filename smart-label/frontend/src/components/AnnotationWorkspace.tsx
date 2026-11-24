@@ -671,6 +671,8 @@ export default function AnnotationWorkspace({
       await applySampleMedia(media);
       // 从别处点「去修」进来的：直接停在出问题的那一刻，不用自己拖进度条找
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
+      // 短任务（只标样本里的一段，比如模型测试的 1 分钟窗口）：没指定位置就停在窗口开头
+      else if (task?.segment_start_ms != null) bus.seek(task.segment_start_ms / 1000);
       // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
       // 类别也带过来了。人在那边已经判断过一次了，不该到这儿再选一遍
       if (initialSimilar && initialSeekMs != null) {
@@ -3167,6 +3169,14 @@ export default function AnnotationWorkspace({
               <Button size="small" onClick={openCamFix}>机位纠正</Button>
             </Tooltip>
           )}
+          {task?.segment_start_ms != null && task?.segment_end_ms != null && (
+            <Tooltip title="这个任务只标样本里的这一段：窗口外不用标，窗口里要全标（休息、活动也标）。点一下循环播放这一段">
+              <Tag color="orange" style={{ cursor: "pointer", fontWeight: 600 }}
+                onClick={() => { bus.seek(task.segment_start_ms! / 1000); setLoop({ startMs: task.segment_start_ms!, endMs: task.segment_end_ms! }); }}>
+                只标 {formatMs(task.segment_start_ms)} ~ {formatMs(task.segment_end_ms)}
+              </Tag>
+            </Tooltip>
+          )}
           <Tag>
             {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
             样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}
@@ -3312,6 +3322,28 @@ export default function AnnotationWorkspace({
       <Spin spinning={loading}>
         {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
             「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
+        {task?.segment_start_ms != null && task?.segment_end_ms != null && (
+          // 短任务：说清楚只标哪一段。不写的话人看到的是整个样本（比如 1 小时），不知道该标哪一分钟
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 6 }}
+            message={
+              <span>
+                这个任务只标 <b>{formatMs(task.segment_start_ms)} ~ {formatMs(task.segment_end_ms)}</b>
+                （{Math.round((task.segment_end_ms - task.segment_start_ms) / 1000)} 秒）：窗口外不用标；
+                窗口里<b>从头到尾都要标</b>（休息、活动也标），没有现成的片段，从零标。
+              </span>
+            }
+            action={
+              <Space size={4}>
+                <Button size="small" onClick={() => bus.seek(task.segment_start_ms! / 1000)}>跳到窗口</Button>
+                <Button size="small" onClick={() => { bus.seek(task.segment_start_ms! / 1000); setLoop({ startMs: task.segment_start_ms!, endMs: task.segment_end_ms! }); }}>循环窗口</Button>
+                {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
+              </Space>
+            }
+          />
+        )}
         {initialSeekMs != null && initialCandFilter != null && (
           // 从找相似跳来的：说清楚定位到了哪一刻、正在循环哪几秒——不然人不知道该看哪一条
           <Alert
