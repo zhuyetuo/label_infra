@@ -260,14 +260,36 @@ type EvalRow = { key: string; group: string; n: number; version: string; r: Vers
 function useEvalPicker() {
   const [label, setLabel] = useState("抓挠");
   const [picked, setPicked] = useState<string[]>([]);
-  const [unseenOnly, setUnseenOnly] = useState(true);
+  const [scope, setScope] = useState<SeenScope>("unseen");
   const [iou, setIou] = useState(0.3);
   const { data: runs, refetch } = useQuery({ queryKey: ["eval-runs-all"], queryFn: () => listEvalRuns() });
   const options = (runs?.runs ?? []).map((r) => ({
     value: `${r.model_tag}::${r.mode}`, label: `${r.model_tag} · ${modeLabelOf(r.mode)}（跑过 ${r.n_samples} 个样本）`,
   }));
   const versions = picked.map((p) => { const [model_tag, mode] = p.split("::"); return { model_tag, mode }; });
-  return { label, setLabel, picked, setPicked, unseenOnly, setUnseenOnly, iou, setIou, options, versions, refetchRuns: refetch };
+  return { label, setLabel, picked, setPicked, scope, setScope, iou, setIou, options, versions, refetchRuns: refetch };
+}
+
+/** 打分用哪些样本：选中的模型都没见过的 / 至少一个见过的 / 全部 / 两部分分开各打一次 */
+type SeenScope = "unseen" | "seen" | "all" | "split";
+const SCOPE_OPTIONS = [
+  { value: "unseen", label: "只用没见过的（正式成绩）" },
+  { value: "seen", label: "只用见过的（训练用过）" },
+  { value: "all", label: "全部" },
+  { value: "split", label: "见过 / 没见过 分开看" },
+];
+/** 按范围把样本分成几份：[名字, 样本 id] */
+async function scopeParts(setId: number, items: TestItem[], tags: string[], scope: SeenScope, notes: string[], prefix = "") {
+  const all = Array.from(new Set(items.map((i) => i.sample_id)));
+  if (scope === "all") return [[`${prefix}全部`, all]] as [string, number[]][];
+  const { seenSamples, unknown } = await seenSamplesOf(setId, items, tags);
+  if (unknown.length) notes.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（都算没见过）`);
+  const seen = all.filter((s) => seenSamples.has(s));
+  const unseen = all.filter((s) => !seenSamples.has(s));
+  notes.push(`${prefix}选中的模型见过 ${seen.length} 个样本、都没见过 ${unseen.length} 个`);
+  if (scope === "seen") return [[`${prefix}见过`, seen]] as [string, number[]][];
+  if (scope === "unseen") return [[`${prefix}没见过`, unseen]] as [string, number[]][];
+  return [[`${prefix}没见过`, unseen], [`${prefix}见过`, seen]] as [string, number[]][];
 }
 
 /** 一批测试集里，选中模型见过的样本（按训练记录的数据集算）。认不出训练记录的模型返回 unknown */
@@ -294,9 +316,9 @@ function EvalPickerBar({ p, extra }: { p: ReturnType<typeof useEvalPicker>; extr
       <Tooltip title="重叠多少算同一段：0.3 宽松，起止差一点也认；想严格看边界调到 0.5 以上">
         <span>IoU ≥ <InputNumber size="small" min={0.05} max={0.95} step={0.05} value={p.iou} onChange={(v) => p.setIou(v ?? 0.3)} /></span>
       </Tooltip>
-      <Checkbox checked={p.unseenOnly} onChange={(e) => p.setUnseenOnly(e.target.checked)}>
-        只用选中的模型<b>都没见过</b>的样本
-      </Checkbox>
+      <Tooltip title="见过 = 样本在选中的任一模型的训练数据里。正式成绩看「没见过」；跟「见过」差得多说明模型在背答案">
+        <Select style={{ width: 210 }} value={p.scope} onChange={(v) => p.setScope(v as SeenScope)} options={SCOPE_OPTIONS} />
+      </Tooltip>
       {extra}
     </Space>
   );
@@ -342,19 +364,16 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
     setBusy(true);
     try {
       const ns: string[] = [];
-      let use = allSamples;
-      if (p.unseenOnly) {
-        const { seenSamples, unknown } = await seenSamplesOf(setId, items, p.versions.map((v) => v.model_tag));
-        use = allSamples.filter((s) => !seenSamples.has(s));
-        ns.push(`剔掉了选中模型见过的 ${allSamples.length - use.length} 个样本，剩 ${use.length} 个`);
-        if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
-      }
-      const groups: [string, number[]][] = [["全部", use]];
-      if (bySize) {
-        for (const sz of [...SIZES, null]) {
-          const ids = Array.from(new Set(items.filter((i) => (sz == null ? !SIZES.includes(i.size ?? "") : i.size === sz)
-            && use.includes(i.sample_id)).map((i) => i.sample_id)));
-          if (ids.length) groups.push([sz == null ? "体型未知" : `${sz}型犬`, ids]);
+      const parts = await scopeParts(setId, items, p.versions.map((v) => v.model_tag), p.scope, ns);
+      const groups: [string, number[]][] = [];
+      for (const [pname, use] of parts) {
+        groups.push([pname, use]);
+        if (bySize) {
+          for (const sz of [...SIZES, null]) {
+            const ids = Array.from(new Set(items.filter((i) => (sz == null ? !SIZES.includes(i.size ?? "") : i.size === sz)
+              && use.includes(i.sample_id)).map((i) => i.sample_id)));
+            if (ids.length) groups.push([`${pname}·${sz == null ? "体型未知" : `${sz}型犬`}`, ids]);
+          }
         }
       }
       const out: EvalRow[] = [];
@@ -411,17 +430,12 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
       for (const sid of setIds) {
         const s = sets.find((x) => x.id === sid)!;
         const { items } = await getTestItems(sid);
-        let use = Array.from(new Set(items.map((i) => i.sample_id)));
-        if (p.unseenOnly) {
-          const { seenSamples, unknown } = await seenSamplesOf(sid, items, p.versions.map((v) => v.model_tag));
-          const before = use.length;
-          use = use.filter((x) => !seenSamples.has(x));
-          if (before - use.length) ns.push(`「${s.name}」剔掉了见过的 ${before - use.length} 个样本`);
-          if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
+        const parts = await scopeParts(sid, items, p.versions.map((v) => v.model_tag), p.scope, ns, `「${s.name}」`);
+        for (const [pname, use] of parts) {
+          if (!use.length) { ns.push(`${pname}没有可用样本`); continue; }
+          const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, use), task_ids: taskIdsOf(items, use) });
+          r.versions.forEach((v) => out.push({ key: `${sid}-${pname}-${v.key}`, group: parts.length > 1 ? `${s.name}·${pname.replace(`「${s.name}」`, "")}` : s.name, n: use.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
         }
-        if (!use.length) { ns.push(`「${s.name}」没有可用样本`); continue; }
-        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, use), task_ids: taskIdsOf(items, use) });
-        r.versions.forEach((v) => out.push({ key: `${sid}-${v.key}`, group: s.name, n: use.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
       }
       setRows(out);
       setNotes(Array.from(new Set(ns)));
@@ -433,7 +447,9 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
   // 每个版本：几批的 F1 / 精确率 / 召回率 平均 ± 标准差
   const summary = useMemo(() => {
     const by = new Map<string, EvalRow[]>();
-    rows.forEach((r) => by.set(r.version, [...(by.get(r.version) ?? []), r]));
+    // 分开看时，见过 / 没见过各算各的平均，不混在一起
+    const keyOf = (r: EvalRow) => r.version + (r.group.endsWith("·见过") ? "（见过）" : r.group.endsWith("·没见过") ? "（没见过）" : "");
+    rows.forEach((r) => by.set(keyOf(r), [...(by.get(keyOf(r)) ?? []), r]));
     return Array.from(by.entries()).map(([version, rs]) => {
       const P = rs.map((x) => x.r.precision), R = rs.map((x) => x.r.recall), F = rs.map((x) => f1(x.r.precision, x.r.recall));
       return { version, n: rs.length, P, R, F };
