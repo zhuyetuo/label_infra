@@ -16,6 +16,7 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs } from "@/api/dogs";
+import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, getTask, listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
@@ -765,14 +766,17 @@ function SetDetail({ setId }: { setId: number }) {
   };
   return (
     <>
-      <Tabs items={[
+      <Tabs defaultActiveKey="plan" items={[
+        { key: "plan", label: "选样", children: (
+          <ModelTestPlan setId={setId} initial={data.set.plan ?? null} frozen={frozen} existing={data.items.length}
+            accent={colors[data.set.plan?.target ?? "抓挠"] ?? "#27AE60"} />) },
         { key: "cov", label: "配额表", children: data.items.length ? <CoverageView cov={data.coverage} /> : <Empty description="还没有片段：点「片段」→「加片段」" /> },
         {
           key: "items", label: `片段 ${data.items.length}`, children: (
             <Space direction="vertical" style={{ width: "100%" }}>
               <Space>
                 <Tooltip title="按场地 / 狗 / 日期 / 类别（含部位）从已有的标注片段里挑，先看配比再加">
-                  <Button type="primary" disabled={frozen} onClick={() => setComposing(true)}>按条件挑</Button>
+                  <Button disabled={frozen} onClick={() => setComposing(true)}>按条件挑</Button>
                 </Tooltip>
                 <Button disabled={frozen} onClick={() => setAdding(true)}>手动加</Button>
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}

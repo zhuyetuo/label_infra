@@ -71,6 +71,27 @@ class CheckIn(BaseModel):
     checked: bool = True
 
 
+class PlanDogIn(BaseModel):
+    dog_id: int
+    q: dict[str, list[int]] = {}          # {"60": [有, 无], "600": [有, 无]}
+    p: dict[str, int] = {}                # {部位: 段数}（有这类各时长合计）
+
+
+class PlanIn(BaseModel):
+    """选样计划：每只狗 × 时长 × 有/无 × 部位"""
+    target: str = "抓挠"
+    durations: list[int] = [60, 600]
+    parts: list[str] = []
+    anchor_names: list[str] | None = None
+    dogs: list[PlanDogIn] = []
+    date_from: date | None = None
+    date_to: date | None = None
+    source: Literal["any", "human", "ai"] = "any"
+    seen_mode: Literal["any", "unseen", "seen"] = "any"
+    model_ids: list[int] | None = None
+    seed: int = 1
+
+
 async def _set_or_404(db: AsyncSession, set_id: int) -> ModelTestSet:
     s = await db.get(ModelTestSet, set_id)
     if s is None:
@@ -123,7 +144,7 @@ async def copy_set(set_id: int, body: SetIn, db: AsyncSession = Depends(get_db),
     name = body.name.strip()
     if (await db.execute(select(ModelTestSet.id).where(ModelTestSet.name == name))).first():
         raise HTTPException(400, "已经有同名的测试集")
-    dst = ModelTestSet(name=name, note=body.note or f"从「{src.name}」复制", created_by=user.id)
+    dst = ModelTestSet(name=name, note=body.note or f"从「{src.name}」复制", created_by=user.id, plan=src.plan)
     db.add(dst)
     await db.flush()
     for it in (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == src.id))).scalars().all():
@@ -140,7 +161,12 @@ async def get_items(set_id: int, db: AsyncSession = Depends(get_db)):
     items = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id)
                               .order_by(ModelTestItem.id))).scalars().all()
     rows = await svc.describe_items(db, list(items))
-    return ok({"set": _set_out(s, len(items), len({i.sample_id for i in items})),
+    import json
+    try:
+        plan = json.loads(s.plan) if s.plan else None
+    except ValueError:
+        plan = None
+    return ok({"set": {**_set_out(s, len(items), len({i.sample_id for i in items})), "plan": plan},
                "items": rows, "coverage": svc.coverage(rows), "colors": await svc.label_colors(db)})
 
 
@@ -224,6 +250,52 @@ async def compose_apply(set_id: int, body: ComposeIn, db: AsyncSession = Depends
                                    + f"·{round((p['end_ms'] - p['start_ms']) / 60000, 1)}分钟·{'人工标过' if p['human'] else 'AI 预标'}")[:300]))
     await db.commit()
     return ok({"added": len(r["picks"]), "stats": r["stats"], "warnings": r["warnings"]})
+
+
+@router.post("/plan/availability")
+async def plan_availability(body: PlanIn, db: AsyncSession = Depends(get_db)):
+    """每只狗在条件范围里有多少这类片段（按细类）"""
+    return ok(await svc.plan_availability(db, body.model_dump()))
+
+
+def _plan_summary(r: dict) -> dict:
+    return {k: v for k, v in r.items() if k != "picks"}
+
+
+@router.post("/sets/{set_id}/plan/preview")
+async def plan_preview(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_db)):
+    """按计划试挑：每只狗每格能挑到几段（不写库）"""
+    await _set_or_404(db, set_id)
+    return ok(_plan_summary(await svc.plan_run(db, set_id, body.model_dump())))
+
+
+@router.post("/sets/{set_id}/plan/save")
+async def plan_save(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_db)):
+    """只存计划，不挑"""
+    import json
+    s = await _set_or_404(db, set_id)
+    s.plan = json.dumps(body.model_dump(mode="json"), ensure_ascii=False)
+    await db.commit()
+    return ok({"saved": True})
+
+
+@router.post("/sets/{set_id}/plan/apply")
+async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """按计划挑，加进测试集，并存下计划"""
+    import json
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
+    r = await svc.plan_run(db, set_id, body.model_dump())
+    for p in r["picks"]:
+        c = p["cell"]
+        note = f"选样·{round(c['dur'] / 60, 1):g}分钟·{c['kind']}{body.target}" + (f"·{c['part']}" if c.get("part") else "") \
+            + (f"·以{p['anchor']}为中心" if p.get("anchor") else "") + f"·{'人工标过' if p['human'] else 'AI 预标'}"
+        db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
+                             end_ms=p["end_ms"], added_by=user.id, note=note[:300]))
+    s.plan = json.dumps(body.model_dump(mode="json"), ensure_ascii=False)
+    await db.commit()
+    return ok({"added": len(r["picks"]), **_plan_summary(r)})
 
 
 @router.post("/items/{item_id}/check")

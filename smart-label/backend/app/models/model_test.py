@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,6 +19,8 @@ class ModelTestSet(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     frozen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="冻结时间；冻结后不能增删")
+    # 选样计划（JSON）：每只狗 × 时长 × 有/无 × 部位 的配额和条件。选样页打开接着改
+    plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

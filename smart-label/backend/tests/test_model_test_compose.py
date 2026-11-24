@@ -73,6 +73,34 @@ def test_无这类窗口_每只狗上限(db, run):
     assert cov["by_dur"].get("10 分钟", {}).get("有抓挠", 0) >= 1
 
 
+def test_选样计划_预览生成_计划保存(db, run):
+    from app.models.dog import Dog
+    from app.models.sample import Sample
+    w = _world(db, run)
+    d = Dog(dog_code="d1", name="阿黄", site="公司影棚", size="中")
+    db.add(d)
+    run(db.flush())
+    smp = run(db.execute(select(Sample))).scalar_one()
+    smp.dog_id = d.id
+    run(db.commit())
+    s = run(api.create_set(api.SetIn(name="v1"), db, w.admin))["data"]
+    plan = api.PlanIn(target="抓挠", durations=[60], dogs=[api.PlanDogIn(dog_id=d.id, q={"60": [1, 1]})])
+    av = run(api.plan_availability(plan, db))["data"]
+    assert sum(av["by_dog"][str(d.id)].values()) >= 1
+    pv = run(api.plan_preview(s["id"], plan, db))["data"]
+    rep = pv["report"][str(d.id)]["q"]["60"]
+    assert rep[0] == 1 and pv["n_picked"] == rep[0] + rep[1]
+    r = run(api.plan_apply(s["id"], plan, db, w.admin))["data"]
+    assert r["added"] == pv["n_picked"]
+    got = run(api.get_items(s["id"], db))["data"]
+    assert got["set"]["plan"]["dogs"][0]["dog_id"] == d.id
+    assert any((it["note"] or "").startswith("选样·1分钟·有抓挠") for it in got["items"])
+    # 有的窗口里没有抓挠
+    for it in got["items"]:
+        if "无抓挠" in (it["note"] or ""):
+            assert "抓挠" not in it["labels"]
+
+
 def test_删测试集_任务和标注不动(db, run):
     from app.models.annotation import AnnotationLabelItem
     w = _world(db, run)

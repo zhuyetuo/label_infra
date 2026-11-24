@@ -369,7 +369,8 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
                   seen_mode: str = "any", model_ids: list[int] | None = None, per_group: int = 10,
                   max_total: int = 200, pad_sec: float = 60, min_sec: float = 0, set_id: int | None = None,
                   seed: int = 1, mode: str = "positive", anchor_names: list[str] | None = None,
-                  per_dog: int | None = None) -> dict:
+                  per_dog: int | None = None, extra_taken: dict[int, list[tuple[int, int]]] | None = None,
+                  _cache: dict | None = None) -> dict:
     """按条件从已有片段里挑。返回 {picks: [...], stats, warnings}；不写库（写库见 compose_apply）。
 
     source：human = 人工标过的（任务已提交/通过，或片段是人加 / 人确认 / 人改过的）；ai = 只要 AI 预标的；any = 都要。
@@ -423,21 +424,34 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
         q = q.where(Sample.session_date <= date_to)
     if min_sec:
         q = q.where(it.end_time_ms - it.start_time_ms >= int(min_sec * 1000))
-    rows = (await db.execute(q.limit(COMPOSE_ROW_CAP))).all()
+    # _cache：选样计划一次要挑很多格（每只狗 × 时长 × 有无 × 部位），同样的查询只查一遍
+    cache = _cache if _cache is not None else {}
+    ck = ("rows", mode, tuple(sorted(ids)), tuple(sorted(anchor_ids or [])), str(date_from), str(date_to), min_sec)
+    if ck not in cache:
+        cache[ck] = (await db.execute(q.limit(COMPOSE_ROW_CAP))).all()
+    rows = cache[ck]
     if len(rows) >= COMPOSE_ROW_CAP:
         warnings.append(f"符合的片段超过 {COMPOSE_ROW_CAP} 条，只看了前 {COMPOSE_ROW_CAP} 条：缩小日期范围更准")
 
-    codes = await seen_codes_of(model_ids or [], db) if seen_mode != "any" and model_ids else None
+    codes = None
+    if seen_mode != "any" and model_ids:
+        kc = ("codes", tuple(sorted(model_ids)))
+        if kc not in cache:
+            cache[kc] = await seen_codes_of(model_ids, db)
+        codes = cache[kc]
     if seen_mode != "any" and not model_ids:
         warnings.append("选了「见过 / 没见过」但没选模型，这一条没生效")
-    idx = await DN.dog_index(db)
-    prof = await DN.dog_profiles(db)
-    dogs = {d.id: d for d in (await db.execute(select(Dog))).scalars().all()}
+    if "dogidx" not in cache:
+        cache["dogidx"] = (await DN.dog_index(db), await DN.dog_profiles(db),
+                           {d.id: d for d in (await db.execute(select(Dog))).scalars().all()})
+    idx, prof, dogs = cache["dogidx"]
     want_sites = set(sites or [])
     want_dogs = set(dog_ids or [])
-    dog_cache: dict[int, tuple[int | None, str | None]] = {}
+    dog_cache: dict[int, tuple[int | None, str | None]] = cache.setdefault("dog_cache", {})
 
     taken: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for sid, spans in (extra_taken or {}).items():
+        taken[sid].extend(spans)
     if set_id is not None:
         for sid, s, e, ts, te in (await db.execute(
             select(ModelTestItem.sample_id, ModelTestItem.start_ms, ModelTestItem.end_ms, Task.segment_start_ms,
@@ -477,9 +491,11 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
                                     "dog_id": did, "site": site_name})
 
     # 没有这类：这些样本里（任何任务、待定的也算）这类片段的时间，窗口一点都不能碰
-    avoid: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    avoid: dict[int, list[tuple[int, int]]] = cache.setdefault(("avoid", tuple(sorted(ids))), defaultdict(list))
+    avoid_done: set[int] = cache.setdefault(("avoid_done", tuple(sorted(ids))), set())
     if negative and groups:
-        sids = list({x["sample_id"] for g in groups.values() for x in g})
+        sids = list({x["sample_id"] for g in groups.values() for x in g} - avoid_done)
+        avoid_done.update(sids)
         for i in range(0, len(sids), 2000):
             for sid, a, b in (await db.execute(
                 select(Task.sample_id, it.start_time_ms, it.end_time_ms)
@@ -546,13 +562,18 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
     for p in picks:
         mat[dogs[p["dog_id"]].name if p["dog_id"] in dogs else "未知狗"][p["label"]] += 1
     dog_meta = {(dogs[d].name if d in dogs else "未知狗"): {"site": dogs[d].site if d in dogs else None,
-                                                          "size": dogs[d].size if d in dogs else None}
+                                                          "size": dogs[d].size if d in dogs else None, "id": d}
                 for d, _l in n_in}
+    avail_by_id: dict[int, dict[str, int]] = defaultdict(dict)
+    for (did, leaf), n in n_in.items():
+        if did is not None:
+            avail_by_id[did][leaf] = n
     stats = {
         "n_found": sum(n_in.values()), "n_picked": len(picks),
         "video_hours": round(sum(p["end_ms"] - p["start_ms"] for p in picks) / 3600_000, 2),
         "by_dog_label": {k: dict(v) for k, v in mat.items()},
         "available": {k: dict(v) for k, v in avail.items()},
+        "available_by_id": {str(k): v for k, v in avail_by_id.items()},
         "dogs": dog_meta,
         "by_site": dict(Counter(p["site"] or "未知" for p in picks)),
         "by_source": dict(Counter("人工标过" if p["human"] else "AI 预标" for p in picks)),
@@ -560,4 +581,78 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
     }
     for p in picks:
         p["date"] = str(p["date"])
+    if _cache is not None:
+        _cache.setdefault("_warn", []).extend(warnings)
     return {"picks": picks, "stats": stats, "warnings": warnings}
+
+
+# ───────────── 选样计划：每只狗 × 时长 × 有/无 × 部位 的配额，一次挑完 ─────────────
+
+async def plan_availability(db: AsyncSession, plan: dict) -> dict:
+    """每只狗在条件范围里有多少这类片段（按细类），给选样页显示「可用」"""
+    r = await compose(db, label_names=[plan["target"]], date_from=plan.get("date_from"), date_to=plan.get("date_to"),
+                      source=plan.get("source", "any"), seen_mode=plan.get("seen_mode", "any"),
+                      model_ids=plan.get("model_ids"), per_group=1, max_total=1)
+    return {"by_dog": r["stats"].get("available_by_id", {}), "warnings": r["warnings"]}
+
+
+async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
+    """按计划挑。plan：
+      target 类别（如 抓挠）；durations [秒]；parts [细类]；anchor_names（无这类时以哪类为中心，可空）；
+      dogs [{dog_id, q: {"60": [有, 无], "600": [有, 无]}, p: {部位: 段数}}]；
+      date_from / date_to / source / seen_mode / model_ids / seed
+    部位数是这只狗「有这类」各时长合计的分配；部位加起来不够的那几段不限部位。
+    返回 picks（每条带 cell：时长 / 有无 / 部位）和每只狗每格「计划 / 挑到」。"""
+    import random
+    cache: dict = {}
+    taken: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    target = plan["target"]
+    seed = int(plan.get("seed") or 1)
+    common = dict(date_from=plan.get("date_from"), date_to=plan.get("date_to"), source=plan.get("source", "any"),
+                  seen_mode=plan.get("seen_mode", "any"), model_ids=plan.get("model_ids"), set_id=set_id,
+                  _cache=cache, extra_taken=taken)
+    picks: list[dict] = []
+    report: dict[str, dict] = {}
+    warnings: list[str] = []
+    for dg in plan.get("dogs", []):
+        did = int(dg["dog_id"])
+        q = {int(k): v for k, v in (dg.get("q") or {}).items()}
+        pq = {k: int(v) for k, v in (dg.get("p") or {}).items() if int(v) > 0}
+        rep = {"q": {str(d): [0, 0] for d in q}, "p": {k: 0 for k in pq}}
+        rng = random.Random(seed * 1000 + did)
+        # 有这类：时长槽位 × 部位槽位配对
+        pos_slots = [d for d in sorted(q) for _ in range(int(q[d][0] or 0))]
+        part_slots = [p for p in pq for _ in range(pq[p])][:len(pos_slots)]
+        part_slots += [target] * (len(pos_slots) - len(part_slots))
+        rng.shuffle(part_slots)
+        cells = Counter(zip(pos_slots, part_slots))
+        for (d, part), n in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            r = await compose(db, label_names=[part], dog_ids=[did], pad_sec=d, per_group=n, max_total=n,
+                              mode="positive", seed=seed, **common)
+            for p in r["picks"]:
+                p["cell"] = {"dur": d, "kind": "有", "part": part if part != target else None}
+                taken[p["sample_id"]].append((p["start_ms"], p["end_ms"]))
+                rep["q"][str(d)][0] += 1
+                if part in rep["p"]:
+                    rep["p"][part] += 1
+            picks += r["picks"]
+        # 无这类
+        for d in sorted(q):
+            n = int(q[d][1] or 0)
+            if not n:
+                continue
+            r = await compose(db, label_names=[target], dog_ids=[did], pad_sec=d, per_group=n, max_total=n,
+                              mode="negative", anchor_names=plan.get("anchor_names") or None, seed=seed, **common)
+            for p in r["picks"]:
+                p["cell"] = {"dur": d, "kind": "无", "part": None}
+                taken[p["sample_id"]].append((p["start_ms"], p["end_ms"]))
+                rep["q"][str(d)][1] += 1
+            picks += r["picks"]
+        report[str(did)] = rep
+    for w in cache.get("_warn", []):
+        if w not in warnings:
+            warnings.append(w)
+    return {"picks": picks, "report": report, "n_picked": len(picks),
+            "video_hours": round(sum(p["end_ms"] - p["start_ms"] for p in picks) / 3600_000, 2),
+            "by_source": dict(Counter("人工标过" if p["human"] else "AI 预标" for p in picks)),
+            "warnings": warnings}

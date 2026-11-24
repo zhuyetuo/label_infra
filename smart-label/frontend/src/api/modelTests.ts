@@ -126,7 +126,38 @@ export const freezeTestSet = (id: number) => request.post<never, TestSet>(`/mode
 export const copyTestSet = (id: number, body: { name: string; note?: string }) =>
   request.post<never, TestSet>(`/model-tests/sets/${id}/copy`, body);
 export const getTestItems = (id: number) =>
-  request.get<never, { set: TestSet; items: TestItem[]; coverage: Coverage; colors?: Record<string, string> }>(`/model-tests/sets/${id}/items`);
+  request.get<never, { set: TestSet & { plan?: Plan | null }; items: TestItem[]; coverage: Coverage; colors?: Record<string, string> }>(`/model-tests/sets/${id}/items`);
+/** 选样计划：每只狗 × 时长 × 有/无 × 部位 */
+export interface PlanDog { dog_id: number; q: Record<string, [number, number]>; p: Record<string, number> }
+export interface Plan {
+  target: string;
+  durations: number[];
+  parts: string[];
+  anchor_names?: string[] | null;
+  dogs: PlanDog[];
+  date_from?: string | null;
+  date_to?: string | null;
+  source?: "any" | "human" | "ai";
+  seen_mode?: "any" | "unseen" | "seen";
+  model_ids?: number[] | null;
+  seed?: number;
+}
+export interface PlanResult {
+  report: Record<string, { q: Record<string, [number, number]>; p: Record<string, number> }>;
+  n_picked: number;
+  video_hours: number;
+  by_source: Record<string, number>;
+  warnings: string[];
+  added?: number;
+}
+export const planAvailability = (plan: Plan) =>
+  request.post<never, { by_dog: Record<string, Record<string, number>>; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });
+export const planPreview = (setId: number, plan: Plan) =>
+  request.post<never, PlanResult>(`/model-tests/sets/${setId}/plan/preview`, plan, { timeout: 600_000 });
+export const planSave = (setId: number, plan: Plan) => request.post<never, { saved: boolean }>(`/model-tests/sets/${setId}/plan/save`, plan);
+export const planApply = (setId: number, plan: Plan) =>
+  request.post<never, PlanResult>(`/model-tests/sets/${setId}/plan/apply`, plan, { timeout: 600_000 });
+
 /** 删测试集：只删测试集和条目，任务 / 标注不动 */
 export const deleteTestSet = (id: number) => request.delete<never, { deleted_items: number }>(`/model-tests/sets/${id}`);
 /** 任务当前轮的标注片段（挑事件用） */
