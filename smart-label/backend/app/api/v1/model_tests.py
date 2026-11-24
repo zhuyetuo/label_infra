@@ -297,7 +297,8 @@ def _plan_summary(r: dict) -> dict:
 async def plan_preview(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_db)):
     """按计划试挑：每只狗每格能挑到几段（不写库）"""
     await _set_or_404(db, set_id)
-    return ok(_plan_summary(await svc.plan_run(db, set_id, body.model_dump())))
+    # 生成是「删掉原有的重新挑」，所以检查时也不避开这个测试集已有的窗口
+    return ok(_plan_summary(await svc.plan_run(db, None, body.model_dump())))
 
 
 @router.post("/sets/{set_id}/plan/save")
@@ -317,6 +318,11 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
     s = await _set_or_404(db, set_id)
     if s.frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
+    # 重新生成：先删掉这个测试集原来的片段记录（任务、标注不动），再按配比挑；不累加
+    old = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id))).scalars().all()
+    for it in old:
+        await db.delete(it)
+    await db.flush()
     r = await svc.plan_run(db, set_id, body.model_dump())
     for p in r["picks"]:
         c = p["cell"]
@@ -327,7 +333,7 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
                              end_ms=p["end_ms"], added_by=user.id, note=note[:300]))
     s.plan = json.dumps(body.model_dump(mode="json"), ensure_ascii=False)
     await db.commit()
-    return ok({"added": len(r["picks"]), **_plan_summary(r)})
+    return ok({"added": len(r["picks"]), "removed": len(old), **_plan_summary(r)})
 
 
 @router.post("/items/{item_id}/check")

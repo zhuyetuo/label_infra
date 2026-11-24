@@ -160,6 +160,8 @@ export interface PlanResult {
   by_source: Record<string, number>;
   warnings: string[];
   added?: number;
+  /** 重新生成时删掉的原有片段数 */
+  removed?: number;
 }
 export const planAvailability = (plan: Plan) =>
   request.post<never, { by_dog: Record<string, Record<string, number>>; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });

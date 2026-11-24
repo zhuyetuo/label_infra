@@ -249,7 +249,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       const r = kind === "check" ? await planPreview(setId, planOut) : await planApply(setId, planOut);
       setResult(r);
       if (kind === "apply") {
-        message.success(`已加进测试集 ${r.added ?? r.n_picked} 段`);
+        message.success(`${r.removed ? `删掉原来的 ${r.removed} 段，` : ""}生成 ${r.added ?? r.n_picked} 段`);
         qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
         qc.invalidateQueries({ queryKey: ["model-test-sets"] });
         onApplied?.();
@@ -386,7 +386,9 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
           </Tooltip>
           <Button disabled={frozen} loading={busy === "save"} onClick={() => run("save")}>保存配比</Button>
           {existing > 0 ? (
-            <Popconfirm title={`测试集里已有 ${existing} 段，再生成会再加 ${total} 段（不跟已有的重叠）`} okText="再加一批"
+            <Popconfirm title={`重新生成：先删掉测试集里已有的 ${existing} 段，再按配比生成 ${total} 段`}
+              description="只删测试集里的片段记录（勾过的「核对」也一起清掉），任务和标注都不动。删了不能恢复。"
+              okText="删掉重新生成" okButtonProps={{ danger: true }}
               onConfirm={() => run("apply")} disabled={frozen || !total}>
               <Button type="primary" disabled={frozen || !total} loading={busy === "apply"}>生成 {total} 段</Button>
             </Popconfirm>

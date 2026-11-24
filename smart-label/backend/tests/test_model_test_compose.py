@@ -91,7 +91,11 @@ def test_选样计划_预览生成_计划保存(db, run):
     rep = pv["report"][str(d.id)]["q"]["60"]
     assert rep[0] == 1 and pv["n_picked"] == rep[0] + rep[1]
     r = run(api.plan_apply(s["id"], plan, db, w.admin))["data"]
-    assert r["added"] == pv["n_picked"]
+    assert r["added"] == pv["n_picked"] and r["removed"] == 0
+    # 再生成一次：先删原有的，不累加
+    r2 = run(api.plan_apply(s["id"], plan, db, w.admin))["data"]
+    assert r2["removed"] == r["added"]
+    assert run(api.get_items(s["id"], db))["data"]["set"]["n_items"] == r2["added"]
     got = run(api.get_items(s["id"], db))["data"]
     assert got["set"]["plan"]["dogs"][0]["dog_id"] == d.id
     assert any((it["note"] or "").startswith("选样·1分钟·有抓挠") for it in got["items"])
