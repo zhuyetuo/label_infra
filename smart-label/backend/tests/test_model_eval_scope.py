@@ -231,3 +231,24 @@ def test_窗口级误报漏报自动归因(db, run, tmp_path, monkeypatch):
     assert by_start[40000]["verdict"] == "fp" and by_start[40000]["diag"]["code"] == "confuse_similar"
     assert "甩头/抖身" in by_start[40000]["diag"]["detail"]
     assert by_start[50000]["verdict"] == "fp" and by_start[50000]["diag"]["code"] == "low_conf_fp"
+
+
+def test_评测活动时自动挖掉嵌套的具体行为时段(db, run):
+    done, *_ = _world(db, run)
+    t = run(db.get(Task, 1))
+    rec = run(db.execute(svc.select(AnnotationRecord).where(AnnotationRecord.task_id == t.id))).scalar_one()
+    act_lab = LabelDefinition(project_id=t.project_id, code="act", display_name="活动", created_by=done.created_by)
+    lick_lab = LabelDefinition(project_id=t.project_id, code="lick", display_name="舔", created_by=done.created_by)
+    for x in (act_lab, lick_lab):
+        db.add(x)
+    run(db.flush())
+    # 大段活动 0-20s，里面嵌套 _world 自带的抓挠 0-1s 以及舔 5-8s
+    for lab, a, b in ((act_lab, 0, 20000), (lick_lab, 5000, 8000)):
+        db.add(AnnotationLabelItem(
+            annotation_record_id=rec.id, label_id=lab.id,
+            start_time_ms=a, end_time_ms=b, source_type=LabelItemSource.human_added,
+        ))
+    run(db.commit())
+
+    truths, _ = run(svc._human_by_sample(db, [done.id], ["活动"]))
+    assert [(s.start_ms, s.end_ms) for s in truths[done.id]] == [(1000, 5000), (8000, 20000)]

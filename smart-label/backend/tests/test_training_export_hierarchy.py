@@ -39,7 +39,7 @@ def test_导出带整条链_父子不冲突_粗段挖掉细段(db, run, tmp_path
     rec = AnnotationRecord(task_id=t.id, round_no=t.round_no, source_type=RecordSourceType.human_only)
     db.add(rec)
     run(db.flush())
-    # 舔 0-10s；里面 2-5s 标了舔-前左爪；活动 8-12s 跟舔重叠（真矛盾）
+    # 舔 0-10s；里面 2-5s 标了舔-前左爪；活动 8-12s 跟舔重叠 → 活动自动让位给具体行为（不算冲突，活动只留 10-12s）
     for lab, a, b in ((lick, 0, 10000), (fl, 2000, 5000), (act, 8000, 12000)):
         db.add(AnnotationLabelItem(annotation_record_id=rec.id, label_id=lab.id, start_time_ms=a, end_time_ms=b,
                                    source_type=LabelItemSource.human_added))
@@ -54,21 +54,21 @@ def test_导出带整条链_父子不冲突_粗段挖掉细段(db, run, tmp_path
     import json, os
     # 先预览：统计跟真导出一模一样，但什么都不落盘
     pre = run(svc.export_dataset(db, "h1", project_ids=[p.id], dry_run=True))
-    assert pre["dry_run"] is True and pre["n_label_conflicts"] == 1
+    assert pre["dry_run"] is True and pre["n_label_conflicts"] == 0
     assert not os.path.exists(os.path.join(str(tmp_path), svc.TRAIN_DIR, "h1"))
     out = run(svc.export_dataset(db, "h1", project_ids=[p.id]))
-    assert out["n_label_conflicts"] == 1                      # 只有活动 vs 舔 那一处，父子不算
+    assert out["n_label_conflicts"] == 0                      # 活动自动给舔让路，不算矛盾；父子也不算
     assert {k: v for k, v in pre.items() if k not in ("dry_run", "exported_at")} == \
         {k: v for k, v in out.items() if k != "exported_at"}
     tasks = json.load(open(os.path.join(str(tmp_path), svc.TRAIN_DIR, "h1", "merged_tmp.json"), encoding="utf-8"))
     res = [(r["value"]["timeserieslabels"], r["value"]["start_ms"], r["value"]["end_ms"])
            for r in tasks[0]["annotations"][0]["result"]]
     res.sort(key=lambda x: (x[1], len(x[0])))
-    # 舔 被 前左爪(2-5s) 和矛盾(8-10s) 挖掉 → 0-2, 5-8；前左爪带整条链；活动剩 10-12
+    # 舔 被 前左爪(2-5s) 挖掉 → 0-2, 5-10；前左爪带整条链；活动被舔挖掉 8-10s → 剩 10-12
     assert res == [
         (["舔"], 0, 2000),
         (["舔", "舔-前爪", "舔-前左爪"], 2000, 5000),
-        (["舔"], 5000, 8000),
+        (["舔"], 5000, 10000),
         (["活动"], 10000, 12000),
     ]
     # 类别统计按 labels[0]（大类）算：训练那边也是读 labels[0]，粗细一致

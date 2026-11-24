@@ -18,11 +18,18 @@ export const TRACKS: { key: string; name: string; hint: string }[] = [
 ];
 export const TRACK_NAME: Record<string, string> = Object.fromEntries(TRACKS.map((t) => [t.key, t.name]));
 
-/** 一个标签的有效轨：自己填了用自己的，没填往上找上级；都没有就是 ""（没分轨那一轨，互相互斥） */
+const MOTION_BG_NAMES = new Set(["活动", "静止/休息", "静止", "休息", "睡觉", "睡眠"]);
+const isMotionBg = (name: string) =>
+  MOTION_BG_NAMES.has(name) || name.startsWith("活动-") || name.startsWith("静止/");
+
+/** 一个标签的有效轨：自己填了用自己的，没填往上找上级；都没填时「活动 / 静止/休息」自动归运动轨，
+ *  让大段活动底下套具体行为（抓挠/舔等）不算重叠冲突（导出和打分会自动从活动里挖掉重叠段） */
 export function trackOf<T extends TreeLabel>(map: Map<number, T>, id: number): string {
-  for (const l of chainOf(map, id).reverse()) {
+  const chain = chainOf(map, id).reverse();
+  for (const l of chain) {
     if (l.track && TRACK_NAME[l.track]) return l.track;
   }
+  if (chain.some((l) => isMotionBg(l.display_name))) return "motion";
   return "";
 }
 

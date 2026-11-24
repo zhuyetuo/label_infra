@@ -360,7 +360,9 @@ async def export_dataset(
             priority.append(t)          # 没点到的轨排在后面，别丢
     # 没分轨的标签（老项目）排最后：跟分了轨的混在一个项目里时让分了轨的赢
     rank_of = {t: i for i, t in enumerate(priority)}
-    rank_of[""] = len(priority)
+    # 老项目里未显式填 track 的具体行为（""）与行为轨同级，优先级高于运动轨（活动/静止），
+    # 导出折叠时自动从活动/静止里挖掉重叠部分，不再把「活动 + 抓挠/舔」误判为冲突丢弃
+    rank_of[""] = rank_of.get("behavior", 0)
     # 「未佩戴」压过所有轨。设备轨里只剩它（颈圈松动已经拿去 aux 了），
     # 所以给整条 device 轨排在最前就行。
     # 为什么必须它赢：项圈不在狗身上时，IMU 测的是桌子，那段时间里任何"行为"
@@ -429,7 +431,7 @@ async def export_dataset(
     own_track = {i: t for i, _n, _p, t, _c in label_rows}
 
     def track(label_id: int) -> str:
-        return label_tracks.track_of(parent_of, own_track, label_id)
+        return label_tracks.track_of(parent_of, own_track, label_id, label_names)
 
     def chain(label_id: int) -> list[int]:
         out: list[int] = []

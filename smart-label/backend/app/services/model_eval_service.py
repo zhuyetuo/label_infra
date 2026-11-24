@@ -36,7 +36,7 @@ from app.models.annotation import AnnotationLabelItem, AnnotationRecord
 from app.models.audit_log import AuditLog
 from app.models.inference_run import SampleInferenceRun
 from app.models.label import LabelDefinition
-from app.services import label_tree
+from app.services import label_tracks, label_tree
 from app.services.model_label_alias import ALIASES
 from app.models.sample import Sample
 from app.models.task import Task, TaskStatus
@@ -217,6 +217,37 @@ async def _csv_start_cached(s: Sample, sem: asyncio.Semaphore) -> datetime:
     return await asyncio.shield(task)
 
 
+def _subtract_segs(segs: list[Seg], cutouts: list[tuple[int, int]], min_ms: int = 200) -> list[Seg]:
+    """从一组片段中挖掉 cutouts 覆盖的时间区间（与训练导出折叠口径一致），丢弃 < min_ms 的极短碎片。"""
+    if not cutouts or not segs:
+        return segs
+    merged: list[list[int]] = []
+    for a, b in sorted(cutouts):
+        if b <= a:
+            continue
+        if merged and a <= merged[-1][1]:
+            if b > merged[-1][1]:
+                merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    out: list[Seg] = []
+    for seg in segs:
+        cur = seg.start_ms
+        for ca, cb in merged:
+            if cb <= cur:
+                continue
+            if ca >= seg.end_ms:
+                break
+            if ca > cur and ca - cur >= min_ms:
+                out.append(Seg(cur, ca, seg.conf, seg.label))
+            cur = max(cur, cb)
+            if cur >= seg.end_ms:
+                break
+        if seg.end_ms - cur >= min_ms:
+            out.append(Seg(cur, seg.end_ms, seg.conf, seg.label))
+    return out
+
+
 async def _human_by_sample(
     db: AsyncSession, sample_ids: list[int], label_names: list[str], task_ids: list[int] | None = None
 ) -> tuple[dict[int, list[Seg]], dict[int, list[tuple[int, int]]]]:
@@ -224,6 +255,7 @@ async def _human_by_sample(
     人工标注（当前轮）按样本取。返回 (正确答案, 不算数的区间)。
 
     「待定」的片段进第二个返回值：那是人看了也拿不准的，模型标不标都不该扣分。
+    评测运动背景态（活动 / 静止/休息）时，与训练导出保持同一口径：自动挖掉嵌套其中的具体行为（抓挠/舔/啃/甩头…）时段。
     """
     # 加上子标签：人标了「抓挠-头颈耳」，模型标「抓挠」也算对
     label_ids = await label_tree.expand_ids(db, set(
@@ -261,6 +293,36 @@ async def _human_by_sample(
             holes[sid].append((int(s_ms), int(e_ms)))
         else:
             truths[sid].append(Seg(int(s_ms), int(e_ms)))
+    if truths and any(label_tracks.is_motion_bg(n) for n in label_names):
+        # 查同批任务里的所有具体行为（behavior / 未分轨非背景态），从活动/静止真值中自动挖掉重叠时段
+        all_labs = (await db.execute(
+            select(LabelDefinition.id, LabelDefinition.parent_id, LabelDefinition.track, LabelDefinition.display_name)
+        )).all()
+        parent_of = {i: p for i, p, _t, _n in all_labs}
+        own_track = {i: t for i, _p, t, _n in all_labs}
+        names_map = {i: n for i, _p, _t, n in all_labs}
+        higher_ids = {
+            i for i, _p, _t, _n in all_labs
+            if i not in label_ids and label_tracks.track_of(parent_of, own_track, i, names_map) in ("behavior", "")
+        }
+        if higher_ids:
+            ov_rows = await db.execute(
+                select(Task.sample_id, AnnotationLabelItem.start_time_ms, AnnotationLabelItem.end_time_ms)
+                .join(AnnotationRecord, AnnotationRecord.task_id == Task.id)
+                .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+                .where(
+                    Task.sample_id.in_(list(truths.keys())),
+                    AnnotationRecord.round_no == Task.round_no,
+                    AnnotationLabelItem.label_id.in_(higher_ids),
+                    AnnotationLabelItem.uncertain.is_(False),
+                    *([Task.id.in_(task_ids)] if task_ids is not None else [Task.status.in_(_REVIEWED)]),
+                )
+            )
+            cutouts: dict[int, list[tuple[int, int]]] = defaultdict(list)
+            for sid, s_ms, e_ms in ov_rows.all():
+                cutouts[sid].append((int(s_ms), int(e_ms)))
+            for sid, cs in cutouts.items():
+                truths[sid] = _subtract_segs(truths[sid], cs)
     for v in truths.values():
         v.sort(key=lambda x: x.start_ms)
     return truths, holes

@@ -31,6 +31,14 @@ TRACK_KEYS = [k for k, _ in TRACKS]
 TRACK_NAMES = dict(TRACKS)
 # 折叠优先级（前面的赢）。设备轨不在里面：颈圈松不松是另一个模型的事
 DEFAULT_PRIORITY = ["behavior", "motion", "posture"]
+# 老项目里未显式填 track 时的兜底：背景运动态（活动 / 静止/休息）遇到具体行为（抓挠/舔/啃/甩头…）
+# 不算矛盾，而是自动归为 motion 轨让位给具体行为（重叠时段从活动/静止里挖掉，只认具体行为）
+MOTION_BG_NAMES = frozenset({"活动", "静止/休息", "静止", "休息", "睡觉", "睡眠"})
+
+
+def is_motion_bg(name: str | None) -> bool:
+    s = (name or "").strip()
+    return bool(s) and (s in MOTION_BG_NAMES or s.startswith("活动-") or s.startswith("静止/"))
 
 
 def normalize(track: str | None) -> str | None:
@@ -39,16 +47,29 @@ def normalize(track: str | None) -> str | None:
     return t if t in TRACK_NAMES else None
 
 
-def track_of(parent_of: dict[int, int | None], own: dict[int, str | None], label_id: int) -> str:
-    """一个标签的有效轨：自己填了用自己的，没填往上找上级；都没有就是 ""（没分轨那一轨）。"""
+def track_of(
+    parent_of: dict[int, int | None],
+    own: dict[int, str | None],
+    label_id: int,
+    names: dict[int, str] | None = None,
+) -> str:
+    """一个标签的有效轨：自己填了用自己的，没填往上找上级；
+    若整条链都没填轨，且传入了 names，则「活动 / 静止/休息」等背景态自动归为 motion 轨，
+    避免老项目里大段「活动」套「抓挠/舔」被当成冲突丢弃。"""
     cur: int | None = label_id
     seen: set[int] = set()
+    chain_ids: list[int] = []
     while cur is not None and cur not in seen:
         seen.add(cur)
+        chain_ids.append(cur)
         t = normalize(own.get(cur))
         if t:
             return t
         cur = parent_of.get(cur)
+    if names:
+        for cid in chain_ids:
+            if is_motion_bg(names.get(cid)):
+                return "motion"
     return ""
 
 
@@ -57,9 +78,10 @@ OVERLAP_MIN_MS = 200   # 跟前端 utils/overlaps.ts 一致：拖边界的几十
 
 def overlapping_ids(items, labels, min_ms: int = OVERLAP_MIN_MS) -> set[int]:
     """同一轨上互相重叠（≥ min_ms）的片段 id：同类重复、父子压在一起、同轨不同类都算；
-    不同轨（卧着 + 舔）本来就该同时标，不算。items 是 (id, label_id, start_ms, end_ms)。"""
+    不同轨（卧着 + 舔、活动 + 抓挠/舔）本来就该同时标，不算。items 是 (id, label_id, start_ms, end_ms)。"""
     parent_of = {l.id: l.parent_id for l in labels}
     own = {l.id: l.track for l in labels}
+    names = {l.id: getattr(l, "display_name", "") for l in labels}
     rows = sorted(items, key=lambda x: x[2])
     hit: set[int] = set()
     for i, (ia, la, sa, ea) in enumerate(rows):
@@ -70,8 +92,8 @@ def overlapping_ids(items, labels, min_ms: int = OVERLAP_MIN_MS) -> set[int]:
             if min(ea, eb) - sb < min_ms:
                 continue
             if ta is None:
-                ta = track_of(parent_of, own, la)
-            if track_of(parent_of, own, lb) != ta:
+                ta = track_of(parent_of, own, la, names)
+            if track_of(parent_of, own, lb, names) != ta:
                 continue
             hit.add(ia)
             hit.add(ib)
@@ -83,6 +105,7 @@ def conflict_checker(labels) -> Callable[[int, int], bool]:
     同一个 / 父子（细的本来就在粗的里面）不算；不同轨不算；其余算。"""
     parent_of = {l.id: l.parent_id for l in labels}
     own = {l.id: l.track for l in labels}
+    names = {l.id: getattr(l, "display_name", "") for l in labels}
 
     def chain(i: int) -> list[int]:
         out: list[int] = []
@@ -95,6 +118,6 @@ def conflict_checker(labels) -> Callable[[int, int], bool]:
     def conflicts(a: int, b: int) -> bool:
         if a == b or a in chain(b) or b in chain(a):
             return False
-        return track_of(parent_of, own, a) == track_of(parent_of, own, b)
+        return track_of(parent_of, own, a, names) == track_of(parent_of, own, b, names)
 
     return conflicts
