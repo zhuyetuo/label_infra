@@ -1,0 +1,569 @@
+/**
+ * 模型测试：管测试集（挑数据、看配额够不够、哪个模型见过）、拿测试集给模型打分、几批测试集交叉对比。
+ *
+ * 规矩（后端守着）：测试集里的样本不进任何训练导出；冻结后不能增删，补数据复制成新版本。
+ * 打分复用「模型对比」那套（/model-eval）：按整个样本、按事件配对算精确率 / 召回率。
+ */
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Alert, Button, Checkbox, Empty, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message,
+} from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  addTestItems, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getTestItems, getTestSeen, listTestSets,
+  type Coverage, type TestItem, type TestSet,
+} from "@/api/modelTests";
+import { listProjects } from "@/api/projects";
+import { listTasks } from "@/api/tasks";
+import { listModelVersions } from "@/api/training";
+import { compareModels, getEvalRunProgress, listEvalRuns, startEvalRun, type VersionResult } from "@/api/modelEval";
+import { useInferModes } from "@/hooks/useInferModes";
+import { modeLabelOf } from "@/utils/inferMode";
+import type { Task } from "@/types";
+
+const TOPS = ["抓挠", "活动", "静止/休息", "未佩戴"];
+const SIZES = ["小", "中", "大"];
+const EVAL_LABELS = ["抓挠", "活动", "静止/休息", "未佩戴"];
+
+const fmtMs = (ms: number) => {
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(x).padStart(2, "0")}`;
+};
+const fmtSec = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)}h` : s >= 60 ? `${(s / 60).toFixed(1)}m` : `${Math.round(s)}s`);
+/** 「1:30」「90」「1:02:03」→ 毫秒；空 → null；认不出 → NaN */
+const parseTime = (v: string): number | null => {
+  const t = v.trim();
+  if (!t) return null;
+  const parts = t.split(":").map(Number);
+  if (parts.some((x) => !Number.isFinite(x) || x < 0)) return NaN;
+  return parts.reduce((a, b) => a * 60 + b, 0) * 1000;
+};
+const f1 = (p: number, r: number) => (p + r > 0 ? (2 * p * r) / (p + r) : 0);
+const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+const std = (xs: number[]) => {
+  if (xs.length < 2) return 0;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
+};
+/** 「srv:train60」之类 → 训练记录的 algo_job_id；默认在线模型之类认不出就 null（见没见过不知道） */
+const jobIdOfTag = (tag: string): number | null => {
+  const m = /train(\d+)/.exec(tag);
+  return m ? Number(m[1]) : null;
+};
+
+// ───────────────────────── 配额表 ─────────────────────────
+function CoverageView({ cov }: { cov: Coverage }) {
+  const sizes = Object.keys(cov.matrix);
+  return (
+    <Space direction="vertical" style={{ width: "100%" }} size={12}>
+      {cov.warnings.map((w) => <Alert key={w} type="warning" showIcon message={w} />)}
+      <Space wrap>
+        <span>共 <b>{cov.n_items}</b> 段，<b>{fmtSec(cov.total_sec)}</b>，<b>{cov.n_dogs}</b> 只狗</span>
+        {Object.entries(cov.kinds).map(([k, n]) => <Tag key={k}>{k} {n}</Tag>)}
+        {Object.entries(cov.sites).map(([k, n]) => <Tag key={k} color="blue">{k} {n}</Tag>)}
+        <span style={{ color: "#888" }}>日期 {Object.keys(cov.dates).length} 天</span>
+      </Space>
+      <Table
+        size="small" pagination={false} rowKey="size" bordered
+        dataSource={sizes.map((sz) => ({ size: sz, ...cov.matrix[sz] }))}
+        columns={[
+          { title: "体型", dataIndex: "size", width: 70 },
+          ...TOPS.map((tp) => ({
+            title: tp, key: tp,
+            render: (_: unknown, r: Record<string, unknown>) => {
+              const c = (r[tp] ?? { items: 0, n: 0, sec: 0 }) as { items: number; n: number; sec: number };
+              if (!c.items) return <span style={{ color: "#ff4d4f" }}>缺</span>;
+              return (
+                <Tooltip title={`${c.items} 段测试数据里有「${tp}」，一共 ${c.n} 次（事件），${fmtSec(c.sec)}`}>
+                  <span><b>{c.n}</b> 次 · {fmtSec(c.sec)} <span style={{ color: "#888" }}>（{c.items} 段）</span></span>
+                </Tooltip>
+              );
+            },
+          })),
+        ]}
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        数事件数，不是段数：抓挠每种体型 30 次左右，召回率的误差约 ±15%；100 次左右才稳到 ±8%。红色「缺」的格子是下一批要补的。
+      </Typography.Text>
+      <Table
+        size="small" pagination={false} rowKey={(r) => `${r.site}-${r.dog}`}
+        dataSource={cov.dogs}
+        columns={[
+          { title: "场地", dataIndex: "site", render: (v) => v ?? "未知" },
+          { title: "狗", dataIndex: "dog", render: (v) => v ?? "未知" },
+          { title: "时长", dataIndex: "sec", render: (v: number) => fmtSec(v) },
+          { title: "占比", dataIndex: "share", render: (v: number) => <span style={{ color: v > 0.15 ? "#ff4d4f" : undefined }}>{pct(v)}</span> },
+        ]}
+      />
+    </Space>
+  );
+}
+
+// ───────────────────────── 添加片段 ─────────────────────────
+function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [idsText, setIdsText] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects, enabled: open });
+  const { data: tasks, isFetching } = useQuery({
+    queryKey: ["tasks", projectId], queryFn: () => listTasks(projectId!), enabled: open && projectId != null,
+  });
+
+  const submit = async () => {
+    const typed = idsText.split(/[\s,，、]+/).map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0);
+    const ids = Array.from(new Set([...picked, ...typed]));
+    if (!ids.length) return message.warning("先选任务，或者填任务号");
+    const s = parseTime(from), e = parseTime(to);
+    if (Number.isNaN(s) || Number.isNaN(e) || (s == null) !== (e == null) || (s != null && e != null && e <= s)) {
+      return message.warning("起止要么都空（整个任务），要么都填、结束晚于开始；格式 1:30 或 90（秒）");
+    }
+    setBusy(true);
+    try {
+      const r = await addTestItems(setId, ids.map((task_id) => ({ task_id, start_ms: s, end_ms: e, note: note || undefined })));
+      message[r.skipped.length ? "warning" : "success"](
+        `加了 ${r.added} 段` + (r.skipped.length ? `，跳过 ${r.skipped.length}：${r.skipped.slice(0, 3).map((x) => `#${x.task_id} ${x.reason}`).join("；")}` : ""));
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+      qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+      setPicked([]); setIdsText("");
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="加到测试集" open={open} onCancel={onClose} onOk={submit} confirmLoading={busy} width={900} okText="加进去">
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Alert type="info" showIcon message={
+          <span>加进来的样本<b>以后不进任何训练导出</b>（整个样本都不要，防相邻几秒漏进去）。
+            挑的时候照顾多样性：体型、狗、场地、白天 / 夜里、不同日期都摊开，一只狗别超过总量 15%。
+            标注要对着视频复核过，别直接用某个模型的预标（测试会偏向那个模型）。</span>} />
+        <Space wrap>
+          <Select showSearch optionFilterProp="label" placeholder="从项目里挑任务" style={{ width: 320 }}
+            value={projectId ?? undefined} onChange={(v) => { setProjectId(v); setPicked([]); }}
+            options={(projects ?? []).map((p) => ({ value: p.id, label: `#${p.id} ${p.name}` }))} />
+          <span>或者直接填任务号：</span>
+          <Input style={{ width: 260 }} placeholder="67845, 67846 …" value={idsText} onChange={(e) => setIdsText(e.target.value)} />
+        </Space>
+        {projectId != null && (
+          <Table<Task>
+            size="small" rowKey="id" loading={isFetching} dataSource={tasks ?? []} pagination={{ pageSize: 8, showSizeChanger: false }}
+            rowSelection={{ selectedRowKeys: picked, onChange: (k) => setPicked(k as number[]) }}
+            columns={[
+              { title: "任务", dataIndex: "id", width: 90 },
+              { title: "样本", render: (_, t) => (t as Task & { sample_code?: string }).sample_code ?? t.sample_id },
+              { title: "状态", dataIndex: "status", width: 110 },
+              { title: "窗口", width: 140, render: (_, t) => (t.segment_start_ms != null && t.segment_end_ms != null
+                ? `${fmtMs(t.segment_start_ms)}–${fmtMs(t.segment_end_ms)}` : "整个样本") },
+            ]}
+          />
+        )}
+        <Space wrap>
+          <span>时间窗口（可空 = 整个任务）：</span>
+          <Input style={{ width: 100 }} placeholder="开始 1:30" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <span>—</span>
+          <Input style={{ width: 100 }} placeholder="结束 2:30" value={to} onChange={(e) => setTo(e.target.value)} />
+          <Input style={{ width: 260 }} placeholder="备注（为什么挑它，可空）" value={note} onChange={(e) => setNote(e.target.value)} />
+        </Space>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          窗口对这次选中的所有任务都一样；不同任务要不同窗口就分几次加。不超过 3 分钟算「短片段」，否则「长片段」。
+        </Typography.Text>
+      </Space>
+    </Modal>
+  );
+}
+
+// ───────────────────────── 打分 ─────────────────────────
+type EvalRow = { key: string; group: string; n: number; version: string; r: VersionResult };
+
+/** 选哪些模型版本、哪个类别；默认只用「选中的模型都没见过」的样本 */
+function useEvalPicker() {
+  const [label, setLabel] = useState("抓挠");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [unseenOnly, setUnseenOnly] = useState(true);
+  const [iou, setIou] = useState(0.3);
+  const { data: runs, refetch } = useQuery({ queryKey: ["eval-runs-all"], queryFn: () => listEvalRuns() });
+  const options = (runs?.runs ?? []).map((r) => ({
+    value: `${r.model_tag}::${r.mode}`, label: `${r.model_tag} · ${modeLabelOf(r.mode)}（跑过 ${r.n_samples} 个样本）`,
+  }));
+  const versions = picked.map((p) => { const [model_tag, mode] = p.split("::"); return { model_tag, mode }; });
+  return { label, setLabel, picked, setPicked, unseenOnly, setUnseenOnly, iou, setIou, options, versions, refetchRuns: refetch };
+}
+
+/** 一批测试集里，选中模型见过的样本（按训练记录的数据集算）。认不出训练记录的模型返回 unknown */
+async function seenSamplesOf(setId: number, items: TestItem[], tags: string[]) {
+  const mvs = await listModelVersions();
+  const jobIds = tags.map(jobIdOfTag);
+  const unknown = tags.filter((_, i) => jobIds[i] == null || !mvs.some((m) => m.algo_job_id === jobIds[i]));
+  const ids = mvs.filter((m) => jobIds.includes(m.algo_job_id)).map((m) => m.id);
+  const seenItems = new Set<number>();
+  if (ids.length) {
+    const r = await getTestSeen(setId, ids);
+    r.models.forEach((m) => m.seen_item_ids.forEach((i) => seenItems.add(i)));
+  }
+  const seenSamples = new Set(items.filter((it) => seenItems.has(it.id)).map((it) => it.sample_id));
+  return { seenSamples, unknown: Array.from(new Set(unknown)) };
+}
+
+function EvalPickerBar({ p, extra }: { p: ReturnType<typeof useEvalPicker>; extra?: ReactNode }) {
+  return (
+    <Space wrap>
+      <Select style={{ width: 130 }} value={p.label} onChange={p.setLabel} options={EVAL_LABELS.map((x) => ({ value: x, label: x }))} />
+      <Select mode="multiple" style={{ minWidth: 420 }} placeholder="选要比的模型版本（要先在这批样本上跑过）"
+        value={p.picked} onChange={p.setPicked} options={p.options} maxTagCount={3} />
+      <Tooltip title="重叠多少算同一段：0.3 宽松，起止差一点也认；想严格看边界调到 0.5 以上">
+        <span>IoU ≥ <InputNumber size="small" min={0.05} max={0.95} step={0.05} value={p.iou} onChange={(v) => p.setIou(v ?? 0.3)} /></span>
+      </Tooltip>
+      <Checkbox checked={p.unseenOnly} onChange={(e) => p.setUnseenOnly(e.target.checked)}>
+        只用选中的模型<b>都没见过</b>的样本
+      </Checkbox>
+      {extra}
+    </Space>
+  );
+}
+
+const evalColumns = (groupTitle: string) => [
+  { title: groupTitle, dataIndex: "group", width: 140 },
+  { title: "样本", dataIndex: "n", width: 70 },
+  { title: "版本", dataIndex: "version" },
+  { title: "精确率", render: (_: unknown, x: EvalRow) => pct(x.r.precision) },
+  { title: "召回率", render: (_: unknown, x: EvalRow) => pct(x.r.recall) },
+  { title: "F1", render: (_: unknown, x: EvalRow) => <b>{pct(f1(x.r.precision, x.r.recall))}</b> },
+  { title: "命中 / 误报 / 漏报", render: (_: unknown, x: EvalRow) => `${x.r.tp} / ${x.r.fp} / ${x.r.fn}` },
+  { title: "跑了几个", render: (_: unknown, x: EvalRow) => (
+    <span style={{ color: x.r.n_samples_with_result < x.n ? "#ff4d4f" : undefined }}>{x.r.n_samples_with_result}/{x.n}</span>) },
+];
+
+function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
+  const p = useEvalPicker();
+  const { options: modeOptions } = useInferModes();
+  const [runModes, setRunModes] = useState<string[]>([]);
+  const [bySize, setBySize] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState<EvalRow[]>([]);
+  const [notes, setNotes] = useState<string[]>([]);
+  const { data: prog, refetch: refetchProg } = useQuery({
+    queryKey: ["eval-run-progress"], queryFn: getEvalRunProgress,
+    refetchInterval: 5000,
+  });
+  useEffect(() => { if (prog?.status === "done") p.refetchRuns(); }, [prog?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const allSamples = useMemo(() => Array.from(new Set(items.map((i) => i.sample_id))), [items]);
+
+  const run = async () => {
+    if (!runModes.length) return message.warning("选要跑的版本");
+    const r = await startEvalRun({ sample_ids: allSamples, modes: runModes });
+    message[r.started ? "success" : "warning"](r.started ? `开始跑：${r.n_samples} 个样本 × ${r.modes.length} 个版本` : "已经有一批在跑了，等它跑完");
+    refetchProg();
+  };
+
+  const score = async () => {
+    if (!p.versions.length) return message.warning("选要比的版本");
+    setBusy(true);
+    try {
+      const ns: string[] = [];
+      let use = allSamples;
+      if (p.unseenOnly) {
+        const { seenSamples, unknown } = await seenSamplesOf(setId, items, p.versions.map((v) => v.model_tag));
+        use = allSamples.filter((s) => !seenSamples.has(s));
+        ns.push(`剔掉了选中模型见过的 ${allSamples.length - use.length} 个样本，剩 ${use.length} 个`);
+        if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
+      }
+      const groups: [string, number[]][] = [["全部", use]];
+      if (bySize) {
+        for (const sz of [...SIZES, null]) {
+          const ids = Array.from(new Set(items.filter((i) => (sz == null ? !SIZES.includes(i.size ?? "") : i.size === sz)
+            && use.includes(i.sample_id)).map((i) => i.sample_id)));
+          if (ids.length) groups.push([sz == null ? "体型未知" : `${sz}型犬`, ids]);
+        }
+      }
+      const out: EvalRow[] = [];
+      for (const [g, ids] of groups) {
+        if (!ids.length) continue;
+        const r = await compareModels({ sample_ids: ids, versions: p.versions, label: p.label, iou_min: p.iou });
+        r.warnings.forEach((w) => ns.push(`${g}：${w}`));
+        r.versions.forEach((v) => out.push({ key: `${g}-${v.key}`, group: g, n: ids.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
+      }
+      setRows(out);
+      setNotes(ns);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Alert type="info" showIcon message={
+        <span>打分按事件配对（跟「模型训练 → 模型对比」一样），先「跑」：让选中的版本在测试集样本上推理一遍；跑完再「打分」。
+          <b>注意：目前按整个样本打分，还没按挑的时间窗口裁</b>——片段只挑了样本里一小段时，窗口外的标注和预测也会算进去。</span>} />
+      <Space wrap>
+        <Select mode="multiple" style={{ minWidth: 420 }} placeholder="要跑的版本" value={runModes} onChange={setRunModes}
+          options={modeOptions as never} maxTagCount={3} />
+        <Button onClick={run} disabled={prog?.status === "running"}>在测试集上跑（{allSamples.length} 个样本）</Button>
+        {prog?.status === "running" && <Tag color="processing">在跑 {prog.done}/{prog.total}{prog.current ? ` · ${prog.current}` : ""}</Tag>}
+      </Space>
+      <EvalPickerBar p={p} extra={<>
+        <Checkbox checked={bySize} onChange={(e) => setBySize(e.target.checked)}>按体型拆开</Checkbox>
+        <Button type="primary" loading={busy} onClick={score}>打分</Button>
+      </>} />
+      {notes.map((n) => <Alert key={n} type="warning" showIcon message={n} />)}
+      <Table size="small" rowKey="key" pagination={false} dataSource={rows} columns={evalColumns("范围")} />
+    </Space>
+  );
+}
+
+/** 多批交叉对比：同一组模型在几批测试集上各打一次分，看平均和波动——只在一批上好，可能是那一批碰巧 */
+function CrossTab({ sets }: { sets: TestSet[] }) {
+  const p = useEvalPicker();
+  const [setIds, setSetIds] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState<EvalRow[]>([]);
+  const [notes, setNotes] = useState<string[]>([]);
+
+  const score = async () => {
+    if (setIds.length < 2) return message.warning("至少选两批测试集");
+    if (!p.versions.length) return message.warning("选要比的版本");
+    setBusy(true);
+    try {
+      const out: EvalRow[] = [];
+      const ns: string[] = [];
+      for (const sid of setIds) {
+        const s = sets.find((x) => x.id === sid)!;
+        const { items } = await getTestItems(sid);
+        let use = Array.from(new Set(items.map((i) => i.sample_id)));
+        if (p.unseenOnly) {
+          const { seenSamples, unknown } = await seenSamplesOf(sid, items, p.versions.map((v) => v.model_tag));
+          const before = use.length;
+          use = use.filter((x) => !seenSamples.has(x));
+          if (before - use.length) ns.push(`「${s.name}」剔掉了见过的 ${before - use.length} 个样本`);
+          if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
+        }
+        if (!use.length) { ns.push(`「${s.name}」没有可用样本`); continue; }
+        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou });
+        r.versions.forEach((v) => out.push({ key: `${sid}-${v.key}`, group: s.name, n: use.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
+      }
+      setRows(out);
+      setNotes(Array.from(new Set(ns)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 每个版本：几批的 F1 / 精确率 / 召回率 平均 ± 标准差
+  const summary = useMemo(() => {
+    const by = new Map<string, EvalRow[]>();
+    rows.forEach((r) => by.set(r.version, [...(by.get(r.version) ?? []), r]));
+    return Array.from(by.entries()).map(([version, rs]) => {
+      const P = rs.map((x) => x.r.precision), R = rs.map((x) => x.r.recall), F = rs.map((x) => f1(x.r.precision, x.r.recall));
+      return { version, n: rs.length, P, R, F };
+    });
+  }, [rows]);
+  const ms = (xs: number[]) => `${pct(mean(xs))} ± ${(std(xs) * 100).toFixed(1)}`;
+
+  return (
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Alert type="info" showIcon message={
+        <span>交叉验证：同一组模型在<b>几批互不重叠</b>的测试集上各打一次分，看平均和波动（±）。
+          波动大说明结论不稳：要么某批数据太少，要么模型对某些狗 / 场景特别差。
+          几批最好按不同的狗 / 日期分，别是同一批数据随便切几刀。</span>} />
+      <Space wrap>
+        <Select mode="multiple" style={{ minWidth: 320 }} placeholder="选几批测试集" value={setIds} onChange={setSetIds}
+          options={sets.map((s) => ({ value: s.id, label: `${s.name}（${s.n_samples} 个样本）${s.frozen ? " · 已冻结" : ""}` }))} />
+      </Space>
+      <EvalPickerBar p={p} extra={<Button type="primary" loading={busy} onClick={score}>打分</Button>} />
+      {notes.map((n) => <Alert key={n} type="warning" showIcon message={n} />)}
+      {summary.length > 0 && (
+        <Table size="small" rowKey="version" pagination={false} dataSource={summary}
+          columns={[
+            { title: "版本", dataIndex: "version" },
+            { title: "批数", dataIndex: "n", width: 60 },
+            { title: "F1 平均 ± 标准差", render: (_, x) => <b>{ms(x.F)}</b> },
+            { title: "精确率", render: (_, x) => ms(x.P) },
+            { title: "召回率", render: (_, x) => ms(x.R) },
+            { title: "最差一批 F1", render: (_, x) => pct(Math.min(...x.F)) },
+          ]} />
+      )}
+      <Table size="small" rowKey="key" pagination={false} dataSource={rows} columns={evalColumns("测试集")} />
+    </Space>
+  );
+}
+
+// ───────────────────────── 见没见过 ─────────────────────────
+function SeenTab({ setId }: { setId: number }) {
+  const [ids, setIds] = useState<number[]>([]);
+  const { data: mvs } = useQuery({ queryKey: ["model-versions"], queryFn: listModelVersions });
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ["model-test-seen", setId, ids], queryFn: () => getTestSeen(setId, ids), enabled: false,
+  });
+  return (
+    <Space direction="vertical" style={{ width: "100%" }}>
+      <Typography.Text type="secondary">
+        「见过」= 这段所在的样本在模型训练用的数据集里。不选就看「上架的 + 最近 5 个训练完的」。正式成绩只看没见过的。
+      </Typography.Text>
+      <Space wrap>
+        <Select mode="multiple" style={{ minWidth: 420 }} placeholder="选训练记录（可空）" value={ids} onChange={setIds}
+          options={(mvs ?? []).filter((m) => m.status === "done").map((m) => ({ value: m.id, label: `#${m.id} train${m.algo_job_id} ${m.model_version ?? ""}` }))} />
+        <Button type="primary" loading={isFetching} onClick={() => refetch()}>查</Button>
+      </Space>
+      {data && (
+        <Table size="small" rowKey="model_id" pagination={false} dataSource={data.models}
+          columns={[
+            { title: "训练记录", render: (_, m) => <span>#{m.model_id} train{m.algo_job_id} {m.listed && <Tag color="green">已启用</Tag>}</span> },
+            { title: "版本", dataIndex: "model_version" },
+            { title: "没见过", render: (_, m) => <b style={{ color: "#52c41a" }}>{m.n_unseen}</b> },
+            { title: "见过", render: (_, m) => <span style={{ color: m.n_seen ? "#ff4d4f" : undefined }}>{m.n_seen}</span> },
+            { title: "训练数据集", render: (_, m) => (
+              <Space size={2} wrap>
+                {m.datasets.map((d) => <Tag key={d} color={m.missing_datasets.includes(d) ? "red" : undefined}>
+                  {d}{m.missing_datasets.includes(d) ? "（找不到导出文件，不知道）" : ""}</Tag>)}
+              </Space>) },
+          ]} />
+      )}
+    </Space>
+  );
+}
+
+// ───────────────────────── 一批测试集 ─────────────────────────
+function SetDetail({ setId }: { setId: number }) {
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const { data, isLoading } = useQuery({ queryKey: ["model-test-items", setId], queryFn: () => getTestItems(setId) });
+  if (isLoading || !data) return <Table loading />;
+  const frozen = data.set.frozen;
+  const del = async (id: number) => {
+    await deleteTestItem(id);
+    qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+    qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+  };
+  return (
+    <>
+      <Tabs items={[
+        { key: "cov", label: "配额表", children: data.items.length ? <CoverageView cov={data.coverage} /> : <Empty description="还没有片段：点「片段」→「加片段」" /> },
+        {
+          key: "items", label: `片段 ${data.items.length}`, children: (
+            <Space direction="vertical" style={{ width: "100%" }}>
+              <Space>
+                <Button type="primary" disabled={frozen} onClick={() => setAdding(true)}>加片段</Button>
+                {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
+              </Space>
+              <Table<TestItem>
+                size="small" rowKey="id" dataSource={data.items} pagination={{ pageSize: 50 }} scroll={{ x: 1200 }}
+                columns={[
+                  { title: "任务", dataIndex: "task_id", width: 80 },
+                  { title: "项目", dataIndex: "project_name", width: 160, ellipsis: true },
+                  { title: "日期", dataIndex: "date", width: 100 },
+                  { title: "场地", dataIndex: "site", width: 120 },
+                  { title: "狗", width: 130, render: (_, r) => (
+                    <span>{r.dog_name ?? "未知"}{r.size ? `（${r.size}）` : ""}
+                      {r.dog_source === "推断" && <Tooltip title="按场地 + IMU 号推断的"><Tag style={{ marginLeft: 4 }}>推断</Tag></Tooltip>}
+                      {r.dog_unsure && <Tooltip title="老影棚数据，推断常对不上：按狗 / 体型统计不可靠"><Tag color="red">不可靠</Tag></Tooltip>}
+                    </span>) },
+                  { title: "窗口", width: 140, render: (_, r) => `${fmtMs(r.start_ms)}–${fmtMs(r.end_ms)}` },
+                  { title: "长短", dataIndex: "kind", width: 80 },
+                  { title: "标了什么", render: (_, r) => (
+                    <Space size={2} wrap>
+                      {Object.entries(r.labels).map(([k, v]) => <Tag key={k} color={k === "抓挠" ? "volcano" : undefined}>{k} {v.n}次 {fmtSec(v.sec)}</Tag>)}
+                      {r.n_uncertain > 0 && <Tag color="gold">待定 {r.n_uncertain}</Tag>}
+                      {!Object.keys(r.labels).length && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
+                    </Space>) },
+                  { title: <Tooltip title="窗口里有多少时间标了东西。测试数据要窗口内全标，低于 80% 标红">标注覆盖</Tooltip>, width: 90,
+                    render: (_, r) => <span style={{ color: r.label_cover < 0.8 ? "#ff4d4f" : undefined }}>{pct(r.label_cover)}</span> },
+                  { title: "任务状态", dataIndex: "task_status", width: 100 },
+                  { title: "备注", dataIndex: "note", width: 140, ellipsis: true },
+                  { title: "", width: 60, render: (_, r) => !frozen && (
+                    <Popconfirm title="从测试集拿掉这段？" onConfirm={() => del(r.id)}><a>拿掉</a></Popconfirm>) },
+                ]}
+              />
+            </Space>
+          ),
+        },
+        { key: "seen", label: "模型见没见过", children: <SeenTab setId={setId} /> },
+        { key: "eval", label: "打分", children: <EvalTab setId={setId} items={data.items} /> },
+      ]} />
+      {adding && <AddItemsModal setId={setId} open={adding} onClose={() => setAdding(false)} />}
+    </>
+  );
+}
+
+// ───────────────────────── 页面 ─────────────────────────
+export default function ModelTest() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["model-test-sets"], queryFn: listTestSets });
+  const sets = data?.sets ?? [];
+  const [cur, setCur] = useState<number | null>(null);
+  const [name, setName] = useState("");
+  const [copyOf, setCopyOf] = useState<TestSet | null>(null);
+  const [copyName, setCopyName] = useState("");
+  useEffect(() => { if (cur == null && sets.length) setCur(sets[0].id); }, [sets, cur]);
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+  const create = async () => {
+    if (!name.trim()) return message.warning("给测试集起个名字，比如「测试集 v1」");
+    const s = await createTestSet({ name: name.trim() });
+    setName(""); refresh(); setCur(s.id);
+  };
+  const doCopy = async () => {
+    if (!copyOf || !copyName.trim()) return message.warning("给新版本起个名字");
+    const s = await copyTestSet(copyOf.id, { name: copyName.trim() });
+    setCopyOf(null); setCopyName(""); refresh(); setCur(s.id);
+  };
+
+  return (
+    <div>
+      <Typography.Title level={4} style={{ marginTop: 0 }}>模型测试</Typography.Title>
+      <Alert type="info" showIcon style={{ marginBottom: 12 }} message={
+        <span>
+          测试集是给模型「考试」的数据：<b>里面的样本以后不进任何训练导出</b>（现在共 {data?.n_excluded_samples ?? 0} 个样本被排除）。
+          正式成绩只算模型<b>没见过</b>的；多样性优先（体型、狗、场地、白天 / 夜里、日期），数量按批补。
+          一版定下来就「冻结」，补数据「复制成新版本」再加——报告注明用的哪一版，前后才比得了。
+        </span>} />
+      <Tabs items={[
+        {
+          key: "sets", label: "测试集", children: (
+            <Space direction="vertical" style={{ width: "100%" }}>
+              <Space>
+                <Input style={{ width: 240 }} placeholder="新测试集名字，如「测试集 v1」" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={create} />
+                <Button onClick={create}>新建</Button>
+              </Space>
+              <Table<TestSet>
+                size="small" rowKey="id" pagination={false} dataSource={sets}
+                rowClassName={(s) => (s.id === cur ? "ant-table-row-selected" : "")}
+                onRow={(s) => ({ onClick: () => setCur(s.id), style: { cursor: "pointer" } })}
+                columns={[
+                  { title: "名字", dataIndex: "name" },
+                  { title: "片段", dataIndex: "n_items", width: 70 },
+                  { title: "样本", dataIndex: "n_samples", width: 70 },
+                  { title: "状态", width: 170, render: (_, s) => (s.frozen ? <Tag color="blue">已冻结 {s.frozen_at?.slice(0, 16).replace("T", " ")}</Tag> : <Tag>可编辑</Tag>) },
+                  { title: "备注", dataIndex: "note", ellipsis: true },
+                  { title: "", width: 200, render: (_, s) => (
+                    <Space onClick={(e) => e.stopPropagation()}>
+                      {!s.frozen && (
+                        <Popconfirm title="冻结后这一版不能再增删，确定？" onConfirm={async () => { await freezeTestSet(s.id); refresh(); }}>
+                          <a>冻结</a>
+                        </Popconfirm>)}
+                      <a onClick={() => { setCopyOf(s); setCopyName(`${s.name} 补充`); }}>复制成新版本</a>
+                    </Space>) },
+                ]}
+              />
+              {cur != null && sets.some((s) => s.id === cur) && <SetDetail key={cur} setId={cur} />}
+            </Space>
+          ),
+        },
+        { key: "cross", label: "多批交叉对比", children: <CrossTab sets={sets} /> },
+      ]} />
+      <Modal title={`复制「${copyOf?.name ?? ""}」成新版本`} open={!!copyOf} onCancel={() => setCopyOf(null)} onOk={doCopy} okText="复制">
+        <Input value={copyName} onChange={(e) => setCopyName(e.target.value)} placeholder="新版本名字" />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
+          原样复制所有片段，新版本可以继续加。原来那版不动。
+        </Typography.Paragraph>
+      </Modal>
+    </div>
+  );
+}

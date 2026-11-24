@@ -188,7 +188,7 @@ async def seen(set_id: int, model_ids: str | None = None, db: AsyncSession = Dep
             else:
                 seen_codes |= c
         seen_ids = [iid for iid, sid in items if codes.get(sid) in seen_codes]
-        out.append({"model_id": m.id, "model_version": m.model_version, "listed": bool(m.listed),
+        out.append({"model_id": m.id, "algo_job_id": m.algo_job_id, "model_version": m.model_version, "listed": bool(m.listed),
                     "datasets": names, "missing_datasets": missing,
                     "n_seen": len(seen_ids), "n_unseen": len(items) - len(seen_ids), "seen_item_ids": seen_ids})
     return ok({"models": out, "n_items": len(items)})

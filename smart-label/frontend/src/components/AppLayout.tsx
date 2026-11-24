@@ -40,6 +40,8 @@ const ALL_ITEMS = [
   { key: "/annotator-stats", label: "标注统计", roles: ["super_admin", "admin"] },
   { key: "/workforce", label: "人力管理", roles: ["super_admin", "admin"] },
   { key: "/training", label: "模型训练", roles: ["super_admin", "admin"] },
+  // 测试集（不进训练）、配额表、模型见没见过、打分、多批交叉对比
+  { key: "/model-test", label: "模型测试", roles: ["super_admin", "admin"] },
   // 宠物可穿戴的来时路、竞品拆解、我们抓挠识别的位置（静态内容）
   { key: "/label-definitions", label: "标签管理", roles: ["super_admin", "admin"] },
   { key: "/llm-providers", label: "模型服务", roles: ["super_admin", "admin"] },

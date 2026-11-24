@@ -31,6 +31,7 @@ TOPS = ("抓挠", "活动", "静止/休息", "未佩戴")
 SIZES = ("小", "中", "大")
 SHORT_MAX_SEC = 180          # 窗口 ≤ 3 分钟算「短片段」，否则「长片段」
 DOG_SHARE_WARN = 0.15        # 一只狗占总时长超过这个比例就提醒（多样性）
+LABEL_COVER_MIN = 0.8        # 窗口里标注覆盖低于这个比例就提醒（没标的时间会把模型的报告冤成误报）
 
 
 async def test_sample_ids(db: AsyncSession) -> set[int]:
@@ -130,17 +131,30 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         d = dogs.get(dog_id) if dog_id else None
         labels: dict[str, dict] = {}
         n_uncertain = 0
+        spans: list[tuple[int, int]] = []
         for k, a, b, unc in segs.get(it.task_id, []):
             ov = min(b, we) - max(a, ws)
             if ov <= 0:
                 continue
+            spans.append((max(a, ws), min(b, we)))   # 待定也算「有人看过」
             if unc:
                 n_uncertain += 1
                 continue
             x = labels.setdefault(k, {"n": 0, "sec": 0.0})
             x["n"] += 1
             x["sec"] = round(x["sec"] + ov / 1000, 1)
+        covered, end = 0, None
+        for a, b in sorted(spans):
+            if end is None or a > end:
+                covered += b - a
+                end = b
+            elif b > end:
+                covered += b - end
+                end = b
         out.append({
+            # 窗口里有多少时间标了东西。测试数据要「窗口内全标」：没标的时间模型报了算误报，
+            # 漏标多了精确率就被冤枉（上次 822 段补标就是这么来的）
+            "label_cover": round(covered / (we - ws), 3) if we > ws else 0.0,
             "id": it.id, "task_id": it.task_id, "sample_id": it.sample_id,
             "sample_code": s.sample_code if s else None,
             "project_id": t.project_id if t else None, "project_name": projects.get(t.project_id) if t else None,
@@ -186,6 +200,10 @@ def coverage(rows: list[dict]) -> dict:
             for k, v in dog_sec.most_common()]
     warns = [f"{x['site'] or ''}{x['dog'] or '未知狗'} 占总时长 {x['share']:.0%}，超过 {DOG_SHARE_WARN:.0%}"
              for x in dogs if x["share"] > DOG_SHARE_WARN and len(dogs) > 1]
+    n_low = sum(1 for r in rows if r["label_cover"] < LABEL_COVER_MIN)
+    if n_low:
+        warns.append(f"{n_low} 段窗口里标注覆盖不到 {LABEL_COVER_MIN:.0%}：测试数据要窗口内全标（休息、活动也标上），"
+                     "否则模型在没标的时间里报的都算误报，精确率被冤枉")
     n_unsure = sum(1 for r in rows if r["dog_unsure"])
     if n_unsure:
         warns.append(f"{n_unsure} 段的狗是按设备号推断、而且是老影棚数据（常对不上），按狗/体型统计时不可靠")
