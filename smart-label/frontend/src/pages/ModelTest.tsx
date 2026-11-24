@@ -14,7 +14,11 @@ import {
   type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listProjects } from "@/api/projects";
-import { listTasks } from "@/api/tasks";
+import { claimTask, getTask, listTasks } from "@/api/tasks";
+import { listLabels } from "@/api/labels";
+import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import { useAuthStore } from "@/stores/authStore";
+import type { LabelDefinition } from "@/types";
 import { listModelVersions } from "@/api/training";
 import { compareModels, getEvalRunProgress, listEvalRuns, startEvalRun, type VersionResult } from "@/api/modelEval";
 import { useInferModes } from "@/hooks/useInferModes";
@@ -500,6 +504,28 @@ function SetDetail({ setId }: { setId: number }) {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
   const { data, isLoading } = useQuery({ queryKey: ["model-test-items", setId], queryFn: () => getTestItems(setId) });
+  // 在这一页直接打开工作台看 / 标：开在窗口开头。没认领时只读，工作台里点「认领」就能标
+  const userId = useAuthStore((st) => st.userInfo?.id);
+  const [wsTask, setWsTask] = useState<Task | null>(null);
+  const [wsLabels, setWsLabels] = useState<LabelDefinition[]>([]);
+  const [wsSeekMs, setWsSeekMs] = useState<number | null>(null);
+  const [opening, setOpening] = useState<number | null>(null);
+  const openTask = async (taskId: number, seekMs: number) => {
+    setOpening(taskId);
+    try {
+      const t = await getTask(taskId);
+      setWsLabels(await listLabels(t.project_id));
+      setWsSeekMs(seekMs);
+      setWsTask(t);
+    } finally {
+      setOpening(null);
+    }
+  };
+  const closeWs = () => {
+    setWsTask(null);
+    // 标了东西回来，覆盖率 / 配额表跟着变
+    qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+  };
   if (isLoading || !data) return <Table loading />;
   const frozen = data.set.frozen;
   const del = async (id: number) => {
@@ -542,8 +568,14 @@ function SetDetail({ setId }: { setId: number }) {
                     render: (_, r) => <span style={{ color: r.label_cover < 0.8 ? "#ff4d4f" : undefined }}>{pct(r.label_cover)}</span> },
                   { title: "任务状态", dataIndex: "task_status", width: 100 },
                   { title: "备注", dataIndex: "note", width: 140, ellipsis: true },
-                  { title: "", width: 60, render: (_, r) => !frozen && (
-                    <Popconfirm title="从测试集拿掉这段？" onConfirm={() => del(r.id)}><a>拿掉</a></Popconfirm>) },
+                  { title: "", width: 130, fixed: "right", render: (_, r) => (
+                    <Space size={8}>
+                      <Tooltip title="打开工作台，从窗口开头放。没认领时只能看；工作台里点「认领」就能标">
+                        <Button size="small" type="link" style={{ padding: 0 }} loading={opening === r.task_id}
+                          onClick={() => openTask(r.task_id, r.start_ms)}>看 / 标</Button>
+                      </Tooltip>
+                      {!frozen && <Popconfirm title="从测试集拿掉这段？" onConfirm={() => del(r.id)}><a>拿掉</a></Popconfirm>}
+                    </Space>) },
                 ]}
               />
             </Space>
@@ -553,6 +585,20 @@ function SetDetail({ setId }: { setId: number }) {
         { key: "eval", label: "打分", children: <EvalTab setId={setId} items={data.items} /> },
       ]} />
       {adding && <AddItemsModal setId={setId} open={adding} onClose={() => setAdding(false)} />}
+      <AnnotationWorkspace
+        task={wsTask}
+        labels={wsLabels}
+        initialSeekMs={wsSeekMs}
+        readOnly={!(wsTask?.status === "IN_PROGRESS" && wsTask?.locked_by === userId)}
+        onClaim={
+          wsTask && wsTask.status !== "APPROVED"
+            ? async () => setWsTask(await claimTask(wsTask.id))
+            : undefined
+        }
+        onClose={closeWs}
+        onSaved={() => qc.invalidateQueries({ queryKey: ["model-test-items", setId] })}
+        onSubmitted={closeWs}
+      />
     </>
   );
 }
