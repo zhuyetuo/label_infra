@@ -297,6 +297,11 @@ async def heartbeat(db: AsyncSession, task_id: int, user: User) -> None:
     result = await db.execute(stmt)
     if result.rowcount != 1:
         await db.rollback()
+        # 管理员 / 超管不用认领就能直接改没通过的任务（见 save_draft），没有锁可续，心跳当作成功
+        if user.role in (UserRole.admin, UserRole.super_admin):
+            task = await db.get(Task, task_id)
+            if task is not None and task.status != TaskStatus.APPROVED:
+                return
         raise TaskConflictError("任务不在你名下或已不在进行中，心跳失败")
     await db.commit()
 

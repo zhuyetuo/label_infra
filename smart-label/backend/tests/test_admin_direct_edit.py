@@ -39,3 +39,17 @@ def test_打分正确答案只取指定任务(db, run):
     assert truths.get(t.sample_id)
     truths, _ = run(_human_by_sample(db, [t.sample_id], ["抓挠"], [t.id + 999]))
     assert not truths.get(t.sample_id)
+
+
+def test_管理员免认领_心跳不报错(db, run):
+    w = _world(db, run)
+    t = run(db.execute(select(Task))).scalars().first()
+    t.status, t.locked_by = TaskStatus.PENDING_ASSIGN, None
+    run(db.commit())
+    run(task_service.heartbeat(db, t.id, w.admin))                    # 不抛
+    with pytest.raises(task_service.TaskConflictError):
+        run(task_service.heartbeat(db, t.id, w.ann))                  # 标注员没认领照旧报错
+    t.status = TaskStatus.APPROVED
+    run(db.commit())
+    with pytest.raises(task_service.TaskConflictError):
+        run(task_service.heartbeat(db, t.id, w.admin))
