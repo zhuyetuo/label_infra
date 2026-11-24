@@ -312,6 +312,8 @@ export default function AnnotationWorkspace({
   const win = task?.segment_start_ms != null && task?.segment_end_ms != null
     ? { s: task.segment_start_ms, e: task.segment_end_ms }
     : focusWindow ? { s: focusWindow.startMs, e: focusWindow.endMs } : null;
+  // 有窗口时只显示窗口里的片段 / 疑似片段（只是不显示，保存按 id，窗口外的原样留着）
+  const inWin = (a: number, b: number) => !win || (a < win.e && b > win.s);
   // 现在这份 AI 结果是哪个版本/哪个模型跑的
   const [aiInfo, setAiInfo] = useState<AiLabelInfo | null>(null);
   // 重跑之后，跟人工已定片段撞上的那些新片段：标出来方便逐条对比
@@ -680,6 +682,8 @@ export default function AnnotationWorkspace({
       if (initialSeekMs != null) bus.seek(initialSeekMs / 1000);
       // 短任务（只标样本里的一段，比如模型测试的 1 分钟窗口）：没指定位置就停在窗口开头
       else if (win) bus.seek(win.s / 1000);
+      // 有窗口：打开就循环播放这一段
+      if (win) setLoop({ startMs: win.s, endMs: win.e });
       // 第一阶段（大模型找动作 / 疑似片段）跳过来扩样本：样例就是那一刻，
       // 类别也带过来了。人在那边已经判断过一次了，不该到这儿再选一遍
       if (initialSimilar && initialSeekMs != null) {
@@ -901,7 +905,8 @@ export default function AnnotationWorkspace({
   const buildChartSegments = (mode: "main" | "ai"): ChartSegment[] => {
     const rows = items.map((i) => {
       const t = trackOf(labelById, i.label_id);
-      const off = (chartFilter != null && !chartFilter.has(i.id))
+      const off = !inWin(i.start_time_ms, i.end_time_ms)
+        || (chartFilter != null && !chartFilter.has(i.id))
         || (mode === "ai"
           ? i.source_type !== "ai_generated"
           // 从零标注：没人碰过的 AI 片段不画进上面那张（列表里选了什么筛选都一样）
@@ -933,11 +938,11 @@ export default function AnnotationWorkspace({
   };
   const segments: ChartSegment[] = useMemo(
     () => buildChartSegments("main"),
-    [items, labelById, chartFilter, manualMode]
+    [items, labelById, chartFilter, manualMode, win?.s, win?.e]
   );
   const aiSegments: ChartSegment[] = useMemo(
     () => buildChartSegments("ai"),
-    [items, labelById, chartFilter, manualMode]
+    [items, labelById, chartFilter, manualMode, win?.s, win?.e]
   );
 
   // 同一轨的两段在时间上不能叠（跨轨叠是正常的，靠分带区分）。
@@ -2626,7 +2631,7 @@ export default function AnnotationWorkspace({
         controlsPortalTarget={segControlsHost}
         projectKey={task?.project_id ?? null}
         focusMs={initialSeekMs}
-        items={items}
+        items={win ? items.filter((i) => inWin(i.start_time_ms, i.end_time_ms)) : items}
         labels={labels}
         readOnly={readOnly}
         durationMs={durationMs}
@@ -2693,7 +2698,7 @@ export default function AnnotationWorkspace({
     children: (
       <CandidatePanel
         controlsPortalTarget={candControlsHost}
-        candidates={candidates}
+        candidates={win ? candidates.filter((c) => inWin(c.start_time_ms, c.end_time_ms)) : candidates}
         labels={labels}
         focusMs={initialSeekMs}
         initialLabelFilter={focusCandLabels}
@@ -3338,7 +3343,7 @@ export default function AnnotationWorkspace({
             message={
               <span>
                 这个任务只标 <b>{formatMs(win.s)} ~ {formatMs(win.e)}</b>
-                （{Math.round((win.e - win.s) / 1000)} 秒）：窗口外不用标；
+                （{Math.round((win.e - win.s) / 1000)} 秒）：窗口外不用标、下面也不显示；
                 窗口里<b>从头到尾都要标</b>（休息、活动也标）。
                 {(() => {
                   const n = candidates.filter((c) => c.status === "pending"
