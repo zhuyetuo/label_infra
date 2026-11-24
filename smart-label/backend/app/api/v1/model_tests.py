@@ -91,6 +91,8 @@ class PlanIn(BaseModel):
     parts: list[str] = []
     anchor_names: list[str] | None = None
     neg_cats: list[NegCatIn] | None = None
+    # 按比例自动配用的比例（前端用，后端只存）
+    alloc: dict | None = None
     dogs: list[PlanDogIn] = []
     date_from: date | None = None
     date_to: date | None = None

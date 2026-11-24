@@ -16,6 +16,9 @@ const SITE_SHORT: Record<string, string> = { 佛山博朗旺狗场: "佛山博�
 const durLabel = (s: number) => (s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`);
 const emptyDog = (id: number): PlanDog => ({ dog_id: id, q: {}, p: {} });
 const NEG_BLUE = "#4a6fa5";
+/** 按比例自动配：场所 / 时长 / 有无 / 部位 的比例，场所内的狗平均还是按可用量。默认照参考方案（佛山 81 : 影棚 13 : 雷诺 6） */
+type Alloc = NonNullable<Plan["alloc"]>;
+const DEFAULT_ALLOC: Alloc = { site: { 佛山博朗旺狗场: 81, 公司影棚: 13, 深圳雷诺狗场: 6 }, dur: {}, pos: 1, neg: 1, part: {}, dog: "even" };
 /** 没抓挠的四类（参考测试说明：4:2:3:1）。颜色、挑什么、为什么 */
 const DEFAULT_NEG = [
   { name: "像抓挠的动作", anchors: ["舔", "啃", "蹭", "甩头/抖身"], ratio: 4 },
@@ -184,17 +187,42 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
 
   // ── 输入总段数，自动配比 ──
   const [wantTotal, setWantTotal] = useState<number | null>(200);
-  // 计划还空着就默认「平均」：「现在比例」要有一版计划才能缩放
-  const [autoMode, setAutoMode] = useState<"scale" | "even" | "avail">(() => (initial?.dogs?.length ? "scale" : "even"));
+  // 「按比例」：场所 / 时长 / 有无 / 部位 各填比例，总数一填就配；「现在比例」：已有计划等比缩放
+  const [autoMode, setAutoMode] = useState<"ratio" | "scale">("ratio");
+  const alloc = plan.alloc ?? DEFAULT_ALLOC;
+  const setAlloc = (patch: Partial<Alloc>) => setPlan((p) => ({ ...p, alloc: { ...(p.alloc ?? DEFAULT_ALLOC), ...patch } }));
+  const wDur = (d: number) => alloc.dur?.[String(d)] ?? 1;
+  const wPart = (k: string) => alloc.part?.[k] ?? 1;
   const autoAllocate = () => {
     const N = Math.max(0, Math.round(wantTotal ?? 0));
     if (!N) return message.warning("先填总段数");
     const durs = plan.durations;
-    let mode = autoMode;
+    const mode = autoMode;
     if (mode === "scale" && !plan.dogs.some((x) => durs.some((d) => qOf(x, d)[0] + qOf(x, d)[1] > 0))) {
-      mode = "even";
-      setAutoMode("even");
-      message.info("计划还是空的，先按「平均」配；之后改总数可以用「现在比例」");
+      return message.info("计划还是空的：用「按比例」配");
+    }
+    if (mode === "ratio") {
+      // 场所 → 狗（没可用数据的狗不分）→ 时长 → 有/无 → 部位，每一层最大余数法，合计正好 N
+      const sites = SITE_ORDER.map((s) => ({ s, w: alloc.site?.[s] ?? 0, dogs: allDogs.filter((d) => d.site === s && availOf(d.id) > 0) }))
+        .filter((x) => x.w > 0 && x.dogs.length);
+      if (!sites.length) return message.warning("没有能分的场所：场所比例都是 0，或者这些场所没有可用数据");
+      const perSite = splitByRatio(N, sites.map((x) => x.w));
+      const made: PlanDog[] = [];
+      sites.forEach((x, si) => {
+        const perDog = splitByRatio(perSite[si], x.dogs.map((d) => (alloc.dog === "avail" ? availOf(d.id) : 1)));
+        x.dogs.forEach((d, di) => {
+          const byDur = splitByRatio(perDog[di], durs.map(wDur));
+          const q: Record<string, [number, number]> = {};
+          durs.forEach((dd, j) => { const [a, b] = splitByRatio(byDur[j], [alloc.pos ?? 1, alloc.neg ?? 1]); q[String(dd)] = [a, b]; });
+          const pos = durs.reduce((a, dd) => a + q[String(dd)][0], 0);
+          const pv = splitByRatio(plan.parts.length ? pos : 0, plan.parts.map(wPart));
+          if (perDog[di] > 0) made.push({ dog_id: d.id, q, p: Object.fromEntries(plan.parts.map((k, j) => [k, pv[j]])) });
+        });
+      });
+      update((p) => ({ ...p, dogs: made }));
+      setSelDog(null);
+      setSite(null);
+      return;
     }
     if (mode === "scale") {
       // 现在的计划等比缩放：每只狗 × 时长 × 有/无 一格一格按比例，最大余数补齐，正好 N
@@ -220,23 +248,6 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
           return { ...x, q, p: Object.fromEntries(ps.map((k, i) => [k, pv[i]])) };
         }).filter((x) => Object.values(x.q).some(([a, b]) => a || b)),
       }));
-    } else {
-      // 平均 / 按可用量：分给当前场所里的狗（按可用量时没数据的狗不分），每只狗再平均分到各时长、有无各半、各部位均分
-      const pool = scopeDogs.filter((d) => mode === "even" || availOf(d.id) > 0);
-      if (!pool.length) return message.warning("这个范围里没有可分的狗");
-      const perDog = splitByRatio(N, pool.map((d) => (mode === "even" ? 1 : availOf(d.id))));
-      update((p) => {
-        const keep = p.dogs.filter((x) => !pool.some((d) => d.id === x.dog_id) && !scopeDogs.some((d) => d.id === x.dog_id));
-        const made = pool.map((d, i) => {
-          const byDur = splitByRatio(perDog[i], durs.map(() => 1));
-          const q: Record<string, [number, number]> = {};
-          durs.forEach((dd, j) => { const [a, b] = splitByRatio(byDur[j], [1, 1]); q[String(dd)] = [a, b]; });
-          const pos = durs.reduce((a, dd) => a + q[String(dd)][0], 0);
-          const pv = splitByRatio(p.parts.length ? pos : 0, p.parts.map(() => 1));
-          return { dog_id: d.id, q, p: Object.fromEntries(p.parts.map((k, j) => [k, pv[j]])) };
-        }).filter((x) => Object.values(x.q).some(([a, b]) => a || b));
-        return { ...p, dogs: [...keep, ...made] };
-      });
     }
     setSelDog(null);
   };
@@ -299,21 +310,47 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
         </Tooltip>
       </Space>
 
-      {/* 输入总段数，自动配比 */}
+      {/* 输入总段数，按比例自动配 */}
       {!frozen && (
-        <Space wrap size={[10, 8]} style={{ fontSize: 13, padding: "10px 14px", border: `1px dashed ${line}`, borderRadius: 8 }}>
-          <span style={{ fontWeight: 700 }}>总数</span>
-          <InputNumber size="small" min={1} max={5000} value={wantTotal ?? undefined} onChange={(v) => setWantTotal(v)} addonAfter="段" style={{ width: 120 }} />
-          {[200, 300, 500].map((n) => <Button key={n} size="small" type={wantTotal === n ? "primary" : "default"} ghost={wantTotal === n} onClick={() => setWantTotal(n)}>{n}</Button>)}
-          <span style={{ color: muted }}>按</span>
-          <Tooltip title={autoMode === "scale" ? "把现在的计划等比放大 / 缩小，每只狗、每个时长、有无、部位的比例都不变"
-            : autoMode === "even" ? `平均分给${site ? SITE_SHORT[site] : "全部场所"}的狗，每只狗再平均分到各时长，有无各半，部位均分`
-              : `按每只狗可用的${plan.target}片段多少分（${site ? SITE_SHORT[site] : "全部场所"}，没数据的狗不分），每只狗内部同「平均」`}>
-            <Segmented size="small" value={autoMode} onChange={(v) => setAutoMode(v as typeof autoMode)}
-              options={[{ value: "scale", label: "现在比例" }, { value: "even", label: "平均" }, { value: "avail", label: "按可用量" }]} />
-          </Tooltip>
-          <Button size="small" type="primary" onClick={autoAllocate}>自动配</Button>
-        </Space>
+        <div style={{ fontSize: 13, padding: "10px 14px", border: `1px dashed ${line}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+          <Space wrap size={[10, 8]}>
+            <span style={{ fontWeight: 700 }}>总数</span>
+            <InputNumber size="small" min={1} max={5000} value={wantTotal ?? undefined} onChange={(v) => setWantTotal(v)} addonAfter="段" style={{ width: 120 }} />
+            {[200, 300, 500].map((n) => <Button key={n} size="small" type={wantTotal === n ? "primary" : "default"} ghost={wantTotal === n} onClick={() => setWantTotal(n)}>{n}</Button>)}
+            <Tooltip title="按比例：按下面填的比例从头配；现在比例：把已经配好的计划整体放大 / 缩小，每格比例不变">
+              <Segmented size="small" value={autoMode} onChange={(v) => setAutoMode(v as typeof autoMode)}
+                options={[{ value: "ratio", label: "按比例" }, { value: "scale", label: "现在比例" }]} />
+            </Tooltip>
+            <Button size="small" type="primary" onClick={autoAllocate}>自动配</Button>
+          </Space>
+          {autoMode === "ratio" && (
+            <Space wrap size={[16, 8]} style={{ color: muted }}>
+              <span>场所 {SITE_ORDER.map((s) => (
+                <span key={s} style={{ marginRight: 6 }}>{SITE_SHORT[s].slice(0, 2)}
+                  <InputNumber size="small" min={0} max={1000} style={{ width: 58, marginLeft: 3 }} value={alloc.site?.[s] ?? 0}
+                    onChange={(v) => setAlloc({ site: { ...(alloc.site ?? {}), [s]: Number(v ?? 0) } })} /></span>))}
+              </span>
+              <span>时长 {plan.durations.map((d) => (
+                <span key={d} style={{ marginRight: 6 }}>{durLabel(d)}
+                  <InputNumber size="small" min={0} max={100} style={{ width: 50, marginLeft: 3 }} value={wDur(d)}
+                    onChange={(v) => setAlloc({ dur: { ...(alloc.dur ?? {}), [String(d)]: Number(v ?? 0) } })} /></span>))}
+              </span>
+              <span>有 : 无 <InputNumber size="small" min={0} max={100} style={{ width: 50 }} value={alloc.pos ?? 1} onChange={(v) => setAlloc({ pos: Number(v ?? 0) })} />
+                {" : "}<InputNumber size="small" min={0} max={100} style={{ width: 50 }} value={alloc.neg ?? 1} onChange={(v) => setAlloc({ neg: Number(v ?? 0) })} /></span>
+              {plan.parts.length > 0 && (
+                <span>部位 {plan.parts.map((k) => (
+                  <span key={k} style={{ marginRight: 6 }}>{k.replace(`${plan.target}-`, "")}
+                    <InputNumber size="small" min={0} max={100} style={{ width: 50, marginLeft: 3 }} value={wPart(k)}
+                      onChange={(v) => setAlloc({ part: { ...(alloc.part ?? {}), [k]: Number(v ?? 0) } })} /></span>))}
+                </span>
+              )}
+              <Tooltip title="场所内的狗怎么分：平均，或按可用抓挠片段多少；没有可用数据的狗不分">
+                <Segmented size="small" value={alloc.dog ?? "even"} onChange={(v) => setAlloc({ dog: v as Alloc["dog"] })}
+                  options={[{ value: "even", label: "狗平均" }, { value: "avail", label: "按可用量" }]} />
+              </Tooltip>
+            </Space>
+          )}
+        </div>
       )}
 
       {/* ① 场所 */}

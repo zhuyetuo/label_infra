@@ -136,6 +136,11 @@ export interface Plan {
   anchor_names?: string[] | null;
   /** 「无这类」的分类：以哪些片段为中心、占多少比例（每只狗每种时长的「无」按比例摊） */
   neg_cats?: { name: string; anchors: string[]; ratio: number }[] | null;
+  /** 按比例自动配用的比例（只是记下来，下次打开还在） */
+  alloc?: {
+    site?: Record<string, number>; dur?: Record<string, number>; pos?: number; neg?: number;
+    part?: Record<string, number>; dog?: "even" | "avail";
+  } | null;
   dogs: PlanDog[];
   date_from?: string | null;
   date_to?: string | null;
