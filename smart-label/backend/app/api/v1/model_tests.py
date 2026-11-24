@@ -138,6 +138,27 @@ async def create_set(body: SetIn, db: AsyncSession = Depends(get_db), user: User
     return ok(_set_out(s))
 
 
+class SetPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.patch("/sets/{set_id}")
+async def update_set(set_id: int, body: SetPatch, db: AsyncSession = Depends(get_db)):
+    """改名字 / 备注（冻结了也能改：不影响里面的片段）"""
+    s = await _set_or_404(db, set_id)
+    if body.name is not None:
+        name = body.name.strip()
+        if name != s.name and (await db.execute(select(ModelTestSet.id).where(ModelTestSet.name == name))).first():
+            raise HTTPException(400, "已经有同名的测试集")
+        s.name = name
+    if body.note is not None:
+        s.note = body.note.strip() or None
+    await db.commit()
+    await db.refresh(s)
+    return ok(_set_out(s))
+
+
 @router.post("/sets/{set_id}/freeze")
 async def freeze_set(set_id: int, db: AsyncSession = Depends(get_db)):
     s = await _set_or_404(db, set_id)

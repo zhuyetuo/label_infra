@@ -12,6 +12,9 @@ import { listDogs, type Dog } from "@/api/dogs";
 import { getLabelTree, planApply, planAvailability, planPreview, planSave, type Plan, type PlanDog, type PlanResult } from "@/api/modelTests";
 
 const SITE_ORDER = ["佛山博朗旺狗场", "公司影棚", "深圳雷诺狗场"];
+const SIZES = ["小", "中", "大", "未知"];
+const SIZE_COLORS: Record<string, string> = { 小: "#d8a85c", 中: "#72999f", 大: "#5b5a86", 未知: "#9ca3af" };
+const SITE_COLORS: Record<string, string> = { 佛山博朗旺狗场: "#25725a", 公司影棚: "#3f7f95", 深圳雷诺狗场: "#a3474c" };
 const SITE_SHORT: Record<string, string> = { 佛山博朗旺狗场: "佛山博朗旺", 公司影棚: "公司影棚", 深圳雷诺狗场: "深圳雷诺" };
 const durLabel = (s: number) => (s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`);
 const emptyDog = (id: number): PlanDog => ({ dog_id: id, q: {}, p: {} });
@@ -85,6 +88,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   });
   const [site, setSite] = useState<string | null>(null);
   const [selDog, setSelDog] = useState<number | null>(null);
+  const [selSize, setSelSize] = useState<string | null>(null);
   const [result, setResult] = useState<PlanResult | null>(null);
   const [busy, setBusy] = useState<"" | "preview" | "apply" | "save">("");
   const [newDur, setNewDur] = useState<number | null>(5);
@@ -119,7 +123,8 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const allDogs = useMemo(() => (dogs ?? []).filter((d) => SITE_ORDER.includes(d.site ?? ""))
     .sort((a, b) => SITE_ORDER.indexOf(a.site ?? "") - SITE_ORDER.indexOf(b.site ?? "") || a.id - b.id), [dogs]);
   const scopeDogs = allDogs.filter((d) => !site || d.site === site);
-  const selected: Dog[] = selDog ? allDogs.filter((d) => d.id === selDog) : scopeDogs;
+  const selected: Dog[] = selDog ? allDogs.filter((d) => d.id === selDog)
+    : selSize ? scopeDogs.filter((d) => (d.size ?? "未知") === selSize) : scopeDogs;
   const dp = (id: number) => plan.dogs.find((x) => x.dog_id === id) ?? emptyDog(id);
   const qOf = (x: PlanDog, d: number): [number, number] => (x.q[String(d)] as [number, number]) ?? [0, 0];
   const dogTotal = (id: number) => plan.durations.reduce((a, d) => a + qOf(dp(id), d)[0] + qOf(dp(id), d)[1], 0);
@@ -193,6 +198,33 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const setAlloc = (patch: Partial<Alloc>) => setPlan((p) => ({ ...p, alloc: { ...(p.alloc ?? DEFAULT_ALLOC), ...patch } }));
   const wDur = (d: number) => alloc.dur?.[String(d)] ?? 1;
   const wPart = (k: string) => alloc.part?.[k] ?? 1;
+  // ── 当前配比（整个计划）：场所 / 体型 / 时长 / 有无 / 部位 各占多少 ──
+  const cur = useMemo(() => {
+    const byId = new Map(allDogs.map((d) => [d.id, d]));
+    const site: Record<string, number> = {}, size: Record<string, number> = {}, dur: Record<string, number> = {}, part: Record<string, number> = {};
+    let pos = 0, neg = 0;
+    plan.dogs.forEach((x) => {
+      const dg = byId.get(x.dog_id);
+      plan.durations.forEach((d) => {
+        const [a, b] = (x.q[String(d)] as [number, number]) ?? [0, 0];
+        const n = a + b;
+        if (!n) return;
+        site[dg?.site ?? "?"] = (site[dg?.site ?? "?"] ?? 0) + n;
+        size[dg?.size ?? "未知"] = (size[dg?.size ?? "未知"] ?? 0) + n;
+        dur[String(d)] = (dur[String(d)] ?? 0) + n;
+        pos += a; neg += b;
+      });
+      Object.entries(x.p).forEach(([k, v]) => { part[k] = (part[k] ?? 0) + (v ?? 0); });
+    });
+    return { site, size, dur, part, pos, neg };
+  }, [plan, allDogs]);
+  const curTotal = cur.pos + cur.neg;
+  const fillFromCurrent = () => {
+    setAlloc({ site: { ...cur.site }, size: { ...cur.size }, dur: { ...cur.dur }, pos: cur.pos, neg: cur.neg, part: { ...cur.part } });
+    setAutoMode("ratio");
+    message.success("已按现在的配比填好比例，改总数或改比例后点「自动配」");
+  };
+
   const autoAllocate = () => {
     const N = Math.max(0, Math.round(wantTotal ?? 0));
     if (!N) return message.warning("先填总段数");
@@ -209,7 +241,9 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       const perSite = splitByRatio(N, sites.map((x) => x.w));
       const made: PlanDog[] = [];
       sites.forEach((x, si) => {
-        const perDog = splitByRatio(perSite[si], x.dogs.map((d) => (alloc.dog === "avail" ? availOf(d.id) : 1)));
+        // 场所内每只狗的权重 = 体型比例 ×（按可用量时再乘可用量）
+        const perDog = splitByRatio(perSite[si], x.dogs.map((d) =>
+          (alloc.size?.[d.size ?? "未知"] ?? 1) * (alloc.dog === "avail" ? availOf(d.id) : 1)));
         x.dogs.forEach((d, di) => {
           const byDur = splitByRatio(perDog[di], durs.map(wDur));
           const q: Record<string, [number, number]> = {};
@@ -344,12 +378,48 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
                       onChange={(v) => setAlloc({ part: { ...(alloc.part ?? {}), [k]: Number(v ?? 0) } })} /></span>))}
                 </span>
               )}
-              <Tooltip title="场所内的狗怎么分：平均，或按可用抓挠片段多少；没有可用数据的狗不分">
+              <span>体型 {["小", "中", "大"].map((sz) => (
+                <span key={sz} style={{ marginRight: 6 }}>{sz}
+                  <InputNumber size="small" min={0} max={100} style={{ width: 50, marginLeft: 3 }} value={alloc.size?.[sz] ?? 1}
+                    onChange={(v) => setAlloc({ size: { ...(alloc.size ?? {}), [sz]: Number(v ?? 0) } })} /></span>))}
+              </span>
+              <Button size="small" onClick={fillFromCurrent} disabled={!curTotal}>照现在的配比填</Button>
+              <Tooltip title="场所内的狗怎么分：平均，或按可用抓挠片段多少；没有可用数据的狗不分。体型比例在场所内起作用">
                 <Segmented size="small" value={alloc.dog ?? "even"} onChange={(v) => setAlloc({ dog: v as Alloc["dog"] })}
                   options={[{ value: "even", label: "狗平均" }, { value: "avail", label: "按可用量" }]} />
               </Tooltip>
             </Space>
           )}
+        </div>
+      )}
+
+      {/* 当前配比：整个计划，场所 / 体型 / 时长 / 有无 / 部位 */}
+      {curTotal > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, padding: "12px 14px",
+          background: token.colorFillQuaternary, borderRadius: 8 }}>
+          {([
+            ["场所", Object.entries(cur.site).map(([k, v]) => [SITE_SHORT[k] ?? k, v, SITE_COLORS[k] ?? "#9ca3af"])],
+            ["体型", SIZES.filter((s) => cur.size[s]).map((s) => [s === "未知" ? "未知" : `${s}型`, cur.size[s], SIZE_COLORS[s]])],
+            ["时长", plan.durations.filter((d) => cur.dur[String(d)]).map((d, i) => [durLabel(d), cur.dur[String(d)], ["#25725a", "#72999f", "#d8a85c", "#8e7cc3"][i % 4]])],
+            [`有 / 无${plan.target}`, [["有", cur.pos, accent], ["无", cur.neg, NEG_BLUE]]],
+            ...(plan.parts.length ? [["部位（占有）", plan.parts.map((k, i) => [k.replace(`${plan.target}-`, ""), cur.part[k] ?? 0,
+              [accent, "#d8a85c", "#72999f", "#8e7cc3", "#c27c7c"][i % 5]])]] : []),
+          ] as [string, [string, number, string][]][]).map(([title, items]) => {
+            const t = items.reduce((a, x) => a + x[1], 0) || 1;
+            return (
+              <div key={title}>
+                <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>{title}</div>
+                <div style={{ height: 8, display: "flex", borderRadius: 3, overflow: "hidden", background: token.colorFillTertiary }}>
+                  {items.map(([k, v, c]) => <div key={k} style={{ width: `${(v / t) * 100}%`, background: c }} />)}
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, display: "flex", flexWrap: "wrap", gap: "0 10px" }}>
+                  {items.map(([k, v, c]) => (
+                    <span key={k}><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: c, marginRight: 3 }} />
+                      {k} <b>{((v / t) * 100).toFixed(0)}%</b></span>))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -362,7 +432,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             const n = sum((x) => plan.durations.reduce((a, d) => a + qOf(x, d)[0] + qOf(x, d)[1], 0), ds.map((d) => d.id));
             const inc = ds.filter((d) => dogTotal(d.id) > 0).length;
             return (
-              <button key={s} type="button" style={card(site === s)} onClick={() => { setSite(site === s ? null : s); setSelDog(null); }}>
+              <button key={s} type="button" style={card(site === s)} onClick={() => { setSite(site === s ? null : s); setSelDog(null); setSelSize(null); }}>
                 <div><div style={{ fontWeight: 700, fontSize: 15 }}>{SITE_SHORT[s]}</div>
                   <div style={{ fontSize: 12, color: muted }}>{inc} / {ds.length} 只纳入</div></div>
                 <div style={big}>{n}<span style={{ fontSize: 12, fontWeight: 400, color: muted }}> 段</span></div>
@@ -376,20 +446,36 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
       <div style={{ display: "grid", gridTemplateColumns: "240px minmax(0, 1fr)", border: `1px solid ${line}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ padding: 20, background: token.colorFillQuaternary, borderRight: `1px solid ${line}` }}>
           <div style={{ ...h3, marginBottom: 12 }}>② 犬只</div>
-          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-            <button type="button" style={chip(selDog == null, false)} onClick={() => setSelDog(null)}>全部犬只</button>
-            {scopeDogs.map((d) => {
-              const n = dogTotal(d.id), a = availOf(d.id), short = dogShort(d.id);
-              return (
-                <Tooltip key={d.id} title={`${d.size ?? "?"}型 · 可用${plan.target} ${a} 条${short > 0 ? ` · 少 ${short} 段` : ""}`}>
-                  <button type="button" style={chip(selDog === d.id, !a)} onClick={() => setSelDog(d.id)}>
-                    {d.name}{n > 0 && <span style={{ marginLeft: 5, fontWeight: 700, opacity: 0.85 }}>{n}</span>}
-                    {short > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 8, height: 8, borderRadius: 4, background: token.colorError }} />}
-                  </button>
-                </Tooltip>
-              );
-            })}
-          </div>
+          <button type="button" style={{ ...chip(selDog == null && selSize == null, false), marginBottom: 12 }}
+            onClick={() => { setSelDog(null); setSelSize(null); }}>全部犬只</button>
+          {/* 按体型分组：点组名看这一组合计，点狗名看单只 */}
+          {SIZES.map((sz) => {
+            const ds = scopeDogs.filter((d) => (d.size ?? "未知") === sz);
+            if (!ds.length) return null;
+            const n = ds.reduce((a, d) => a + dogTotal(d.id), 0);
+            return (
+              <div key={sz} style={{ marginBottom: 12 }}>
+                <div onClick={() => { setSelSize(sz); setSelDog(null); }}
+                  style={{ fontSize: 12, fontWeight: 700, color: selSize === sz && selDog == null ? accent : muted, cursor: "pointer", marginBottom: 6,
+                    display: "flex", justifyContent: "space-between" }}>
+                  <span>{sz === "未知" ? "体型未知" : `${sz}型犬`} · {ds.length} 只</span><span>{n} 段</span>
+                </div>
+                <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                  {ds.map((d) => {
+                    const dn = dogTotal(d.id), a = availOf(d.id), short = dogShort(d.id);
+                    return (
+                      <Tooltip key={d.id} title={`${SITE_SHORT[d.site ?? ""] ?? ""} · 可用${plan.target} ${a} 条${short > 0 ? ` · 少 ${short} 段` : ""}`}>
+                        <button type="button" style={chip(selDog === d.id, !a)} onClick={() => { setSelDog(d.id); setSelSize(null); }}>
+                          {d.name}{dn > 0 && <span style={{ marginLeft: 5, fontWeight: 700, opacity: 0.85 }}>{dn}</span>}
+                          {short > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 8, height: 8, borderRadius: 4, background: token.colorError }} />}
+                        </button>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <div style={{ padding: "22px 26px", minWidth: 0 }}>
@@ -397,7 +483,8 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
             <div>
               <div style={eyebrow}>当前查看</div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>
-                {selDog ? selected[0]?.name : site ? `${SITE_SHORT[site]} · 全部犬只` : "全部犬只"}
+                {selDog ? selected[0]?.name
+                  : `${site ? `${SITE_SHORT[site]} · ` : ""}${selSize ? (selSize === "未知" ? "体型未知" : `${selSize}型犬`) : "全部犬只"}`}
               </div>
               <div style={{ fontSize: 13, color: muted }}>
                 {selDog ? `${SITE_SHORT[selected[0]?.site ?? ""] ?? ""} · ${selected[0]?.size ?? "?"}型 · 可用${plan.target} ${availOf(selDog)} 条`

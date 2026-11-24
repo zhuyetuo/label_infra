@@ -141,6 +141,18 @@ def test_选样计划_无这类按分类挑(db, run):
     assert all("活动类" in (it["note"] or "") for it in items) and len(items) == r["added"]
 
 
+def test_改名改备注(db, run):
+    w = _world(db, run)
+    a = run(api.create_set(api.SetIn(name="a"), db, w.admin))["data"]
+    run(api.create_set(api.SetIn(name="b"), db, w.admin))
+    r = run(api.update_set(a["id"], api.SetPatch(name=" a2 ", note="备注"), db))["data"]
+    assert r["name"] == "a2" and r["note"] == "备注"
+    with pytest.raises(HTTPException):
+        run(api.update_set(a["id"], api.SetPatch(name="b"), db))
+    r = run(api.update_set(a["id"], api.SetPatch(note=""), db))["data"]
+    assert r["note"] is None and r["name"] == "a2"
+
+
 def test_删测试集_任务和标注不动(db, run):
     from app.models.annotation import AnnotationLabelItem
     w = _world(db, run)

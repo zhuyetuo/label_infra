@@ -122,6 +122,8 @@ export const listTestSets = () =>
   request.get<never, { sets: TestSet[]; n_excluded_samples: number }>("/model-tests/sets");
 export const createTestSet = (body: { name: string; note?: string }) =>
   request.post<never, TestSet>("/model-tests/sets", body);
+export const updateTestSet = (id: number, body: { name?: string; note?: string }) =>
+  request.patch<never, TestSet>(`/model-tests/sets/${id}`, body);
 export const freezeTestSet = (id: number) => request.post<never, TestSet>(`/model-tests/sets/${id}/freeze`);
 export const copyTestSet = (id: number, body: { name: string; note?: string }) =>
   request.post<never, TestSet>(`/model-tests/sets/${id}/copy`, body);
@@ -139,7 +141,7 @@ export interface Plan {
   /** 按比例自动配用的比例（只是记下来，下次打开还在） */
   alloc?: {
     site?: Record<string, number>; dur?: Record<string, number>; pos?: number; neg?: number;
-    part?: Record<string, number>; dog?: "even" | "avail";
+    part?: Record<string, number>; dog?: "even" | "avail"; size?: Record<string, number>;
   } | null;
   dogs: PlanDog[];
   date_from?: string | null;

@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree,
+  addTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -861,6 +861,16 @@ export default function ModelTest() {
   const [name, setName] = useState("");
   const [copyOf, setCopyOf] = useState<TestSet | null>(null);
   const [copyName, setCopyName] = useState("");
+  const [editOf, setEditOf] = useState<TestSet | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const doEdit = async () => {
+    if (!editOf || !editName.trim()) return message.warning("名字不能空");
+    await updateTestSet(editOf.id, { name: editName.trim(), note: editNote });
+    setEditOf(null);
+    refresh();
+    qc.invalidateQueries({ queryKey: ["model-test-items", editOf.id] });
+  };
   useEffect(() => { if (cur == null && sets.length) setCur(sets[0].id); }, [sets, cur]);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["model-test-sets"] });
@@ -908,6 +918,7 @@ export default function ModelTest() {
                         <Popconfirm title="冻结后这一版不能再增删，确定？" onConfirm={async () => { await freezeTestSet(s.id); refresh(); }}>
                           <a>冻结</a>
                         </Popconfirm>)}
+                      <a onClick={() => { setEditOf(s); setEditName(s.name); setEditNote(s.note ?? ""); }}>编辑</a>
                       <a onClick={() => { setCopyOf(s); setCopyName(`${s.name} 补充`); }}>复制成新版本</a>
                       <Popconfirm
                         title={`删除测试集「${s.name}」？`}
@@ -932,6 +943,12 @@ export default function ModelTest() {
         },
         { key: "cross", label: "多批交叉对比", children: <CrossTab sets={sets} /> },
       ]} />
+      <Modal title="编辑测试集" open={!!editOf} onCancel={() => setEditOf(null)} onOk={doEdit} okText="保存">
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="名字" maxLength={100} />
+          <Input.TextArea value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="备注（可空）" maxLength={500} autoSize={{ minRows: 3, maxRows: 8 }} />
+        </Space>
+      </Modal>
       <Modal title={`复制「${copyOf?.name ?? ""}」成新版本`} open={!!copyOf} onCancel={() => setCopyOf(null)} onOk={doCopy} okText="复制">
         <Input value={copyName} onChange={(e) => setCopyName(e.target.value)} placeholder="新版本名字" />
         <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
