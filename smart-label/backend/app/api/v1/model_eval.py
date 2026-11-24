@@ -244,6 +244,12 @@ class VersionRef(BaseModel):
     mode: str
 
 
+class WindowIn(BaseModel):
+    sample_id: int
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+
+
 class CompareIn(BaseModel):
     # 三选一：评测集 id / 直接给样本 / 日期范围
     set_id: int | None = None
@@ -256,6 +262,18 @@ class CompareIn(BaseModel):
     # 想严格考察边界就调到 0.5+
     iou_min: float = 0.3
     conf_min: float = 0.0
+    # 给了就只算这些时间窗口里的（模型测试集：挑的是样本里的一段）
+    windows: list[WindowIn] | None = None
+
+
+def _windows_of(ws: list[WindowIn] | None) -> dict[int, list[tuple[int, int]]] | None:
+    if ws is None:
+        return None
+    out: dict[int, list[tuple[int, int]]] = {}
+    for w in ws:
+        if w.end_ms > w.start_ms:
+            out.setdefault(w.sample_id, []).append((w.start_ms, w.end_ms))
+    return out
 
 
 @router.post("/compare")
@@ -271,6 +289,7 @@ async def compare(body: CompareIn, db: AsyncSession = Depends(get_db)):
             label=body.label,
             iou_min=body.iou_min,
             conf_min=body.conf_min,
+            windows=_windows_of(body.windows),
         )
     )
 

@@ -36,6 +36,8 @@ class ItemIn(BaseModel):
     start_ms: int | None = None      # 都不给 = 整个任务
     end_ms: int | None = None
     note: str | None = Field(default=None, max_length=300)
+    # 凑够多少秒：围绕起止前后各延长一半（碰到头尾往另一边补）。要先给起止
+    pad_to_sec: float | None = Field(default=None, gt=0, le=3600)
 
 
 class ItemsIn(BaseModel):
@@ -122,6 +124,9 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
         raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
     tasks = {t.id: t for t in (await db.execute(
         select(Task).where(Task.id.in_({x.task_id for x in body.items})))).scalars().all()}
+    from app.models.sample import Sample
+    dur_ms = {sid: (d or 0) * 1000 for sid, d in (await db.execute(
+        select(Sample.id, Sample.video_duration_sec).where(Sample.id.in_({t.sample_id for t in tasks.values()})))).all()} if tasks else {}
     have = {(t, st) for t, st in (await db.execute(
         select(ModelTestItem.task_id, ModelTestItem.start_ms).where(ModelTestItem.set_id == set_id))).all()}
     added, skipped = 0, []
@@ -133,6 +138,13 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
         if (x.start_ms is None) != (x.end_ms is None) or (x.start_ms is not None and (x.start_ms < 0 or x.end_ms <= x.start_ms)):
             skipped.append({"task_id": x.task_id, "reason": "起止不对（要么都不给 = 整个任务，要么都给且结束晚于开始）"})
             continue
+        if x.pad_to_sec:
+            if x.start_ms is None:
+                skipped.append({"task_id": x.task_id, "reason": "凑时长要先给起止"})
+                continue
+            lo = t.segment_start_ms or 0
+            hi = t.segment_end_ms if t.segment_end_ms is not None else (dur_ms.get(t.sample_id) or None)
+            x.start_ms, x.end_ms = svc.pad_window(x.start_ms, x.end_ms, int(x.pad_to_sec * 1000), lo, hi)
         if (x.task_id, x.start_ms) in have:
             skipped.append({"task_id": x.task_id, "reason": "已经在这个测试集里"})
             continue
@@ -142,6 +154,14 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
         added += 1
     await db.commit()
     return ok({"added": added, "skipped": skipped})
+
+
+@router.get("/task-segments")
+async def get_task_segments(task_id: int, db: AsyncSession = Depends(get_db)):
+    """挑事件：任务当前轮的标注片段"""
+    if await db.get(Task, task_id) is None:
+        raise HTTPException(404, "任务不存在")
+    return ok(await svc.task_segments(db, task_id))
 
 
 @router.delete("/items/{item_id}")

@@ -75,7 +75,13 @@ export const copyTestSet = (id: number, body: { name: string; note?: string }) =
   request.post<never, TestSet>(`/model-tests/sets/${id}/copy`, body);
 export const getTestItems = (id: number) =>
   request.get<never, { set: TestSet; items: TestItem[]; coverage: Coverage }>(`/model-tests/sets/${id}/items`);
-export const addTestItems = (id: number, items: { task_id: number; start_ms?: number | null; end_ms?: number | null; note?: string }[]) =>
+/** 任务当前轮的标注片段（挑事件用） */
+export interface TaskSeg { id: number; top: string; label: string; start_ms: number; end_ms: number; uncertain: boolean }
+export const getTaskSegments = (taskId: number) =>
+  request.get<never, TaskSeg[]>("/model-tests/task-segments", { params: { task_id: taskId } });
+
+/** pad_to_sec：凑够多少秒，围绕起止前后各延长一半（碰到头尾往另一边补），要先给起止 */
+export const addTestItems = (id: number, items: { task_id: number; start_ms?: number | null; end_ms?: number | null; note?: string; pad_to_sec?: number | null }[]) =>
   request.post<never, { added: number; skipped: { task_id: number; reason: string }[] }>(`/model-tests/sets/${id}/items`, { items });
 export const deleteTestItem = (itemId: number) => request.delete<never, { deleted: number }>(`/model-tests/items/${itemId}`);
 export const getTestSeen = (id: number, modelIds?: number[]) =>

@@ -63,6 +63,20 @@ class Seg:
         return max(0, self.end_ms - self.start_ms)
 
 
+def clip_to_windows(segs: list[Seg], wins: list[tuple[int, int]]) -> list[Seg]:
+    """只留窗口里的部分：跨窗口边的段在边上切开，跨两个窗口的切成两段。
+    模型测试集挑的是样本里的一段（比如 1 分钟），窗口外的标注和预测都不该算分"""
+    import dataclasses
+    out: list[Seg] = []
+    for s in segs:
+        for a, b in wins:
+            lo, hi = max(s.start_ms, a), min(s.end_ms, b)
+            if hi > lo:
+                out.append(dataclasses.replace(s, start_ms=lo, end_ms=hi))
+    out.sort(key=lambda x: x.start_ms)
+    return out
+
+
 def _iou(a: Seg, b: Seg) -> float:
     inter = min(a.end_ms, b.end_ms) - max(a.start_ms, b.start_ms)
     if inter <= 0:
@@ -284,9 +298,11 @@ async def evaluate(
     label: str = "抓挠",
     iou_min: float = 0.3,
     conf_min: float = 0.0,
+    windows: dict[int, list[tuple[int, int]]] | None = None,
 ) -> dict:
     """
     一批样本、若干个 (模型, 版本)，各跟人工标注比一遍。
+    windows：{样本 id: [(开始毫秒, 结束毫秒), …]}，给了就只算窗口里的（模型测试集用）。
 
     versions: [{"model_tag": ..., "mode": ...}, ...]
     返回每个版本的 P/R/F1、阈值曲线，以及两两之间的回归对照。
@@ -339,6 +355,9 @@ async def evaluate(
 
     samples = (await db.execute(select(Sample).where(Sample.id.in_(covered)))).scalars().all()
     truths, uncertain_holes = await _human_by_sample(db, [s.id for s in samples], label_names)
+    if windows is not None:
+        truths = {sid: clip_to_windows(v, windows.get(sid, [])) for sid, v in truths.items()}
+        truths = {sid: v for sid, v in truths.items() if v}
     if not truths:
         warnings.append(f"这批样本里没有人工标的「{label}」，只能看误报")
 
@@ -364,6 +383,8 @@ async def evaluate(
             ).scalars().all()
         }
         preds, missing, warn = await _run_segments(samples, runs, label_names)
+        if windows is not None:
+            preds = {sid: clip_to_windows(v, windows.get(sid, [])) for sid, v in preds.items()}
         warnings.extend(warn)
         pred_cache[key] = preds
 
@@ -453,6 +474,7 @@ async def evaluate(
         "n_samples": len(samples),
         "n_truth": sum(len(v) for v in truths.values()),
         "iou_min": iou_min,
+        "windowed": windows is not None,
         "warnings": warnings[:50],
     }
 

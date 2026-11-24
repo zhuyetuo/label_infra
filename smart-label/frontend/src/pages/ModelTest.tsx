@@ -10,8 +10,8 @@ import {
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getTestItems, getTestSeen, listTestSets,
-  type Coverage, type TestItem, type TestSet,
+  addTestItems, copyTestSet, createTestSet, deleteTestItem, freezeTestSet, getTaskSegments, getTestItems, getTestSeen, listTestSets,
+  type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listProjects } from "@/api/projects";
 import { listTasks } from "@/api/tasks";
@@ -38,6 +38,12 @@ const parseTime = (v: string): number | null => {
   const parts = t.split(":").map(Number);
   if (parts.some((x) => !Number.isFinite(x) || x < 0)) return NaN;
   return parts.reduce((a, b) => a * 60 + b, 0) * 1000;
+};
+/** 测试片段 → 打分用的时间窗口（只要 sampleIds 里的） */
+const windowsOf = (items: TestItem[], sampleIds: number[]) => {
+  const keep = new Set(sampleIds);
+  return items.filter((i) => keep.has(i.sample_id) && i.end_ms > i.start_ms)
+    .map((i) => ({ sample_id: i.sample_id, start_ms: i.start_ms, end_ms: i.end_ms }));
 };
 const f1 = (p: number, r: number) => (p + r > 0 ? (2 * p * r) / (p + r) : 0);
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
@@ -110,23 +116,52 @@ function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean;
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [note, setNote] = useState("");
+  const [padSec, setPadSec] = useState<number | null>(60);
+  const [segTask, setSegTask] = useState<number | null>(null);
+  const [segPicked, setSegPicked] = useState<number[]>([]);
+  const [segTop, setSegTop] = useState<string>("抓挠");
   const [busy, setBusy] = useState(false);
   const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: listProjects, enabled: open });
   const { data: tasks, isFetching } = useQuery({
     queryKey: ["tasks", projectId], queryFn: () => listTasks(projectId!), enabled: open && projectId != null,
   });
+  const { data: segs, isFetching: segLoading } = useQuery({
+    queryKey: ["task-segs", segTask], queryFn: () => getTaskSegments(segTask!), enabled: open && segTask != null,
+  });
+  const segShown = (segs ?? []).filter((x) => !segTop || x.top === segTop);
+  const typedIds = () => idsText.split(/[\s,，、]+/).map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0);
 
   const submit = async () => {
-    const typed = idsText.split(/[\s,，、]+/).map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0);
-    const ids = Array.from(new Set([...picked, ...typed]));
-    if (!ids.length) return message.warning("先选任务，或者填任务号");
+    // 挑了事件：每个事件一段，起止 = 事件起止，再凑够 N 秒
+    if (segTask != null && segPicked.length) {
+      const chosen = (segs ?? []).filter((x) => segPicked.includes(x.id));
+      setBusy(true);
+      try {
+        const r = await addTestItems(setId, chosen.map((x) => ({
+          task_id: segTask, start_ms: x.start_ms, end_ms: x.end_ms, pad_to_sec: padSec, note: note || `${x.label} 事件`,
+        })));
+        message[r.skipped.length ? "warning" : "success"](
+          `加了 ${r.added} 段` + (r.skipped.length ? `，跳过 ${r.skipped.length}：${r.skipped.slice(0, 3).map((x) => x.reason).join("；")}` : ""));
+        qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+        qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+        setSegPicked([]);
+        onClose();
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    const ids = Array.from(new Set([...picked, ...typedIds()]));
+    if (!ids.length) return message.warning("先选任务、填任务号，或者点「挑事件」选标注片段");
     const s = parseTime(from), e = parseTime(to);
     if (Number.isNaN(s) || Number.isNaN(e) || (s == null) !== (e == null) || (s != null && e != null && e <= s)) {
       return message.warning("起止要么都空（整个任务），要么都填、结束晚于开始；格式 1:30 或 90（秒）");
     }
     setBusy(true);
     try {
-      const r = await addTestItems(setId, ids.map((task_id) => ({ task_id, start_ms: s, end_ms: e, note: note || undefined })));
+      const r = await addTestItems(setId, ids.map((task_id) => ({
+        task_id, start_ms: s, end_ms: e, note: note || undefined, pad_to_sec: s != null ? padSec : null,
+      })));
       message[r.skipped.length ? "warning" : "success"](
         `加了 ${r.added} 段` + (r.skipped.length ? `，跳过 ${r.skipped.length}：${r.skipped.slice(0, 3).map((x) => `#${x.task_id} ${x.reason}`).join("；")}` : ""));
       qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
@@ -150,7 +185,8 @@ function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean;
             value={projectId ?? undefined} onChange={(v) => { setProjectId(v); setPicked([]); }}
             options={(projects ?? []).map((p) => ({ value: p.id, label: `#${p.id} ${p.name}` }))} />
           <span>或者直接填任务号：</span>
-          <Input style={{ width: 260 }} placeholder="67845, 67846 …" value={idsText} onChange={(e) => setIdsText(e.target.value)} />
+          <Input style={{ width: 200 }} placeholder="67845, 67846 …" value={idsText} onChange={(e) => setIdsText(e.target.value)} />
+          {typedIds().length === 1 && <Button size="small" onClick={() => { setSegTask(typedIds()[0]); setSegPicked([]); }}>挑这个任务的事件</Button>}
         </Space>
         {projectId != null && (
           <Table<Task>
@@ -162,18 +198,46 @@ function AddItemsModal({ setId, open, onClose }: { setId: number; open: boolean;
               { title: "状态", dataIndex: "status", width: 110 },
               { title: "窗口", width: 140, render: (_, t) => (t.segment_start_ms != null && t.segment_end_ms != null
                 ? `${fmtMs(t.segment_start_ms)}–${fmtMs(t.segment_end_ms)}` : "整个样本") },
+              { title: "", width: 90, render: (_, t) => (
+                <a onClick={(e) => { e.stopPropagation(); setSegTask(t.id); setSegPicked([]); }}>
+                  {segTask === t.id ? <b>挑事件 ▾</b> : "挑事件"}
+                </a>) },
             ]}
           />
+        )}
+        {segTask != null && (
+          <div style={{ border: "1px solid #d9d9d9", borderRadius: 6, padding: 8 }}>
+            <Space wrap style={{ marginBottom: 6 }}>
+              <b>任务 #{segTask} 的标注片段</b>
+              <Select size="small" style={{ width: 130 }} value={segTop} onChange={setSegTop} allowClear placeholder="全部大类"
+                options={[...TOPS, "其他"].map((x) => ({ value: x, label: x }))} />
+              <span style={{ color: "#888" }}>勾哪几个事件，每个加成一段（起止 = 事件起止，再按下面「凑够」前后延长）</span>
+              <a onClick={() => { setSegTask(null); setSegPicked([]); }}>收起</a>
+            </Space>
+            <Table<TaskSeg>
+              size="small" rowKey="id" loading={segLoading} dataSource={segShown} pagination={{ pageSize: 8, showSizeChanger: false }}
+              rowSelection={{ selectedRowKeys: segPicked, onChange: (k) => setSegPicked(k as number[]) }}
+              columns={[
+                { title: "类别", render: (_, x) => <span>{x.label}{x.uncertain && <Tag color="gold" style={{ marginLeft: 4 }}>待定</Tag>}</span> },
+                { title: "起止", render: (_, x) => `${fmtMs(x.start_ms)}–${fmtMs(x.end_ms)}` },
+                { title: "时长", render: (_, x) => fmtSec((x.end_ms - x.start_ms) / 1000) },
+              ]}
+            />
+          </div>
         )}
         <Space wrap>
           <span>时间窗口（可空 = 整个任务）：</span>
           <Input style={{ width: 100 }} placeholder="开始 1:30" value={from} onChange={(e) => setFrom(e.target.value)} />
           <span>—</span>
           <Input style={{ width: 100 }} placeholder="结束 2:30" value={to} onChange={(e) => setTo(e.target.value)} />
-          <Input style={{ width: 260 }} placeholder="备注（为什么挑它，可空）" value={note} onChange={(e) => setNote(e.target.value)} />
+          <Tooltip title="围绕起止前后各延长一半凑够这么长（碰到样本头尾就往另一边补）。比如 10 秒抓挠凑成 60 秒：窗口里有事件前后的上下文，模型报早报晚、起止准不准（交并比）才测得出来。空 = 不延长">
+            <span>凑够 <InputNumber size="small" min={1} max={3600} style={{ width: 80 }} value={padSec} onChange={(v) => setPadSec(v)} /> 秒</span>
+          </Tooltip>
+          <Input style={{ width: 220 }} placeholder="备注（为什么挑它，可空）" value={note} onChange={(e) => setNote(e.target.value)} />
         </Space>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          窗口对这次选中的所有任务都一样；不同任务要不同窗口就分几次加。不超过 3 分钟算「短片段」，否则「长片段」。
+          勾了事件就按事件加（上面的时间窗口不用填）；否则窗口对这次选中的所有任务都一样。不超过 3 分钟算「短片段」，否则「长片段」。
+          延长出来的那部分也要标全（休息、活动也标），不然模型在那里报的会算误报。
         </Typography.Text>
       </Space>
     </Modal>
@@ -287,7 +351,7 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
       const out: EvalRow[] = [];
       for (const [g, ids] of groups) {
         if (!ids.length) continue;
-        const r = await compareModels({ sample_ids: ids, versions: p.versions, label: p.label, iou_min: p.iou });
+        const r = await compareModels({ sample_ids: ids, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, ids) });
         r.warnings.forEach((w) => ns.push(`${g}：${w}`));
         r.versions.forEach((v) => out.push({ key: `${g}-${v.key}`, group: g, n: ids.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
       }
@@ -301,8 +365,9 @@ function EvalTab({ setId, items }: { setId: number; items: TestItem[] }) {
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <Alert type="info" showIcon message={
-        <span>打分按事件配对（跟「模型训练 → 模型对比」一样），先「跑」：让选中的版本在测试集样本上推理一遍；跑完再「打分」。
-          <b>注意：目前按整个样本打分，还没按挑的时间窗口裁</b>——片段只挑了样本里一小段时，窗口外的标注和预测也会算进去。</span>} />
+        <span>打分按事件配对（跟「模型训练 → 模型对比」一样），<b>只算挑的时间窗口里的</b>：窗口外的标注和预测都不算，
+          跨窗口边的段在边上切开。先「跑」：让选中的版本在测试集样本上推理一遍（推理按整个样本跑，前后有上下文）；跑完再「打分」。
+          IoU 门槛调高（如 0.5）就是在考起止准不准。</span>} />
       <Space wrap>
         <Select mode="multiple" style={{ minWidth: 420 }} placeholder="要跑的版本" value={runModes} onChange={setRunModes}
           options={modeOptions as never} maxTagCount={3} />
@@ -346,7 +411,7 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
           if (unknown.length) ns.push(`${unknown.join("、")} 对不上训练记录，见没见过不知道（没剔）`);
         }
         if (!use.length) { ns.push(`「${s.name}」没有可用样本`); continue; }
-        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou });
+        const r = await compareModels({ sample_ids: use, versions: p.versions, label: p.label, iou_min: p.iou, windows: windowsOf(items, use) });
         r.versions.forEach((v) => out.push({ key: `${sid}-${v.key}`, group: s.name, n: use.length, version: `${v.model_tag} · ${modeLabelOf(v.mode)}`, r: v }));
       }
       setRows(out);

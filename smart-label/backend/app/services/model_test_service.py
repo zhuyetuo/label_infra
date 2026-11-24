@@ -34,6 +34,46 @@ DOG_SHARE_WARN = 0.15        # 一只狗占总时长超过这个比例就提醒�
 LABEL_COVER_MIN = 0.8        # 窗口里标注覆盖低于这个比例就提醒（没标的时间会把模型的报告冤成误报）
 
 
+def pad_window(start_ms: int, end_ms: int, pad_ms: int, lo: int, hi: int | None) -> tuple[int, int]:
+    """把 [start, end] 前后各延长一半凑够 pad_ms（本来就更长就不动）；碰到头尾就往另一边补。
+    选了一段 10 秒的抓挠凑成 1 分钟：窗口里有事件前后的上下文，模型报早报晚、起止准不准（交并比）才测得出来"""
+    length = end_ms - start_ms
+    if pad_ms <= length:
+        return start_ms, end_ms
+    s = start_ms - (pad_ms - length) // 2
+    e = s + pad_ms
+    if s < lo:
+        s, e = lo, lo + pad_ms
+    if hi is not None and e > hi:
+        s, e = max(lo, hi - pad_ms), hi
+    return s, e
+
+
+async def task_segments(db: AsyncSession, task_id: int) -> list[dict]:
+    """任务当前轮的标注片段（挑事件用）：大类、细类、起止、待定"""
+    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
+    lname = {i: n for i, n, _p in lrows}
+    parent = {i: p for i, _n, p in lrows}
+
+    def top(lid: int) -> str:
+        cur, seen = lid, set()
+        while parent.get(cur) is not None and cur not in seen:
+            seen.add(cur)
+            cur = parent[cur]
+        return lname.get(cur, "?")
+
+    rows = (await db.execute(
+        select(AnnotationLabelItem.id, AnnotationLabelItem.label_id, AnnotationLabelItem.start_time_ms,
+               AnnotationLabelItem.end_time_ms, AnnotationLabelItem.uncertain)
+        .join(AnnotationRecord, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .join(Task, Task.id == AnnotationRecord.task_id)
+        .where(AnnotationRecord.task_id == task_id, AnnotationRecord.round_no == Task.round_no)
+        .order_by(AnnotationLabelItem.start_time_ms)
+    )).all()
+    return [{"id": i, "top": top(lid), "label": lname.get(lid, "?"), "start_ms": int(s), "end_ms": int(e),
+             "uncertain": bool(u)} for i, lid, s, e, u in rows]
+
+
 async def test_sample_ids(db: AsyncSession) -> set[int]:
     """所有测试集（冻结没冻结都算）里的样本。训练导出要排除它们。"""
     return set((await db.execute(select(ModelTestItem.sample_id).distinct())).scalars().all())

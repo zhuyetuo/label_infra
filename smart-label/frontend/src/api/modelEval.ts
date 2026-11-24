@@ -109,6 +109,8 @@ export const compareModels = (body: {
   label?: string;
   iou_min?: number;
   conf_min?: number;
+  /** 只算这些时间窗口里的（模型测试集） */
+  windows?: { sample_id: number; start_ms: number; end_ms: number }[];
 }) => request.post<never, CompareResult>("/model-eval/compare", body, { timeout: 600_000 });
 
 export const startEvalRun = (body: ScopeParams & { modes: string[] }) =>
