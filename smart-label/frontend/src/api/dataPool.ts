@@ -72,6 +72,7 @@ export interface PoolItem {
   hz: number;
   label_id: number;
   label_name: string;
+  label_color?: string | null;
   start_time_ms: number;
   end_time_ms: number;
   /** manual = 手动加入；approved = 片段审核通过进来的 */

@@ -439,7 +439,12 @@ export default function DataPoolPanel({
           },
         }}
         columns={[
-          { title: "类别", dataIndex: "label_name", width: 150, render: (v: string) => <Tag>{v}</Tag> },
+          {
+            title: "类别",
+            dataIndex: "label_name",
+            width: 150,
+            render: (v: string, r: PoolItem) => <Tag color={r.label_color || undefined} style={{ marginInlineEnd: 0 }}>{v}</Tag>,
+          },
           {
             title: "时长",
             width: 90,

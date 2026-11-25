@@ -371,7 +371,22 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
     }.get(sort, (Task.id, it.start_time_ms))
     page_size = max(1, min(page_size, 500))
     rows = (await db.execute(q.order_by(*order).offset((max(1, page) - 1) * page_size).limit(page_size))).all()
-    labels = {l.id: l.display_name for l in (await db.execute(select(LabelDefinition))).scalars().all()}
+    all_lbs = (await db.execute(select(LabelDefinition))).scalars().all()
+    lb_by_id = {l.id: l for l in all_lbs}
+    labels = {l.id: l.display_name for l in all_lbs}
+
+    def _lb_color(lid: int) -> str | None:
+        cur: int | None = lid
+        seen: set[int] = set()
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            lb = lb_by_id.get(cur)
+            if lb is None:
+                break
+            if lb.color:
+                return lb.color
+            cur = lb.parent_id
+        return None
     projects = {p.id: p.name for p in (await db.execute(select(Project))).scalars().all()}
     dog_ids = {smp.dog_id for _, _, smp in rows if smp.dog_id}
     dogs = ({d.id: (d.name or d.dog_code) for d in (await db.execute(select(Dog).where(Dog.id.in_(dog_ids)))).scalars()}
@@ -388,6 +403,7 @@ async def list_items(db: AsyncSession, f: PoolFilter, sort: str = "long", page: 
         "hz": _hz_of(smp),
         "label_id": x.label_id,
         "label_name": labels.get(x.label_id, f"#{x.label_id}"),
+        "label_color": _lb_color(x.label_id),
         "start_time_ms": x.start_time_ms,
         "end_time_ms": x.end_time_ms,
         # manual = 手动加入的；approved = 片段审核通过进来的
