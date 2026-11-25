@@ -1520,6 +1520,7 @@ function SetDetail({ setId }: { setId: number }) {
   const [opening, setOpening] = useState<number | null>(null);
   const [promoting, setPromoting] = useState<number | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
+  const [itemCheckFilter, setItemCheckFilter] = useState<"all" | "unchecked" | "checked">("all");
   const openTask = async (taskId: number, seekMs: number, opts?: OpenTaskOpts) => {
     setOpening(taskId);
     try {
@@ -1580,7 +1581,21 @@ function SetDetail({ setId }: { setId: number }) {
     await checkTestItem(id, checked);
     qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
   };
+  const confirmItemChecked = async (itemId: number) => {
+    await checkTestItem(itemId, true);
+    message.success("已保存并标记为「已核对」（保留在测试集内，不入训练池）");
+    closeWs();
+  };
   const checkedCount = data.items.filter((i) => i.checked).length;
+  const uncheckedCount = data.items.length - checkedCount;
+  const pendingCandsOf = (r: TestItem) =>
+    Object.values(r.cands ?? {}).reduce((sum, v) => sum + (v.pending ?? 0), 0);
+  const filteredItems = itemCheckFilter === "all"
+    ? data.items
+    : itemCheckFilter === "checked"
+      ? data.items.filter((i) => i.checked)
+      : data.items.filter((i) => !i.checked);
+  const wsFromEval = !!wsWin?.evalHint;
   const checkAll = async (checked: boolean) => {
     setCheckingAll(true);
     try {
@@ -1624,18 +1639,52 @@ function SetDetail({ setId }: { setId: number }) {
                         <Button size="small" type="text" loading={checkingAll}>取消全部核对</Button>
                       </Popconfirm>
                     )}
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      已核对 {checkedCount} / {data.items.length} 段
+                    <Segmented
+                      size="small"
+                      value={itemCheckFilter}
+                      onChange={(v) => setItemCheckFilter(v as "all" | "unchecked" | "checked")}
+                      options={[
+                        { label: `全部 ${data.items.length}`, value: "all" },
+                        { label: `未核对 ${uncheckedCount}`, value: "unchecked" },
+                        { label: `已核对 ${checkedCount}`, value: "checked" },
+                      ]}
+                    />
+                    <Typography.Text style={{ fontSize: 12, color: uncheckedCount > 0 ? "#faad14" : "#52c41a" }}>
+                      {uncheckedCount > 0
+                        ? `已核对 ${checkedCount} / ${data.items.length} 段 · 还剩 ${uncheckedCount} 段未核对`
+                        : `全部 ${data.items.length} 段已核对完成`}
                     </Typography.Text>
                   </>
                 )}
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
               </Space>
               <Table<TestItem>
-                size="small" rowKey="id" dataSource={data.items} pagination={{ pageSize: 50 }} scroll={{ x: 1200 }}
+                size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }} scroll={{ x: 1260 }}
+                onRow={(r) => (r.checked && itemCheckFilter === "all" ? { style: { opacity: 0.68 } } : {})}
                 columns={[
-                  { title: <Tooltip title="人工看过这段窗口、片段该调的调了，就勾上。打分默认只用核对过的">核对</Tooltip>, width: 60,
-                    render: (_, r) => <Checkbox checked={!!r.checked} disabled={frozen} onChange={(e) => toggleCheck(r.id, e.target.checked)} /> },
+                  {
+                    title: <Tooltip title="人工看过这段窗口、疑似片段和标注都确认无误后勾上。测试集打分默认只用已核对的段">核对状态</Tooltip>,
+                    width: 132,
+                    render: (_, r) => {
+                      const pend = pendingCandsOf(r);
+                      return (
+                        <Space size={6}>
+                          <Checkbox checked={!!r.checked} disabled={frozen} onChange={(e) => toggleCheck(r.id, e.target.checked)} />
+                          {r.checked ? (
+                            <Tag color="green" style={{ marginInlineEnd: 0 }}>✓ 已核对</Tag>
+                          ) : pend > 0 ? (
+                            <Tooltip title={`窗口内还有 ${pend} 条疑似片段未判，点右侧「看 / 标」处理完后点击「保存并标记已核对」`}>
+                              <Tag color="orange" style={{ marginInlineEnd: 0 }}>余 {pend} 条待判</Tag>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip title="窗口内疑似片段已全部判完，确认标注无误后勾上左侧核对框，或进工作台点「保存并标记已核对」">
+                              <Tag color="blue" style={{ marginInlineEnd: 0 }}>待确认核对</Tag>
+                            </Tooltip>
+                          )}
+                        </Space>
+                      );
+                    },
+                  },
                   { title: "任务", dataIndex: "task_id", width: 80 },
                   { title: "项目", dataIndex: "project_name", width: 160, ellipsis: true },
                   { title: "日期", dataIndex: "date", width: 100 },
@@ -1704,12 +1753,18 @@ function SetDetail({ setId }: { setId: number }) {
             : undefined
         }
         onApprove={
-          isAdmin && wsItemId != null && !frozen
-            ? () => promoteItem(wsItemId, wsWasApproved)
+          wsItemId != null && !frozen
+            ? wsFromEval
+              ? (isAdmin ? () => promoteItem(wsItemId, wsWasApproved) : undefined)
+              : () => confirmItemChecked(wsItemId)
             : undefined
         }
-        approveText="审核入池并剥离测试集"
-        approveConfirmTitle="将本窗口调整后的标注视为人工审核通过、直接进入数据池，并从当前测试集剥离？"
+        approveText={wsFromEval ? "审核入池并剥离测试集" : "保存并标记已核对（留在测试集）"}
+        approveConfirmTitle={
+          wsFromEval
+            ? "将本窗口调整后的标注视为人工审核通过、直接进入数据池，并从当前测试集剥离？"
+            : "保存当前窗口标注并标记为「已核对」？（保留在测试集内，不会进入训练数据池）"
+        }
         onClose={closeWs}
         onSaved={() => qc.invalidateQueries({ queryKey: ["model-test-items", setId] })}
         onSubmitted={closeWs}
