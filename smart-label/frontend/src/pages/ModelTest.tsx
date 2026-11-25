@@ -585,20 +585,18 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   { title: groupTitle, dataIndex: "group", width: 115 },
   { title: "版本", dataIndex: "version", width: 210, ellipsis: true },
   {
-    title: <Tooltip title="以每个测试窗口（如 1 分钟 / 5 分钟段）为单位，判断「有/无」该动作的对错">窗口级（整段有无）</Tooltip>,
+    title: <Tooltip title="以每个测试窗口（如 1 分钟 / 2 分钟 / 3 分钟段）为单位，判断「有/无」该动作的对错">窗口级（整段有无）</Tooltip>,
     children: [
-      { title: "窗口", key: "w_n", width: 60, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
-      { title: "准确率", key: "w_acc", width: 72, render: (_: unknown, x: EvalRow) => x.r.window ? <b>{pct(x.r.window.accuracy)}</b> : "-" },
+      { title: "窗口", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
+      { title: "准确率", key: "w_acc", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.accuracy) : "-" },
+      { title: "精确率", key: "w_p", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.precision) : "-" },
+      { title: "召回率", key: "w_r", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.recall) : "-" },
       {
-        title: "F1", key: "w_f1", width: 70,
-        render: (_: unknown, x: EvalRow) => x.r.window ? (
-          <Tooltip title={`窗口精确率 ${pct(x.r.window.precision)} · 召回率 ${pct(x.r.window.recall)}`}>
-            <b>{pct(x.r.window.f1)}</b>
-          </Tooltip>
-        ) : "-",
+        title: "F1", key: "w_f1", width: 68,
+        render: (_: unknown, x: EvalRow) => x.r.window ? <b>{pct(x.r.window.f1)}</b> : "-",
       },
       {
-        title: "明细（对 / 误 / 漏）", key: "w_det", width: 160,
+        title: "明细（对 / 误 / 漏）", key: "w_det", width: 150,
         render: (_: unknown, x: EvalRow) => {
           const w = x.r.window;
           if (!w) return "-";
