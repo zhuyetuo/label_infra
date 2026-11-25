@@ -96,6 +96,11 @@ export const segCarveMotion = (taskId: number) =>
   request.post<never, { carved: number; created: number; removed: number }>(
     "/segments/carve-motion", { task_id: taskId });
 
+/** 合并相邻同类别片段：把指定的多组同类别片段各自合为起止并集 */
+export const segMergeAdjacent = (taskId: number, groups: number[][]) =>
+  request.post<never, { groups_merged: number; removed: number }>(
+    "/segments/merge-adjacent", { task_id: taskId, groups });
+
 /** 整个项目一键去重（每个任务各跑一遍上面那套）。只给审核员 / 管理员 */
 export const segDedupeProject = (projectId: number) =>
   request.post<never, { tasks: number; tasks_changed: number; merged: number; removed_parent: number; conflicts_left: number }>(

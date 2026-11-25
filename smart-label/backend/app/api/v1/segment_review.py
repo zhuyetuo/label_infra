@@ -528,6 +528,96 @@ async def carve_motion(body: DedupeIn, db: AsyncSession = Depends(get_db), user:
     return ok(out)
 
 
+class MergeAdjacentIn(BaseModel):
+    task_id: int
+    groups: list[list[int]] = Field(..., min_length=1)
+
+
+@router.post("/merge-adjacent")
+async def merge_adjacent(body: MergeAdjacentIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """把用户确认的一组或多组相邻同类别片段合并成一条（起止取并集），
+    保留最靠谱那条的记录与审核状态，其余条目删掉并妥善处理候选来源。"""
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.services.task_service import _append_boundary_edit
+
+    task = await db.get(Task, body.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+
+    items = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+    )).scalars().all()
+    by_id = {x.id: x for x in items}
+    now = _now()
+
+    def rank(x: AnnotationLabelItem):
+        human = bool(x.ai_confirmed or x.is_modified or x.source_type == LabelItemSource.human_added)
+        return (x.seg_status == "approved", human, x.end_time_ms - x.start_time_ms, -x.id)
+
+    deleted: set[int] = set()
+    cand_to_reject: set[int] = set()
+    n_groups = 0
+    n_removed = 0
+
+    for raw_ids in body.groups:
+        uniq = list(dict.fromkeys(i for i in raw_ids if i in by_id and i not in deleted))
+        if len(uniq) < 2:
+            continue
+        grp = [by_id[i] for i in uniq]
+        if len({x.label_id for x in grp}) != 1:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "只能合并同一类别的片段")
+        keeper = max(grp, key=rank)
+        old = (keeper.start_time_ms, keeper.end_time_ms)
+        keeper.start_time_ms = min(x.start_time_ms for x in grp)
+        keeper.end_time_ms = max(x.end_time_ms for x in grp)
+        keeper.uncertain = all(x.uncertain for x in grp)
+        # 合并备忘标记（去重保序）
+        merged_marks: list[str] = []
+        for x in grp:
+            for mk in (x.marks or "").split(","):
+                mk = mk.strip()
+                if mk and mk not in merged_marks:
+                    merged_marks.append(mk)
+        if merged_marks:
+            keeper.marks = ",".join(merged_marks)
+        # 组里只要全部或主条原本已通过，继续保持通过；不把全是待审的强行标成通过
+        if all(x.seg_status == "approved" for x in grp):
+            keeper.seg_status = "approved"
+        if (keeper.start_time_ms, keeper.end_time_ms) != old:
+            keeper.boundary_edits = _append_boundary_edit(
+                keeper.boundary_edits, old, (keeper.start_time_ms, keeper.end_time_ms), user
+            )
+            if keeper.source_type == LabelItemSource.ai_generated:
+                keeper.is_modified = True
+            keeper.touched_at, keeper.touched_by = now, user.id
+        for x in grp:
+            if x is keeper:
+                continue
+            deleted.add(x.id)
+            n_removed += 1
+            if x.from_candidate_id is not None:
+                if keeper.from_candidate_id is None:
+                    keeper.from_candidate_id = x.from_candidate_id
+                else:
+                    cand_to_reject.add(x.from_candidate_id)
+        n_groups += 1
+
+    for x in items:
+        if x.id in deleted:
+            await db.delete(x)
+    for cid in cand_to_reject:
+        cand = await db.get(AiCandidate, cid)
+        if cand is not None and cand.status == CandidateStatus.confirmed:
+            cand.status = CandidateStatus.rejected
+            cand.decided_by, cand.decided_at = user.id, _decided_at()
+    await db.commit()
+    return ok({"groups_merged": n_groups, "removed": n_removed})
+
+
 class DedupeProjectIn(BaseModel):
     project_id: int
 

@@ -203,6 +203,8 @@ interface Props {
   onDedupe?: () => Promise<void>;
   /** 挖空活动：把压在具体行为下面的「活动 / 静止/休息」按重叠处切成多段 */
   onCarveMotion?: () => Promise<void>;
+  /** 合并相邻同类别片段：传入要合并的多组片段 id */
+  onMergeAdjacent?: (groups: number[][]) => Promise<void>;
   /** 只读时也能删（管理员 / 审核员直接删到服务器，不用认领）。删前都要确认 */
   canDeleteReadOnly?: boolean;
   /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
@@ -272,6 +274,7 @@ export default function SegmentPanel({
   onMarksRemote,
   onDedupe,
   onCarveMotion,
+  onMergeAdjacent,
   onSplit,
   onLowlight,
   onReturnToCandidate,
@@ -303,6 +306,83 @@ export default function SegmentPanel({
     }
     return n;
   }, [items, labelMap]);
+  // 相邻同类别合并推荐：默认间隔 ≤ 1.5s（含首尾紧挨着 / 轻微重叠），且中间不能夹着其他同轨异类片段
+  // （运动轨也不能跨过具体行为片段合并，避免把刚挖开的「活动」重新合回去）
+  const [mergeGapMs, setMergeGapMs] = useState(1500);
+  const [mergePopOpen, setMergePopOpen] = useState(false);
+  const adjacentGroups = useMemo(() => {
+    const byLabel = new Map<number, LabelItem[]>();
+    for (const it of items) {
+      const arr = byLabel.get(it.label_id) ?? [];
+      arr.push(it);
+      byLabel.set(it.label_id, arr);
+    }
+    const groups: {
+      key: string;
+      labelId: number;
+      ids: number[];
+      count: number;
+      startMs: number;
+      endMs: number;
+      maxGapMs: number;
+    }[] = [];
+    for (const [lid, list] of byLabel.entries()) {
+      if (list.length < 2) continue;
+      const sorted = [...list].sort((a, b) => a.start_time_ms - b.start_time_ms || a.end_time_ms - b.end_time_ms);
+      const tr = trackOf(labelMap, lid);
+      let cluster: LabelItem[] = [sorted[0]];
+      let clusterEnd = sorted[0].end_time_ms;
+      let clusterMaxGap = 0;
+      const flush = () => {
+        if (cluster.length >= 2) {
+          groups.push({
+            key: `${lid}:${cluster[0].id}`,
+            labelId: lid,
+            ids: cluster.map((x) => x.id),
+            count: cluster.length,
+            startMs: cluster[0].start_time_ms,
+            endMs: clusterEnd,
+            maxGapMs: clusterMaxGap,
+          });
+        }
+      };
+      for (let idx = 1; idx < sorted.length; idx++) {
+        const cur = sorted[idx];
+        const gap = cur.start_time_ms - clusterEnd;
+        let blocked = false;
+        if (gap > mergeGapMs) {
+          blocked = true;
+        } else if (gap > 0) {
+          blocked = items.some((o) => {
+            if (o.label_id === lid) return false;
+            const oTr = trackOf(labelMap, o.label_id);
+            const sameScope = oTr === tr || (tr === "motion" && isBehaviorTrack(labelMap, o.label_id));
+            if (!sameScope) return false;
+            return Math.min(o.end_time_ms, cur.start_time_ms) - Math.max(o.start_time_ms, clusterEnd) >= 200;
+          });
+        }
+        if (!blocked) {
+          cluster.push(cur);
+          clusterEnd = Math.max(clusterEnd, cur.end_time_ms);
+          clusterMaxGap = Math.max(clusterMaxGap, Math.max(0, gap));
+        } else {
+          flush();
+          cluster = [cur];
+          clusterEnd = cur.end_time_ms;
+          clusterMaxGap = 0;
+        }
+      }
+      flush();
+    }
+    return groups.sort((a, b) => a.startMs - b.startMs);
+  }, [items, labelMap, mergeGapMs]);
+  const adjGroupByItemId = useMemo(() => {
+    const m = new Map<number, (typeof adjacentGroups)[number]>();
+    for (const g of adjacentGroups) {
+      for (const id of g.ids) m.set(id, g);
+    }
+    return m;
+  }, [adjacentGroups]);
   const isLooping = (startMs: number, endMs: number) =>
     loopRange != null && loopRange.startMs === startMs && loopRange.endMs === endMs;
   // 每行的"循环"按钮：正在循环这一段时变成"停止"
@@ -744,6 +824,90 @@ export default function SegmentPanel({
             </Button>
           </Tooltip>
         )}
+        {adjacentGroups.length > 0 && onMergeAdjacent && (
+          <Popover
+            trigger="click"
+            open={mergePopOpen}
+            onOpenChange={setMergePopOpen}
+            placement="bottomLeft"
+            content={
+              <div style={{ width: 420 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontWeight: 500, fontSize: 13 }}>
+                    合并相邻同类推荐（{adjacentGroups.length} 组）
+                  </span>
+                  <Space size={4}>
+                    <span style={{ fontSize: 12, color: "#888" }}>最大间隔</span>
+                    {[500, 1500, 3000].map((ms) => (
+                      <Button
+                        key={ms}
+                        size="small"
+                        type={mergeGapMs === ms ? "primary" : "default"}
+                        style={{ paddingInline: 6, height: 22, fontSize: 11 }}
+                        onClick={() => setMergeGapMs(ms)}
+                      >
+                        {ms / 1000}s
+                      </Button>
+                    ))}
+                  </Space>
+                </div>
+                <div style={{ maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                  {adjacentGroups.map((g) => (
+                    <div
+                      key={g.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        padding: "5px 8px",
+                        borderRadius: 4,
+                        background: "rgba(128,128,128,0.08)",
+                        fontSize: 12,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <Tag color={colorOf(g.labelId)} style={{ marginInlineEnd: 6 }}>{nameOf(g.labelId)}</Tag>
+                        <span>{g.count} 段 → 1 段</span>
+                        <div style={{ color: "#888", fontSize: 11, marginTop: 2 }}>
+                          {formatMs(g.startMs)} ~ {formatMs(g.endMs)}（合后 {((g.endMs - g.startMs) / 1000).toFixed(2)}s，最大间隔 {(g.maxGapMs / 1000).toFixed(2)}s）
+                        </div>
+                      </div>
+                      <Button
+                        size="small"
+                        type="link"
+                        style={{ paddingInline: 4, flexShrink: 0 }}
+                        onClick={async () => {
+                          await onMergeAdjacent([g.ids]);
+                          if (adjacentGroups.length <= 1) setMergePopOpen(false);
+                        }}
+                      >
+                        合并这组
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#888" }}>中间夹有其他异类片段的不会跨段合并</span>
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={async () => {
+                      setMergePopOpen(false);
+                      await onMergeAdjacent(adjacentGroups.map((g) => g.ids));
+                    }}
+                  >
+                    一键合并全部 {adjacentGroups.length} 组
+                  </Button>
+                </div>
+              </div>
+            }
+          >
+            <Button size="small" style={{ borderColor: "#13c2c2", color: "#13c2c2" }}>
+              🔗 合并相邻同类 {adjacentGroups.length} 组
+            </Button>
+          </Popover>
+        )}
         {cov.gaps.length > 0 && (
           <Tooltip title={`还有 ${cov.gaps.length} 段 ≥${GAP_MIN_MS / 1000}s 的时间既没有 AI 预测也没有人工标注，点开单独查看`}>
             <Button
@@ -1124,6 +1288,23 @@ export default function SegmentPanel({
                     </Tooltip>
                   )}
                   {overlaps.has(i.id) && overlapTag(i, overlaps.get(i.id)!)}
+                  {onMergeAdjacent && adjGroupByItemId.has(i.id) && (() => {
+                    const g = adjGroupByItemId.get(i.id)!;
+                    return (
+                      <Tooltip title={`与相邻同类共 ${g.count} 段间隔 ≤ ${(g.maxGapMs / 1000).toFixed(2)}s（合并后 ${formatMs(g.startMs)} ~ ${formatMs(g.endMs)}），点此一键合并`}>
+                        <Tag
+                          color="cyan"
+                          style={{ marginLeft: 4, marginInlineEnd: 0, fontSize: 11, cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onMergeAdjacent([g.ids]);
+                          }}
+                        >
+                          可合并({g.count})
+                        </Tag>
+                      </Tooltip>
+                    );
+                  })()}
                 </span>
               );
             },

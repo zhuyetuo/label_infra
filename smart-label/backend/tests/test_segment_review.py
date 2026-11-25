@@ -403,3 +403,45 @@ def test_挖空活动_按重叠具体行为切成多段(db, run):
     # 幂等：再跑一次无变化
     r2 = run(api.carve_motion(api.DedupeIn(task_id=w.t.id), db, w.rev))["data"]
     assert r2 == {"carved": 0, "created": 0, "removed": 0}
+
+
+def test_合并相邻同类片段_保留审核状态并拒绝异类合并(db, run):
+    w = _world(db, run)
+    s1 = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=w.child.id,
+        start_time_ms=49580, end_time_ms=57500,
+        source_type=LabelItemSource.ai_generated, is_modified=True, seg_status="approved",
+    )
+    s2 = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=w.child.id,
+        start_time_ms=57499, end_time_ms=59598,
+        source_type=LabelItemSource.human_added, seg_status="approved",
+    )
+    s3 = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=w.child.id,
+        start_time_ms=59600, end_time_ms=63750,
+        source_type=LabelItemSource.ai_generated, is_modified=True, seg_status="approved",
+    )
+    other = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=w.other.id,
+        start_time_ms=64000, end_time_ms=66000,
+        source_type=LabelItemSource.human_added,
+    )
+    for obj in (s1, s2, s3, other):
+        db.add(obj)
+    run(db.commit())
+
+    # 异类合并被拒绝
+    with pytest.raises(HTTPException) as e:
+        run(api.merge_adjacent(api.MergeAdjacentIn(task_id=w.t.id, groups=[[s1.id, other.id]]), db, w.rev))
+    assert e.value.status_code == 422
+
+    # 3 段相邻同类合为 1 段，起止取并集，保持已通过
+    r = run(api.merge_adjacent(api.MergeAdjacentIn(task_id=w.t.id, groups=[[s1.id, s2.id, s3.id]]), db, w.rev))["data"]
+    assert r == {"groups_merged": 1, "removed": 2}
+    left = run(db.execute(
+        select(AnnotationLabelItem).where(AnnotationLabelItem.id.in_([s1.id, s2.id, s3.id]))
+    )).scalars().all()
+    assert len(left) == 1
+    assert (left[0].start_time_ms, left[0].end_time_ms) == (49580, 63750)
+    assert left[0].seg_status == "approved"

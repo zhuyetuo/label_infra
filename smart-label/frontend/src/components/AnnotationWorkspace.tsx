@@ -63,7 +63,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
+import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segSendBackReviewer, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -1569,6 +1569,42 @@ export default function AnnotationWorkspace({
       r.removed ? `移除被盖满的 ${r.removed} 段` : "",
     ].filter(Boolean).join("，");
     message.success(`已挖空 ${r.carved} 段活动/静止${detail ? `（${detail}）` : ""}`, 4);
+  };
+  const handleMergeAdjacent = async (groups: number[][]) => {
+    if (taskId == null || !groups.length) return;
+    let resolved = groups;
+    if (!readOnly) {
+      await saveDraft(taskId, toDraftPayload(items));
+      if (groups.some((g) => g.some((id) => id <= 0))) {
+        const fresh = (await getDraft(taskId)).items;
+        const localById = new Map(items.map((x) => [x.id, x]));
+        const used = new Set<number>();
+        resolved = groups
+          .map((g) =>
+            g
+              .map((id) => {
+                if (id > 0) return id;
+                const loc = localById.get(id);
+                if (!loc) return -1;
+                const hit = fresh.find(
+                  (f) => !used.has(f.id) && f.label_id === loc.label_id && f.start_time_ms === loc.start_time_ms && f.end_time_ms === loc.end_time_ms,
+                );
+                if (hit) {
+                  used.add(hit.id);
+                  return hit.id;
+                }
+                return -1;
+              })
+              .filter((id) => id > 0),
+          )
+          .filter((g) => g.length >= 2);
+      }
+    }
+    if (!resolved.length) return;
+    const r = await segMergeAdjacent(taskId, resolved);
+    const d = await getDraft(taskId);
+    loadItems(d.items);
+    message.success(`已合并 ${r.groups_merged} 组相邻同类片段（合掉 ${r.removed} 段）`, 4);
   };
   // 只读（管理员 / 审核员旁观）时删一段：直接走片段接口删到库里，不用认领。
   // 正在循环它的话停掉循环，地址栏的 seg 也清掉
@@ -3080,6 +3116,7 @@ export default function AnnotationWorkspace({
         canDeleteReadOnly={canFlag && !segReview}
         onDedupe={taskId != null && !segReview && (!readOnly || canFlag) ? handleDedupe : undefined}
         onCarveMotion={taskId != null && !segReview && (!readOnly || canFlag) ? handleCarveMotion : undefined}
+        onMergeAdjacent={taskId != null && !segReview && (!readOnly || canFlag) ? handleMergeAdjacent : undefined}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];
