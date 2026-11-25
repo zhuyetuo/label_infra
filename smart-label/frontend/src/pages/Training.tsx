@@ -915,31 +915,78 @@ export default function Training() {
         {tag}：查全 {prfText(x.recall)} / 查准 {prfText(x.precision)} / F1 {prfText(f1OrCalc(x))}
       </div>
     ) : null;
-  /** 抓挠指标：同一个场地下，窗口级和片段级各一行 */
+  /** 抓挠按场地对照表：可视化迷你色条 + 合计高亮，不再堆叠长纯文本 */
   const scratchSiteTip = (v: ModelVersion) => {
     const d = scratchSites(v);
     if (!d) return null;
+    const scColor = (x?: number | null) =>
+      x == null ? "#888" : x >= 0.8 ? "#52c41a" : x >= 0.6 ? "#faad14" : "#ff4d4f";
+    const bar = (val?: number | null) => {
+      const pct = val == null ? 0 : Math.max(0, Math.min(100, val * 100));
+      return (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <span style={{ width: 38, height: 6, borderRadius: 3, background: "rgba(128,128,128,0.22)", overflow: "hidden", display: "inline-block" }}>
+            <span style={{ display: "block", height: "100%", width: `${pct}%`, background: scColor(val), borderRadius: 3 }} />
+          </span>
+          <b style={{ color: scColor(val), fontVariantNumeric: "tabular-nums", minWidth: 32, textAlign: "right" }}>
+            {val == null ? "-" : val.toFixed(2)}
+          </b>
+        </span>
+      );
+    };
     return (
-      <div style={{ fontVariantNumeric: "tabular-nums" }}>
-        {d.rows.map(([k, r]) => {
-          const s = r.scratch_segments;
-          return (
-            <div key={k} style={{ marginTop: 4 }}>
-              <div>{r.name ?? k}{r.n_windows != null ? `（${r.n_windows} 窗）` : ""}</div>
-              {prfLine("按窗口", prfOfClass(r.per_class))}
-              {prfLine("按片段（宽松）", s)}
-              {prfLine("按事件（IoU≥50%）", r.scratch_events)}
-              {s?.n_gt != null && (
-                <div style={{ paddingLeft: 10, opacity: 0.65 }}>人标 {s.n_gt} 段 / 模型报 {s.n_pred ?? "-"} 段</div>
-              )}
-            </div>
-          );
-        })}
-        <div style={{ marginTop: 6, borderTop: "1px solid rgba(127,127,127,0.3)", paddingTop: 4 }}>合计</div>
-        {prfLine("按窗口", d.totalWin)}
-        {prfLine("按片段（宽松）", d.total)}
-        {prfLine("按事件（IoU≥50%）", d.totalEv)}
-      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+        <thead>
+          <tr style={{ opacity: 0.65, borderBottom: "1px solid rgba(128,128,128,0.25)" }}>
+            <th style={{ textAlign: "left", padding: "3px 4px" }}>场地</th>
+            <th style={{ textAlign: "right", padding: "3px 4px" }}>窗口 F1</th>
+            <th style={{ textAlign: "right", padding: "3px 4px" }}>片段 F1</th>
+            <th style={{ textAlign: "right", padding: "3px 4px" }}>事件 F1</th>
+            <th style={{ textAlign: "right", padding: "3px 4px" }}>标 / 报</th>
+          </tr>
+        </thead>
+        <tbody>
+          {d.rows.map(([k, r]) => {
+            const w = prfOfClass(r.per_class);
+            const s = r.scratch_segments;
+            const sF1 = s ? f1OrCalc(s) : null;
+            const eF1 = r.scratch_events?.f1 ?? null;
+            return (
+              <tr key={k} style={{ borderBottom: "1px solid rgba(128,128,128,0.12)" }}>
+                <td style={{ padding: "4px 4px", fontWeight: 500, whiteSpace: "nowrap" }}>
+                  {r.name ?? k}
+                  {r.n_windows != null && <span style={{ opacity: 0.55, marginLeft: 4 }}>({(r.n_windows / 1000).toFixed(1)}k)</span>}
+                </td>
+                <td style={{ textAlign: "right", padding: "4px 4px" }} title={w ? `查全 ${prfText(w.recall)} / 查准 ${prfText(w.precision)}` : undefined}>
+                  {bar(w?.f1)}
+                </td>
+                <td style={{ textAlign: "right", padding: "4px 4px" }} title={s ? `查全 ${prfText(s.recall)} / 查准 ${prfText(s.precision)}` : undefined}>
+                  {bar(sF1)}
+                </td>
+                <td style={{ textAlign: "right", padding: "4px 4px" }} title={r.scratch_events ? `查全 ${prfText(r.scratch_events.recall)} / 查准 ${prfText(r.scratch_events.precision)}` : undefined}>
+                  {bar(eF1)}
+                </td>
+                <td style={{ textAlign: "right", padding: "4px 4px", opacity: 0.75, whiteSpace: "nowrap" }}>
+                  {s?.n_gt ?? "-"} / {s?.n_pred ?? "-"}
+                </td>
+              </tr>
+            );
+          })}
+          <tr style={{ background: "rgba(128,128,128,0.10)", fontWeight: 600 }}>
+            <td style={{ padding: "4px 4px" }}>合计</td>
+            <td style={{ textAlign: "right", padding: "4px 4px" }} title={d.totalWin ? `查全 ${prfText(d.totalWin.recall)} / 查准 ${prfText(d.totalWin.precision)}` : undefined}>
+              {bar(d.totalWin?.f1)}
+            </td>
+            <td style={{ textAlign: "right", padding: "4px 4px" }} title={d.total ? `查全 ${prfText(d.total.recall)} / 查准 ${prfText(d.total.precision)}` : undefined}>
+              {bar(d.total ? f1OrCalc(d.total) : null)}
+            </td>
+            <td style={{ textAlign: "right", padding: "4px 4px" }} title={d.totalEv ? `查全 ${prfText(d.totalEv.recall)} / 查准 ${prfText(d.totalEv.precision)}` : undefined}>
+              {bar(d.totalEv?.f1)}
+            </td>
+            <td style={{ textAlign: "right", padding: "4px 4px", opacity: 0.7 }}>—</td>
+          </tr>
+        </tbody>
+      </table>
     );
   };
   /** 这一版的数据集参数（提交时存的那份 JSON） */
@@ -1677,28 +1724,48 @@ export default function Training() {
                               <Tag style={{ marginInlineEnd: 0, cursor: "pointer" }}>主数据集</Tag>
                             </Popover>
                           )}
-                          {pc.map((c) => (
-                            <Tooltip
-                              key={c.cls}
-                              title={
-                                <div style={{ fontSize: 12 }}>
-                                  <div>{c.cls} 按窗口：精确率 {c.p.toFixed(2)} / 召回 {c.r.toFixed(2)} / F1 {c.f1.toFixed(2)}</div>
-                                  {/* 抓挠在不同场地差得最多：佛山几乎全对、影棚可能一段都判不出来，
-                                      只看一个总分会以为「都还行」 */}
-                                  {c.cls === "抓挠" && scratchSites(v) && (
-                                    <div style={{ marginTop: 4 }}>
-                                      <div>按场地（窗口 / 片段宽松 / 事件）：</div>
-                                      {scratchSiteTip(v)}
-                                    </div>
-                                  )}
+                          {pc.map((c) => {
+                            const hasSites = c.cls === "抓挠" && !!scratchSites(v);
+                            const metricRows = [
+                              { name: "F1", val: c.f1 },
+                              { name: "精确率", val: c.p },
+                              { name: "召回率", val: c.r },
+                            ];
+                            const card = (
+                              <div style={{ width: hasSites ? 460 : 210, maxHeight: "64vh", overflowY: "auto", fontSize: 12 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                  <span style={{ fontWeight: 600 }}>{c.cls} · 窗口级指标</span>
+                                  <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>F1 {c.f1.toFixed(2)}</Tag>
                                 </div>
-                              }
-                            >
-                              <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0 }}>
-                                {c.cls} {c.f1.toFixed(2)}
-                              </Tag>
-                            </Tooltip>
-                          ))}
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  {metricRows.map((mr) => (
+                                    <div key={mr.name} style={{ display: "grid", gridTemplateColumns: "46px 1fr 38px", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                      <span style={{ opacity: 0.75 }}>{mr.name}</span>
+                                      <div style={{ height: 6, borderRadius: 3, background: "rgba(128,128,128,0.22)", overflow: "hidden" }}>
+                                        <div style={{ height: "100%", width: `${Math.max(2, Math.min(100, mr.val * 100))}%`, background: barColor(mr.val), borderRadius: 3 }} />
+                                      </div>
+                                      <b style={{ color: barColor(mr.val), textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{mr.val.toFixed(2)}</b>
+                                    </div>
+                                  ))}
+                                </div>
+                                {hasSites && (
+                                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid rgba(128,128,128,0.22)" }}>
+                                    <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 12 }}>
+                                      按场地对照 <span style={{ fontWeight: 400, fontSize: 11, opacity: 0.6 }}>（悬停数字看查全/查准）</span>
+                                    </div>
+                                    {scratchSiteTip(v)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                            return (
+                              <Popover key={c.cls} placement="bottomLeft" overlayInnerStyle={{ padding: "10px 12px" }} content={card}>
+                                <Tag color={f1Color(c.f1)} style={{ marginInlineEnd: 0, cursor: "pointer" }}>
+                                  {c.cls} {c.f1.toFixed(2)}
+                                </Tag>
+                              </Popover>
+                            );
+                          })}
                         </Space>
                       );
                     },
