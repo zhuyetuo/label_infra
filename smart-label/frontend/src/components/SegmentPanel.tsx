@@ -105,7 +105,7 @@ const isAi = (i: LabelItem) => i.source_type === "ai_generated";
 // 「待定」压过 AI 的确认状态：人已经看过并给了结论（只是结论是"拿不准"），
 // 不该再算进「AI 待确认」里催人确认
 const aiState = (i: LabelItem): "pending" | "confirmed" | "modified" | null =>
-  i.uncertain || !isAi(i) ? null : i.is_modified ? "modified" : i.ai_confirmed ? "confirmed" : "pending";
+  i.uncertain || !isAi(i) ? null : i.is_modified ? "modified" : (i.ai_confirmed || i.seg_status === "approved") ? "confirmed" : "pending";
 
 function confColor(c: number): string {
   if (c >= 0.8) return "green";

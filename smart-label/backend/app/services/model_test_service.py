@@ -197,7 +197,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         src_val = src.value if hasattr(src, "value") else str(src)
         ai_pend = (
             (not unc)
-            and src_val == "ai_prefill"
+            and src_val == "ai_generated"
             and (not is_mod)
             and (not ai_conf)
             and seg_st != "approved"
