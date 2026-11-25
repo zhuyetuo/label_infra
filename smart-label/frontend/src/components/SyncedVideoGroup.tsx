@@ -1161,7 +1161,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
       )}
         </>
       )}
-      <Typography.Text type="secondary">播放速度：</Typography.Text>
+      <Typography.Text type="secondary">{controlsPortalTarget ? "倍速" : "播放速度："}</Typography.Text>
       <Radio.Group size="small" value={speed} onChange={(e) => handleSpeedChange(e.target.value)}>
         {SPEED_OPTIONS.map((s) => (
           <Radio.Button key={s} value={s}>
@@ -1177,7 +1177,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         step={0.05}
         value={speed}
         onChange={handleSpeedChange}
-        style={{ width: 140 }}
+        style={{ width: controlsPortalTarget ? 80 : 140 }}
         tooltip={{ formatter: (v) => `${v}x` }}
       />
       <InputNumber
@@ -1188,18 +1188,25 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
         precision={2}
         value={speed}
         addonAfter="x"
-        style={{ width: 100 }}
+        style={{ width: controlsPortalTarget ? 82 : 100 }}
         onChange={(v) => v != null && handleSpeedChange(v)}
       />
       {!!fps && (
         <>
-          <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+          <Typography.Text type="secondary" style={{ marginLeft: controlsPortalTarget ? 4 : 12 }}>
             帧：
           </Typography.Text>
           <Tooltip title="上一帧（← 键；Shift+← 一次 10 帧）。会先暂停">
             <Button size="small" icon={<StepBackwardOutlined />} onClick={() => stepFrames(-1)} />
           </Tooltip>
-          <InputNumber size="small" min={0} max={totalFrames ?? undefined} value={frame} onChange={handleFrameJump} />
+          <InputNumber
+            size="small"
+            min={0}
+            max={totalFrames ?? undefined}
+            value={frame}
+            style={controlsPortalTarget ? { width: 76 } : undefined}
+            onChange={handleFrameJump}
+          />
           <Tooltip title="下一帧（→ 键；Shift+→ 一次 10 帧）。会先暂停">
             <Button size="small" icon={<StepForwardOutlined />} onClick={() => stepFrames(1)} />
           </Tooltip>

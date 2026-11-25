@@ -3378,8 +3378,8 @@ export default function AnnotationWorkspace({
         // 左边是"这是什么"（任务/狗/样本 + 播放控件），右边是"我能干什么"
         // （只读 / 认领并修改）。夹在中间的话，播放控件的位置会跟着只读与否
         // 左右跳，而且那个按钮混在一串说明性标签里也不显眼
-        <div style={{ display: "flex", width: "100%", alignItems: "center", gap: 8 }}>
-        <Space wrap style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, paddingRight: 28, flexWrap: "wrap" }}>
+        <Space wrap size={[6, 4]} style={{ flex: "1 1 360px", minWidth: 0 }}>
           <span>{readOnly ? "查看标注" : "标注"} - 任务 #{taskId}</span>
           {flaggedCount > 0 && (
             <Tooltip title="审核时标出来的有问题的片段（含疑似片段）。已标注片段的来源筛选选「被标有问题」、疑似片段选「有问题」只看这几条">
@@ -3430,14 +3430,16 @@ export default function AnnotationWorkspace({
               </Tag>
             </Tooltip>
           )}
-          <Tag>
-            {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
-            样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}
-            {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
-          </Tag>
-          {/* 播放速度/帧号控件从视频区上方 portal 到这里，跟标题拼一行，省出来的高度给视频用 */}
-          <span ref={setControlsHost} style={{ display: "inline-flex" }} />
+          <Tooltip title={`样本 ${task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}${task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}`}>
+            <Tag style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginInlineEnd: 0 }}>
+              {/* 带上日期：这个标题栏里没有项目名，不写日期就不知道是哪天的数据 */}
+              样本 {task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}
+              {task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}
+            </Tag>
+          </Tooltip>
         </Space>
+        {/* 播放速度/帧号控件从视频区上方 portal 到标题栏右上角，跟标题拼一行，省出来的高度给视频用 */}
+        <span ref={setControlsHost} style={{ display: "inline-flex", flexShrink: 0, marginLeft: "auto" }} />
         </div>
       }
       open={taskId != null}
