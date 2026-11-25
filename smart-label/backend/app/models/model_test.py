@@ -46,3 +46,31 @@ class ModelTestItem(Base):
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     added_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class TestPoolWindow(Base):
+    """
+    测试数据池：沉淀下来的测试窗口资产库（跟「训练数据池」并列）。
+    · status = 'active'：当前在测试数据池里，严格不进训练；新建测试集时可直接复用并继承已核对状态，免重复审核
+    · status = 'moved_to_train'：已拨入训练数据池（解除测试隔离，窗内已核对片段直接入训练池，并留痕避免再当干净测试集）
+    """
+
+    __tablename__ = "test_pool_windows"
+    __table_args__ = (UniqueConstraint("task_id", "start_ms", "end_ms", name="uq_test_pool_window"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tasks.id"), nullable=False, index=True)
+    sample_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("samples.id"), nullable=False, index=True)
+    start_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # active = 在测试数据池 / moved_to_train = 已拨到训练数据池
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active", index=True)
+    checked_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_set_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    moved_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    moved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

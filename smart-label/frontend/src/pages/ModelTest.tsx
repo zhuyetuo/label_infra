@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, promoteTestItemToPool, updateTestSet,
+  addTestItems, batchPromoteTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, promoteTestItemToPool, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -1519,6 +1519,27 @@ function SetDetail({ setId }: { setId: number }) {
   const [wsWasApproved, setWsWasApproved] = useState(false);
   const [opening, setOpening] = useState<number | null>(null);
   const [promoting, setPromoting] = useState<number | null>(null);
+  const [pickedTestIds, setPickedTestIds] = useState<number[]>([]);
+  const [batchPromoting, setBatchPromoting] = useState(false);
+  useEffect(() => { setPickedTestIds([]); }, [setId]);
+  const batchPromoteSelected = async () => {
+    if (!pickedTestIds.length) return;
+    setBatchPromoting(true);
+    try {
+      const r = await batchPromoteTestItems(pickedTestIds);
+      message.success(
+        `已将 ${r.moved_windows} 个窗口拨到训练数据池（${r.pooled_segments} 条片段入训练池，移出 ${r.removed_from_sets} 条测试项）`,
+        5,
+      );
+      setPickedTestIds([]);
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+      qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+      qc.invalidateQueries({ queryKey: ["data-pool"] });
+      qc.invalidateQueries({ queryKey: ["test-pool"] });
+    } finally {
+      setBatchPromoting(false);
+    }
+  };
   const [checkingAll, setCheckingAll] = useState(false);
   const [itemCheckFilter, setItemCheckFilter] = useState<"all" | "unchecked" | "checked">("all");
   const openTask = async (taskId: number, seekMs: number, opts?: OpenTaskOpts) => {
@@ -1649,6 +1670,18 @@ function SetDetail({ setId }: { setId: number }) {
                         { label: `已核对 ${checkedCount}`, value: "checked" },
                       ]}
                     />
+                    {!frozen && pickedTestIds.length > 0 && (
+                      <Popconfirm
+                        title={`将勾选的 ${pickedTestIds.length} 段拨到训练数据池？`}
+                        description="拨出后解除测试隔离、从未冻结测试集移出，窗内已核对标注直接进入训练数据池（下次训练立刻可用）。"
+                        okText="确认拨入训练池"
+                        onConfirm={batchPromoteSelected}
+                      >
+                        <Button size="small" type="primary" loading={batchPromoting}>
+                          ➡️ 拨到训练数据池（{pickedTestIds.length}）
+                        </Button>
+                      </Popconfirm>
+                    )}
                     <Typography.Text style={{ fontSize: 12, color: uncheckedCount > 0 ? "#faad14" : "#52c41a" }}>
                       {uncheckedCount > 0
                         ? `已核对 ${checkedCount} / ${data.items.length} 段 · 还剩 ${uncheckedCount} 段未核对`
@@ -1660,6 +1693,10 @@ function SetDetail({ setId }: { setId: number }) {
               </Space>
               <Table<TestItem>
                 size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }} scroll={{ x: 1260 }}
+                rowSelection={!frozen ? {
+                  selectedRowKeys: pickedTestIds,
+                  onChange: (keys) => setPickedTestIds(keys as number[]),
+                } : undefined}
                 onRow={(r) => (r.checked && itemCheckFilter === "all" ? { style: { opacity: 0.68 } } : {})}
                 columns={[
                   {

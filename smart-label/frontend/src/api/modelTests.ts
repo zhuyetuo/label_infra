@@ -198,6 +198,9 @@ export const getTaskSegments = (taskId: number) =>
 export const addTestItems = (id: number, items: { task_id: number; start_ms?: number | null; end_ms?: number | null; note?: string; pad_to_sec?: number | null }[]) =>
   request.post<never, { added: number; skipped: { task_id: number; reason: string }[] }>(`/model-tests/sets/${id}/items`, { items });
 export const deleteTestItem = (itemId: number) => request.delete<never, { deleted: number }>(`/model-tests/items/${itemId}`);
+export const batchPromoteTestItems = (item_ids: number[]) =>
+  request.post<never, { moved_windows: number; pooled_segments: number; removed_from_sets: number }>(
+    "/model-tests/items/batch-promote", { item_ids });
 export const getTestSeen = (id: number, modelIds?: number[]) =>
   request.get<never, { models: SeenModel[]; n_items: number }>(`/model-tests/sets/${id}/seen`, {
     params: modelIds?.length ? { model_ids: modelIds.join(",") } : undefined,

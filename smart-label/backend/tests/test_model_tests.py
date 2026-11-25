@@ -189,3 +189,38 @@ def test_测试集纠偏审核入池并剥离(db, run, tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         run(api.promote_item_to_pool(frozen_item_id, api.PromoteIn(restore_approved=False), db, w.admin))
     assert exc.value.status_code == 400
+
+
+def test_测试数据池_自动沉淀_新测试集免重审_拨到训练池解除隔离(db, run):
+    from app.services import test_pool
+
+    w = _world(db, run)
+    s1 = run(api.create_set(api.SetIn(name="测试集A"), db, w.admin))["data"]
+    run(api.add_items(s1["id"], api.ItemsIn(items=[
+        api.ItemIn(task_id=w.t.id, start_ms=0, end_ms=15000),
+    ]), db, w.admin))
+    it1_id = run(api.get_items(s1["id"], db))["data"]["items"][0]["id"]
+    # 在测试集A里核对通过 → 自动沉淀进测试数据池
+    run(api.check_item(it1_id, api.CheckIn(checked=True), db, w.admin))
+    tp = run(test_pool.list_test_pool(db, status="active"))
+    assert tp["summary"]["active"] == 1 and tp["summary"]["checked"] == 1
+    win_id = tp["items"][0]["id"]
+
+    # 新建测试集B，加入同一个窗口 → 自动继承已核对，免重复审核
+    s2 = run(api.create_set(api.SetIn(name="测试集B"), db, w.admin))["data"]
+    run(api.add_items(s2["id"], api.ItemsIn(items=[
+        api.ItemIn(task_id=w.t.id, start_ms=0, end_ms=15000),
+    ]), db, w.admin))
+    s2_items = run(api.get_items(s2["id"], db))["data"]["items"]
+    assert len(s2_items) == 1 and s2_items[0]["checked_at"] is not None
+
+    # 冻结测试集A后，从测试数据池一键拨到训练数据池 → 解除训练隔离、未冻结测试集B同步移除、窗内片段入训练池
+    run(api.freeze_set(s1["id"], db))
+    excl_before, _ = run(mts.test_exclusion(db))
+    assert w.t.sample_id in excl_before
+
+    mv = run(test_pool.move_windows_to_train(db, [win_id], w.admin.id))
+    assert mv["moved_windows"] == 1 and mv["pooled_segments"] >= 1 and mv["removed_from_sets"] == 1
+    assert run(api.get_items(s2["id"], db))["data"]["items"] == []
+    excl_after, _ = run(mts.test_exclusion(db))
+    assert w.t.sample_id not in excl_after

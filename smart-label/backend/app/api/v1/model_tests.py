@@ -330,6 +330,7 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
     have = {(t, st) for t, st in (await db.execute(
         select(ModelTestItem.task_id, ModelTestItem.start_ms).where(ModelTestItem.set_id == set_id))).all()}
     added, skipped = 0, []
+    added_items: list[ModelTestItem] = []
     for x in body.items:
         t = tasks.get(x.task_id)
         if t is None:
@@ -348,10 +349,21 @@ async def add_items(set_id: int, body: ItemsIn, db: AsyncSession = Depends(get_d
         if (x.task_id, x.start_ms) in have:
             skipped.append({"task_id": x.task_id, "reason": "已经在这个测试集里"})
             continue
-        db.add(ModelTestItem(set_id=set_id, task_id=t.id, sample_id=t.sample_id, start_ms=x.start_ms,
-                             end_ms=x.end_ms, note=x.note, added_by=user.id))
+        item = ModelTestItem(set_id=set_id, task_id=t.id, sample_id=t.sample_id, start_ms=x.start_ms,
+                             end_ms=x.end_ms, note=x.note, added_by=user.id)
+        db.add(item)
+        added_items.append(item)
         have.add((x.task_id, x.start_ms))
         added += 1
+    if added_items:
+        from app.services import test_pool
+        await test_pool.inherit_checked_from_pool(db, added_items)
+        for it in added_items:
+            await test_pool.sync_window_to_test_pool(
+                db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+                user_id=user.id, checked=None, checked_by=it.checked_by, checked_at=it.checked_at,
+                note=it.note, source_set_id=set_id,
+            )
     await db.commit()
     return ok({"added": added, "skipped": skipped})
 
@@ -427,13 +439,25 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
         await db.delete(it)
     await db.flush()
     r = await svc.plan_run(db, set_id, body.model_dump())
+    created: list[ModelTestItem] = []
     for p in r["picks"]:
         c = p["cell"]
         note = f"选样·{round(c['dur'] / 60, 1):g}分钟·{c['kind']}{body.target}" + (f"·{c['part']}" if c.get("part") else "") \
             + (f"·{c['cat']}" if c.get("cat") else "") \
             + (f"·以{p['anchor']}为中心" if p.get("anchor") else "") + f"·{'人工标过' if p['human'] else 'AI 预标'}"
-        db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
-                             end_ms=p["end_ms"], added_by=user.id, note=note[:300]))
+        it = ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
+                           end_ms=p["end_ms"], added_by=user.id, note=note[:300])
+        db.add(it)
+        created.append(it)
+    if created:
+        from app.services import test_pool
+        await test_pool.inherit_checked_from_pool(db, created)
+        for it in created:
+            await test_pool.sync_window_to_test_pool(
+                db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+                user_id=user.id, checked=None, checked_by=it.checked_by, checked_at=it.checked_at,
+                note=it.note, source_set_id=set_id,
+            )
     s.plan = json.dumps(body.model_dump(mode="json"), ensure_ascii=False)
     await db.commit()
     return ok({"added": len(r["picks"]), "removed": len(old), **_plan_summary(r)})
@@ -442,13 +466,21 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
 @router.post("/items/{item_id}/check")
 async def check_item(item_id: int, body: CheckIn, db: AsyncSession = Depends(get_db),
                      user: User = Depends(get_current_user)):
-    """人工核对过这一段（看了窗口里的片段，该调的调了）/ 取消"""
+    """人工核对过这一段（看了窗口里的片段，该调的调了）/ 取消；同步沉淀进测试数据池"""
+    from app.services import test_pool
+
     it = await db.get(ModelTestItem, item_id)
     if it is None:
         raise HTTPException(404, "不存在")
     if (await _set_or_404(db, it.set_id)).frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，核对状态不能再改")
-    it.checked_by, it.checked_at = (user.id, datetime.now()) if body.checked else (None, None)
+    now = datetime.now()
+    it.checked_by, it.checked_at = (user.id, now) if body.checked else (None, None)
+    await test_pool.sync_window_to_test_pool(
+        db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+        user_id=user.id, checked=body.checked, checked_by=it.checked_by, checked_at=it.checked_at,
+        note=it.note, source_set_id=it.set_id,
+    )
     await db.commit()
     return ok({"checked": body.checked})
 
@@ -456,7 +488,9 @@ async def check_item(item_id: int, body: CheckIn, db: AsyncSession = Depends(get
 @router.post("/sets/{set_id}/check-all")
 async def check_all_items(set_id: int, body: CheckIn, db: AsyncSession = Depends(get_db),
                           user: User = Depends(get_current_user)):
-    """一键全部核对通过 / 取消全部核对（只改测试集核对状态，不动原标注任务状态）"""
+    """一键全部核对通过 / 取消全部核对（只改测试集核对状态，同步沉淀进测试数据池）"""
+    from app.services import test_pool
+
     s = await _set_or_404(db, set_id)
     if s.frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，核对状态不能再改")
@@ -464,6 +498,11 @@ async def check_all_items(set_id: int, body: CheckIn, db: AsyncSession = Depends
     now = datetime.now()
     for it in items:
         it.checked_by, it.checked_at = (user.id, now) if body.checked else (None, None)
+        await test_pool.sync_window_to_test_pool(
+            db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+            user_id=user.id, checked=body.checked, checked_by=it.checked_by, checked_at=it.checked_at,
+            note=it.note, source_set_id=set_id,
+        )
     await db.commit()
     return ok({"updated": len(items), "checked": body.checked})
 
@@ -551,6 +590,15 @@ async def promote_item_to_pool(
             task.lock_expires_at = None
 
     sample_id, task_id, start_ms, end_ms, set_id = it.sample_id, it.task_id, it.start_ms, it.end_ms, it.set_id
+    # 同步把测试数据池里对应窗口标记为 moved_to_train（解除测试隔离）
+    from app.services import test_pool
+    w = await test_pool.sync_window_to_test_pool(
+        db, task_id=task_id, sample_id=sample_id, start_ms=start_ms, end_ms=end_ms,
+        user_id=user.id, checked=True, note=it.note, source_set_id=set_id,
+    )
+    w.status = "moved_to_train"
+    w.moved_by = user.id
+    w.moved_at = now
     await db.delete(it)
     await db.flush()
 
@@ -586,6 +634,36 @@ async def promote_item_to_pool(
     ))
     await db.commit()
     return ok({"n_pooled": len(segs), "removed": 1, "still_in_other_sets": still_in_other_sets})
+
+
+class BatchPromoteIn(BaseModel):
+    item_ids: list[int]
+
+
+@router.post("/items/batch-promote")
+async def batch_promote_items_to_pool(
+    body: BatchPromoteIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """批量把测试集里勾选的窗口拨到训练数据池（同时从所有未冻结测试集移出并解除测试隔离）"""
+    from app.services import test_pool
+
+    if not body.item_ids:
+        raise HTTPException(422, "请先勾选要拨到训练数据池的片段")
+    items = (await db.execute(select(ModelTestItem).where(ModelTestItem.id.in_(body.item_ids)))).scalars().all()
+    if not items:
+        return ok({"moved_windows": 0, "pooled_segments": 0, "removed_from_sets": 0})
+    w_ids: list[int] = []
+    for it in items:
+        w = await test_pool.sync_window_to_test_pool(
+            db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+            user_id=user.id, checked=True if it.checked_at else None,
+            checked_by=it.checked_by, checked_at=it.checked_at, note=it.note, source_set_id=it.set_id,
+        )
+        w_ids.append(w.id)
+    res = await test_pool.move_windows_to_train(db, w_ids, user.id)
+    return ok(res)
 
 
 @router.get("/sets/{set_id}/seen")

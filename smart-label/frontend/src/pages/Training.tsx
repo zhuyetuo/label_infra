@@ -23,6 +23,7 @@ import { fmtSecs } from "@/utils/fmtDuration";
 import { NEG_GROUPS, negClassesOf, negGroupOf } from "@/utils/negMining";
 import ModelCompare from "@/components/ModelCompare";
 import DataPoolPanel from "@/components/DataPoolPanel";
+import TestPoolPanel from "@/components/TestPoolPanel";
 import { markPoolItems, type PoolReviewMark } from "@/api/dataPool";
 import ClassCompare from "@/components/ClassCompare";
 import type { LabelDefinition, Task } from "@/types";
@@ -214,6 +215,7 @@ export default function Training() {
   // 落在模型对比页签、默认打开两个版本互比、并预填这个项目
   const [params] = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") || "cmp");
+  const [poolKind, setPoolKind] = useState<"train" | "test">("train");
   const abMode = params.get("ab") === "1";
   const abProject = Number(params.get("project")) || undefined;
   const { data: datasets, isLoading: loadingDs } = useQuery({ queryKey: ["train-datasets"], queryFn: listDatasets });
@@ -1139,7 +1141,30 @@ export default function Training() {
           {
             key: "pool",
             label: "数据池",
-            children: <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms, item) => openTask(id, ms, item)} />,
+            children: (
+              <div>
+                <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <Segmented
+                    value={poolKind}
+                    onChange={(v) => setPoolKind(v as "train" | "test")}
+                    options={[
+                      { value: "train", label: "🏋️ 训练数据池" },
+                      { value: "test", label: "🧪 测试数据池" },
+                    ]}
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {poolKind === "train"
+                      ? "高质量训练片段库：训练导出直接从这里抽样（自动隔离测试数据池）。"
+                      : "测试窗口资产库：测试集核对过的窗口自动沉淀于此，新测试集免重审；可随时拨到训练数据池。"}
+                  </Typography.Text>
+                </div>
+                {poolKind === "train" ? (
+                  <DataPoolPanel onTrain={(ds) => openTrain(ds)} onOpen={(id, ms, item) => openTask(id, ms, item)} />
+                ) : (
+                  <TestPoolPanel />
+                )}
+              </div>
+            ),
           },
           {
             key: "compare",

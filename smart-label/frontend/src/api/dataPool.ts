@@ -169,3 +169,63 @@ export interface LabelInventory {
 }
 export const labelInventory = (label: string) =>
   request.get<never, LabelInventory>("/data-pool/inventory", { params: { label }, timeout: 120000 });
+
+/** 测试数据池（与训练数据池双池隔离） */
+export interface TestPoolWindowItem {
+  id: number;
+  task_id: number;
+  sample_id: number;
+  sample_code: string;
+  project_name: string | null;
+  dog_id: number | null;
+  dog_name: string | null;
+  site: string | null;
+  size_group: string | null;
+  start_ms: number | null;
+  end_ms: number | null;
+  dur_sec: number | null;
+  labels: string[];
+  n_segs: number;
+  n_ai_pending?: number;
+  note: string | null;
+  status: "active" | "moved_to_train";
+  checked_at: string | null;
+  checked_by_name: string | null;
+  moved_at: string | null;
+  moved_by_name: string | null;
+  sets: { id: number; name: string; frozen: boolean }[];
+}
+
+export interface TestPoolResponse {
+  summary: {
+    active: number;
+    checked: number;
+    unchecked: number;
+    moved_to_train: number;
+    n_dogs: number;
+    total_sec: number;
+  };
+  total: number;
+  page: number;
+  page_size: number;
+  items: TestPoolWindowItem[];
+}
+
+export const getTestPool = (params: {
+  status?: "active" | "moved_to_train" | "all";
+  checked?: "all" | "checked" | "unchecked";
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}) => request.get<never, TestPoolResponse>("/data-pool/test-pool", { params });
+
+export const checkTestPoolWindow = (windowId: number, checked: boolean) =>
+  request.post<never, { id: number; checked: boolean }>(`/data-pool/test-pool/${windowId}/check`, { checked });
+
+export const moveTestPoolToTrain = (window_ids: number[]) =>
+  request.post<never, { moved_windows: number; pooled_segments: number; removed_from_sets: number }>(
+    "/data-pool/test-pool/move-to-train", { window_ids });
+
+export const addTestPoolToSet = (window_ids: number[], set_id: number) =>
+  request.post<never, { added: number; skipped: number }>(
+    "/data-pool/test-pool/add-to-set", { window_ids, set_id });

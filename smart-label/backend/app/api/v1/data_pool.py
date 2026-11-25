@@ -193,3 +193,80 @@ async def post_compare_preview(body: CompareIn, db: AsyncSession = Depends(get_d
         "a": await class_compare.preview(db, body.a, body.project_ids, body.pool_only, win_s),
         "b": await class_compare.preview(db, body.b, body.project_ids, body.pool_only, win_s),
     })
+
+
+# ── 测试数据池（与训练数据池双池隔离、支持拨入训练数据池与复用到新测试集） ──────────
+
+@router.get("/test-pool")
+async def get_test_pool(
+    status: str = "active",
+    checked: str = "all",
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.services import test_pool
+
+    return ok(await test_pool.list_test_pool(db, status=status, checked=checked, keyword=keyword, page=page, page_size=page_size))
+
+
+class TestPoolCheckIn(BaseModel):
+    checked: bool = True
+
+
+@router.post("/test-pool/{window_id}/check")
+async def post_test_pool_check(
+    window_id: int,
+    body: TestPoolCheckIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.services import test_pool
+
+    _require_curator(user)
+    w = await test_pool.check_window(db, window_id, body.checked, user.id)
+    if w is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "测试数据池窗口不存在")
+    return ok({"id": w.id, "checked": w.checked_at is not None})
+
+
+class TestPoolMoveIn(BaseModel):
+    window_ids: list[int]
+
+
+@router.post("/test-pool/move-to-train")
+async def post_test_pool_move_to_train(
+    body: TestPoolMoveIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.services import test_pool
+
+    _require_curator(user)
+    if not body.window_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "请先勾选要拨到训练数据池的测试窗口")
+    return ok(await test_pool.move_windows_to_train(db, body.window_ids, user.id))
+
+
+class TestPoolAddToSetIn(BaseModel):
+    window_ids: list[int]
+    set_id: int
+
+
+@router.post("/test-pool/add-to-set")
+async def post_test_pool_add_to_set(
+    body: TestPoolAddToSetIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.services import test_pool
+
+    _require_curator(user)
+    if not body.window_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "请先勾选要加入测试集的窗口")
+    try:
+        return ok(await test_pool.add_windows_to_test_set(db, body.window_ids, body.set_id, user.id))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e

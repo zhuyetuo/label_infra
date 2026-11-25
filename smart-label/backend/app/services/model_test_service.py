@@ -82,25 +82,51 @@ EXCLUDE_MARGIN_MS = 60_000   # 测试窗口前后各多挖 60 秒不进训练：
 async def test_exclusion(db: AsyncSession) -> tuple[dict[int, list[tuple[int, int]] | None], set[int]]:
     """训练导出要避开的测试数据。
     返回 ({样本 id: [(起, 止) 已加余量] 或 None=整个样本}, 测试集自己的任务 id)。
-    片段给了窗口（或任务本身是短任务）就只挖窗口 ±60 秒；整个任务加进来的才整个样本不要——
-    第一批从 1 小时的样本里挑 1 分钟，按整个样本排除的话最新几天几百小时数据都进不了训练"""
+    · 测试数据池里 status='active' 的窗口严格排除（±60 秒）
+    · 仍在测试集里且未被显式「拨到训练数据池（moved_to_train）」的窗口严格排除
+    · 一旦在测试数据池里明确「拨到训练数据池」，即解除测试隔离，允许下次训练使用（历史冻结测试集快照不受破坏）"""
+    from app.models.model_test import TestPoolWindow
+    from app.services.test_pool import moved_to_train_keys
+
+    moved = await moved_to_train_keys(db)
     rows = (await db.execute(
         select(ModelTestItem.task_id, ModelTestItem.sample_id, ModelTestItem.start_ms, ModelTestItem.end_ms,
                Task.segment_start_ms, Task.segment_end_ms)
         .join(Task, Task.id == ModelTestItem.task_id))).all()
+    pool_rows = (await db.execute(
+        select(TestPoolWindow.task_id, TestPoolWindow.sample_id, TestPoolWindow.start_ms, TestPoolWindow.end_ms,
+               Task.segment_start_ms, Task.segment_end_ms)
+        .join(Task, Task.id == TestPoolWindow.task_id)
+        .where(TestPoolWindow.status == "active"))).all()
+
     excl: dict[int, list[tuple[int, int]] | None] = {}
     tasks: set[int] = set()
-    for tid, sid, s, e, ts, te in rows:
+
+    def _add(tid: int, sid: int, s: int | None, e: int | None, ts: int | None, te: int | None):
         if ts is not None:
             tasks.add(tid)      # 专门为测试建的短任务整份不导出；挂在原任务上的（按条件挑的）只挖窗口
         if s is None or e is None:
             s, e = ts, te
         if s is None or e is None:
             excl[sid] = None
-            continue
+            return
         if sid in excl and excl[sid] is None:
-            continue
+            return
         excl.setdefault(sid, []).append((max(0, s - EXCLUDE_MARGIN_MS), e + EXCLUDE_MARGIN_MS))
+
+    seen_keys: set[tuple[int, int | None, int | None]] = set()
+    for tid, sid, s, e, ts, te in rows:
+        k = (int(tid), s, e)
+        if k in moved or k in seen_keys:
+            continue
+        seen_keys.add(k)
+        _add(tid, sid, s, e, ts, te)
+    for tid, sid, s, e, ts, te in pool_rows:
+        k = (int(tid), s, e)
+        if k in seen_keys:
+            continue
+        seen_keys.add(k)
+        _add(tid, sid, s, e, ts, te)
     return excl, tasks
 
 
