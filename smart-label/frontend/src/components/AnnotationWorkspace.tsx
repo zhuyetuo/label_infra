@@ -62,7 +62,7 @@ import {
 import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
-import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
+import LoopWaveform, { type AdjustTarget, type LinkedAdjust, type LinkedNeighbor, type LoopInfo } from "@/components/LoopWaveform";
 import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segSendBackReviewer, segSplit } from "@/api/segReview";
 
 interface Props {
@@ -949,18 +949,42 @@ export default function AnnotationWorkspace({
           const hits = nearBehaviors.filter(([bs, be]) => Math.min(x.end_time_ms, be) - Math.max(x.start_time_ms, bs) >= 200);
           if (hits.length) {
             return subtractSpans(x.start_time_ms, x.end_time_ms, hits, 150).map(([s, e]) => ({
-              s, e, color: colorOf(x.label_id), label: nameOf(x.label_id),
+              s, e, color: colorOf(x.label_id), label: nameOf(x.label_id), id: x.id,
             }));
           }
         }
-        return [{ s: x.start_time_ms, e: x.end_time_ms, color: colorOf(x.label_id), label: nameOf(x.label_id) }];
+        return [{ s: x.start_time_ms, e: x.end_time_ms, color: colorOf(x.label_id), label: nameOf(x.label_id), id: x.id }];
       });
     const neighbors = [
       ...itemNeighbors,
       ...candidates.filter((x) => x !== c && x.status === "pending" && x.end_time_ms > lo && x.start_time_ms < hi)
         .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: "#999", label: `疑似${x.label_name}` })),
     ];
-    if (it) return { startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id), itemId: it.id, neighbors };
+    if (it) {
+      const canLink = (aId: number, bId: number) => {
+        const ta = trackOf(labelById, aId);
+        const tb = trackOf(labelById, bId);
+        return ta === tb || (ta === "motion" && isBehaviorTrack(labelById, bId)) || (isBehaviorTrack(labelById, aId) && tb === "motion");
+      };
+      const pickClosest = (cands: LabelItem[], dist: (x: LabelItem) => number): LinkedNeighbor | null => {
+        if (!cands.length) return null;
+        cands.sort((a, b) => dist(a) - dist(b));
+        const best = cands[0];
+        return { id: best.id, s: best.start_time_ms, e: best.end_time_ms, label: nameOf(best.label_id), color: colorOf(best.label_id) };
+      };
+      const leftNeighbor = pickClosest(
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && Math.abs(x.end_time_ms - it.start_time_ms) <= 150 && x.start_time_ms < it.start_time_ms - 250),
+        (x) => Math.abs(x.end_time_ms - it.start_time_ms),
+      );
+      const rightNeighbor = pickClosest(
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && Math.abs(x.start_time_ms - it.end_time_ms) <= 150 && x.end_time_ms > it.end_time_ms + 250),
+        (x) => Math.abs(x.start_time_ms - it.end_time_ms),
+      );
+      return {
+        startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id),
+        itemId: it.id, neighbors, leftNeighbor, rightNeighbor,
+      };
+    }
     if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors };
     const ep = focusWindow?.evalHint?.predSegs.find(([ps, pe]) => near(ps, startMs) && near(pe, endMs));
     if (ep && focusWindow?.evalHint) {
@@ -1182,7 +1206,7 @@ export default function AnnotationWorkspace({
 
   // 波形浮窗里调好的起止：改这一条、立刻落库，再拉一遍——调整记录（第几次、从哪改到哪）
   // 是后端存草稿时记的，不拉回来的话「起止调过 N 次」不会更新。循环跟着换到新起止
-  const adjustBoundary = async (target: AdjustTarget, startMs: number, endMs: number) => {
+  const adjustBoundary = async (target: AdjustTarget, startMs: number, endMs: number, linked?: LinkedAdjust) => {
     if (taskId == null) return;
     if (target.kind === "cand") {
       // 疑似片段：直接改那条候选（后端记调整记录），列表拉一遍
@@ -1193,13 +1217,23 @@ export default function AnnotationWorkspace({
       return;
     }
     const id = target.id;
-    const next = items.map((it) => (it.id === id ? touchItem(it, { start_time_ms: startMs, end_time_ms: endMs }) : it));
+    const next = items.map((it) => {
+      if (it.id === id) return touchItem(it, { start_time_ms: startMs, end_time_ms: endMs });
+      if (linked?.left && it.id === linked.left.id) {
+        return touchItem(it, { start_time_ms: linked.left.startMs, end_time_ms: linked.left.endMs });
+      }
+      if (linked?.right && it.id === linked.right.id) {
+        return touchItem(it, { start_time_ms: linked.right.startMs, end_time_ms: linked.right.endMs });
+      }
+      return it;
+    });
     setItems(next);
     await saveDraft(taskId, toDraftPayload(next));
     const d = await getDraft(taskId);
     loadItems(d.items);
     showRange({ startMs, endMs });
-    message.success("起止已保存");
+    const linkedNames = [linked?.left?.label, linked?.right?.label].filter(Boolean).join("、");
+    message.success(linkedNames ? `起止已保存（已联动调整相邻「${linkedNames}」）` : "起止已保存");
   };
 
   // 只读时想拖起止：说清楚为什么改不了、要先做什么。以前拖边没反应也没提示，
@@ -1667,9 +1701,9 @@ export default function AnnotationWorkspace({
 
   // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
   // 保存起止出错 / 超时：不知道服务器到底存没存上。重新拉一次看实际的起止，明确告诉人
-  const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number) => {
+  const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number, linked?: LinkedAdjust) => {
     try {
-      await adjustFromWaveInner(target, startMs, endMs);
+      await adjustFromWaveInner(target, startMs, endMs, linked);
     } catch (e) {
       if (target.kind !== "item" || taskId == null) throw e;
       try {
@@ -1734,15 +1768,28 @@ export default function AnnotationWorkspace({
     });
   };
 
-  const adjustFromWaveInner = async (target: AdjustTarget, startMs: number, endMs: number) => {
+  const adjustFromWaveInner = async (target: AdjustTarget, startMs: number, endMs: number, linked?: LinkedAdjust) => {
     // 审核员 / 管理员看只读的任务（已提交的、别人的）：直接改这一条，走片段接口，
     // 不用为了调个起止去认领整个任务
     if (readOnly && canFlag && !segReview && target.kind === "item" && taskId != null) {
       const prev = items.find((x) => x.id === target.id);
       const r = await segEdit(target.id, { start_time_ms: startMs, end_time_ms: endMs });
-      savedLocally(target.id, r);
-      showRange({ startMs, endMs });
-      savedWithUndo(prev, r);
+      if (linked?.left && linked.left.id > 0) {
+        await segEdit(linked.left.id, { start_time_ms: linked.left.startMs, end_time_ms: linked.left.endMs });
+      }
+      if (linked?.right && linked.right.id > 0) {
+        await segEdit(linked.right.id, { start_time_ms: linked.right.startMs, end_time_ms: linked.right.endMs });
+      }
+      if (linked?.left || linked?.right) {
+        loadItems((await getDraft(taskId)).items);
+        showRange({ startMs, endMs });
+        const linkedNames = [linked?.left?.label, linked?.right?.label].filter(Boolean).join("、");
+        message.success(`起止已保存（已联动调整相邻「${linkedNames}」）`);
+      } else {
+        savedLocally(target.id, r);
+        showRange({ startMs, endMs });
+        savedWithUndo(prev, r);
+      }
       return;
     }
     if (segReview && target.kind === "item" && target.id === segReview.itemId && taskId != null) {
@@ -1762,7 +1809,7 @@ export default function AnnotationWorkspace({
       savedWithUndo(prev, r);
       return;
     }
-    await adjustBoundary(target, startMs, endMs);
+    await adjustBoundary(target, startMs, endMs, linked);
   };
 
   const updateItems = (ids: number[], patch: Partial<LabelItem>) => {

@@ -43,6 +43,19 @@ const GYRO: { key: ChKey; label: string; color: string }[] = [
   { key: "gyro_z", label: "GZ", color: "#8e44ad" },
 ];
 
+export interface LinkedNeighbor {
+  id: number;
+  s: number;
+  e: number;
+  label: string;
+  color: string;
+}
+
+export interface LinkedAdjust {
+  left?: { id: number; startMs: number; endMs: number; label: string };
+  right?: { id: number; startMs: number; endMs: number; label: string };
+}
+
 export interface LoopInfo {
   startMs: number;
   endMs: number;
@@ -53,7 +66,11 @@ export interface LoopInfo {
   itemId?: number;
   candId?: number;
   /** 附近的别的片段：图顶上画一条细色带 + 名字，看得出这一段前后挨着的是什么 */
-  neighbors?: { s: number; e: number; color: string; label: string }[];
+  neighbors?: { s: number; e: number; color: string; label: string; id?: number }[];
+  /** 紧挨在左侧（终点贴着当前段起点 ≤150ms）的相邻片段，用于联动调整边界 */
+  leftNeighbor?: LinkedNeighbor | null;
+  /** 紧挨在右侧（起点贴着当前段终点 ≤150ms）的相邻片段，用于联动调整边界 */
+  rightNeighbor?: LinkedNeighbor | null;
 }
 
 export type AdjustTarget = { kind: "item" | "cand"; id: number };
@@ -85,6 +102,8 @@ interface Cfg {
   winSec: number;
   /** 锁住位置和大小：标题栏拖不动、边角不能改大小，免得点按钮时误拖 */
   locked?: boolean;
+  /** 调整起止时是否默认联动紧挨着的相邻片段边界（默认 true） */
+  linkNeighbors?: boolean;
 }
 const CFG_KEY = "loop-waveform-cfg";
 const defaultCfg = (): Cfg => ({
@@ -97,6 +116,7 @@ const defaultCfg = (): Cfg => ({
   smooth: true,
   follow: true,
   winSec: 10,
+  linkNeighbors: true,
 });
 function loadCfg(): Cfg {
   const d = defaultCfg();
@@ -188,7 +208,8 @@ function fitVisible(u: uPlot, seg?: [number, number]): [number, number] {
 
 function MiniPlot({
   snap, chans, smooth, yRange, xRange, width, height, bus, live, follow, winSec, axisColor,
-  rangeRef, editable, onEdge, onScrub, onMove, onDragEnd, version, resetKey, neighbors, widen = 1,
+  rangeRef, editable, onEdge, onScrub, onMove, onDragEnd, version, resetKey, neighbors,
+  leftNeighbor, rightNeighbor, linkStateRef, widen = 1,
 }: {
   snap: Snap;
   chans: typeof ACC;
@@ -207,12 +228,12 @@ function MiniPlot({
   rangeRef?: React.MutableRefObject<{ s: number; e: number }>;
   /** 能拖起止 */
   editable?: boolean;
-  /** 拖边：which = 起 / 止，ms = 新位置（绝对毫秒） */
-  onEdge?: (which: "s" | "e", ms: number) => void;
+  /** 拖边：which = 起 / 止，ms = 新位置（绝对毫秒），altKey = 按住 Alt 临时反选联动 */
+  onEdge?: (which: "s" | "e", ms: number, altKey?: boolean) => void;
   /** 点 / 拖图上别处：把视频跳到那里 */
   onScrub?: (ms: number) => void;
-  /** 按住色块顶上那条拖：整段平移，给新的起止（绝对毫秒） */
-  onMove?: (s: number, e: number) => void;
+  /** 按住色块顶上那条拖：整段平移，给新的起止（绝对毫秒），altKey = 按住 Alt 临时反选联动 */
+  onMove?: (s: number, e: number, altKey?: boolean) => void;
   /** 拖边 / 拖整段松手 */
   onDragEnd?: () => void;
   /** 浮窗拉宽了几倍：初始视图前后按比例多看一些（一秒的像素宽度不变，宽了就是看得更多） */
@@ -222,6 +243,9 @@ function MiniPlot({
   /** 加一 = 视图回到初始（取消 Shift+滚轮的缩放 / 平移） */
   resetKey?: number;
   neighbors?: LoopInfo["neighbors"];
+  leftNeighbor?: LinkedNeighbor | null;
+  rightNeighbor?: LinkedNeighbor | null;
+  linkStateRef?: React.MutableRefObject<{ left: boolean; right: boolean }>;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
@@ -231,8 +255,8 @@ function MiniPlot({
   const scrolling = !!follow && dur > winSec * 1.2;
 
   // 交互回调放 ref 里：它们每次渲染都是新函数，放进 effect 依赖会让图每次都重建
-  const cb = useRef({ onEdge, onScrub, onMove, onDragEnd, editable, neighbors });
-  cb.current = { onEdge, onScrub, onMove, onDragEnd, editable, neighbors };
+  const cb = useRef({ onEdge, onScrub, onMove, onDragEnd, editable, neighbors, leftNeighbor, rightNeighbor });
+  cb.current = { onEdge, onScrub, onMove, onDragEnd, editable, neighbors, leftNeighbor, rightNeighbor };
   // 人用 Shift+滚轮 缩放 / Shift+拖 平移过：跟随模式就别再自己挪窗口
   const zoomedRef = useRef(false);
   const initXRef = useRef<[number, number] | null>(null);
@@ -300,17 +324,29 @@ function MiniPlot({
               u.ctx.fillRect(x0, top, x1 - x0, h);
               u.ctx.restore();
             }
-            // 附近别的片段：顶上一条细色带 + 名字
+            // 附近别的片段：顶上一条细色带 + 名字（开启联动相邻边界时，紧挨着的左右邻居实时跟着拉长/缩短）
             const nb = cb.current.neighbors ?? [];
             if (nb.length) {
               const dpr = window.devicePixelRatio || 1;
+              const ln = cb.current.leftNeighbor;
+              const rn = cb.current.rightNeighbor;
+              const lk = linkStateRef?.current;
               u.ctx.save();
               u.ctx.font = `${10 * dpr}px sans-serif`;
               u.ctx.textBaseline = "top";
               u.ctx.textAlign = "left";
               for (const n of nb) {
-                const a = Math.max(left, u.valToPos((n.s - info.startMs) / 1000, "x", true));
-                const b = Math.min(left + bw, u.valToPos((n.e - info.startMs) / 1000, "x", true));
+                let ns = n.s;
+                let ne = n.e;
+                if (lk?.left && ln && ((n.id != null && n.id === ln.id) || (Math.abs(n.e - info.startMs) <= 150 && Math.abs(n.s - ln.s) <= 150))) {
+                  ne = r.s;
+                }
+                if (lk?.right && rn && ((n.id != null && n.id === rn.id) || (Math.abs(n.s - info.endMs) <= 150 && Math.abs(n.e - rn.e) <= 150))) {
+                  ns = r.e;
+                }
+                if (ne <= ns) continue;
+                const a = Math.max(left, u.valToPos((ns - info.startMs) / 1000, "x", true));
+                const b = Math.min(left + bw, u.valToPos((ne - info.startMs) / 1000, "x", true));
                 if (b <= a) continue;
                 u.ctx.globalAlpha = 0.55;
                 u.ctx.fillStyle = n.color;
@@ -454,18 +490,20 @@ function MiniPlot({
         const a0 = msAt(ev.clientX), r0 = { ...cur() };
         over.style.cursor = "grabbing";
         let lastX = ev.clientX;
-        const apply = (x: number) => {
+        let lastAlt = ev.altKey;
+        const apply = (x: number, alt: boolean) => {
           const d = msAt(x) - a0;
-          cb.current.onMove?.(r0.s + d, r0.e + d);
+          cb.current.onMove?.(r0.s + d, r0.e + d, alt);
           const r = cur();
           reveal((r.s - info.startMs) / 1000, (r.e - info.startMs) / 1000);
           u.redraw(false);
         };
         const move = (e2: MouseEvent) => {
           lastX = e2.clientX;
-          apply(lastX);
+          lastAlt = e2.altKey;
+          apply(lastX, lastAlt);
         };
-        const timer = window.setInterval(() => atBorder(lastX) && apply(lastX), 120);
+        const timer = window.setInterval(() => atBorder(lastX) && apply(lastX, lastAlt), 120);
         const up = () => {
           over.style.cursor = "grab";
           window.clearInterval(timer);
@@ -479,10 +517,10 @@ function MiniPlot({
       }
       if (!which && !cb.current.onScrub) return;
       ev.preventDefault();
-      const act = (x: number) => {
+      const act = (x: number, alt: boolean) => {
         const ms = msAt(x);
         if (which === "s" || which === "e") {
-          cb.current.onEdge?.(which, ms);
+          cb.current.onEdge?.(which, ms, alt);
           // 拖到视图边上：视图往外扩，边界跟着走（不然长片段到窗口头就拖不动了）
           const r = cur();
           const v = ((which === "s" ? r.s : r.e) - info.startMs) / 1000;
@@ -491,13 +529,15 @@ function MiniPlot({
         u.redraw(false);
       };
       let lastX = ev.clientX;
-      act(lastX);
+      let lastAlt = ev.altKey;
+      act(lastX, lastAlt);
       const move = (e2: MouseEvent) => {
         lastX = e2.clientX;
-        act(lastX);
+        lastAlt = e2.altKey;
+        act(lastX, lastAlt);
       };
       // 鼠标按着停在图的左右边上（或者拖出图外）：每 120ms 往外扩一点，一直按着就一直延伸
-      const timer = which ? window.setInterval(() => atBorder(lastX) && act(lastX), 120) : 0;
+      const timer = which ? window.setInterval(() => atBorder(lastX) && act(lastX, lastAlt), 120) : 0;
       const up = () => {
         window.clearInterval(timer);
         window.removeEventListener("mousemove", move);
@@ -606,8 +646,8 @@ export default function LoopWaveform({
   /** 当前在循环的那段；null = 没在循环（钉住的还在就照样显示） */
   info: LoopInfo | null;
   onStop?: () => void;
-  /** 保存新的起止（已标注片段 / 疑似片段）。不给 = 只读，不能拖起止 */
-  onAdjust?: (target: AdjustTarget, startMs: number, endMs: number) => Promise<void>;
+  /** 保存新的起止（已标注片段 / 疑似片段）。不给 = 只读，不能拖起止。linked = 联动调整到的左右相邻片段 */
+  onAdjust?: (target: AdjustTarget, startMs: number, endMs: number, linked?: LinkedAdjust) => Promise<void>;
   /** 只读时为什么不能改起止（给了就在浮窗里写出来） */
   readOnlyHint?: string;
   /** 只有这些能改（片段审核：只读的任务里只放开正在审的那一条） */
@@ -663,6 +703,9 @@ export default function LoopWaveform({
   // edit 是给界面显示用的同一对；null = 没动过
   const rangeRef = useRef({ s: 0, e: 0 });
   const [edit, setEdit] = useState<{ s: number; e: number } | null>(null);
+  const linkMode = cfg.linkNeighbors !== false;
+  const linkStateRef = useRef({ left: linkMode, right: linkMode });
+  const [linkState, setLinkState] = useState({ left: linkMode, right: linkMode });
   const [version, setVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const lastSec = useRef(0);
@@ -683,6 +726,8 @@ export default function LoopWaveform({
     setClosed(false);
     setOpened(false);
     setEdit(null);
+    linkStateRef.current = { left: linkMode, right: linkMode };
+    setLinkState({ left: linkMode, right: linkMode });
     if (info) rangeRef.current = { s: info.startMs, e: info.endMs };
     setVersion((v) => v + 1);
     if (!info) {
@@ -755,29 +800,45 @@ export default function LoopWaveform({
   // 能调到的范围 = 拉回来的那截数据（前后各 10 秒 ~ 1 分钟）
   const lo = info && cur ? Math.max(0, info.startMs - cur.ctxMs) : 0;
   const hi = info && cur ? info.endMs + cur.ctxMs : 0;
-  const setRange = (s0: number, e0: number) => {
+  const setRange = (s0: number, e0: number, linkOpt?: { left?: boolean; right?: boolean }) => {
+    const lkL = linkOpt?.left ?? linkStateRef.current.left;
+    const lkR = linkOpt?.right ?? linkStateRef.current.right;
+    if (linkOpt) {
+      const nextLk = { left: lkL, right: lkR };
+      linkStateRef.current = nextLk;
+      setLinkState(nextLk);
+    }
+    // 联动相邻边界时，保证左右邻居至少保留 0.3s，不会被挤没或起止反转
+    const minS = lkL && info?.leftNeighbor ? Math.max(lo, info.leftNeighbor.s + 300) : lo;
+    const maxE = lkR && info?.rightNeighbor ? Math.min(hi, info.rightNeighbor.e - 300) : hi;
     // 只能在拉回来的这截数据里调；起止至少隔 0.2 秒
-    const s1 = Math.round(Math.min(Math.max(lo, s0), hi - 200) / 10) * 10;
-    const e1 = Math.round(Math.max(Math.min(hi, e0), s1 + 200) / 10) * 10;
+    const s1 = Math.round(Math.min(Math.max(minS, s0), maxE - 200) / 10) * 10;
+    const e1 = Math.round(Math.max(Math.min(maxE, e0), s1 + 200) / 10) * 10;
     rangeRef.current = { s: s1, e: e1 };
     setEdit(info && s1 === info.startMs && e1 === info.endMs ? null : { s: s1, e: e1 });
     setVersion((v) => v + 1);
     return { s: s1, e: e1 };
   };
-  const onEdge = (which: "s" | "e", ms: number) => {
+  const onEdge = (which: "s" | "e", ms: number, altKey?: boolean) => {
     bus.play("pause");
     bus.holdLoop(true);
+    const eff = altKey ? !linkMode : linkMode;
     const r = rangeRef.current;
-    const n = which === "s" ? setRange(ms, r.e) : setRange(r.s, ms);
+    const n = which === "s"
+      ? setRange(ms, r.e, { left: eff })
+      : setRange(r.s, ms, { right: eff });
     seekTo(which === "s" ? n.s : n.e);
   };
-  const onMove = (s0: number, e0: number) => {
+  const onMove = (s0: number, e0: number, altKey?: boolean) => {
     bus.play("pause");
     bus.holdLoop(true);
+    const eff = altKey ? !linkMode : linkMode;
     // 整段平移：长度不变，挪到头就停在头上
     const len = e0 - s0;
-    const s1 = Math.min(Math.max(lo, s0), hi - len);
-    const n = setRange(s1, s1 + len);
+    const minS = eff && info?.leftNeighbor ? Math.max(lo, info.leftNeighbor.s + 300) : lo;
+    const maxE = eff && info?.rightNeighbor ? Math.min(hi, info.rightNeighbor.e - 300) : hi;
+    const s1 = Math.min(Math.max(minS, s0), Math.max(minS, maxE - len));
+    const n = setRange(s1, s1 + len, { left: eff, right: eff });
     seekTo(n.s);
   };
   // 起止拖到已拉数据的头上（前后 3 秒内）松手：再往外多拉 1 分钟，接着就能继续拖。
@@ -831,7 +892,14 @@ export default function LoopWaveform({
     }, 20000);
     try {
       bus.previewLoop(null);
-      await onAdjust(target, edit.s, edit.e);
+      const linked: LinkedAdjust = {};
+      if (info?.leftNeighbor && linkStateRef.current.left && edit.s !== info.startMs && edit.s - info.leftNeighbor.s >= 300) {
+        linked.left = { id: info.leftNeighbor.id, startMs: info.leftNeighbor.s, endMs: edit.s, label: info.leftNeighbor.label };
+      }
+      if (info?.rightNeighbor && linkStateRef.current.right && edit.e !== info.endMs && info.rightNeighbor.e - edit.e >= 300) {
+        linked.right = { id: info.rightNeighbor.id, startMs: edit.e, endMs: info.rightNeighbor.e, label: info.rightNeighbor.label };
+      }
+      await onAdjust(target, edit.s, edit.e, linked.left || linked.right ? linked : undefined);
     } finally {
       window.clearTimeout(guard);
       if (!timedOut) setSaving(false);
@@ -991,7 +1059,8 @@ export default function LoopWaveform({
               ) : cur ? (
                 <MiniPlot snap={cur} {...plotProps} height={cfg.h} bus={bus} live follow={followEff}
                   rangeRef={rangeRef} editable={editable} onEdge={onEdge} onScrub={onScrub} onMove={onMove} onDragEnd={extendData} version={version}
-                  resetKey={resetKey} neighbors={info.neighbors} />
+                  resetKey={resetKey} neighbors={info.neighbors}
+                  leftNeighbor={info.leftNeighbor} rightNeighbor={info.rightNeighbor} linkStateRef={linkStateRef} />
               ) : (
                 <div style={{ height: cfg.h }} />
               )}
@@ -1021,6 +1090,23 @@ export default function LoopWaveform({
                 </Checkbox>
               </Tooltip>
             )}
+            {info && editable && info.itemId != null && (
+              <Tooltip title="默认开启：拖起止或点「起点/终点=播放线」时，紧挨着的前后相邻片段一起跟着调整，交界不留空隙。取消勾选只调当前段；拖动时按住 Alt 可单次反选">
+                <Checkbox
+                  checked={linkMode}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setCfg({ linkNeighbors: v });
+                    linkStateRef.current = { left: v, right: v };
+                    setLinkState({ left: v, right: v });
+                    setVersion((x) => x + 1);
+                  }}
+                  style={{ fontSize: 11 }}
+                >
+                  联动相邻边界
+                </Checkbox>
+              </Tooltip>
+            )}
           </div>
           {info && editable && (
             <div style={{ marginTop: 4, padding: "4px 6px", borderRadius: 4, background: edit ? token.colorWarningBg : token.colorFillQuaternary, fontSize: 12 }}>
@@ -1031,12 +1117,32 @@ export default function LoopWaveform({
                   {(((edit?.e ?? info.endMs) - (edit?.s ?? info.startMs)) / 1000).toFixed(2)}s
                   {edit && `（原 ${fmtMs(info.startMs)} ~ ${fmtMs(info.endMs)}）`}
                 </Typography.Text>
+                {(() => {
+                  const lkL = !!(info.leftNeighbor && linkState.left);
+                  const lkR = !!(info.rightNeighbor && linkState.right);
+                  if (!lkL && !lkR) return null;
+                  const parts = [
+                    lkL ? `← ${info.leftNeighbor!.label}` : "",
+                    lkR ? `${info.rightNeighbor!.label} →` : "",
+                  ].filter(Boolean);
+                  const tipLines = [
+                    lkL ? `左相邻「${info.leftNeighbor!.label}」终点将同步调到 ${fmtMs(edit?.s ?? info.startMs)}` : "",
+                    lkR ? `右相邻「${info.rightNeighbor!.label}」起点将同步调到 ${fmtMs(edit?.e ?? info.endMs)}` : "",
+                    "拖动边界时按住 Alt 可临时只调当前段",
+                  ].filter(Boolean);
+                  return (
+                    <Tooltip title={<div style={{ fontSize: 12, lineHeight: 1.6 }}>{tipLines.map((t, idx) => <div key={idx}>{t}</div>)}</div>}>
+                      <Tag color="cyan" style={{ marginInlineEnd: 0, fontSize: 11 }}>联动：{parts.join(" ｜ ")}</Tag>
+                    </Tooltip>
+                  );
+                })()}
                 {/* 操作说明收进问号：常驻一大段字占地方，只有头几次用得上 */}
                 <Tooltip
                   overlayStyle={{ maxWidth: 360 }}
                   title={
                     <div style={{ fontSize: 12, lineHeight: 1.7 }}>
                       · 拖底色两边的竖线改起止；按住顶上那条拖动整段，视频跟着停在那一帧<br />
+                      · 默认开启<b>联动相邻边界</b>（前后紧挨着的片段一起跟着调）；<b>按住 Alt 拖边界</b>可单次只调当前段<br />
                       · 点 / 拖图上别处，视频跳过去<br />
                       · <b>Shift+滚轮</b>缩放、<b>Shift+拖</b>左右平移，看前后的全貌<br />
                       · 拖到窗口边上按住不放，视图会继续往外延伸<br />
@@ -1048,10 +1154,10 @@ export default function LoopWaveform({
                 </Tooltip>
                 <span style={{ flex: 1 }} />
                 <Tooltip title="先在图上点 / 拖到动作真正开始的那一帧，再点这个">
-                  <Button size="small" onClick={() => { const n = setRange(lastSec.current * 1000, rangeRef.current.e); seekTo(n.s, true); }}>起点 = 播放线</Button>
+                  <Button size="small" onClick={() => { const n = setRange(lastSec.current * 1000, rangeRef.current.e, { left: linkMode }); seekTo(n.s, true); }}>起点 = 播放线</Button>
                 </Tooltip>
                 <Tooltip title="拖到动作真正结束的那一帧，再点这个">
-                  <Button size="small" onClick={() => { const n = setRange(rangeRef.current.s, lastSec.current * 1000); seekTo(n.e, true); }}>终点 = 播放线</Button>
+                  <Button size="small" onClick={() => { const n = setRange(rangeRef.current.s, lastSec.current * 1000, { right: linkMode }); seekTo(n.e, true); }}>终点 = 播放线</Button>
                 </Tooltip>
                 {edit && <Button size="small" onClick={revert}>还原</Button>}
                 <Button size="small" type="primary" disabled={!edit} loading={saving} onClick={save}>保存起止</Button>
