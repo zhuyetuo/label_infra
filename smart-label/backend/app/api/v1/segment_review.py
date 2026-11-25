@@ -695,12 +695,25 @@ async def _carve_motion_task(db: AsyncSession, task: Task, user: User) -> dict:
     own = {l.id: l.track for l in labels}
     names = {l.id: getattr(l, "display_name", "") for l in labels}
 
+    def _is_rest_name(name: str) -> bool:
+        s = (name or "").strip()
+        return s in {"静止/休息", "静止", "休息", "睡觉", "睡眠"} or s.startswith("静止/")
+
+    def _is_activity_name(name: str) -> bool:
+        s = (name or "").strip()
+        return s == "活动" or s.startswith("活动-")
+
     behaviors = [
         (x.start_time_ms, x.end_time_ms)
         for x in items
         if track_of(parent_of, own, x.label_id, names) in ("behavior", "")
     ]
-    if not behaviors:
+    activities = [
+        (x.start_time_ms, x.end_time_ms)
+        for x in items
+        if track_of(parent_of, own, x.label_id, names) == "motion" and _is_activity_name(names.get(x.label_id, ""))
+    ]
+    if not behaviors and not activities:
         return {"carved": 0, "created": 0, "removed": 0}
 
     now = _now()
@@ -710,9 +723,11 @@ async def _carve_motion_task(db: AsyncSession, task: Task, user: User) -> dict:
     for m in items:
         if track_of(parent_of, own, m.label_id, names) != "motion":
             continue
+        # 静止/休息 既让位给具体行为，也让位给 活动（重叠部分归活动）
+        cutters = (behaviors + activities) if _is_rest_name(names.get(m.label_id, "")) else behaviors
         hits = [
             (bs, be)
-            for bs, be in behaviors
+            for bs, be in cutters
             if min(m.end_time_ms, be) - max(m.start_time_ms, bs) >= OVERLAP_MIN_MS
         ]
         if not hits:
@@ -911,19 +926,6 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
                 drop(coarse, fines[0])
                 n_parent += 1
 
-    # 3) 剩下的同轨不同类冲突：只数一下
-    conflicts = conflict_checker(labels)
-    alive = sorted((x for x in items if x.id not in deleted), key=lambda x: x.start_time_ms)
-    conflict_ids: set[int] = set()
-    for i, a in enumerate(alive):
-        for b in alive[i + 1:]:
-            if b.start_time_ms >= a.end_time_ms:
-                break
-            if min(a.end_time_ms, b.end_time_ms) - b.start_time_ms < OVERLAP_MIN_MS:
-                continue
-            if track_of(parent_of, own, a.label_id) == track_of(parent_of, own, b.label_id) and conflicts(a.label_id, b.label_id):
-                conflict_ids.update((a.id, b.id))
-
     for x in items:
         if x.id in deleted:
             await db.delete(x)
@@ -934,6 +936,25 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
             cand.decided_by, cand.decided_at = user.id, _decided_at()
     await db.flush()
     carve_res = await _carve_motion_task(db, task, user)
+
+    # 3) 剩下的同轨不同类冲突：在运动轨挖空（含休息让位给活动）后再统计
+    conflicts = conflict_checker(labels)
+    alive = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+        .order_by(AnnotationLabelItem.start_time_ms, AnnotationLabelItem.id)
+    )).scalars().all()
+    conflict_ids: set[int] = set()
+    for i, a in enumerate(alive):
+        for b in alive[i + 1:]:
+            if b.start_time_ms >= a.end_time_ms:
+                break
+            if min(a.end_time_ms, b.end_time_ms) - b.start_time_ms < OVERLAP_MIN_MS:
+                continue
+            if track_of(parent_of, own, a.label_id) == track_of(parent_of, own, b.label_id) and conflicts(a.label_id, b.label_id):
+                conflict_ids.update((a.id, b.id))
+
     return {
         "merged": n_merged,
         "removed_parent": n_parent,

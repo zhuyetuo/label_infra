@@ -445,3 +445,33 @@ def test_合并相邻同类片段_保留审核状态并拒绝异类合并(db, ru
     assert len(left) == 1
     assert (left[0].start_time_ms, left[0].end_time_ms) == (49580, 63750)
     assert left[0].seg_status == "approved"
+
+
+def test_一键去重_休息与活动重叠时归活动(db, run):
+    w = _world(db, run)
+    rest = LabelDefinition(project_id=w.p.id, code="rest_test", display_name="静止/休息", color="#8c8c8c", sort_order=20, track="motion", created_by=w.admin.id)
+    act = LabelDefinition(project_id=w.p.id, code="activity_test", display_name="活动", color="#faad14", sort_order=21, track="motion", created_by=w.admin.id)
+    for obj in (rest, act):
+        db.add(obj)
+    run(db.flush())
+    r_seg = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=rest.id,
+        start_time_ms=359210, end_time_ms=388041,
+        source_type=LabelItemSource.human_added, seg_status="approved",
+    )
+    a_seg = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=act.id,
+        start_time_ms=387631, end_time_ms=396622,
+        source_type=LabelItemSource.human_added, seg_status="approved",
+    )
+    for obj in (r_seg, a_seg):
+        db.add(obj)
+    run(db.commit())
+
+    res = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.rev))["data"]
+    assert res["carved_motion"] >= 1 and res["conflicts_left"] == 0
+    run(db.refresh(r_seg))
+    run(db.refresh(a_seg))
+    assert (r_seg.start_time_ms, r_seg.end_time_ms) == (359210, 387631)
+    assert (a_seg.start_time_ms, a_seg.end_time_ms) == (387631, 396622)
+    assert r_seg.seg_status == "approved" and a_seg.seg_status == "approved"
