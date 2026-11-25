@@ -368,3 +368,38 @@ def test_查看里直接新建片段_审核员管理员可以_标注员不行(db
     run(api.create(body, db, w.rev))
     n = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.start_time_ms == 70000))).scalars().all()
     assert len(n) == 2
+
+
+def test_挖空活动_按重叠具体行为切成多段(db, run):
+    w = _world(db, run)
+    # 新增运动轨「活动」与行为轨「舔」
+    act = LabelDefinition(project_id=w.p.id, code="activity", display_name="活动", color="#faad14", sort_order=10, track="motion", created_by=w.admin.id)
+    lick = LabelDefinition(project_id=w.p.id, code="lick", display_name="舔", color="#f5222d", sort_order=11, track="behavior", created_by=w.admin.id)
+    for obj in (act, lick):
+        db.add(obj)
+    run(db.flush())
+    # 模拟真实场景：活动 47080~75697，内部压着 舔 47080~47970、抓挠 57499~59598、抓挠 69570~84590
+    m = AnnotationLabelItem(
+        annotation_record_id=w.rec.id, label_id=act.id,
+        start_time_ms=47080, end_time_ms=75697,
+        source_type=LabelItemSource.ai_generated, ai_confidence=0.95,
+    )
+    b1 = AnnotationLabelItem(annotation_record_id=w.rec.id, label_id=lick.id, start_time_ms=47080, end_time_ms=47970, source_type=LabelItemSource.human_added)
+    b2 = AnnotationLabelItem(annotation_record_id=w.rec.id, label_id=w.child.id, start_time_ms=57499, end_time_ms=59598, source_type=LabelItemSource.human_added)
+    b3 = AnnotationLabelItem(annotation_record_id=w.rec.id, label_id=w.child.id, start_time_ms=69570, end_time_ms=84590, source_type=LabelItemSource.human_added)
+    for obj in (m, b1, b2, b3):
+        db.add(obj)
+    run(db.commit())
+
+    r = run(api.carve_motion(api.DedupeIn(task_id=w.t.id), db, w.rev))["data"]
+    assert r["carved"] >= 1 and r["created"] >= 1 and r["removed"] == 0
+    act_rows = sorted(
+        run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.label_id == act.id))).scalars().all(),
+        key=lambda x: x.start_time_ms,
+    )
+    assert [(x.start_time_ms, x.end_time_ms) for x in act_rows] == [(47970, 57499), (59598, 69570)]
+    # 保持原来的待审状态（不擅自标通过）
+    assert all(x.seg_status is None and x.source_type == LabelItemSource.ai_generated for x in act_rows)
+    # 幂等：再跑一次无变化
+    r2 = run(api.carve_motion(api.DedupeIn(task_id=w.t.id), db, w.rev))["data"]
+    assert r2 == {"carved": 0, "created": 0, "removed": 0}

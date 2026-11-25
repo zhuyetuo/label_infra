@@ -86,9 +86,15 @@ export const segMarks = (id: number, marks: string[], note?: string | null) =>
 /** 删掉一条片段（重复的 / 不要的）。审核员 / 管理员不用认领；从候选来的，候选一起标成排除 */
 export const segDelete = (id: number) => request.delete<never, { id: number; deleted: boolean }>(`/segments/${id}`);
 
-/** 一键去重：同类重叠的并成一条、父子压在一起的删粗的；类别冲突不动只报数 */
+/** 一键去重：同类重叠的并成一条、父子压在一起的删粗的、活动压在具体行为下的挖空切分；类别冲突不动只报数 */
 export const segDedupe = (taskId: number) =>
-  request.post<never, { merged: number; removed_parent: number; conflicts_left: number }>("/segments/dedupe", { task_id: taskId });
+  request.post<never, { merged: number; removed_parent: number; carved_motion?: number; conflicts_left: number }>(
+    "/segments/dedupe", { task_id: taskId });
+
+/** 挖空活动：把压在具体行为下面的「活动 / 静止/休息」按重叠处切分成多段 */
+export const segCarveMotion = (taskId: number) =>
+  request.post<never, { carved: number; created: number; removed: number }>(
+    "/segments/carve-motion", { task_id: taskId });
 
 /** 整个项目一键去重（每个任务各跑一遍上面那套）。只给审核员 / 管理员 */
 export const segDedupeProject = (projectId: number) =>

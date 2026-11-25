@@ -39,6 +39,43 @@ export function conflicts<T extends TreeLabel>(map: Map<number, T>, a: number, b
   return trackOf(map, a) === trackOf(map, b);
 }
 
+/** 具体行为轨（不含 motion / posture / device）：用于把压在下面的「活动 / 静止/休息」挖空切分 */
+export function isBehaviorTrack<T extends TreeLabel>(map: Map<number, T>, id: number): boolean {
+  const t = trackOf(map, id);
+  return t === "behavior" || t === "";
+}
+
+/** 从 [startMs, endMs] 中挖掉 cutters 区间，保留时长 ≥ minPieceMs 的剩余子段 */
+export function subtractSpans(
+  startMs: number,
+  endMs: number,
+  cutters: readonly [number, number][],
+  minPieceMs = 300,
+): [number, number][] {
+  const clipped: [number, number][] = [];
+  for (const [cs, ce] of cutters) {
+    const s = Math.max(startMs, cs);
+    const e = Math.min(endMs, ce);
+    if (e > s) clipped.push([s, e]);
+  }
+  if (!clipped.length) return [[startMs, endMs]];
+  clipped.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: [number, number][] = [];
+  for (const [cs, ce] of clipped) {
+    const last = merged[merged.length - 1];
+    if (last && cs <= last[1]) last[1] = Math.max(last[1], ce);
+    else merged.push([cs, ce]);
+  }
+  const out: [number, number][] = [];
+  let cur = startMs;
+  for (const [cs, ce] of merged) {
+    if (cs - cur >= minPieceMs) out.push([cur, cs]);
+    cur = Math.max(cur, ce);
+  }
+  if (endMs - cur >= minPieceMs) out.push([cur, endMs]);
+  return out;
+}
+
 export function byId<T extends TreeLabel>(labels: T[]): Map<number, T> {
   return new Map(labels.map((l) => [l.id, l]));
 }

@@ -49,7 +49,7 @@ import { hintOf, modeLabelOf, type InferMode } from "@/utils/inferMode";
 import { INFER_SELECT_PROPS, useInferModes } from "@/hooks/useInferModes";
 import { formatDuration, sampleDisplayName } from "@/utils/sampleName";
 import { getSavedBool, getSavedHeight, getSavedKeys, saveBool, saveHeight, saveKeys } from "@/utils/persistedSize";
-import { TRACKS, TRACK_NAME, chainOf, conflicts as labelsConflict, currentName, childrenMap, descendantIds, flatten as flattenLabels, related as labelsRelated, shortName, trackOf } from "@/utils/labelTree";
+import { TRACKS, TRACK_NAME, chainOf, conflicts as labelsConflict, currentName, childrenMap, descendantIds, flatten as flattenLabels, isBehaviorTrack, related as labelsRelated, shortName, subtractSpans, trackOf } from "@/utils/labelTree";
 import {
   PANEL_TITLES,
   loadHidden,
@@ -63,7 +63,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LoopInfo } from "@/components/LoopWaveform";
-import { segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
+import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segSendBackReviewer, segSplit } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -935,11 +935,28 @@ export default function AnnotationWorkspace({
     const near = (a: number, b: number) => Math.abs(a - b) <= 2;
     const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
     const c = it ? undefined : candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
-    // 附近 1 分钟内别的片段 / 还没判的疑似片段：浮窗顶上画细色带，看得出前后挨着的是什么
+    // 附近 1 分钟内别的片段 / 还没判的疑似片段：浮窗顶上画细色带，看得出前后挨着的是什么。
+    // 压在具体行为下面的「活动 / 静止/休息」按重叠区间挖空分几段显示，避免被盖住看不清
     const lo = startMs - 60000, hi = endMs + 60000;
+    const nearItems = items.filter((x) => x.end_time_ms > lo && x.start_time_ms < hi);
+    const nearBehaviors: [number, number][] = nearItems
+      .filter((x) => isBehaviorTrack(labelById, x.label_id))
+      .map((x) => [x.start_time_ms, x.end_time_ms]);
+    const itemNeighbors = nearItems
+      .filter((x) => x !== it)
+      .flatMap((x) => {
+        if (trackOf(labelById, x.label_id) === "motion" && nearBehaviors.length) {
+          const hits = nearBehaviors.filter(([bs, be]) => Math.min(x.end_time_ms, be) - Math.max(x.start_time_ms, bs) >= 200);
+          if (hits.length) {
+            return subtractSpans(x.start_time_ms, x.end_time_ms, hits, 150).map(([s, e]) => ({
+              s, e, color: colorOf(x.label_id), label: nameOf(x.label_id),
+            }));
+          }
+        }
+        return [{ s: x.start_time_ms, e: x.end_time_ms, color: colorOf(x.label_id), label: nameOf(x.label_id) }];
+      });
     const neighbors = [
-      ...items.filter((x) => x !== it && x.end_time_ms > lo && x.start_time_ms < hi)
-        .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: colorOf(x.label_id), label: nameOf(x.label_id) })),
+      ...itemNeighbors,
       ...candidates.filter((x) => x !== c && x.status === "pending" && x.end_time_ms > lo && x.start_time_ms < hi)
         .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: "#999", label: `疑似${x.label_name}` })),
     ];
@@ -1080,24 +1097,50 @@ export default function AnnotationWorkspace({
       })();
       return;
     }
-    setItems((prev) => [
-      ...prev,
-      {
-        id: -Date.now(),
-        label_id: forLabel,
-        start_time_ms: Math.round(Math.max(0, startMs)),
-        end_time_ms: Math.round(Math.max(0, endMs)),
-        origin_item_id: null,
-        source_type: "human_added",
-        is_modified: false,
-        ai_confidence: null,
-        ai_confirmed: false,
-        uncertain: false,
-        uncertain_reason: null,
-        from_candidate_id: null,
-        created_by: null,
-      },
-    ]);
+    const s = Math.round(Math.max(0, startMs));
+    const e = Math.round(Math.max(0, endMs));
+    const isBeh = isBehaviorTrack(labelById, forLabel);
+    setItems((prev) => {
+      const nextBase = isBeh
+        ? prev.flatMap((x) => {
+            if (trackOf(labelById, x.label_id) !== "motion") return [x];
+            if (Math.min(x.end_time_ms, e) - Math.max(x.start_time_ms, s) < 200) return [x];
+            const pieces = subtractSpans(x.start_time_ms, x.end_time_ms, [[s, e]], WIN_SPLIT_MIN_MS);
+            if (!pieces.length) return [];
+            return pieces.map(([ps, pe], idx) =>
+              idx === 0
+                ? touchItem(x, { start_time_ms: ps, end_time_ms: pe })
+                : {
+                    ...x,
+                    id: -(Date.now() * 100 + (++splitSeqRef.current % 100)),
+                    start_time_ms: ps,
+                    end_time_ms: pe,
+                    origin_item_id: null,
+                    from_candidate_id: null,
+                    is_modified: x.source_type === "ai_generated" ? true : x.is_modified,
+                  },
+            );
+          })
+        : prev;
+      return [
+        ...nextBase,
+        {
+          id: -(Date.now() * 100 + (++splitSeqRef.current % 100)),
+          label_id: forLabel,
+          start_time_ms: s,
+          end_time_ms: e,
+          origin_item_id: null,
+          source_type: "human_added",
+          is_modified: false,
+          ai_confidence: null,
+          ai_confirmed: false,
+          uncertain: false,
+          uncertain_reason: null,
+          from_candidate_id: null,
+          created_by: null,
+        },
+      ];
+    });
   };
 
   // 先拉后选：类别点下去时，把刚才拉出来的那段按这个类别建好。
@@ -1500,11 +1543,32 @@ export default function AnnotationWorkspace({
     const d = await getDraft(taskId);
     loadItems(d.items);
     const n = r.merged + r.removed_parent;
+    const carved = r.carved_motion ?? 0;
+    const parts = [
+      n ? `去掉 ${n} 段（合并同类 ${r.merged}、删父类 ${r.removed_parent}）` : "",
+      carved ? `挖空活动 ${carved} 段` : "",
+    ].filter(Boolean);
     message.success(
-      `${n ? `去掉 ${n} 段（合并同类 ${r.merged}、删父类 ${r.removed_parent}）` : "没有能自动去掉的重复"}` +
+      `${parts.length ? parts.join("；") : "没有能自动整理的重复"}` +
         (r.conflicts_left ? `；还有 ${r.conflicts_left} 段是不同类别冲突，要人看` : ""),
       4,
     );
+  };
+  const handleCarveMotion = async () => {
+    if (taskId == null) return;
+    if (!readOnly) await saveDraft(taskId, toDraftPayload(items));
+    const r = await segCarveMotion(taskId);
+    const d = await getDraft(taskId);
+    loadItems(d.items);
+    if (!r.carved) {
+      message.info("当前没有压在具体行为下面的活动/静止片段");
+      return;
+    }
+    const detail = [
+      r.created ? `拆出 ${r.created} 段` : "",
+      r.removed ? `移除被盖满的 ${r.removed} 段` : "",
+    ].filter(Boolean).join("，");
+    message.success(`已挖空 ${r.carved} 段活动/静止${detail ? `（${detail}）` : ""}`, 4);
   };
   // 只读（管理员 / 审核员旁观）时删一段：直接走片段接口删到库里，不用认领。
   // 正在循环它的话停掉循环，地址栏的 seg 也清掉
@@ -3015,6 +3079,7 @@ export default function AnnotationWorkspace({
         }}
         canDeleteReadOnly={canFlag && !segReview}
         onDedupe={taskId != null && !segReview && (!readOnly || canFlag) ? handleDedupe : undefined}
+        onCarveMotion={taskId != null && !segReview && (!readOnly || canFlag) ? handleCarveMotion : undefined}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];

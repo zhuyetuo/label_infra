@@ -514,6 +514,20 @@ async def dedupe(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User 
     return ok(out)
 
 
+@router.post("/carve-motion")
+async def carve_motion(body: DedupeIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """把压在具体行为（抓挠/舔/啃…）下面的「活动 / 静止/休息」按重叠处挖空切分成多段，
+    让列表与波形跟标注习惯一致，方便逐段核对和调边界。"""
+    task = await db.get(Task, body.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+    out = await _carve_motion_task(db, task, user)
+    await db.commit()
+    return ok(out)
+
+
 class DedupeProjectIn(BaseModel):
     project_id: int
 
@@ -539,6 +553,117 @@ async def dedupe_project(body: DedupeProjectIn, db: AsyncSession = Depends(get_d
             tot["changed"].append({"task_id": t.id, **r})
     await db.commit()
     return ok(tot)
+
+
+def _subtract_spans(
+    start_ms: int,
+    end_ms: int,
+    cutters: list[tuple[int, int]],
+    min_piece_ms: int = 300,
+) -> list[tuple[int, int]]:
+    """从 [start_ms, end_ms] 中挖掉所有 cutters 区间，保留时长 ≥ min_piece_ms 的剩余子段。"""
+    clipped = sorted(
+        (max(start_ms, cs), min(end_ms, ce))
+        for cs, ce in cutters
+        if min(end_ms, ce) > max(start_ms, cs)
+    )
+    if not clipped:
+        return [(start_ms, end_ms)]
+    merged: list[list[int]] = []
+    for cs, ce in clipped:
+        if merged and cs <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], ce)
+        else:
+            merged.append([cs, ce])
+    out: list[tuple[int, int]] = []
+    cur = start_ms
+    for cs, ce in merged:
+        if cs - cur >= min_piece_ms:
+            out.append((cur, cs))
+        cur = max(cur, ce)
+    if end_ms - cur >= min_piece_ms:
+        out.append((cur, end_ms))
+    return out
+
+
+async def _carve_motion_task(db: AsyncSession, task: Task, user: User) -> dict:
+    """把当前这一轮里压在具体行为（behavior / 无轨具体行为）下面的 motion 轨（活动 / 静止/休息）
+    按重叠区间挖空切分成多段。保留原来的来源、置信度、审核状态，不擅自标通过。"""
+    from app.services.label_tracks import OVERLAP_MIN_MS, track_of
+    from app.services.task_service import _append_boundary_edit
+
+    items = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+        .order_by(AnnotationLabelItem.start_time_ms, AnnotationLabelItem.id)
+    )).scalars().all()
+    if not items:
+        return {"carved": 0, "created": 0, "removed": 0}
+    labels = (await db.execute(select(LabelDefinition).where(LabelDefinition.project_id == task.project_id))).scalars().all()
+    parent_of = {l.id: l.parent_id for l in labels}
+    own = {l.id: l.track for l in labels}
+    names = {l.id: getattr(l, "display_name", "") for l in labels}
+
+    behaviors = [
+        (x.start_time_ms, x.end_time_ms)
+        for x in items
+        if track_of(parent_of, own, x.label_id, names) in ("behavior", "")
+    ]
+    if not behaviors:
+        return {"carved": 0, "created": 0, "removed": 0}
+
+    now = _now()
+    carved = 0
+    created = 0
+    removed = 0
+    for m in items:
+        if track_of(parent_of, own, m.label_id, names) != "motion":
+            continue
+        hits = [
+            (bs, be)
+            for bs, be in behaviors
+            if min(m.end_time_ms, be) - max(m.start_time_ms, bs) >= OVERLAP_MIN_MS
+        ]
+        if not hits:
+            continue
+        pieces = _subtract_spans(m.start_time_ms, m.end_time_ms, hits, min_piece_ms=SPLIT_MIN_MS)
+        carved += 1
+        if not pieces:
+            await db.delete(m)
+            removed += 1
+            continue
+        old = (m.start_time_ms, m.end_time_ms)
+        m.start_time_ms, m.end_time_ms = pieces[0]
+        if (m.start_time_ms, m.end_time_ms) != old:
+            m.boundary_edits = _append_boundary_edit(m.boundary_edits, old, (m.start_time_ms, m.end_time_ms), user)
+            if m.source_type == LabelItemSource.ai_generated:
+                m.is_modified = True
+            m.touched_at, m.touched_by = now, user.id
+        for ps, pe in pieces[1:]:
+            db.add(AnnotationLabelItem(
+                annotation_record_id=m.annotation_record_id,
+                label_id=m.label_id,
+                start_time_ms=ps,
+                end_time_ms=pe,
+                source_type=m.source_type,
+                ai_confidence=m.ai_confidence,
+                ai_confirmed=m.ai_confirmed,
+                is_modified=True if m.source_type == LabelItemSource.ai_generated else m.is_modified,
+                uncertain=m.uncertain,
+                uncertain_reason=m.uncertain_reason,
+                marks=m.marks,
+                mark_note=m.mark_note,
+                seg_status=m.seg_status,
+                seg_reviewed_by=m.seg_reviewed_by,
+                seg_reviewed_at=m.seg_reviewed_at,
+                created_by=m.created_by,
+                touched_at=now,
+                touched_by=user.id,
+            ))
+            created += 1
+    await db.flush()
+    return {"carved": carved, "created": created, "removed": removed}
 
 
 async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool = True) -> dict:
@@ -718,7 +843,13 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
             cand.status = CandidateStatus.rejected
             cand.decided_by, cand.decided_at = user.id, _decided_at()
     await db.flush()
-    return {"merged": n_merged, "removed_parent": n_parent, "conflicts_left": len(conflict_ids)}
+    carve_res = await _carve_motion_task(db, task, user)
+    return {
+        "merged": n_merged,
+        "removed_parent": n_parent,
+        "carved_motion": carve_res["carved"],
+        "conflicts_left": len(conflict_ids),
+    }
 
 
 class CreateIn(BaseModel):
