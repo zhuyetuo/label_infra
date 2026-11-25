@@ -794,9 +794,11 @@ export default function CandidatePanel({
                     )}
                     {otherLabels.length > 0 && (
                       <Dropdown
+                        overlayClassName="cand-relabel-menu"
                         menu={{
                           // 只摆大类，鼠标移上去再展开小类；大类本身在子菜单第一项「就是 X」
                           items: relabelItems(null),
+                          style: { maxHeight: "min(56vh, 420px)", overflowY: "auto" },
                           onClick: ({ key }) => {
                             const l = otherLabels.find((x) => String(x.id) === key);
                             if (l) relabel(c, l);

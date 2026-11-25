@@ -172,3 +172,12 @@
 .cand-loop-row > td:first-child {
   box-shadow: inset 3px 0 0 #52c41a;
 }
+
+/* 疑似片段「改成别的」下拉菜单及其子菜单：限制最大高度并允许内部滚动，避免大类多时顶出屏幕顶部无法选择 */
+.cand-relabel-menu .ant-dropdown-menu,
+.cand-relabel-sub .ant-dropdown-menu {
+  max-height: min(56vh, 420px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
