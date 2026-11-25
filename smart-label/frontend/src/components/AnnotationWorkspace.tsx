@@ -2120,6 +2120,21 @@ export default function AnnotationWorkspace({
   const hasCross = !!(cross && (cross.items.length || cross.note));
   const hasEval = !!focusWindow?.evalHint;
   const [evalOnlyErr, setEvalOnlyErr] = useState(true);
+  // 「只标窗口」顶层提示气泡（挂在标题栏橙色胶囊下方，zIndex 高于波形/视频浮窗）：
+  // 没点过「知道了 / ×」时首次打开自动展开，点了收起并记住；之后点标题栏橙色胶囊随时展开/收起
+  const [winHintOpen, setWinHintOpen] = useState(false);
+  useEffect(() => {
+    if (!taskId || !win || hasEval) { setWinHintOpen(false); return; }
+    try {
+      setWinHintOpen(localStorage.getItem("ws-win-hint-ack") !== "1");
+    } catch {
+      setWinHintOpen(true);
+    }
+  }, [taskId, win?.s, win?.e, hasEval]);
+  const dismissWinHint = () => {
+    setWinHintOpen(false);
+    try { localStorage.setItem("ws-win-hint-ack", "1"); } catch { /* 隐私模式 */ }
+  };
   // 当前任务里实际存在的面板（没跑过画面对照 / 不是从模型测试打分进来的就不显示对应面板），按用户顺序
   const presentPanels: PanelKey[] = panelOrder.filter((k) => (k !== "cross" || hasCross) && (k !== "eval" || hasEval));
   const shownPanels = presentPanels.filter((k) => !panelHidden.includes(k));
@@ -3423,12 +3438,54 @@ export default function AnnotationWorkspace({
             </Tooltip>
           )}
           {win && (
-            <Tooltip title="这个任务只标样本里的这一段：窗口外不用标，窗口里要全标（休息、活动也标）。点一下循环播放这一段">
-              <Tag color="orange" style={{ cursor: "pointer", fontWeight: 600 }}
-                onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>
-                只标 {formatMs(win.s)} ~ {formatMs(win.e)}
+            <Popover
+              open={winHintOpen}
+              onOpenChange={(v) => { if (!v) dismissWinHint(); else setWinHintOpen(true); }}
+              trigger="click"
+              placement="bottomLeft"
+              zIndex={1200}
+              content={
+                <div style={{ maxWidth: 420, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <Typography.Text strong style={{ color: "#faad14" }}>
+                      标注窗口范围（{Math.round((win.e - win.s) / 1000)} 秒）
+                    </Typography.Text>
+                    <Button
+                      size="small"
+                      type="text"
+                      style={{ padding: "0 4px", lineHeight: 1 }}
+                      onClick={dismissWinHint}
+                      aria-label="收起提示"
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                    这个任务只标 <b>{formatMs(win.s)} ~ {formatMs(win.e)}</b>：窗口外不用标、下面也不显示；
+                    窗口里<b>从头到尾都要标</b>（休息、活动也标）。
+                    {(() => {
+                      const n = candidates.filter((c) => c.status === "pending"
+                        && c.start_time_ms < win.e && c.end_time_ms > win.s).length;
+                      return n
+                        ? <div style={{ marginTop: 4 }}>窗口里有 <b>{n}</b> 条疑似片段，往下滚到「疑似片段」面板判（确认 / 排除 / 调起止），其余时间自己补标。</div>
+                        : null;
+                    })()}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <Space size={6}>
+                      <Button size="small" onClick={() => bus.seek(win.s / 1000)}>跳到窗口</Button>
+                      <Button size="small" onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>循环窗口</Button>
+                      {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
+                    </Space>
+                    <Button size="small" type="primary" onClick={dismissWinHint}>知道了</Button>
+                  </div>
+                </div>
+              }
+            >
+              <Tag color="orange" style={{ cursor: "pointer", fontWeight: 600, marginInlineEnd: 0 }}>
+                只标 {formatMs(win.s)} ~ {formatMs(win.e)} {winHintOpen ? "▴" : "▾"}
               </Tag>
-            </Tooltip>
+            </Popover>
           )}
           <Tooltip title={`样本 ${task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}${task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}`}>
             <Tag style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginInlineEnd: 0 }}>
@@ -3575,38 +3632,8 @@ export default function AnnotationWorkspace({
       <Fragment key={taskId ?? "none"}>
       <div className={`ws-body${chartExpanded && imuOpen ? " ws-body--charts-expanded" : ""}`}>
       <Spin spinning={loading}>
-        {/* 循环状态不用单开一条提示占一整行：那一行的按钮跟片段行里的
-            「停止播放」是同一件事，而正在循环哪一段，那一行自己就写着 */}
-        {/* 从模型测试打分进来时，底部已有专门的「识别错误对照」面板，顶部不再叠两条大提示框抢占视频与浮窗空间 */}
-        {win && !hasEval && (
-          <Alert
-            type="warning"
-            showIcon
-            closable
-            style={{ marginBottom: 6 }}
-            message={
-              <span>
-                这个任务只标 <b>{formatMs(win.s)} ~ {formatMs(win.e)}</b>
-                （{Math.round((win.e - win.s) / 1000)} 秒）：窗口外不用标、下面也不显示；
-                窗口里<b>从头到尾都要标</b>（休息、活动也标）。
-                {(() => {
-                  const n = candidates.filter((c) => c.status === "pending"
-                    && c.start_time_ms < win.e && c.end_time_ms > win.s).length;
-                  return n
-                    ? <>窗口里有 <b>{n}</b> 条疑似片段，往下滚到「疑似片段」面板判（确认 / 排除 / 调起止），其余时间自己补标。</>
-                    : null;
-                })()}
-              </span>
-            }
-            action={
-              <Space size={4}>
-                <Button size="small" onClick={() => bus.seek(win.s / 1000)}>跳到窗口</Button>
-                <Button size="small" onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>循环窗口</Button>
-                {loopRange && <Button size="small" onClick={() => setLoop(null)}>停止循环</Button>}
-              </Space>
-            }
-          />
-        )}
+        {/* 循环状态不用单开一条提示占一整行；「只标窗口」提示已收进标题栏橙色胶囊的顶层气泡里（zIndex 1200），
+            既不会被波形/视频浮窗遮挡，也不占正文高度 */}
         {initialSeekMs != null && initialCandFilter != null && (
           // 从找相似跳来的：说清楚定位到了哪一刻、正在循环哪几秒——不然人不知道该看哪一条
           <Alert
