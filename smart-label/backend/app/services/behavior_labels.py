@@ -93,7 +93,7 @@ ROOTS: list[tuple[str, str, str, str, list]] = [
     ("ACT_ACTIVITY", "活动", "motion", "#F39C12", [
         ("ACT_WALK", "行走", []), ("ACT_RUN", "奔跑", []), ("ACT_JUMP", "跳跃", []), ("ACT_SWIM", "游泳", []),
         ("ACT_STAIRS", "上下楼", [("up", "上楼", []), ("down", "下楼", [])]),
-        ("stretch", "伸懒腰", []),
+        ("ACT_STRETCH", "伸懒腰", []),
     ]),
     ("POST_SIT", "坐", "posture", "#3498DB", []),
     ("POST_LIE", "卧", "posture", "#1F618D", [("side", "侧卧", []), ("sternal", "趴卧", []), ("supine", "仰卧", [])]),
