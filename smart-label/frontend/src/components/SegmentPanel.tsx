@@ -181,6 +181,8 @@ interface Props {
   /** 这个任务属于哪个项目：「最近用过的类别」按项目分开记（不同项目标签模板不同） */
   projectKey?: number | string | null;
   readOnly?: boolean;
+  /** 当前标注窗口（只标其中一段时）：跨出窗口的长片段主显窗内有效时长，跳转/循环也自动限制在窗内 */
+  focusWin?: { s: number; e: number } | null;
   /** IMU 总时长，算覆盖率用；没有 CSV 时为 null */
   durationMs: number | null;
   colorOf: (labelId: number) => string;
@@ -254,6 +256,7 @@ export default function SegmentPanel({
   items,
   labels,
   readOnly,
+  focusWin,
   durationMs,
   colorOf,
   nameOf,
@@ -1041,33 +1044,65 @@ export default function SegmentPanel({
           {
             title: "开始",
             width: 120,
-            render: (_, i: LabelItem) =>
-              readOnly ? formatMs(i.start_time_ms) : (
+            render: (_, i: LabelItem) => {
+              const s = focusWin ? Math.max(i.start_time_ms, focusWin.s) : i.start_time_ms;
+              const clippedL = !!focusWin && i.start_time_ms < focusWin.s;
+              const label = clippedL ? (
+                <Tooltip title={`原起点 ${formatMs(i.start_time_ms)}（在标注窗口之前，已按窗口起点截断显示）`}>
+                  <span style={{ color: "#69b1ff" }}>{formatMs(s)}</span>
+                </Tooltip>
+              ) : formatMs(s);
+              return readOnly ? label : (
                 <Button size="small" type="link" style={{ padding: 0 }} onClick={() => openEditor(i)} title="改起止时间">
-                  {formatMs(i.start_time_ms)}
+                  {label}
                 </Button>
-              ),
+              );
+            },
           },
           {
             title: "结束",
             width: 120,
-            render: (_, i: LabelItem) =>
-              readOnly ? formatMs(i.end_time_ms) : (
+            render: (_, i: LabelItem) => {
+              const e = focusWin ? Math.min(i.end_time_ms, focusWin.e) : i.end_time_ms;
+              const clippedR = !!focusWin && i.end_time_ms > focusWin.e;
+              const label = clippedR ? (
+                <Tooltip title={`原终点 ${formatMs(i.end_time_ms)}（超出标注窗口，已按窗口终点截断显示）`}>
+                  <span style={{ color: "#69b1ff" }}>{formatMs(e)}</span>
+                </Tooltip>
+              ) : formatMs(e);
+              return readOnly ? label : (
                 <Button size="small" type="link" style={{ padding: 0 }} onClick={() => openEditor(i)} title="改起止时间">
-                  {formatMs(i.end_time_ms)}
+                  {label}
                 </Button>
-              ),
+              );
+            },
           },
           {
             title: "时长",
-            width: 90,
-            sorter: (a: LabelItem, b: LabelItem) => a.end_time_ms - a.start_time_ms - (b.end_time_ms - b.start_time_ms),
-            render: (_, i: LabelItem) => (
-              <span style={{ whiteSpace: "nowrap" }}>
-                {`${((i.end_time_ms - i.start_time_ms) / 1000).toFixed(2)}s`}
-                {overlaps.has(i.id) && overlapTag(i, overlaps.get(i.id)!)}
-              </span>
-            ),
+            width: 145,
+            sorter: (a: LabelItem, b: LabelItem) => {
+              const da = focusWin ? Math.min(a.end_time_ms, focusWin.e) - Math.max(a.start_time_ms, focusWin.s) : a.end_time_ms - a.start_time_ms;
+              const db = focusWin ? Math.min(b.end_time_ms, focusWin.e) - Math.max(b.start_time_ms, focusWin.s) : b.end_time_ms - b.start_time_ms;
+              return da - db;
+            },
+            render: (_, i: LabelItem) => {
+              const s = focusWin ? Math.max(i.start_time_ms, focusWin.s) : i.start_time_ms;
+              const e = focusWin ? Math.min(i.end_time_ms, focusWin.e) : i.end_time_ms;
+              const clipped = !!focusWin && (i.start_time_ms < focusWin.s || i.end_time_ms > focusWin.e);
+              const fullSec = (i.end_time_ms - i.start_time_ms) / 1000;
+              const fullText = fullSec >= 60 ? `${(fullSec / 60).toFixed(1)}m` : `${fullSec.toFixed(1)}s`;
+              return (
+                <span style={{ whiteSpace: "nowrap" }}>
+                  {`${(Math.max(0, e - s) / 1000).toFixed(2)}s`}
+                  {clipped && (
+                    <Tooltip title={`原片段 ${formatMs(i.start_time_ms)} ~ ${formatMs(i.end_time_ms)}（共 ${fullText}），跨出当前标注窗口。点「通过」或「改类别」会自动按窗口边界切分，只处理窗内这 ${(Math.max(0, e - s) / 1000).toFixed(1)}s，窗外保持原样。`}>
+                      <Tag color="geekblue" style={{ marginLeft: 4, marginInlineEnd: 0, fontSize: 11 }}>跨窗·原{fullText}</Tag>
+                    </Tooltip>
+                  )}
+                  {overlaps.has(i.id) && overlapTag(i, overlaps.get(i.id)!)}
+                </span>
+              );
+            },
           },
           {
             title: "置信度",
@@ -1314,12 +1349,15 @@ export default function SegmentPanel({
                 });
               }
 
+              const playS = focusWin ? Math.max(i.start_time_ms, focusWin.s) : i.start_time_ms;
+              const playE = focusWin ? Math.min(i.end_time_ms, focusWin.e) : i.end_time_ms;
+
               return (
                 <Space size={0} wrap={false}>
-                  <Button size="small" type="link" style={{ paddingInline: 4 }} onClick={() => onSeek(i.start_time_ms)}>
+                  <Button size="small" type="link" style={{ paddingInline: 4 }} onClick={() => onSeek(playS)}>
                     跳转
                   </Button>
-                  {loopButton(i.start_time_ms, i.end_time_ms)}
+                  {loopButton(playS, playE)}
                   {canRelabel && (() => {
                     const g = guessRelabel(relabelHist, i.label_id);
                     const ok = g != null && labels.some((l) => l.id === g);

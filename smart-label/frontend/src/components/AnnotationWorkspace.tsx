@@ -582,8 +582,73 @@ export default function AnnotationWorkspace({
       : x)));
     message.success(note ? `已退回这一条：${note}` : "已清除问题标记");
   };
+  // 窗口核对时，如果一条片段跨越窗口边界，点「通过 / 改类别」前先按窗口边界自动切开，
+  // 避免把窗外长达几十分钟、人工没看过的内容一并标成已通过或改了类别
+  const WIN_SPLIT_MIN_MS = 300;
+  const splitSeqRef = useRef(0);
+  const splitForWindowLocal = (it: LabelItem, w: { s: number; e: number }, insidePatch?: Partial<LabelItem>) => {
+    const hasLeft = w.s - it.start_time_ms >= WIN_SPLIT_MIN_MS;
+    const hasRight = it.end_time_ms - w.e >= WIN_SPLIT_MIN_MS;
+    const insideS = hasLeft ? Math.round(w.s) : it.start_time_ms;
+    const insideE = hasRight ? Math.round(w.e) : it.end_time_ms;
+    if ((!hasLeft && !hasRight) || insideE - insideS < WIN_SPLIT_MIN_MS) return null;
+    const nextTmpId = () => -(Date.now() * 100 + (++splitSeqRef.current % 100));
+    const pieces: LabelItem[] = [];
+    if (hasLeft) {
+      pieces.push({ ...it, id: nextTmpId(), end_time_ms: insideS, origin_item_id: null, from_candidate_id: null });
+    }
+    const inside = touchItem({ ...it, start_time_ms: insideS, end_time_ms: insideE }, insidePatch ?? {});
+    pieces.push(inside);
+    if (hasRight) {
+      pieces.push({ ...it, id: nextTmpId(), start_time_ms: insideE, origin_item_id: null, from_candidate_id: null });
+    }
+    return { pieces, inside };
+  };
+  const splitForWindowRemote = async (it: LabelItem, w: { s: number; e: number }) => {
+    if (it.id <= 0) return null;
+    const hasLeft = w.s - it.start_time_ms >= WIN_SPLIT_MIN_MS;
+    const hasRight = it.end_time_ms - w.e >= WIN_SPLIT_MIN_MS;
+    const insideS = hasLeft ? Math.round(w.s) : it.start_time_ms;
+    const insideE = hasRight ? Math.round(w.e) : it.end_time_ms;
+    if ((!hasLeft && !hasRight) || insideE - insideS < WIN_SPLIT_MIN_MS) return null;
+    let curId = it.id;
+    if (hasLeft) {
+      const r1 = await segSplit(curId, insideS);
+      curId = r1.right.id;
+    }
+    if (hasRight) {
+      const r2 = await segSplit(curId, insideE);
+      curId = r2.left.id;
+    }
+    return { id: curId, start_time_ms: insideS, end_time_ms: insideE };
+  };
   // 片段级「通过」：一条条认可（跟「有问题」一条条退回配对），不用整个任务通过
   const handleSegApprove = async (it: LabelItem, okFlag: boolean) => {
+    if (okFlag && win && taskId != null) {
+      if (!readOnly) {
+        const sp = splitForWindowLocal(it, win);
+        if (sp) {
+          const next = items.flatMap((x) => (x.id === it.id ? sp.pieces : [x]));
+          await saveDraft(taskId, toDraftPayload(next));
+          const dr = await getDraft(taskId);
+          const insideSaved = dr.items.find(
+            (x) => x.start_time_ms === sp.inside.start_time_ms && x.end_time_ms === sp.inside.end_time_ms && x.label_id === it.label_id,
+          );
+          if (insideSaved) await segDecide(insideSaved.id, "approved");
+          loadItems((await getDraft(taskId)).items);
+          message.success("已按窗口边界自动切分，仅通过窗内部分（窗外保持原样）");
+          return;
+        }
+      } else {
+        const insideRemote = await splitForWindowRemote(it, win);
+        if (insideRemote) {
+          await segDecide(insideRemote.id, "approved");
+          loadItems((await getDraft(taskId)).items);
+          message.success("已按窗口边界自动切分，仅通过窗内部分（窗外保持原样）");
+          return;
+        }
+      }
+    }
     const r = await segDecide(it.id, okFlag ? "approved" : "pending");
     setItems((prev) => prev.map((x) => (x.id === it.id
       ? { ...x, seg_status: r.seg_status === "pending" ? null : r.seg_status, ...(okFlag ? { review_note: null, review_flag_by: null } : {}) }
@@ -1484,6 +1549,16 @@ export default function AnnotationWorkspace({
   };
   const relabelItem = async (it: LabelItem, labelId: number) => {
     if (taskId == null || labelId === it.label_id) return;
+    if (win) {
+      const insideRemote = await splitForWindowRemote(it, win);
+      if (insideRemote) {
+        await segEdit(insideRemote.id, { start_time_ms: insideRemote.start_time_ms, end_time_ms: insideRemote.end_time_ms, label_id: labelId });
+        const d = await getDraft(taskId);
+        loadItems(d.items);
+        message.success(`已按窗口边界自动切分，仅将窗内部分改为「${nameOf(labelId)}」（窗外保持原样）`);
+        return;
+      }
+    }
     await segEdit(it.id, { start_time_ms: it.start_time_ms, end_time_ms: it.end_time_ms, label_id: labelId });
     const d = await getDraft(taskId);
     loadItems(d.items);
@@ -1592,6 +1667,24 @@ export default function AnnotationWorkspace({
 
   const updateItems = (ids: number[], patch: Partial<LabelItem>) => {
     const set = new Set(ids);
+    if (win && !readOnly && (patch.label_id != null || patch.ai_confirmed === true)) {
+      let didSplit = false;
+      setItems((prev) =>
+        prev.flatMap((it) => {
+          if (!set.has(it.id)) return [it];
+          const sp = splitForWindowLocal(it, win, patch);
+          if (sp) {
+            didSplit = true;
+            return sp.pieces;
+          }
+          return [touchItem(it, patch)];
+        }),
+      );
+      if (didSplit) {
+        message.info({ content: "已按窗口边界自动切分，仅修改窗内部分（窗外保持原样）", key: "win-split" });
+      }
+      return;
+    }
     setItems((prev) => prev.map((it) => (set.has(it.id) ? touchItem(it, patch) : it)));
   };
 
@@ -2901,6 +2994,7 @@ export default function AnnotationWorkspace({
         controlsPortalTarget={segControlsHost}
         projectKey={task?.project_id ?? null}
         focusMs={initialSeekMs}
+        focusWin={win}
         items={win ? items.filter((i) => inWin(i.start_time_ms, i.end_time_ms)) : items}
         labels={labels}
         readOnly={readOnly}
