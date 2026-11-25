@@ -634,7 +634,9 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
                 cluster, end = [x], x.end_time_ms
         flush()
 
-    # 2) 父子压在一起：细的盖住粗的八成以上，删粗的
+    # 2) 父子类别重叠（≥0.2s）：
+    #    - 粗类只跟同一种细类有交集（如 抓挠 15s + 抓挠-头颈耳 7s）：合并成一条细类，起止取并集
+    #    - 粗类同时压着多种不同细类（如 抓挠-头颈耳 + 抓挠-躯干）：细类合计盖住粗类八成以上时删粗类
     def ancestors(i: int) -> set[int]:
         out: set[int] = set()
         cur = parent_of.get(i)
@@ -649,14 +651,50 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
         if coarse.id in deleted:
             continue
         dur = max(1, coarse.end_time_ms - coarse.start_time_ms)
-        for fine in alive:
-            if fine.id in deleted or fine is coarse or coarse.label_id not in ancestors(fine.label_id):
-                continue
-            ov = min(coarse.end_time_ms, fine.end_time_ms) - max(coarse.start_time_ms, fine.start_time_ms)
-            if ov >= 0.8 * dur:
-                drop(coarse, fine)
+        fines = [
+            fine for fine in alive
+            if fine.id not in deleted
+            and fine is not coarse
+            and coarse.label_id in ancestors(fine.label_id)
+            and min(coarse.end_time_ms, fine.end_time_ms) - max(coarse.start_time_ms, fine.start_time_ms) >= OVERLAP_MIN_MS
+        ]
+        if not fines:
+            continue
+        if len({f.label_id for f in fines}) == 1:
+            keeper = max(fines, key=rank)
+            old = (keeper.start_time_ms, keeper.end_time_ms)
+            group_all = [coarse, *fines]
+            keeper.start_time_ms = min(x.start_time_ms for x in group_all)
+            keeper.end_time_ms = max(x.end_time_ms for x in group_all)
+            keeper.uncertain = all(x.uncertain for x in group_all)
+            # 若粗段原本已审核通过，合并后的细段在 approve=True 时继续保持通过
+            if coarse.seg_status == "approved" and keeper.seg_status != "approved" and approve:
+                keeper.seg_status = "approved"
+                keeper.seg_reviewed_by, keeper.seg_reviewed_at = user.id, now
+            drop(coarse, keeper)
+            n_parent += 1
+            for f in fines:
+                if f is not keeper:
+                    drop(f, keeper)
+                    n_merged += 1
+            touched(keeper, old)
+        else:
+            # 多种不同细类盖在粗类上：算细类并集覆盖粗类的比例，≥80% 删粗类保留各细类
+            spans = sorted(
+                (max(coarse.start_time_ms, f.start_time_ms), min(coarse.end_time_ms, f.end_time_ms))
+                for f in fines
+            )
+            cov, cur_end = 0, -1
+            for s0, e0 in spans:
+                if s0 > cur_end:
+                    cov += e0 - s0
+                    cur_end = e0
+                elif e0 > cur_end:
+                    cov += e0 - cur_end
+                    cur_end = e0
+            if cov >= 0.8 * dur:
+                drop(coarse, fines[0])
                 n_parent += 1
-                break
 
     # 3) 剩下的同轨不同类冲突：只数一下
     conflicts = conflict_checker(labels)

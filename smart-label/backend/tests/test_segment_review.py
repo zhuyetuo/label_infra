@@ -288,6 +288,20 @@ def test_一键去重(db, run):
     r = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.admin))["data"]
     assert r["merged"] == 0 and r["removed_parent"] == 0
 
+    # 父子部分重叠（细类只占粗类不到一半，如 抓挠 15s 与 抓挠-头颈耳 7s）：合并成一条长细类取并集
+    p_long = AnnotationLabelItem(annotation_record_id=rec.id, label_id=w.parent.id, start_time_ms=200_000,
+                                 end_time_ms=215_000, source_type=LabelItemSource.human_added)
+    f_short = AnnotationLabelItem(annotation_record_id=rec.id, label_id=c.label_id, start_time_ms=200_200,
+                                  end_time_ms=207_200, source_type=LabelItemSource.human_added)
+    db.add(p_long)
+    db.add(f_short)
+    run(db.commit())
+    r2 = run(api.dedupe(api.DedupeIn(task_id=w.t.id), db, w.admin))["data"]
+    assert r2["removed_parent"] == 1
+    rem = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id.in_([p_long.id, f_short.id])))).scalars().all()
+    assert len(rem) == 1 and rem[0].id == f_short.id
+    assert (rem[0].start_time_ms, rem[0].end_time_ms) == (200_000, 215_000)
+
 
 def test_整个项目一键去重(db, run):
     import pytest
