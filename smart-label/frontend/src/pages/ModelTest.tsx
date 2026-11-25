@@ -1718,9 +1718,16 @@ function SetDetail({ setId }: { setId: number }) {
       setCheckingAll(false);
     }
   };
+  const [detailTab, setDetailTab] = useState<string>(() => {
+    try { return localStorage.getItem("smart-label:model-test-tab") || "plan"; } catch { return "plan"; }
+  });
+  const onDetailTabChange = (k: string) => {
+    setDetailTab(k);
+    try { localStorage.setItem("smart-label:model-test-tab", k); } catch { /* ignore */ }
+  };
   return (
     <>
-      <Tabs defaultActiveKey="plan" items={[
+      <Tabs activeKey={detailTab} onChange={onDetailTabChange} items={[
         { key: "plan", label: "配比", children: (
           <ModelTestPlan setId={setId} initial={data.set.plan ?? null} frozen={frozen} existing={data.items.length}
             accent={colors[data.set.plan?.target ?? "抓挠"] ?? "#27AE60"} />) },
@@ -1959,7 +1966,19 @@ export default function ModelTest() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["model-test-sets"], queryFn: listTestSets });
   const sets = data?.sets ?? [];
-  const [cur, setCur] = useState<number | null>(null);
+  const [cur, setCurState] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem("smart-label:model-test-cur-set"));
+      return Number.isInteger(v) && v > 0 ? v : null;
+    } catch { return null; }
+  });
+  const setCur = (id: number | null) => {
+    setCurState(id);
+    try {
+      if (id == null) localStorage.removeItem("smart-label:model-test-cur-set");
+      else localStorage.setItem("smart-label:model-test-cur-set", String(id));
+    } catch { /* ignore */ }
+  };
   const [name, setName] = useState("");
   const [copyOf, setCopyOf] = useState<TestSet | null>(null);
   const [copyName, setCopyName] = useState("");
@@ -1973,7 +1992,12 @@ export default function ModelTest() {
     refresh();
     qc.invalidateQueries({ queryKey: ["model-test-items", editOf.id] });
   };
-  useEffect(() => { if (cur == null && sets.length) setCur(sets[0].id); }, [sets, cur]);
+  useEffect(() => {
+    if (!sets.length) return;
+    if (cur == null || !sets.some((s) => s.id === cur)) {
+      setCur(sets[0].id);
+    }
+  }, [sets, cur]);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["model-test-sets"] });
   const create = async () => {
