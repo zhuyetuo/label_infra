@@ -1284,20 +1284,22 @@ export default function AnnotationWorkspace({
     setPiecesOpenState(v);
     try { localStorage.setItem("smart-label:wave-pieces-open", v ? "1" : "0"); } catch { /* ignore */ }
   };
-  const splitPanel = (
-    <div style={{ width: "100%", borderTop: "1px dashed var(--sl-border2)", paddingTop: 4, marginTop: 2 }}>
-      <Space size={6} wrap style={{ marginBottom: 4 }}>
-        <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，自动保存"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
-          <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
-        </Tooltip>
-        {panelItems.length > 1 && (
-          <Typography.Link style={{ fontSize: 12 }} onClick={() => setPiecesOpen(!piecesOpen)}>
-            {segReview ? `拆成了 ${panelItems.length} 段` : `这段时间里 ${panelItems.length} 段`}
-            {piecesOpen ? "，逐段改类别 / 调起止 ▴ 收起" : " ▸ 展开逐段改类别 / 调起止"}
-          </Typography.Link>
-        )}
-      </Space>
-      {panelItems.length > 1 && piecesOpen && <div style={{ maxHeight: 156, overflowY: "auto" }}>{panelItems.map((it, k) => {
+  const splitControls = (
+    <>
+      <Tooltip title={`把播放线压着的那一段拆成两段（类别不变${segReview ? "，都交回重审" : "，自动保存"}）。也可以在下面波形上按住 Alt 点要拆的位置，或按 Alt+S。拆出来的每段都能接着拆、改类别；点「▶」切到那一段调起止`}>
+        <Button size="small" onClick={() => splitAtPlayheadRef.current()}>✂ 在播放线处拆开</Button>
+      </Tooltip>
+      {panelItems.length > 1 && (
+        <Typography.Link style={{ fontSize: 12 }} onClick={() => setPiecesOpen(!piecesOpen)}>
+          {segReview ? `拆成了 ${panelItems.length} 段` : `这段时间里 ${panelItems.length} 段`}
+          {piecesOpen ? " ▴ 收起" : " ▸ 展开逐段改类别 / 调起止"}
+        </Typography.Link>
+      )}
+    </>
+  );
+  const splitPiecesList = panelItems.length > 1 && piecesOpen ? (
+    <div style={{ width: "100%", borderTop: "1px dashed var(--sl-border2)", paddingTop: 4, marginTop: 4, maxHeight: 156, overflowY: "auto" }}>
+      {panelItems.map((it, k) => {
         const cur = loopInfo?.itemId === it.id;
         return (
           <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "1px 0",
@@ -1334,17 +1336,26 @@ export default function AnnotationWorkspace({
             )}
           </div>
         );
-      })}</div>}
+      })}
+    </div>
+  ) : null;
+  const splitPanel = (
+    <div style={{ width: "100%", borderTop: "1px dashed var(--sl-border2)", paddingTop: 4, marginTop: 2 }}>
+      <Space size={6} wrap style={{ marginBottom: splitPiecesList ? 2 : 0 }}>
+        {splitControls}
+      </Space>
+      {splitPiecesList}
     </div>
   );
-  const waveReviewBar = (it: LabelItem) => (
+  const waveReviewBar = (it: LabelItem, withSplit = false) => (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>这一条：</Typography.Text>
       <Tooltip title="复制这一段的链接：发给标注员，打开就直接循环这一段">
         <Button size="small" type="text" icon={<LinkOutlined />} onClick={() => copySegLink(it.id)} />
       </Tooltip>
-      {it.seg_status === "approved" && <Tag color="success">✓ 已通过</Tag>}
-      {it.review_note && <Tag color="red">退回：{it.review_note}</Tag>}
+      {it.seg_status === "approved" && <Tag color="success" style={{ marginInlineEnd: 0 }}>✓ 已通过</Tag>}
+      {it.review_note && <Tag color="red" style={{ marginInlineEnd: 0 }}>退回：{it.review_note}</Tag>}
+      {withSplit && splitControls}
       <span style={{ flex: 1 }} />
       {readOnly && (
         <Tooltip title="类别不对就在这里改（只读任务里也能改，不用认领）">
@@ -3080,8 +3091,12 @@ export default function AnnotationWorkspace({
             : loopItem && (!readOnly || canFlag)
               ? (
                 <div style={{ width: "100%" }}>
-                  {canFlag && waveReviewBar(loopItem)}
-                  {splitPanel}
+                  {canFlag ? (
+                    <>
+                      {waveReviewBar(loopItem, true)}
+                      {splitPiecesList}
+                    </>
+                  ) : splitPanel}
                 </div>
               )
               : canFlag && loopItem ? waveReviewBar(loopItem) : undefined
