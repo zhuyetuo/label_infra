@@ -577,6 +577,49 @@ function EvalPickerBar({ p, extra }: { p: ReturnType<typeof useEvalPicker>; extr
   );
 }
 
+const EVAL_GROUP_THEME = {
+  window: {
+    accent: "#4096ff",
+    border: "2px solid #1677ff",
+    headBg: "rgba(22, 119, 255, 0.18)",
+    subBg: "rgba(22, 119, 255, 0.09)",
+    cellBg: "rgba(22, 119, 255, 0.04)",
+  },
+  event: {
+    accent: "#b37feb",
+    border: "2px solid #9254de",
+    headBg: "rgba(114, 46, 209, 0.20)",
+    subBg: "rgba(114, 46, 209, 0.10)",
+    cellBg: "rgba(114, 46, 209, 0.04)",
+  },
+  boundary: {
+    accent: "#36cfc9",
+    border: "2px solid #13c2c2",
+    headBg: "rgba(19, 194, 194, 0.18)",
+    subBg: "rgba(19, 194, 194, 0.09)",
+    cellBg: "rgba(19, 194, 194, 0.04)",
+  },
+} as const;
+
+const styleGroupCols = <T extends Record<string, unknown>>(
+  theme: (typeof EVAL_GROUP_THEME)[keyof typeof EVAL_GROUP_THEME],
+  cols: T[],
+): T[] => cols.map((c, idx) => ({
+  ...c,
+  onHeaderCell: () => ({
+    style: {
+      background: theme.subBg,
+      ...(idx === 0 ? { borderLeft: theme.border } : {}),
+    },
+  }),
+  onCell: () => ({
+    style: {
+      background: theme.cellBg,
+      ...(idx === 0 ? { borderLeft: theme.border } : {}),
+    },
+  }),
+}));
+
 const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string) => string | undefined) => [
   ...(showLabel ? [{
     title: "类别", dataIndex: "label", width: 92,
@@ -585,15 +628,26 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   { title: groupTitle, dataIndex: "group", width: 115 },
   { title: "版本", dataIndex: "version", width: 210, ellipsis: true },
   {
-    title: <Tooltip title="以每个测试窗口（如 1 分钟 / 2 分钟 / 3 分钟段）为单位，判断「有/无」该动作的对错">窗口级（整段有无）</Tooltip>,
-    children: [
+    title: (
+      <Tooltip title="以每个测试窗口（如 1 分钟 / 2 分钟 / 3 分钟段）为单位，判断「有/无」该动作的对错">
+        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 窗口级（整段有无）</span>
+      </Tooltip>
+    ),
+    onHeaderCell: () => ({
+      style: {
+        background: EVAL_GROUP_THEME.window.headBg,
+        borderLeft: EVAL_GROUP_THEME.window.border,
+        borderTop: EVAL_GROUP_THEME.window.border,
+      },
+    }),
+    children: styleGroupCols(EVAL_GROUP_THEME.window, [
       { title: "窗口", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
       { title: "准确率", key: "w_acc", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.accuracy) : "-" },
       { title: "精确率", key: "w_p", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.precision) : "-" },
       { title: "召回率", key: "w_r", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.recall) : "-" },
       {
         title: "F1", key: "w_f1", width: 68,
-        render: (_: unknown, x: EvalRow) => x.r.window ? <b>{pct(x.r.window.f1)}</b> : "-",
+        render: (_: unknown, x: EvalRow) => x.r.window ? <b style={{ color: EVAL_GROUP_THEME.window.accent }}>{pct(x.r.window.f1)}</b> : "-",
       },
       {
         title: "明细（对 / 误 / 漏）", key: "w_det", width: 150,
@@ -609,30 +663,52 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
           );
         },
       },
-    ],
+    ]),
   },
   {
-    title: <Tooltip title="窗口内每次预测动作和每次人工标注逐一配对（IoU 达标算命中）">事件（片段）级</Tooltip>,
-    children: [
+    title: (
+      <Tooltip title="窗口内每次预测动作和每次人工标注逐一配对（IoU 达标算命中）">
+        <span style={{ color: EVAL_GROUP_THEME.event.accent, fontWeight: 700 }}>● 事件（片段）级</span>
+      </Tooltip>
+    ),
+    onHeaderCell: () => ({
+      style: {
+        background: EVAL_GROUP_THEME.event.headBg,
+        borderLeft: EVAL_GROUP_THEME.event.border,
+        borderTop: EVAL_GROUP_THEME.event.border,
+      },
+    }),
+    children: styleGroupCols(EVAL_GROUP_THEME.event, [
       { title: "精确率", key: "e_p", width: 70, render: (_: unknown, x: EvalRow) => pct(x.r.precision) },
       { title: "召回率", key: "e_r", width: 70, render: (_: unknown, x: EvalRow) => pct(x.r.recall) },
-      { title: "F1", key: "e_f1", width: 70, render: (_: unknown, x: EvalRow) => <b>{pct(f1(x.r.precision, x.r.recall))}</b> },
+      { title: "F1", key: "e_f1", width: 70, render: (_: unknown, x: EvalRow) => <b style={{ color: EVAL_GROUP_THEME.event.accent }}>{pct(f1(x.r.precision, x.r.recall))}</b> },
       {
         title: "明细（对 / 误 / 漏）", key: "e_det", width: 160,
         render: (_: unknown, x: EvalRow) => (
           <span><b style={{ color: "#52c41a" }}>{x.r.tp}</b> 对 / <span style={{ color: "#faad14" }}>{x.r.fp}</span> 误 / <span style={{ color: "#ff4d4f" }}>{x.r.fn}</span> 漏</span>
         ),
       },
-    ],
+    ]),
   },
   {
-    title: <Tooltip title="命中事件与人工标注边界是否对齐（IoU 越高、起止偏差秒数越小越准）">起止对齐（命中事件）</Tooltip>,
-    children: [
+    title: (
+      <Tooltip title="命中事件与人工标注边界是否对齐（IoU 越高、起止偏差秒数越小越准）">
+        <span style={{ color: EVAL_GROUP_THEME.boundary.accent, fontWeight: 700 }}>● 起止对齐（命中事件）</span>
+      </Tooltip>
+    ),
+    onHeaderCell: () => ({
+      style: {
+        background: EVAL_GROUP_THEME.boundary.headBg,
+        borderLeft: EVAL_GROUP_THEME.boundary.border,
+        borderTop: EVAL_GROUP_THEME.boundary.border,
+      },
+    }),
+    children: styleGroupCols(EVAL_GROUP_THEME.boundary, [
       { title: "平均 IoU", key: "b_iou", width: 78, render: (_: unknown, x: EvalRow) => x.r.mean_iou != null ? pct(x.r.mean_iou) : "-" },
       {
         title: <Tooltip title="命中的事件里，开始和结束时间都与标注相差 ≤ 2 秒的比例">±2s 对齐</Tooltip>,
         key: "b_2s", width: 82,
-        render: (_: unknown, x: EvalRow) => x.r.within_2s_ratio != null ? <b>{pct(x.r.within_2s_ratio)}</b> : "-",
+        render: (_: unknown, x: EvalRow) => x.r.within_2s_ratio != null ? <b style={{ color: EVAL_GROUP_THEME.boundary.accent }}>{pct(x.r.within_2s_ratio)}</b> : "-",
       },
       {
         title: <Tooltip title="开始时间平均偏差 / 结束时间平均偏差">起/止均差</Tooltip>,
@@ -641,7 +717,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
           ? `${(x.r.d_start_abs_mean_ms / 1000).toFixed(1)}s / ${(x.r.d_end_abs_mean_ms / 1000).toFixed(1)}s`
           : "-",
       },
-    ],
+    ]),
   },
   { title: "样本", key: "ran", width: 68, render: (_: unknown, x: EvalRow) => (
     <span style={{ color: x.r.n_samples_with_result < x.n ? "#ff4d4f" : undefined }}>{x.r.n_samples_with_result}/{x.n}</span>) },
