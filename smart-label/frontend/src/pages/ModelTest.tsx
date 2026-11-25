@@ -1366,6 +1366,8 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
       {/* 极简主栏：选模型 → 选范围（已核对 / 全部） → 跑并打分，高级参数收进「设置」 */}
       <Space wrap align="center">
         <Select mode="multiple" allowClear showSearch optionFilterProp="label" style={{ minWidth: 360 }}
+          popupMatchSelectWidth={false}
+          dropdownStyle={{ minWidth: 520, maxWidth: "85vw" }}
           placeholder="选模型来跑测试集（可多选，搜 #61 等）"
           value={runModes} onChange={setRunModes} options={modeOptions as never} maxTagCount={3} />
         <Segmented
