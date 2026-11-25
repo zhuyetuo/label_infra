@@ -588,6 +588,49 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
         })}
       </div>
 
+      {/* 当前筛选条件下可用目标动作的真实时长阶梯分布 + 自适应抽样说明 */}
+      {avail?.dur_buckets && avail.dur_buckets.some((b) => b.n > 0) && (() => {
+        const buckets = avail.dur_buckets;
+        const tot = buckets.reduce((a, b) => a + b.n, 0) || 1;
+        const maxN = Math.max(1, ...buckets.map((b) => b.n));
+        const bColors = ["#faad14", "#52c41a", "#1677ff", "#722ed1", "#eb2f96"];
+        return (
+          <div style={{
+            padding: "10px 14px", borderRadius: 8,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            background: token.colorBgContainer,
+            display: "flex", flexDirection: "column", gap: 8,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>
+                可用「{plan.target}」实际时长阶梯分布 <span style={{ fontWeight: 400, color: muted, fontSize: 12 }}>（共 {tot} 段）</span>
+              </span>
+              <span style={{ fontSize: 12, color: muted }}>
+                自适应抽样：≤1 分钟窗优先挑 &lt;30s 短/常规动作；≥3 分钟窗优先挑 ≥30s 长动作，且优先单事件干净窗口
+              </span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${buckets.length}, minmax(95px, 1fr))`, gap: 10 }}>
+              {buckets.map((b, i) => {
+                const pctVal = (b.n / tot) * 100;
+                const barW = Math.round((b.n / maxN) * 100);
+                const c = bColors[i % bColors.length];
+                return (
+                  <div key={b.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                      <span style={{ fontWeight: 600 }}>{b.label}</span>
+                      <span style={{ color: muted }}>{b.n} 段 · {pctVal.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: token.colorFillSecondary, overflow: "hidden" }}>
+                      <div style={{ width: `${barW}%`, height: "100%", borderRadius: 3, background: c, transition: "width .25s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 按狗明细（可展开）：每只狗一个小块——名字 + 段数 + 一根细条（有 / 无 占比）；细节放悬停里，点一下去掉 / 纳入 */}
       <Collapse size="small" items={[{
         key: "dogs",

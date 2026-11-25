@@ -180,7 +180,7 @@ export interface PlanResult {
   removed?: number;
 }
 export const planAvailability = (plan: Plan) =>
-  request.post<never, { by_dog: Record<string, Record<string, number>>; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });
+  request.post<never, { by_dog: Record<string, Record<string, number>>; dur_buckets?: { label: string; n: number }[]; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });
 export const planPreview = (setId: number, plan: Plan) =>
   request.post<never, PlanResult>(`/model-tests/sets/${setId}/plan/preview`, plan, { timeout: 600_000 });
 export const planSave = (setId: number, plan: Plan) => request.post<never, { saved: boolean }>(`/model-tests/sets/${setId}/plan/save`, plan);

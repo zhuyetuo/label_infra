@@ -539,10 +539,58 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
             return s, s + pad_ms
         # 有这类：事件比窗口长（长时间抓挠）不截，留完整过程
         return pad_window(x["a"], x["b"], pad_ms, 0, hi)
+
+    # 统计当前筛选条件下所有可用正样本的真实动作时长阶梯分布（给配比页直观参考窗口时长）
+    dur_buckets_def = [
+        ("<3s", 0.0, 3.0),
+        ("3-10s", 3.0, 10.0),
+        ("10-30s", 10.0, 30.0),
+        ("30-60s", 30.0, 60.0),
+        ("≥60s", 60.0, float("inf")),
+    ]
+    dur_bucket_cnt = [0] * len(dur_buckets_def)
+    by_sample_ev: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    if not negative:
+        for segs in groups.values():
+            for x in segs:
+                by_sample_ev[x["sample_id"]].append((x["a"], x["b"]))
+                ev_s = max(0.0, (x["b"] - x["a"]) / 1000.0)
+                for bi, (_lb, lo_s, hi_s) in enumerate(dur_buckets_def):
+                    if lo_s <= ev_s < hi_s:
+                        dur_bucket_cnt[bi] += 1
+                        break
+
+    def _dur_tier(ev_s: float) -> int:
+        # 窗长 ↔ 动作时长自适应对齐：
+        #   长窗（≥3分钟）：优先真·长动作（≥30s → ≥15s → 其余顺延）
+        #   中窗（90–179s）：优先 10–60s
+        #   短窗（<90s）：优先 <30s 短/常规动作，把珍贵的长动作留给长窗
+        if pad_sec >= 180:
+            return 0 if ev_s >= 30.0 else (1 if ev_s >= 15.0 else 2)
+        if pad_sec >= 90:
+            return 0 if 10.0 <= ev_s < 60.0 else (1 if ev_s >= 3.0 else 2)
+        return 0 if ev_s < 30.0 else 1
+
+    def _win_ev_count(x: dict) -> int:
+        # 窗口纯净度：优先选窗口内只有 1 段目标动作的干净单事件窗口（避免长窗里塞进 3–4 个碎段）
+        s0, e0 = pad_window(x["a"], x["b"], pad_ms, 0, x["dur_ms"] or None)
+        evs = by_sample_ev.get(x["sample_id"])
+        if not evs:
+            return 1
+        return sum(1 for a, b in evs if a < e0 and b > s0)
+
     picked_by_group: dict[tuple, list[dict]] = {}
     for key, segs in groups.items():
         rng.shuffle(segs)
-        segs.sort(key=lambda x: not x["human"])           # 人工标过的优先
+        if not negative:
+            segs.sort(key=lambda x: (
+                not x["human"],
+                _dur_tier(max(0.0, (x["b"] - x["a"]) / 1000.0)),
+                _win_ev_count(x),
+                -((x["b"] - x["a"]) if pad_sec >= 180 else 0),
+            ))
+        else:
+            segs.sort(key=lambda x: not x["human"])           # 人工标过的优先
         per_day: dict = defaultdict(list)
         for x in segs:
             per_day[x["date"]].append(x)
@@ -601,6 +649,7 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
         "by_site": dict(Counter(p["site"] or "未知" for p in picks)),
         "by_source": dict(Counter("人工标过" if p["human"] else "AI 预标" for p in picks)),
         "by_date": dict(sorted(Counter(str(p["date"]) for p in picks).items())),
+        "dur_buckets": [{"label": lb, "n": cnt} for (lb, _lo, _hi), cnt in zip(dur_buckets_def, dur_bucket_cnt)],
     }
     for p in picks:
         p["date"] = str(p["date"])
@@ -612,11 +661,15 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
 # ───────────── 选样计划：每只狗 × 时长 × 有/无 × 部位 的配额，一次挑完 ─────────────
 
 async def plan_availability(db: AsyncSession, plan: dict) -> dict:
-    """每只狗在条件范围里有多少这类片段（按细类），给选样页显示「可用」"""
+    """每只狗在条件范围里有多少这类片段（按细类）及真实动作时长阶梯分布，给选样页显示「可用」"""
     r = await compose(db, label_names=[plan["target"]], date_from=plan.get("date_from"), date_to=plan.get("date_to"),
                       source=plan.get("source", "any"), seen_mode=plan.get("seen_mode", "any"),
                       model_ids=plan.get("model_ids"), per_group=1, max_total=1)
-    return {"by_dog": r["stats"].get("available_by_id", {}), "warnings": r["warnings"]}
+    return {
+        "by_dog": r["stats"].get("available_by_id", {}),
+        "dur_buckets": r["stats"].get("dur_buckets", []),
+        "warnings": r["warnings"],
+    }
 
 
 def split_by_ratio(n: int, ratios: list[float]) -> list[int]:
@@ -709,7 +762,8 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
         part_slots += [target] * (len(pos_slots) - len(part_slots))
         rng.shuffle(part_slots)
         cells = Counter(zip(pos_slots, part_slots))
-        for (d, part), n in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        # 长窗（≥3分钟）优先挑，先把珍贵的长持续动作留给长窗，短窗再挑常规/短动作
+        for (d, part), n in sorted(cells.items(), key=lambda kv: (-kv[0][0], kv[0][1])):
             r = await compose(db, label_names=[part], dog_ids=[did], pad_sec=d, per_group=n, max_total=n,
                               mode="positive", seed=seed, **common)
             for p in r["picks"]:

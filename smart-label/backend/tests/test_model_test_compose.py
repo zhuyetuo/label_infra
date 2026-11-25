@@ -172,3 +172,34 @@ def test_删测试集_任务和标注不动(db, run):
     assert run(db.execute(select(Task))).scalars().first() is not None
     with pytest.raises(HTTPException):
         run(api.delete_set(s["id"], db))
+
+
+def test_窗长自适应长短匹配与时长阶梯分布(db, run):
+    from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+    from app.models.label import LabelDefinition
+
+    w = _world(db, run)
+    rec = run(db.execute(select(AnnotationRecord))).scalars().first()
+    scr = run(db.execute(select(LabelDefinition).where(LabelDefinition.display_name == "抓挠"))).scalar_one()
+    # 同一个样本里（避开 _world 自带的 0..200s 片段）：
+    # - 500s..505s / 520s..525s / 540s..545s：一簇 3 条 5s 短抓挠
+    # - 1200s..1245s：单独 1 条 45s 长抓挠（干净单事件）
+    for a, b in ((500_000, 505_000), (520_000, 525_000), (540_000, 545_000), (1_200_000, 1_245_000)):
+        db.add(AnnotationLabelItem(
+            annotation_record_id=rec.id, label_id=scr.id,
+            start_time_ms=a, end_time_ms=b, source_type=LabelItemSource.human_added,
+        ))
+    run(db.commit())
+
+    # 3 分钟长窗（pad_sec=180）应优先挑 45s 的干净单事件长抓挠，而不是那簇 5s 碎段
+    r_long = run(mts.compose(db, label_names=["抓挠"], pad_sec=180, per_group=1, max_total=1, seed=1))
+    assert len(r_long["picks"]) == 1
+    p_long = r_long["picks"][0]
+    assert p_long["b"] - p_long["a"] == 45_000
+    bmap = {x["label"]: x["n"] for x in r_long["stats"]["dur_buckets"]}
+    assert bmap["30-60s"] >= 1 and bmap["3-10s"] >= 3
+
+    # 1 分钟短窗（pad_sec=60）应优先挑 <30s 的常规/短抓挠，把 45s 长抓挠留给长窗
+    r_short = run(mts.compose(db, label_names=["抓挠"], pad_sec=60, per_group=1, max_total=1, seed=1))
+    assert len(r_short["picks"]) == 1
+    assert r_short["picks"][0]["b"] - r_short["picks"][0]["a"] < 30_000
