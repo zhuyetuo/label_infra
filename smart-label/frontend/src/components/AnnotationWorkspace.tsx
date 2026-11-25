@@ -970,14 +970,23 @@ export default function AnnotationWorkspace({
         if (!cands.length) return null;
         cands.sort((a, b) => dist(a) - dist(b));
         const best = cands[0];
-        return { id: best.id, s: best.start_time_ms, e: best.end_time_ms, label: nameOf(best.label_id), color: colorOf(best.label_id) };
+        return {
+          id: best.id,
+          s: best.start_time_ms,
+          e: best.end_time_ms,
+          label: nameOf(best.label_id),
+          color: colorOf(best.label_id),
+          touching: dist(best) <= 150,
+        };
       };
+      // 找到左右最近的相邻片段（不管原本是贴边还是中间有空隙）：
+      // 原本贴边（≤150ms）直接双向联动；原本有空隙的拖到贴合时磁吸补齐，继续推过即自动转联动
       const leftNeighbor = pickClosest(
-        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && Math.abs(x.end_time_ms - it.start_time_ms) <= 150 && x.start_time_ms < it.start_time_ms - 250),
-        (x) => Math.abs(x.end_time_ms - it.start_time_ms),
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.end_time_ms <= it.start_time_ms + 150 && x.start_time_ms < it.start_time_ms - 250),
+        (x) => Math.abs(it.start_time_ms - x.end_time_ms),
       );
       const rightNeighbor = pickClosest(
-        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && Math.abs(x.start_time_ms - it.end_time_ms) <= 150 && x.end_time_ms > it.end_time_ms + 250),
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.start_time_ms >= it.end_time_ms - 150 && x.end_time_ms > it.end_time_ms + 250),
         (x) => Math.abs(x.start_time_ms - it.end_time_ms),
       );
       return {

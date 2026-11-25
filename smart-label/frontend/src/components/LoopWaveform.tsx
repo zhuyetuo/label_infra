@@ -49,6 +49,8 @@ export interface LinkedNeighbor {
   e: number;
   label: string;
   color: string;
+  /** 初始是否已紧贴当前段边界（≤150ms）；false 表示中间原本有空隙，拖到贴合/越过时自动转联动 */
+  touching: boolean;
 }
 
 export interface LinkedAdjust {
@@ -338,11 +340,11 @@ function MiniPlot({
               for (const n of nb) {
                 let ns = n.s;
                 let ne = n.e;
-                if (lk?.left && ln && ((n.id != null && n.id === ln.id) || (Math.abs(n.e - info.startMs) <= 150 && Math.abs(n.s - ln.s) <= 150))) {
-                  ne = r.s;
+                if (lk?.left && ln && ((n.id != null && n.id === ln.id) || (Math.abs(n.e - ln.e) <= 150 && Math.abs(n.s - ln.s) <= 150))) {
+                  if (ln.touching || r.s < ln.e) ne = r.s;
                 }
-                if (lk?.right && rn && ((n.id != null && n.id === rn.id) || (Math.abs(n.s - info.endMs) <= 150 && Math.abs(n.e - rn.e) <= 150))) {
-                  ns = r.e;
+                if (lk?.right && rn && ((n.id != null && n.id === rn.id) || (Math.abs(n.s - rn.s) <= 150 && Math.abs(n.e - rn.e) <= 150))) {
+                  if (rn.touching || r.e > rn.s) ns = r.e;
                 }
                 if (ne <= ns) continue;
                 const a = Math.max(left, u.valToPos((ns - info.startMs) / 1000, "x", true));
@@ -808,12 +810,22 @@ export default function LoopWaveform({
       linkStateRef.current = nextLk;
       setLinkState(nextLk);
     }
+    // 原本有空隙的邻居：拖到 ±80ms 内自动磁吸贴合（0 缝隙补空），继续推过去自动进入联动
+    const SNAP_MS = 80;
+    let sTarget = s0;
+    let eTarget = e0;
+    if (lkL && info?.leftNeighbor && !info.leftNeighbor.touching && Math.abs(sTarget - info.leftNeighbor.e) <= SNAP_MS) {
+      sTarget = info.leftNeighbor.e;
+    }
+    if (lkR && info?.rightNeighbor && !info.rightNeighbor.touching && Math.abs(eTarget - info.rightNeighbor.s) <= SNAP_MS) {
+      eTarget = info.rightNeighbor.s;
+    }
     // 联动相邻边界时，保证左右邻居至少保留 0.3s，不会被挤没或起止反转
     const minS = lkL && info?.leftNeighbor ? Math.max(lo, info.leftNeighbor.s + 300) : lo;
     const maxE = lkR && info?.rightNeighbor ? Math.min(hi, info.rightNeighbor.e - 300) : hi;
     // 只能在拉回来的这截数据里调；起止至少隔 0.2 秒
-    const s1 = Math.round(Math.min(Math.max(minS, s0), maxE - 200) / 10) * 10;
-    const e1 = Math.round(Math.max(Math.min(maxE, e0), s1 + 200) / 10) * 10;
+    const s1 = Math.round(Math.min(Math.max(minS, sTarget), maxE - 200) / 10) * 10;
+    const e1 = Math.round(Math.max(Math.min(maxE, eTarget), s1 + 200) / 10) * 10;
     rangeRef.current = { s: s1, e: e1 };
     setEdit(info && s1 === info.startMs && e1 === info.endMs ? null : { s: s1, e: e1 });
     setVersion((v) => v + 1);
@@ -893,11 +905,13 @@ export default function LoopWaveform({
     try {
       bus.previewLoop(null);
       const linked: LinkedAdjust = {};
-      if (info?.leftNeighbor && linkStateRef.current.left && edit.s !== info.startMs && edit.s - info.leftNeighbor.s >= 300) {
-        linked.left = { id: info.leftNeighbor.id, startMs: info.leftNeighbor.s, endMs: edit.s, label: info.leftNeighbor.label };
+      const ln = info?.leftNeighbor;
+      const rn = info?.rightNeighbor;
+      if (ln && linkStateRef.current.left && (ln.touching ? edit.s !== info.startMs : edit.s < ln.e) && edit.s - ln.s >= 300) {
+        linked.left = { id: ln.id, startMs: ln.s, endMs: edit.s, label: ln.label };
       }
-      if (info?.rightNeighbor && linkStateRef.current.right && edit.e !== info.endMs && info.rightNeighbor.e - edit.e >= 300) {
-        linked.right = { id: info.rightNeighbor.id, startMs: edit.e, endMs: info.rightNeighbor.e, label: info.rightNeighbor.label };
+      if (rn && linkStateRef.current.right && (rn.touching ? edit.e !== info.endMs : edit.e > rn.s) && rn.e - edit.e >= 300) {
+        linked.right = { id: rn.id, startMs: edit.e, endMs: rn.e, label: rn.label };
       }
       await onAdjust(target, edit.s, edit.e, linked.left || linked.right ? linked : undefined);
     } finally {
@@ -1118,16 +1132,26 @@ export default function LoopWaveform({
                   {edit && `（原 ${fmtMs(info.startMs)} ~ ${fmtMs(info.endMs)}）`}
                 </Typography.Text>
                 {(() => {
-                  const lkL = !!(info.leftNeighbor && linkState.left);
-                  const lkR = !!(info.rightNeighbor && linkState.right);
+                  const curS = edit?.s ?? info.startMs;
+                  const curE = edit?.e ?? info.endMs;
+                  const ln = info.leftNeighbor;
+                  const rn = info.rightNeighbor;
+                  const lkL = !!(ln && linkState.left && (ln.touching || curS <= ln.e));
+                  const lkR = !!(rn && linkState.right && (rn.touching || curE >= rn.s));
                   if (!lkL && !lkR) return null;
+                  const lSnapOnly = lkL && !ln!.touching && curS === ln!.e;
+                  const rSnapOnly = lkR && !rn!.touching && curE === rn!.s;
                   const parts = [
-                    lkL ? `← ${info.leftNeighbor!.label}` : "",
-                    lkR ? `${info.rightNeighbor!.label} →` : "",
+                    lkL ? `← ${ln!.label}${lSnapOnly ? "(已贴合)" : ""}` : "",
+                    lkR ? `${rn!.label}${rSnapOnly ? "(已贴合)" : ""} →` : "",
                   ].filter(Boolean);
                   const tipLines = [
-                    lkL ? `左相邻「${info.leftNeighbor!.label}」终点将同步调到 ${fmtMs(edit?.s ?? info.startMs)}` : "",
-                    lkR ? `右相邻「${info.rightNeighbor!.label}」起点将同步调到 ${fmtMs(edit?.e ?? info.endMs)}` : "",
+                    lkL ? (lSnapOnly
+                      ? `已精准贴合左相邻「${ln!.label}」终点 ${fmtMs(ln!.e)}（空隙已补齐），继续向左拖将联动推进`
+                      : `左相邻「${ln!.label}」终点将同步调到 ${fmtMs(curS)}`) : "",
+                    lkR ? (rSnapOnly
+                      ? `已精准贴合右相邻「${rn!.label}」起点 ${fmtMs(rn!.s)}（空隙已补齐），继续向右拖将联动推进`
+                      : `右相邻「${rn!.label}」起点将同步调到 ${fmtMs(curE)}`) : "",
                     "拖动边界时按住 Alt 可临时只调当前段",
                   ].filter(Boolean);
                   return (
