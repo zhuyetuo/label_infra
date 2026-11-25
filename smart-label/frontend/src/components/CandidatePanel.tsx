@@ -670,43 +670,59 @@ export default function CandidatePanel({
           },
           {
             title: "状态",
-            width: 96,
+            width: 175,
             render: (_, c: AiCandidate) => (
-              <>
+              <Space size={4} wrap>
               {c.review_note && (
                 <Tooltip title={`审核标的问题：${c.review_note}。重新判断这一条（确认 / 改类别 / 排除 / 待定，或先撤回）就算处理过`}>
-                  <Tag color="red" style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle" }}>
+                  <Tag color="red" style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle", marginInlineEnd: 0 }}>
                     有问题：{c.review_note}
                   </Tag>
                 </Tooltip>
               )}
-              {/* 改成别的类别的要写清楚改成了什么，不然「已确认」看着像确认成抓挠了 */}
+              {/* 改成别的类别的要带目标类别自己的颜色徽标，扫一眼就能分清改成了哪一类 */}
               {c.status === "confirmed" ? (
                 (() => {
                   const picked = labels.find((l) => l.id === c.decided_label_id);
                   // 同一类的部位（抓挠 → 抓挠-头颈耳）是确认，不是改成别的
                   if (picked && sameKind(c.label_name, picked.display_name)) {
                     const part = picked.display_name.slice(currentName(c.label_name).length + 1);
-                    return <Tag color="green">已确认{part ? `·${part}` : ""}</Tag>;
+                    return (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                        <span style={{ fontSize: 11, color: "#52c41a", fontWeight: 600 }}>✓已确</span>
+                        <Tag color={picked.color || "green"} style={{ marginInlineEnd: 0 }}>
+                          {part || picked.display_name}
+                        </Tag>
+                      </span>
+                    );
                   }
-                  return picked ? <Tag color="blue">已改成 {picked.display_name}</Tag> : <Tag color="green">已确认</Tag>;
+                  return picked ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 11, color: "#8c8c8c" }}>已改</span>
+                      <Tag color={picked.color || "blue"} style={{ marginInlineEnd: 0 }}>
+                        {picked.display_name}
+                      </Tag>
+                    </span>
+                  ) : (
+                    <Tag color="green" style={{ marginInlineEnd: 0 }}>已确认</Tag>
+                  );
                 })()
               ) :
               c.status === "rejected" ? (
-                <Tag>已排除</Tag>
+                <Tag style={{ marginInlineEnd: 0 }}>已排除</Tag>
               ) : c.status === "uncertain" ? (
                 (() => {
                   const k = UNCERTAIN_KINDS.find((x) => x.value === c.uncertain_reason);
                   return (
                     <Tooltip title={`${k?.label ?? "拿不准"}；不进训练集，也不算抓挠`}>
-                      <Tag color="purple">{k ? `待定·${k.short}` : "待定"}</Tag>
+                      <Tag color="purple" style={{ marginInlineEnd: 0 }}>{k ? `待定·${k.short}` : "待定"}</Tag>
                     </Tooltip>
                   );
                 })()
               ) : (
-                <Tag color="gold">待确认</Tag>
+                <Tag color="gold" style={{ marginInlineEnd: 0 }}>待确认</Tag>
               )}
-              </>
+              </Space>
             ),
           },
           {
