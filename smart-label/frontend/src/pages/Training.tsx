@@ -1421,7 +1421,6 @@ export default function Training() {
                       const m = metricsOf(v) ?? {};
                       if (m.pipeline !== "v2") return <b>{f1.toFixed(3)}</b>;
                       const main = mainOf(v);
-                      // 新版流程：分组交叉验证，跟老流程（按片段随机切）的分数不是一回事；分数据集的看悬停
                       const pd = (m.per_dataset ?? {}) as Record<string, {
                         macro_f1: number; n: number; segment_macro_f1?: number;
                         per_class?: Record<string, Record<string, number>>;
@@ -1431,41 +1430,135 @@ export default function Training() {
                       const sc = m.scratch_segments as Prf | undefined;
                       const sw = prfOfClass(m.per_class as Record<string, Record<string, number>> | undefined);
                       const sites = scratchSites(v);
-                      return (
-                        <Tooltip title={
-                          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
-                            <div>新版流程：按（天, 项圈）分组交叉验证，同一只狗同一天不会两边都有——比老流程的分数低一些，但更接近换一只狗的真实表现。不能跟老流程的数直接比</div>
-                            {seg != null && <div>按片段 macro F1 {seg.toFixed(3)}</div>}
-                            {sw && <div>抓挠 按窗口：查全 {prfText(sw.recall)} / 查准 {prfText(sw.precision)} / F1 {prfText(sw.f1)}</div>}
-                            {sc && <div>抓挠 按片段（宽松）：查全 {prfText(sc.recall)} / 查准 {prfText(sc.precision)} / F1 {prfText(f1OrCalc(sc))}</div>}
-                            {sites?.totalEv && <div>抓挠 按事件（IoU≥50%）：查全 {prfText(sites.totalEv.recall)} / 查准 {prfText(sites.totalEv.precision)} / F1 {prfText(sites.totalEv.f1)}</div>}
-                            {sites && (
-                              <div style={{ marginTop: 6 }}>
-                                <div>抓挠按场地（窗口 / 片段宽松 / 事件；合计看上面）：</div>
-                                {scratchSiteTip(v)}
-                              </div>
-                            )}
-                            {Object.keys(pd).length > 0 && <div style={{ marginTop: 4 }}>分数据集（老数据标得粗，会拉低总分）：</div>}
-                            {Object.entries(pd).map(([d, r]) => {
-                              const w = prfOfClass(r.per_class);
-                              return (
-                                <div key={d}>
-                                  {d}：{r.macro_f1.toFixed(3)}
-                                  {r.segment_macro_f1 != null ? `，按片段 ${r.segment_macro_f1.toFixed(3)}` : ""}
-                                  {w ? `；抓挠 按窗口 查全 ${prfText(w.recall)} / 查准 ${prfText(w.precision)} / F1 ${prfText(w.f1)}` : ""}
-                                  {r.scratch_segments?.recall != null ? `；按片段 查全 ${prfText(r.scratch_segments.recall)} / 查准 ${prfText(r.scratch_segments.precision)}` : ""}
-                                  （{r.n} 窗）
-                                </div>
-                              );
-                            })}
+                      const scoreColor = (x?: number | null) =>
+                        x == null ? "#888" : x >= 0.8 ? "#52c41a" : x >= 0.6 ? "#faad14" : "#ff4d4f";
+                      const MiniBar = ({ val }: { val?: number | null }) => {
+                        const pct = val == null ? 0 : Math.max(0, Math.min(100, val * 100));
+                        return (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                            <span style={{ width: 42, height: 6, borderRadius: 3, background: "rgba(128,128,128,0.22)", overflow: "hidden", display: "inline-block" }}>
+                              <span style={{ display: "block", height: "100%", width: `${pct}%`, background: scoreColor(val), borderRadius: 3 }} />
+                            </span>
+                            <b style={{ color: scoreColor(val), fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" }}>
+                              {val == null ? "-" : val.toFixed(2)}
+                            </b>
+                          </span>
+                        );
+                      };
+                      const cards = [
+                        { label: "抓挠·窗口级", color: "#4096ff", bg: "rgba(22,119,255,0.12)", f1: sw?.f1, r: sw?.recall, p: sw?.precision },
+                        { label: "抓挠·片段宽松", color: "#b37feb", bg: "rgba(114,46,209,0.14)", f1: sc ? f1OrCalc(sc) : null, r: sc?.recall, p: sc?.precision },
+                        { label: "抓挠·事件(IoU50)", color: "#36cfc9", bg: "rgba(19,194,194,0.12)", f1: sites?.totalEv?.f1, r: sites?.totalEv?.recall, p: sites?.totalEv?.precision },
+                      ].filter((c) => c.f1 != null || c.r != null || c.p != null);
+                      const f1Card = (
+                        <div style={{ width: 520, maxHeight: "70vh", overflowY: "auto", fontSize: 12, paddingRight: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                            <span style={{ fontWeight: 600 }}>分组交叉验证成绩（新版）</span>
+                            <Space size={6}>
+                              {main && <Tag color="purple" style={{ marginInlineEnd: 0 }}>主集 {main.macro_f1.toFixed(3)}</Tag>}
+                              <Tag style={{ marginInlineEnd: 0 }}>总 macro {f1.toFixed(3)}</Tag>
+                              {seg != null && <Tag color="blue" style={{ marginInlineEnd: 0 }}>片段 macro {seg.toFixed(3)}</Tag>}
+                            </Space>
                           </div>
-                        }>
-                          <span style={{ cursor: "help" }}>
+                          {cards.length > 0 && (
+                            <div style={{ display: "grid", gridTemplateColumns: `repeat(${cards.length}, 1fr)`, gap: 8, marginBottom: 10 }}>
+                              {cards.map((c) => (
+                                <div key={c.label} style={{ padding: "6px 8px", borderRadius: 6, background: c.bg, borderLeft: `3px solid ${c.color}` }}>
+                                  <div style={{ fontSize: 11, color: c.color, fontWeight: 600 }}>{c.label}</div>
+                                  <div style={{ fontSize: 18, fontWeight: 700, color: scoreColor(c.f1), lineHeight: 1.3 }}>
+                                    {c.f1 != null ? c.f1.toFixed(3) : "-"}
+                                  </div>
+                                  <div style={{ fontSize: 11, opacity: 0.78 }}>
+                                    查全 {prfText(c.r)} · 查准 {prfText(c.p)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {sites && (
+                            <div style={{ marginBottom: 10 }}>
+                              <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 12 }}>抓挠 · 按场地对照</div>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                <thead>
+                                  <tr style={{ opacity: 0.65, borderBottom: "1px solid rgba(128,128,128,0.25)" }}>
+                                    <th style={{ textAlign: "left", padding: "3px 4px" }}>场地</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>窗口 F1</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>片段 F1</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>事件 F1</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>标 / 报</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sites.rows.map(([sk, r]) => {
+                                    const w = prfOfClass(r.per_class);
+                                    const sF1 = r.scratch_segments ? f1OrCalc(r.scratch_segments) : null;
+                                    const eF1 = r.scratch_events?.f1;
+                                    return (
+                                      <tr key={sk} style={{ borderBottom: "1px solid rgba(128,128,128,0.12)" }}>
+                                        <td style={{ padding: "4px 4px", fontWeight: 500 }}>
+                                          {r.name || sk}
+                                          {r.n_windows != null && <span style={{ opacity: 0.55, marginLeft: 4 }}>({(r.n_windows / 1000).toFixed(1)}k)</span>}
+                                        </td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={w?.f1} /></td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={sF1} /></td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={eF1} /></td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px", opacity: 0.75, whiteSpace: "nowrap" }}>
+                                          {r.scratch_segments?.n_gt ?? "-"} / {r.scratch_segments?.n_pred ?? "-"}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  <tr style={{ background: "rgba(128,128,128,0.10)", fontWeight: 600 }}>
+                                    <td style={{ padding: "4px 4px" }}>合计</td>
+                                    <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={sites.totalWin?.f1} /></td>
+                                    <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={sites.total ? f1OrCalc(sites.total) : null} /></td>
+                                    <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={sites.totalEv?.f1} /></td>
+                                    <td style={{ textAlign: "right", padding: "4px 4px", opacity: 0.7 }}>—</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          {Object.keys(pd).length > 0 && (
+                            <div>
+                              <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 12 }}>分数据集（多数据集各自得分）</div>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                <thead>
+                                  <tr style={{ opacity: 0.65, borderBottom: "1px solid rgba(128,128,128,0.25)" }}>
+                                    <th style={{ textAlign: "left", padding: "3px 4px" }}>数据集</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>macro F1</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>抓挠窗口 F1</th>
+                                    <th style={{ textAlign: "right", padding: "3px 4px" }}>窗数</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {Object.entries(pd).map(([d, r]) => {
+                                    const w = prfOfClass(r.per_class);
+                                    return (
+                                      <tr key={d} style={{ borderBottom: "1px solid rgba(128,128,128,0.12)" }}>
+                                        <td style={{ padding: "4px 4px", maxWidth: 210, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d}>
+                                          {d}
+                                        </td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={r.macro_f1} /></td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px" }}><MiniBar val={w?.f1} /></td>
+                                        <td style={{ textAlign: "right", padding: "4px 4px", opacity: 0.7, whiteSpace: "nowrap" }}>{r.n.toLocaleString()}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                      return (
+                        <Popover placement="right" content={f1Card} overlayInnerStyle={{ padding: "10px 12px" }}>
+                          <span style={{ cursor: "pointer" }}>
                             <b>{(main?.macro_f1 ?? f1).toFixed(3)}</b>
                             <Tag color="purple" style={{ marginLeft: 4, marginInlineEnd: 0 }}>新版</Tag>
                             {main && <div style={{ fontSize: 11, opacity: 0.6, whiteSpace: "nowrap" }}>主数据集 · 全部 {f1.toFixed(3)}</div>}
                           </span>
-                        </Tooltip>
+                        </Popover>
                       );
                     },
                   },
@@ -1478,18 +1571,53 @@ export default function Training() {
                         ? Object.entries(main.per_class).map(([cls, m]) => ({ cls, p: m.precision ?? 0, r: m.recall ?? 0, f1: m["f1-score"] ?? 0 }))
                         : perClassOf(v);
                       if (!pc.length) return "-";
-                      const all = main ? perClassOf(v) : [];
+                      const all = main ? [...perClassOf(v)].sort((a, b) => b.f1 - a.f1) : [];
+                      const dsRows = main ? datasetRows(v) : [];
+                      const barColor = (x: number) => (x >= 0.8 ? "#52c41a" : x >= 0.6 ? "#faad14" : "#ff4d4f");
                       return (
                         <Space size={2} wrap>
                           {main && (
-                            <Tooltip title={<div style={{ fontSize: 12 }}>
-                              {datasetsBrief(v)}
-                              <div style={{ margin: "8px 0", borderTop: "1px solid rgba(127,127,127,0.3)" }} />
-                              <div>这里是主数据集 {main.name} 的（交叉验证，没训练过的数据）。全部数据集合在一起：</div>
-                              {all.map((c) => <div key={c.cls}>{c.cls} {c.f1.toFixed(2)}（P {c.p.toFixed(2)} / R {c.r.toFixed(2)}）</div>)}
-                            </div>}>
-                              <Tag style={{ marginInlineEnd: 0, cursor: "help" }}>主数据集</Tag>
-                            </Tooltip>
+                            <Popover
+                              placement="bottomLeft"
+                              overlayInnerStyle={{ padding: "10px 12px" }}
+                              content={
+                                <div style={{ width: 410, maxHeight: "68vh", overflowY: "auto", fontSize: 12 }}>
+                                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                                    训练用了 {dsRows.length} 份数据集
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+                                    {dsRows.map((r) => (
+                                      <div key={r.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11 }}>
+                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.name}>{r.name}</span>
+                                        <Tag color={r.excl.length === 0 ? "blue" : "orange"} style={{ marginInlineEnd: 0, flexShrink: 0, fontSize: 11 }}>
+                                          {r.excl.length === 0 ? "整份" : `只用 ${r.kept.map(([c]) => c).join("、") || "—"}`}
+                                        </Tag>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div style={{ borderTop: "1px solid rgba(128,128,128,0.25)", paddingTop: 8, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span style={{ fontWeight: 600 }}>全部数据集合计 · 各类别 F1</span>
+                                    <span style={{ fontSize: 11, opacity: 0.65 }}>列表默认仅展示主集 {main.name}</span>
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                    {all.map((c) => (
+                                      <div key={c.cls} style={{ display: "grid", gridTemplateColumns: "72px 1fr 38px 94px", alignItems: "center", gap: 8, fontSize: 11 }}>
+                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{c.cls}</span>
+                                        <div style={{ height: 7, borderRadius: 4, background: "rgba(128,128,128,0.22)", overflow: "hidden" }}>
+                                          <div style={{ height: "100%", width: `${Math.max(2, Math.min(100, c.f1 * 100))}%`, background: barColor(c.f1), borderRadius: 4 }} />
+                                        </div>
+                                        <b style={{ color: barColor(c.f1), textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{c.f1.toFixed(2)}</b>
+                                        <span style={{ opacity: 0.7, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                                          P {c.p.toFixed(2)} · R {c.r.toFixed(2)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              }
+                            >
+                              <Tag style={{ marginInlineEnd: 0, cursor: "pointer" }}>主数据集</Tag>
+                            </Popover>
                           )}
                           {pc.map((c) => (
                             <Tooltip
