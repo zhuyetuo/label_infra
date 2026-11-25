@@ -1015,43 +1015,101 @@ export default function Training() {
       return { ...r, d, kept };
     });
   };
-  /** 悬停「数据集」列：每份数据集两行，最多 56vh，超了在提示框里滚动 */
+  /** 悬停「数据集」列：可视化堆叠占比条 + 每份数据集紧凑卡片，一眼看清数据来源与占比 */
   const usedDatasetsTip = (v: ModelVersion) => {
     const rows = datasetRows(v);
-    const SCOPE: Record<string, string> = {
-      approved: "整份审完的任务", reviewed: "人确认过的片段",
-      seg_approved: "片段审核通过", pool: "复审入池的数据池",
+    const SCOPE: Record<string, { label: string; color: string }> = {
+      approved: { label: "整份审完", color: "geekblue" },
+      reviewed: { label: "人确认片段", color: "cyan" },
+      seg_approved: { label: "片段审过", color: "blue" },
+      pool: { label: "数据池", color: "green" },
     };
+    const PALETTE = ["#4096ff", "#faad14", "#52c41a", "#b37feb", "#36cfc9", "#ff7a45", "#eb2f96"];
     const fmtN = (x: { n: number; sec: number }) =>
-      `${x.n} 段${x.sec >= 90 ? ` / ${(x.sec / 60).toFixed(1)} 分` : x.sec ? ` / ${Math.round(x.sec)} 秒` : ""}`;
+      `${x.n}段${x.sec >= 90 ? `/${(x.sec / 60).toFixed(1)}分` : x.sec ? `/${Math.round(x.sec)}秒` : ""}`;
+    const enriched = rows.map((r, i) => {
+      const used = r.excl.length === 0
+        ? (r.d?.n_segments ?? 0)
+        : r.kept.reduce((acc, [, x]) => acc + x.n, 0);
+      return { ...r, used, color: PALETTE[i % PALETTE.length] };
+    });
+    const totalUsed = enriched.reduce((acc, r) => acc + r.used, 0);
+    const shortDate = (s?: string | null) => (s ? s.replace(/^\d{4}-/, "") : "");
     return (
-      <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 470, maxHeight: "56vh", overflowY: "auto", paddingRight: 4 }}>
-        <div style={{ fontWeight: 600, marginBottom: 2 }}>
-          训练用了 {rows.length} 份数据集
-          <span style={{ fontWeight: 400, opacity: 0.55 }}>（内容多可滚动）</span>
+      <div style={{ width: 500, maxHeight: "64vh", overflowY: "auto", fontSize: 12, paddingRight: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <span style={{ fontWeight: 600 }}>训练数据构成（{rows.length} 份）</span>
+          <span style={{ fontSize: 11, opacity: 0.7 }}>
+            实际采用 <b>{totalUsed.toLocaleString()}</b> 段
+          </span>
         </div>
-        {rows.map((r, i) => (
-          <div key={`${r.name}-${i}`} style={{ marginTop: 4, paddingTop: 4, borderTop: i ? "1px solid rgba(127,127,127,0.2)" : undefined }}>
-            <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-              <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 250 }}>{r.name}</b>
-              {i === 0 && <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "16px" }}>主</Tag>}
-              <span style={{ opacity: 0.6, whiteSpace: "nowrap" }}>
-                {r.sourceHz != null ? `原始 ${r.sourceHz}Hz · ` : ""}{r.d ? `${r.d.n_tasks} 任务 / ${r.d.n_segments} 段` : "清单里找不到"}
-              </span>
-            </div>
-            <div style={{ opacity: 0.85 }}>
-              {r.d && <span style={{ opacity: 0.6 }}>{SCOPE[r.d.scope ?? ""] ?? r.d.scope ?? "未知"} · {r.d.date_from} ~ {r.d.date_to} · </span>}
-              {r.excl.length === 0 ? (
-                <>整份都用{r.kept.length ? `（${r.kept.length} 类）` : ""}</>
-              ) : (
-                <>
-                  只用 <b>{r.kept.length ? r.kept.map(([c, x]) => `${c}（${fmtN(x)}）`).join("、") : "（无）"}</b>
-                  <span title={`排除：${r.excl.join("、")}`}>；其余 {r.excl.length} 类排除</span>
-                </>
-              )}
-            </div>
+        {/* 顶部堆叠占比条 */}
+        {totalUsed > 0 && (
+          <div style={{ display: "flex", height: 9, borderRadius: 5, overflow: "hidden", gap: 2, marginBottom: 10, background: "rgba(128,128,128,0.18)" }}>
+            {enriched.map((r, i) => {
+              const pct = (r.used / totalUsed) * 100;
+              if (pct <= 0) return null;
+              return (
+                <Tooltip key={`${r.name}-${i}`} title={`${r.name}：${r.used.toLocaleString()} 段（${pct.toFixed(1)}%）`}>
+                  <div style={{ width: `${Math.max(1.5, pct)}%`, background: r.color, height: "100%" }} />
+                </Tooltip>
+              );
+            })}
           </div>
-        ))}
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {enriched.map((r, i) => {
+            const pct = totalUsed > 0 ? (r.used / totalUsed) * 100 : 0;
+            const sc = r.d?.scope ? SCOPE[r.d.scope] : undefined;
+            return (
+              <div
+                key={`${r.name}-${i}`}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "rgba(128,128,128,0.08)",
+                  borderLeft: `3px solid ${r.color}`,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <Space size={4} style={{ minWidth: 0 }}>
+                    <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 230 }} title={r.name}>
+                      {r.name}
+                    </b>
+                    {i === 0 && <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", paddingInline: 4 }}>主</Tag>}
+                    {r.sourceHz != null && <Tag style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", paddingInline: 4 }}>{r.sourceHz}Hz</Tag>}
+                  </Space>
+                  <span style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+                    <b style={{ color: r.color }}>{r.used.toLocaleString()}</b> 段
+                    {totalUsed > 0 && <span style={{ opacity: 0.6, marginLeft: 4 }}>({pct.toFixed(1)}%)</span>}
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  <Space size={4} wrap style={{ fontSize: 11 }}>
+                    {sc && <Tag color={sc.color} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px" }}>{sc.label}</Tag>}
+                    {r.d?.date_from && (
+                      <span style={{ opacity: 0.65 }}>
+                        {shortDate(r.d.date_from)} ~ {shortDate(r.d.date_to)}
+                      </span>
+                    )}
+                    {r.d && <span style={{ opacity: 0.55 }}>· {r.d.n_tasks} 任务</span>}
+                  </Space>
+                  {r.excl.length === 0 ? (
+                    <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px" }}>
+                      整份都用{r.kept.length ? ` · ${r.kept.length} 类` : ""}
+                    </Tag>
+                  ) : (
+                    <Tooltip title={`排除：${r.excl.join("、")}`}>
+                      <Tag color="orange" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", cursor: "help" }}>
+                        只用 {r.kept.length ? r.kept.map(([c, x]) => `${c} ${fmtN(x)}`).join("、") : "—"}
+                      </Tag>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   };
