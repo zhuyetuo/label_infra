@@ -991,10 +991,10 @@ export default function AnnotationWorkspace({
       );
       return {
         startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id),
-        itemId: it.id, neighbors, leftNeighbor, rightNeighbor,
+        itemId: it.id, neighbors, leftNeighbor, rightNeighbor, focusWin: win,
       };
     }
-    if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors };
+    if (c) return { startMs, endMs, title: `疑似 · ${c.label_name}`, candId: c.id, neighbors, focusWin: win };
     const ep = focusWindow?.evalHint?.predSegs.find(([ps, pe]) => near(ps, startMs) && near(pe, endMs));
     if (ep && focusWindow?.evalHint) {
       return {
@@ -1003,11 +1003,12 @@ export default function AnnotationWorkspace({
         title: `模型预测 · ${focusWindow.evalHint.label}${ep[2] != null ? ` (${ep[2]})` : ""}`,
         color: "#faad14",
         neighbors,
+        focusWin: win,
       };
     }
-    return { startMs, endMs, title: "循环区间", neighbors };
+    return { startMs, endMs, title: "循环区间", neighbors, focusWin: win };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewRange, items, candidates, labelById, focusWindow?.evalHint]);
+  }, [viewRange, items, candidates, labelById, focusWindow?.evalHint, win?.s, win?.e]);
 
   // 分了互斥轨的项目：波形上的色块按轨分成几条横带（行为 / 运动 / 姿态 / 设备），
   // 同一时刻「卧 + 静止 + 舔」三条各占一带，不互相盖住。没分轨的项目照旧整高一条
@@ -3756,6 +3757,16 @@ export default function AnnotationWorkspace({
                 只标 {formatMs(win.s)} ~ {formatMs(win.e)} {winHintOpen ? "▴" : "▾"}
               </Tag>
             </Popover>
+          )}
+          {win && (
+            <>
+              <Button size="small" style={{ paddingInline: 6 }} onClick={() => bus.seek(win.s / 1000)}>跳到窗口</Button>
+              {loopRange && loopRange.startMs === win.s && loopRange.endMs === win.e ? (
+                <Button size="small" danger style={{ paddingInline: 6 }} onClick={() => setLoop(null)}>停循环</Button>
+              ) : (
+                <Button size="small" style={{ paddingInline: 6 }} onClick={() => { bus.seek(win.s / 1000); setLoop({ startMs: win.s, endMs: win.e }); }}>循环窗口</Button>
+              )}
+            </>
           )}
           <Tooltip title={`样本 ${task?.sample_code ? sampleDisplayName(task.sample_code, task.video_duration_sec, role, true) : sampleId}${task?.video_duration_sec ? ` · ${formatDuration(task.video_duration_sec)}` : ""}`}>
             <Tag style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginInlineEnd: 0 }}>

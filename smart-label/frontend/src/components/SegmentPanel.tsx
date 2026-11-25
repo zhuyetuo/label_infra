@@ -114,9 +114,11 @@ function confColor(c: number): string {
 }
 
 /** 合并区间算覆盖率和空白段，用来回答"整段都预测到了吗，漏了哪里" */
-function coverage(items: LabelItem[], durationMs: number | null) {
+function coverage(items: LabelItem[], durationMs: number | null, focusWin?: { s: number; e: number } | null) {
+  const lo = focusWin ? Math.max(0, focusWin.s) : 0;
+  const hi = focusWin ? focusWin.e : durationMs;
   const sorted = items
-    .map((i) => [Math.max(0, i.start_time_ms), i.end_time_ms] as [number, number])
+    .map((i) => [Math.max(lo, i.start_time_ms), hi != null ? Math.min(hi, i.end_time_ms) : i.end_time_ms] as [number, number])
     .filter(([s, e]) => e > s)
     .sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [];
@@ -127,12 +129,12 @@ function coverage(items: LabelItem[], durationMs: number | null) {
   }
   const covered = merged.reduce((acc, [s, e]) => acc + (e - s), 0);
   const gaps: { start: number; end: number }[] = [];
-  let cursor = 0;
+  let cursor = lo;
   for (const [s, e] of merged) {
     if (s - cursor >= GAP_MIN_MS) gaps.push({ start: cursor, end: s });
     cursor = Math.max(cursor, e);
   }
-  if (durationMs != null && durationMs - cursor >= GAP_MIN_MS) gaps.push({ start: cursor, end: durationMs });
+  if (hi != null && hi - cursor >= GAP_MIN_MS) gaps.push({ start: cursor, end: hi });
   return { covered, gaps };
 }
 
@@ -642,7 +644,7 @@ export default function SegmentPanel({
     return rows.sort((a, b) => b.rollCount - a.rollCount || b.count - a.count);
   }, [items, labels]);
 
-  const cov = useMemo(() => coverage(items, durationMs), [items, durationMs]);
+  const cov = useMemo(() => coverage(items, durationMs, focusWin), [items, durationMs, focusWin?.s, focusWin?.e]);
   const pendingTotal = items.filter((i) => aiState(i) === "pending").length;
   const uncertainTotal = items.filter((i) => i.uncertain).length;
   // 待定按原因拆开写，「待定 5」看不出哪些还值得回头看

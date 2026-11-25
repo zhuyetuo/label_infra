@@ -73,6 +73,8 @@ export interface LoopInfo {
   leftNeighbor?: LinkedNeighbor | null;
   /** 紧挨在右侧（起点贴着当前段终点 ≤150ms）的相邻片段，用于联动调整边界 */
   rightNeighbor?: LinkedNeighbor | null;
+  /** 标注窗口范围（测试集/窗口核对）：在波形上画出窗起点/窗终点虚线与窗外阴影 */
+  focusWin?: { s: number; e: number } | null;
 }
 
 export type AdjustTarget = { kind: "item" | "cand"; id: number };
@@ -324,6 +326,42 @@ function MiniPlot({
               u.ctx.fillStyle = band;
               u.ctx.globalAlpha = 0.14;
               u.ctx.fillRect(x0, top, x1 - x0, h);
+              u.ctx.restore();
+            }
+            // 标注窗口范围：窗外铺一层轻阴影，窗起点 / 窗终点画橙色虚线，拖边界时一眼看出有没有出窗
+            if (info.focusWin) {
+              const dpr = window.devicePixelRatio || 1;
+              const wx0 = u.valToPos((info.focusWin.s - info.startMs) / 1000, "x", true);
+              const wx1 = u.valToPos((info.focusWin.e - info.startMs) / 1000, "x", true);
+              u.ctx.save();
+              u.ctx.fillStyle = "rgba(0, 0, 0, 0.24)";
+              if (wx0 > left) u.ctx.fillRect(left, top, Math.min(left + bw, wx0) - left, h);
+              if (wx1 < left + bw) {
+                const sx = Math.max(left, wx1);
+                u.ctx.fillRect(sx, top, left + bw - sx, h);
+              }
+              u.ctx.strokeStyle = "#faad14";
+              u.ctx.fillStyle = "#faad14";
+              u.ctx.lineWidth = 1.5 * dpr;
+              u.ctx.setLineDash([4 * dpr, 3 * dpr]);
+              u.ctx.font = `${10 * dpr}px sans-serif`;
+              u.ctx.textBaseline = "bottom";
+              if (wx0 >= left && wx0 <= left + bw) {
+                u.ctx.beginPath();
+                u.ctx.moveTo(wx0, top);
+                u.ctx.lineTo(wx0, top + h);
+                u.ctx.stroke();
+                u.ctx.textAlign = "left";
+                u.ctx.fillText("窗起点", wx0 + 3 * dpr, top + h - 3 * dpr);
+              }
+              if (wx1 >= left && wx1 <= left + bw) {
+                u.ctx.beginPath();
+                u.ctx.moveTo(wx1, top);
+                u.ctx.lineTo(wx1, top + h);
+                u.ctx.stroke();
+                u.ctx.textAlign = "right";
+                u.ctx.fillText("窗终点", wx1 - 3 * dpr, top + h - 3 * dpr);
+              }
               u.ctx.restore();
             }
             // 附近别的片段：顶上一条细色带 + 名字（开启联动相邻边界时，紧挨着的左右邻居实时跟着拉长/缩短）
