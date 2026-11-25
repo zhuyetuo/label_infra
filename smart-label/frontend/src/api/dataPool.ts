@@ -181,12 +181,13 @@ export interface TestPoolWindowItem {
   dog_id: number | null;
   dog_name: string | null;
   site: string | null;
-  size_group: string | null;
+  size?: string | null;
+  size_group?: string | null;
   start_ms: number | null;
   end_ms: number | null;
   dur_sec: number | null;
-  labels: string[];
-  n_segs: number;
+  labels: Record<string, { n: number; sec: number }> | string[];
+  n_segs?: number;
   n_ai_pending?: number;
   note: string | null;
   status: "active" | "moved_to_train";

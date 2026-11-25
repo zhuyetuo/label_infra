@@ -210,12 +210,15 @@ export default function TestPoolPanel() {
           {
             title: "狗 / 场地",
             width: 140,
-            render: (_, r) => (
-              <div>
-                <div>{r.dog_name || "-"} {r.size_group ? <Tag style={{ fontSize: 11 }}>{r.size_group}</Tag> : null}</div>
-                <div style={{ color: "#888", fontSize: 11 }}>{r.site || "-"}</div>
-              </div>
-            ),
+            render: (_, r) => {
+              const sz = r.size || r.size_group;
+              return (
+                <div>
+                  <div>{r.dog_name || "-"} {sz ? <Tag style={{ fontSize: 11 }}>{sz}</Tag> : null}</div>
+                  <div style={{ color: "#888", fontSize: 11 }}>{r.site || "-"}</div>
+                </div>
+              );
+            },
           },
           {
             title: "测试窗口",
@@ -233,21 +236,32 @@ export default function TestPoolPanel() {
           },
           {
             title: "窗内标注",
-            width: 200,
-            render: (_, r) => (
-              <Space size={[4, 4]} wrap>
-                {(r.labels ?? []).slice(0, 5).map((lb) => <Tag key={lb} style={{ marginInlineEnd: 0, fontSize: 11 }}>{lb}</Tag>)}
-                {(r.labels?.length ?? 0) > 5 && <Tag style={{ fontSize: 11 }}>+{r.labels.length - 5}</Tag>}
-                {(r.n_ai_pending ?? 0) > 0 && <Tag color="orange" style={{ fontSize: 11 }}>AI待确 {r.n_ai_pending}</Tag>}
-              </Space>
-            ),
+            width: 220,
+            render: (_, r) => {
+              const entries: { name: string; n?: number; sec?: number }[] = Array.isArray(r.labels)
+                ? r.labels.map((name) => ({ name }))
+                : Object.entries(r.labels ?? {}).map(([name, v]) => ({ name, n: v?.n, sec: v?.sec }));
+              return (
+                <Space size={[4, 4]} wrap>
+                  {entries.slice(0, 5).map(({ name, n, sec }) => (
+                    <Tooltip key={name} title={n != null ? `${name}：${n} 段 / ${sec ?? 0}s` : name}>
+                      <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                        {name}{n != null ? ` ${n}` : ""}
+                      </Tag>
+                    </Tooltip>
+                  ))}
+                  {entries.length > 5 && <Tag style={{ fontSize: 11 }}>+{entries.length - 5}</Tag>}
+                  {(r.n_ai_pending ?? 0) > 0 && <Tag color="orange" style={{ fontSize: 11 }}>AI待确 {r.n_ai_pending}</Tag>}
+                </Space>
+              );
+            },
           },
           {
             title: "所属测试集",
             width: 160,
             render: (_, r) => (
               <Space size={[4, 4]} wrap>
-                {r.sets.length ? r.sets.map((s) => (
+                {(r.sets ?? []).length ? (r.sets ?? []).map((s) => (
                   <Tag key={s.id} color={s.frozen ? "purple" : "blue"} style={{ marginInlineEnd: 0, fontSize: 11 }}>
                     {s.name}{s.frozen ? " 🔒" : ""}
                   </Tag>
