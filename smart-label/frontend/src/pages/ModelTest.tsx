@@ -1699,7 +1699,14 @@ function SetDetail({ setId }: { setId: number }) {
                       {r.dog_unsure && <Tooltip title="老影棚数据，推断常对不上：按狗 / 体型统计不可靠"><Tag color="red">不可靠</Tag></Tooltip>}
                     </span>) },
                   { title: "窗口", width: 140, render: (_, r) => `${fmtMs(r.start_ms)}–${fmtMs(r.end_ms)}` },
-                  { title: "长短", dataIndex: "kind", width: 80 },
+                  {
+                    title: "长短", dataIndex: "kind", width: 82,
+                    render: (k: TestItem["kind"]) => (
+                      <Tag color={k === "短片段" ? "cyan" : k === "中片段" ? "blue" : "purple"} style={{ marginInlineEnd: 0 }}>
+                        {k}
+                      </Tag>
+                    ),
+                  },
                   { title: "标了什么", render: (_, r) => (
                     <Space size={4} wrap>
                       {/* 颜色跟工作台里的标签一样；抓挠排最前。实心 = 已有片段，虚线框 = 疑似片段待判 */}
@@ -1718,7 +1725,48 @@ function SetDetail({ setId }: { setId: number }) {
                     render: (_, r) => <span style={{ color: r.label_cover < 0.8 ? "#ff4d4f" : undefined }}>{pct(r.label_cover)}</span> },
                   { title: "任务状态", dataIndex: "task_status", width: 100,
                     render: (s: TaskStatus | null) => (s ? <TaskStatusTag status={s} /> : "-") },
-                  { title: "备注", dataIndex: "note", width: 140, ellipsis: true },
+                  {
+                    title: "来源 / 备注", dataIndex: "note", width: 215,
+                    render: (note: string | null) => {
+                      if (!note) return <span style={{ color: "#666" }}>—</span>;
+                      if (note.startsWith("选样·") || note.startsWith("按条件挑·")) {
+                        const parts = note.split("·").slice(1).filter(Boolean);
+                        const tagColor = (t: string) => {
+                          if (t.startsWith("有")) return "red";
+                          if (t.startsWith("无")) return "geekblue";
+                          if (t.endsWith("分钟")) {
+                            const m = parseFloat(t);
+                            return m <= 1.5 ? "cyan" : m <= 2.5 ? "blue" : "purple";
+                          }
+                          if (t.includes("像抓挠") || t.includes("为中心")) return "orange";
+                          if (t.includes("活动")) return "lime";
+                          if (t.includes("未佩戴")) return "volcano";
+                          if (t.includes("人工")) return "green";
+                          if (t.includes("AI")) return "gold";
+                          if (t.includes("休息") || t.includes("睡眠")) return "default";
+                          return "magenta";
+                        };
+                        return (
+                          <Tooltip title={note}>
+                            <Space size={[4, 4]} wrap>
+                              {parts.map((t, idx) => (
+                                <Tag key={`${idx}-${t}`} color={tagColor(t)} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                                  {t}
+                                </Tag>
+                              ))}
+                            </Space>
+                          </Tooltip>
+                        );
+                      }
+                      return (
+                        <Tooltip title={note}>
+                          <span style={{ display: "inline-block", maxWidth: 195, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
+                            {note}
+                          </span>
+                        </Tooltip>
+                      );
+                    },
+                  },
                   { title: "", width: 130, fixed: "right", render: (_, r) => (
                     <Space size={8}>
                       <Tooltip title="打开工作台，从窗口开头放。管理员不用认领、直接改（已通过的要先「继续编辑」）；其他人认领了才能标">
