@@ -1633,6 +1633,13 @@ function SetDetail({ setId }: { setId: number }) {
   };
   const [checkingAll, setCheckingAll] = useState(false);
   const [itemCheckFilter, setItemCheckFilter] = useState<"all" | "unchecked" | "checked">("all");
+  const [detailTab, setDetailTab] = useState<string>(() => {
+    try { return localStorage.getItem("smart-label:model-test-tab") || "plan"; } catch { return "plan"; }
+  });
+  const onDetailTabChange = (k: string) => {
+    setDetailTab(k);
+    try { localStorage.setItem("smart-label:model-test-tab", k); } catch { /* ignore */ }
+  };
   const openTask = async (taskId: number, seekMs: number, opts?: OpenTaskOpts) => {
     setOpening(taskId);
     try {
@@ -1717,13 +1724,6 @@ function SetDetail({ setId }: { setId: number }) {
     } finally {
       setCheckingAll(false);
     }
-  };
-  const [detailTab, setDetailTab] = useState<string>(() => {
-    try { return localStorage.getItem("smart-label:model-test-tab") || "plan"; } catch { return "plan"; }
-  });
-  const onDetailTabChange = (k: string) => {
-    setDetailTab(k);
-    try { localStorage.setItem("smart-label:model-test-tab", k); } catch { /* ignore */ }
   };
   return (
     <>
