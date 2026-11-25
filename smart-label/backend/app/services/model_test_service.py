@@ -175,16 +175,35 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         n = lname.get(cur, "?")
         return ALIASES.get(n, n)
 
-    segs: dict[int, list[tuple[str, int, int, bool]]] = defaultdict(list)
+    segs: dict[int, list[tuple[str, int, int, bool, bool]]] = defaultdict(list)
     leaf_segs: dict[int, list[tuple[str, int, int]]] = defaultdict(list)
-    for tid, lid, s, e, unc in (await db.execute(
-        select(AnnotationRecord.task_id, AnnotationLabelItem.label_id, AnnotationLabelItem.start_time_ms,
-               AnnotationLabelItem.end_time_ms, AnnotationLabelItem.uncertain)
+    for tid, lid, s, e, unc, src, is_mod, ai_conf, seg_st, marks in (await db.execute(
+        select(
+            AnnotationRecord.task_id,
+            AnnotationLabelItem.label_id,
+            AnnotationLabelItem.start_time_ms,
+            AnnotationLabelItem.end_time_ms,
+            AnnotationLabelItem.uncertain,
+            AnnotationLabelItem.source_type,
+            AnnotationLabelItem.is_modified,
+            AnnotationLabelItem.ai_confirmed,
+            AnnotationLabelItem.seg_status,
+            AnnotationLabelItem.marks,
+        )
         .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
         .join(Task, Task.id == AnnotationRecord.task_id)
         .where(AnnotationRecord.task_id.in_(tids), AnnotationRecord.round_no == Task.round_no)
     )).all():
-        segs[tid].append((top(lid), int(s), int(e), bool(unc)))
+        src_val = src.value if hasattr(src, "value") else str(src)
+        ai_pend = (
+            (not unc)
+            and src_val == "ai_prefill"
+            and (not is_mod)
+            and (not ai_conf)
+            and seg_st != "approved"
+            and (not marks)
+        )
+        segs[tid].append((top(lid), int(s), int(e), bool(unc), ai_pend))
         if not unc and parent.get(lid) is not None:
             leaf_segs[tid].append((lname.get(lid, "?"), int(s), int(e)))   # 细类（抓挠-头颈耳…），配额表按部位看
 
@@ -213,8 +232,9 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         d = dogs.get(dog_id) if dog_id else None
         labels: dict[str, dict] = {}
         n_uncertain = 0
+        n_ai_pending = 0
         spans: list[tuple[int, int]] = []
-        for k, a, b, unc in segs.get(it.task_id, []):
+        for k, a, b, unc, ai_pend in segs.get(it.task_id, []):
             ov = min(b, we) - max(a, ws)
             if ov <= 0:
                 continue
@@ -222,6 +242,8 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             if unc:
                 n_uncertain += 1
                 continue
+            if ai_pend:
+                n_ai_pending += 1
             x = labels.setdefault(k, {"n": 0, "sec": 0.0})
             x["n"] += 1
             x["sec"] = round(x["sec"] + ov / 1000, 1)
@@ -250,7 +272,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             "dog_unsure": bool(s and not s.dog_id and dog_id and site_key is None),
             "start_ms": ws, "end_ms": we, "dur_sec": round(dur, 1),
             "kind": "短片段" if dur <= SHORT_MAX_SEC else "长片段",
-            "labels": labels, "n_uncertain": n_uncertain, "note": it.note,
+            "labels": labels, "n_uncertain": n_uncertain, "n_ai_pending": n_ai_pending, "note": it.note,
             # 窗口里的疑似片段：{类别: {状态: 条数}}
             "cands": {k: dict(v) for k, v in _cand_count(cands.get(it.task_id, []), ws, we).items()},
             "leaf": dict(Counter(n for n, a, b in leaf_segs.get(it.task_id, []) if a < we and b > ws)),

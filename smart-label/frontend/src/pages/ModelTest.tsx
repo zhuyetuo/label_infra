@@ -1663,21 +1663,25 @@ function SetDetail({ setId }: { setId: number }) {
                 onRow={(r) => (r.checked && itemCheckFilter === "all" ? { style: { opacity: 0.68 } } : {})}
                 columns={[
                   {
-                    title: <Tooltip title="人工看过这段窗口、疑似片段和标注都确认无误后勾上。测试集打分默认只用已核对的段">核对状态</Tooltip>,
-                    width: 132,
+                    title: <Tooltip title="人工看过这段窗口、疑似片段和 AI 预标都确认无误后勾上。测试集打分默认只用已核对的段">核对状态</Tooltip>,
+                    width: 165,
                     render: (_, r) => {
-                      const pend = pendingCandsOf(r);
+                      const pendCand = pendingCandsOf(r);
+                      const pendAi = r.n_ai_pending ?? 0;
+                      const parts: string[] = [];
+                      if (pendCand > 0) parts.push(`${pendCand} 疑似`);
+                      if (pendAi > 0) parts.push(`${pendAi} 待确认`);
                       return (
                         <Space size={6}>
                           <Checkbox checked={!!r.checked} disabled={frozen} onChange={(e) => toggleCheck(r.id, e.target.checked)} />
                           {r.checked ? (
                             <Tag color="green" style={{ marginInlineEnd: 0 }}>✓ 已核对</Tag>
-                          ) : pend > 0 ? (
-                            <Tooltip title={`窗口内还有 ${pend} 条疑似片段未判，点右侧「看 / 标」处理完后点击「保存并标记已核对」`}>
-                              <Tag color="orange" style={{ marginInlineEnd: 0 }}>余 {pend} 条待判</Tag>
+                          ) : parts.length > 0 ? (
+                            <Tooltip title={`窗口内还有 ${parts.join("、")} 未处理，点右侧「看 / 标」处理完后点「保存并标记已核对」`}>
+                              <Tag color="orange" style={{ marginInlineEnd: 0 }}>余 {parts.join(" · ")}</Tag>
                             </Tooltip>
                           ) : (
-                            <Tooltip title="窗口内疑似片段已全部判完，确认标注无误后勾上左侧核对框，或进工作台点「保存并标记已核对」">
+                            <Tooltip title="窗口内疑似片段和 AI 预标已全部确认完，勾上左侧核对框或进工作台点「保存并标记已核对」">
                               <Tag color="blue" style={{ marginInlineEnd: 0 }}>待确认核对</Tag>
                             </Tooltip>
                           )}
@@ -1752,6 +1756,7 @@ function SetDetail({ setId }: { setId: number }) {
             ? async () => setWsTask(await editAgain(wsTask.id))
             : undefined
         }
+        hideSubmit={!wsFromEval && wsItemId != null}
         onApprove={
           wsItemId != null && !frozen
             ? wsFromEval

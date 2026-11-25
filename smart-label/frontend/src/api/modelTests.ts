@@ -43,6 +43,8 @@ export interface TestItem {
   /** 窗口里各大类：段数 / 秒数（待定的不算） */
   labels: Record<string, { n: number; sec: number }>;
   n_uncertain: number;
+  /** 窗口内还没人工确认/通过的 AI 预标片段数 */
+  n_ai_pending?: number;
   /** 窗口里有多少时间标了东西（0~1）。测试数据要窗口内全标 */
   label_cover: number;
   /** 窗口里的疑似片段：{类别: {pending/confirmed/rejected/uncertain: 条数}} */

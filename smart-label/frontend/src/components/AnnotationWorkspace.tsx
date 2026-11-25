@@ -116,6 +116,8 @@ interface Props {
     /** 从模型打分错例跳来：展示评测模型预测时段与人工标注时段的一键定位 */
     evalHint?: EvalWindowHint;
   } | null;
+  /** 隐藏「提交」整任务按钮（测试集只核对单个窗口时不需要提交整条 1 小时任务，避免误操作） */
+  hideSubmit?: boolean;
   /** 从找相似 / 补标模式进来：候选面板默认只看「画面相似」或「补标」 */
   initialCandFilter?: "similar" | "all" | "fill" | null;
   /** 开进来就打开「找相似」，样例取 initialSeekMs 那一刻（第一阶段跳过来的） */
@@ -222,6 +224,7 @@ export default function AnnotationWorkspace({
   onReject,
   approveText,
   approveConfirmTitle,
+  hideSubmit,
   onClaim,
   initialSeekMs,
   focusWindow,
@@ -3596,11 +3599,13 @@ export default function AnnotationWorkspace({
             <Button onClick={handleSaveDraft} loading={saving}>
               存草稿
             </Button>
-            <Popconfirm title="确认提交？提交后进入审核队列，不能再改" onConfirm={handleSubmit}>
-              <Button type={onApprove ? "default" : "primary"} loading={saving}>
-                提交
-              </Button>
-            </Popconfirm>
+            {!hideSubmit && (
+              <Popconfirm title="确认提交？提交后进入审核队列，不能再改" onConfirm={handleSubmit}>
+                <Button type={onApprove ? "default" : "primary"} loading={saving}>
+                  提交
+                </Button>
+              </Popconfirm>
+            )}
             {/* 自己标自己过（管理员的常规操作）：存草稿 + 提交 + 通过一步到位。
                 先落草稿再交给外面走审核链，不然刚改的几段不算数 */}
             {onApprove && (
