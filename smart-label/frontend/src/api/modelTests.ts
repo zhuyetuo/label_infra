@@ -39,7 +39,7 @@ export interface TestItem {
   start_ms: number;
   end_ms: number;
   dur_sec: number;
-  kind: "短片段" | "长片段";
+  kind: "短片段" | "中片段" | "长片段";
   /** 窗口里各大类：段数 / 秒数（待定的不算） */
   labels: Record<string, { n: number; sec: number }>;
   n_uncertain: number;

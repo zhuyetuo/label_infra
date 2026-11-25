@@ -30,7 +30,8 @@ from app.services import site_layout as SL
 # 测试关心的四类（按标签树最顶层的名字归），其余归「其他」
 TOPS = ("抓挠", "活动", "静止/休息", "未佩戴")
 SIZES = ("小", "中", "大")
-SHORT_MAX_SEC = 180          # 窗口 ≤ 3 分钟算「短片段」，否则「长片段」
+SHORT_MAX_SEC = 90           # 窗口 ≤ 1.5 分钟算「短片段」（如 1 分钟）
+MID_MAX_SEC = 150            # 1.5–2.5 分钟算「中片段」（如 2 分钟），其余（≥ 3 分钟）算「长片段」
 DOG_SHARE_WARN = 0.15        # 一只狗占总时长超过这个比例就提醒（多样性）
 LABEL_COVER_MIN = 0.8        # 窗口里标注覆盖低于这个比例就提醒（没标的时间会把模型的报告冤成误报）
 
@@ -271,7 +272,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             "dog_source": "人工" if (s and s.dog_id) else ("推断" if dog_id else None),
             "dog_unsure": bool(s and not s.dog_id and dog_id and site_key is None),
             "start_ms": ws, "end_ms": we, "dur_sec": round(dur, 1),
-            "kind": "短片段" if dur <= SHORT_MAX_SEC else "长片段",
+            "kind": "短片段" if dur <= SHORT_MAX_SEC else ("中片段" if dur <= MID_MAX_SEC else "长片段"),
             "labels": labels, "n_uncertain": n_uncertain, "n_ai_pending": n_ai_pending, "note": it.note,
             # 窗口里的疑似片段：{类别: {状态: 条数}}
             "cands": {k: dict(v) for k, v in _cand_count(cands.get(it.task_id, []), ws, we).items()},

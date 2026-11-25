@@ -36,7 +36,7 @@ const NEG_TIPS: Record<string, string> = {
 type Alloc = NonNullable<Plan["alloc"]> & { total?: number; exclude?: number[]; pct?: boolean };
 /** 比例都是目标百分比；合计不是 100 时按比例换算 */
 const DEFAULT_ALLOC: Alloc = { total: 200, site: { 佛山博朗旺狗场: 81, 公司影棚: 13, 深圳雷诺狗场: 6 }, size: { 小: 34, 中: 33, 大: 33 },
-  dur: {}, pos: 50, neg: 50, part: {}, dog: "even", exclude: [], pct: true };
+  dur: { "60": 60, "120": 30, "180": 10 }, pos: 50, neg: 50, part: {}, dog: "even", exclude: [], pct: true };
 const durLabel = (s: number) => (s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`);
 
 /** n 按比例摊（最大余数），合计正好 n；跟后端 split_by_ratio 同一套 */
@@ -108,7 +108,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const { token } = theme.useToken();
   const qc = useQueryClient();
   const [plan, setPlan] = useState<Plan>(() => {
-    const p = initial ?? { target: "抓挠", durations: [60, 600], parts: [], dogs: [] };
+    const p = initial ?? { target: "抓挠", durations: [60, 120, 180], parts: [], dogs: [] };
     const old = p.alloc as Alloc | undefined;
     const nc = p.neg_cats ?? (p.target === "抓挠" ? DEFAULT_NEG : []);
     const ncPct = old?.pct || !p.neg_cats ? nc : (() => { const v = toPct(nc.map((c) => c.ratio)); return nc.map((c, i) => ({ ...c, ratio: v[i] })); })();
