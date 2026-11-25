@@ -1132,13 +1132,20 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
     }
   }, [evalLabels, p.label, targetLb]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allSamples = useMemo(() => Array.from(new Set(allItems.map((i) => i.sample_id))), [allItems]);
+  const checkedCount = useMemo(() => allItems.filter((i) => i.checked).length, [allItems]);
+  const targetSamples = useMemo(() => Array.from(new Set(items.map((i) => i.sample_id))), [items]);
 
   const run = async () => {
     if (!runModes.length) return message.warning("请先选要测的模型");
-    if (!allSamples.length) return message.warning("当前测试集还没有片段");
-    const r = await startEvalRun({ test_set_id: setId, sample_ids: allSamples, modes: runModes });
-    message[r.started ? "success" : "warning"](r.started ? `开始跑：${r.n_samples} 个样本 × ${r.modes.length} 个模型，跑完自动记录并出分` : "已经有一批在跑了，请等它跑完");
+    if (!targetSamples.length) {
+      return message.warning(p.checkedOnly ? "还没有已核对的片段，请先去「片段」页核对或切到「测全部」" : "当前测试集还没有片段");
+    }
+    const r = await startEvalRun({ test_set_id: setId, sample_ids: targetSamples, modes: runModes });
+    message[r.started ? "success" : "warning"](
+      r.started
+        ? `开始跑：${r.n_samples} 个样本（${p.checkedOnly ? `已核对 ${items.length} 段` : `全部 ${items.length} 段`}）× ${r.modes.length} 个模型，跑完自动记录并出分`
+        : "已经有一批在跑了，请等它跑完",
+    );
     refetchProg();
   };
 
@@ -1252,7 +1259,7 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
     if (wasRunning && prog?.status === "done") {
       p.refetchRuns().then((res) => {
         const produced = prog.produced ?? [];
-        const ns = res.data?.n_scope ?? allSamples.length;
+        const ns = targetSamples.length || (res.data?.n_scope ?? 0);
         const fallback = (res.data?.runs ?? []).filter((r) => !ns || r.n_samples >= ns * 0.8).map((r) => `${r.model_tag}::${r.mode}`);
         const next = produced.length ? produced : fallback.slice(0, 1);
         if (next.length) {
@@ -1282,13 +1289,23 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
 
   return (
     <Space direction="vertical" style={{ width: "100%" }} size={12}>
-      {/* 极简主栏：选模型 → 跑并打分，高级参数收进「设置」 */}
+      {/* 极简主栏：选模型 → 选范围（已核对 / 全部） → 跑并打分，高级参数收进「设置」 */}
       <Space wrap align="center">
-        <Select mode="multiple" allowClear showSearch optionFilterProp="label" style={{ minWidth: 380 }}
+        <Select mode="multiple" allowClear showSearch optionFilterProp="label" style={{ minWidth: 360 }}
           placeholder="选模型来跑测试集（可多选，搜 #61 等）"
           value={runModes} onChange={setRunModes} options={modeOptions as never} maxTagCount={3} />
-        <Button type="primary" onClick={run} disabled={prog?.status === "running" || !allSamples.length}>
-          {prog?.status === "running" ? `正在跑 ${prog.done}/${prog.total}…` : `跑并打分（${allSamples.length} 个样本）`}
+        <Segmented
+          value={p.checkedOnly ? "checked" : "all"}
+          onChange={(v) => p.setCheckedOnly(v === "checked")}
+          options={[
+            { value: "checked", label: `只测已核对 (${checkedCount})` },
+            { value: "all", label: `测全部 (${allItems.length})` },
+          ]}
+        />
+        <Button type="primary" onClick={run} disabled={prog?.status === "running" || !targetSamples.length}>
+          {prog?.status === "running"
+            ? `正在跑 ${prog.done}/${prog.total}…`
+            : `跑并打分（${targetSamples.length} 个样本 · ${items.length} 段）`}
         </Button>
         <Popover trigger="click" title="评测设置" content={settingsContent}>
           <Button icon={<SettingOutlined />}>设置</Button>
