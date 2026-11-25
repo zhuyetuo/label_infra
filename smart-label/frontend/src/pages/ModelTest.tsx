@@ -1841,9 +1841,12 @@ export default function ModelTest() {
             <Space direction="vertical" style={{ width: "100%" }} size={12}>
               {/* 选一个测试集：几十个也不用滚 */}
               <Space wrap size={[12, 8]}>
-                <Select showSearch optionFilterProp="label" style={{ minWidth: 320 }} value={cur ?? undefined} onChange={setCur}
+                <Select showSearch optionFilterProp="label" style={{ minWidth: 380 }} value={cur ?? undefined} onChange={setCur}
                   placeholder="选测试集"
-                  options={sets.map((s) => ({ value: s.id, label: `${s.name} · ${s.n_items} 段${s.frozen ? " · 已冻结" : ""}` }))} />
+                  options={sets.map((s) => ({
+                    value: s.id,
+                    label: `${s.is_demo ? "[示例] " : ""}${s.name} · ${s.n_items} 段${s.seen_ref && s.n_items > 0 ? ` · 没见过 ${s.n_unseen ?? 0}` : ""}${s.creator_name ? ` · ${s.creator_name}` : ""}${s.frozen ? " · 已冻结" : ""}`,
+                  }))} />
                 {curSet && actions(curSet)}
                 <Popover trigger="click" placement="bottom" content={
                   <Space>
@@ -1853,21 +1856,79 @@ export default function ModelTest() {
                   <Button size="small" icon={<PlusOutlined />}>新建测试集</Button>
                 </Popover>
               </Space>
-              {curSet?.note && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{curSet.note}</Typography.Text>}
+              {curSet && (
+                <Space wrap size={[8, 4]} style={{ fontSize: 12 }}>
+                  {curSet.is_demo && <Tag color="purple" style={{ marginInlineEnd: 0 }}>系统示例</Tag>}
+                  {curSet.creator_name && <Typography.Text type="secondary">创建人：{curSet.creator_name}</Typography.Text>}
+                  {curSet.created_at && <Typography.Text type="secondary">创建于：{curSet.created_at.slice(0, 16).replace("T", " ")}</Typography.Text>}
+                  {curSet.n_items > 0 && (
+                    <Typography.Text type="secondary">
+                      已核对 {curSet.n_checked ?? 0}/{curSet.n_items}
+                    </Typography.Text>
+                  )}
+                  {curSet.seen_ref && curSet.n_items > 0 && (
+                    <Tooltip title={`相对最新训练模型 ${curSet.seen_ref}（样本级）`}>
+                      <Space size={4}>
+                        <Tag color="green" style={{ marginInlineEnd: 0 }}>没见过 {curSet.n_unseen ?? 0}</Tag>
+                        <Tag color="orange" style={{ marginInlineEnd: 0 }}>见过 {curSet.n_seen ?? 0}</Tag>
+                      </Space>
+                    </Tooltip>
+                  )}
+                  {curSet.note && <Typography.Text type="secondary">{curSet.note}</Typography.Text>}
+                </Space>
+              )}
               <Collapse size="small" items={[{
                 key: "all", label: `全部测试集（${sets.length}）`,
                 children: (
                   <Table<TestSet>
                     size="small" rowKey="id" pagination={sets.length > 15 ? { pageSize: 15 } : false} dataSource={sets}
+                    scroll={{ x: 1080 }}
                     rowClassName={(s) => (s.id === cur ? "ant-table-row-selected" : "")}
                     onRow={(s) => ({ onClick: () => setCur(s.id), style: { cursor: "pointer" } })}
                     columns={[
-                      { title: "名字", dataIndex: "name" },
-                      { title: "片段", dataIndex: "n_items", width: 70 },
-                      { title: "样本", dataIndex: "n_samples", width: 70 },
-                      { title: "状态", width: 170, render: (_, s) => (s.frozen ? <Tag color="blue">已冻结 {s.frozen_at?.slice(0, 16).replace("T", " ")}</Tag> : <Tag>可编辑</Tag>) },
+                      {
+                        title: "名字", width: 210,
+                        render: (_, s) => (
+                          <Space size={6} wrap>
+                            <b>{s.name}</b>
+                            {s.is_demo && <Tag color="purple" style={{ marginInlineEnd: 0 }}>系统示例</Tag>}
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: "创建人 / 时间", width: 155,
+                        render: (_, s) => (
+                          <div style={{ lineHeight: 1.35 }}>
+                            <div>{s.creator_name ?? "系统"}</div>
+                            <div style={{ fontSize: 11, color: "#888" }}>{s.created_at ? s.created_at.slice(5, 16).replace("T", " ") : "-"}</div>
+                          </div>
+                        ),
+                      },
+                      {
+                        title: "片段 / 核对", width: 125,
+                        render: (_, s) => (
+                          <div style={{ lineHeight: 1.35 }}>
+                            <div>{s.n_items} 段 <span style={{ color: "#888", fontSize: 11 }}>({s.n_samples} 样本)</span></div>
+                            <div style={{ fontSize: 11, color: (s.n_checked ?? 0) === s.n_items && s.n_items > 0 ? "#52c41a" : "#888" }}>
+                              已核对 {s.n_checked ?? 0}/{s.n_items}
+                            </div>
+                          </div>
+                        ),
+                      },
+                      {
+                        title: <Tooltip title="相对最新训练模型（样本级）：「没见过」越多越适合做正式考试">模型见过 / 没见过</Tooltip>, width: 165,
+                        render: (_, s) => (s.seen_ref && s.n_items > 0 ? (
+                          <Tooltip title={`相对最新训练模型 ${s.seen_ref}（按样本统计）`}>
+                            <Space size={4} wrap>
+                              <Tag color="green" style={{ marginInlineEnd: 0 }}>没见过 {s.n_unseen ?? 0}</Tag>
+                              <Tag color="orange" style={{ marginInlineEnd: 0 }}>见过 {s.n_seen ?? 0}</Tag>
+                            </Space>
+                          </Tooltip>
+                        ) : <span style={{ color: "#888" }}>—</span>),
+                      },
+                      { title: "状态", width: 120, render: (_, s) => (s.frozen ? <Tag color="blue">已冻结 {s.frozen_at?.slice(5, 16).replace("T", " ")}</Tag> : <Tag>可编辑</Tag>) },
                       { title: "备注", dataIndex: "note", ellipsis: true },
-                      { title: "", width: 240, render: (_, s) => actions(s) },
+                      { title: "", width: 220, render: (_, s) => actions(s) },
                     ]}
                   />),
               }]} />

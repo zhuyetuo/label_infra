@@ -8,8 +8,15 @@ export interface TestSet {
   frozen: boolean;
   frozen_at: string | null;
   created_at: string | null;
+  created_by?: number | null;
+  creator_name?: string | null;
+  is_demo?: boolean;
   n_items: number;
   n_samples: number;
+  n_checked?: number;
+  n_seen?: number;
+  n_unseen?: number;
+  seen_ref?: string | null;
 }
 
 export interface TestItem {

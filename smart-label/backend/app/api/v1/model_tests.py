@@ -114,21 +114,117 @@ async def _set_or_404(db: AsyncSession, set_id: int) -> ModelTestSet:
     return s
 
 
-def _set_out(s: ModelTestSet, n_items: int = 0, n_samples: int = 0) -> dict:
-    return {"id": s.id, "name": s.name, "note": s.note, "frozen": s.frozen_at is not None,
-            "frozen_at": s.frozen_at.isoformat() if s.frozen_at else None,
-            "created_at": s.created_at.isoformat() if s.created_at else None,
-            "n_items": n_items, "n_samples": n_samples}
+def _is_demo_set(s: ModelTestSet) -> bool:
+    note = s.note or ""
+    return s.name == "测试集 v1" or s.name.startswith("测试集·") or "片段备注里【训练用过】" in note
+
+
+def _set_out(
+    s: ModelTestSet,
+    n_items: int = 0,
+    n_samples: int = 0,
+    *,
+    n_checked: int = 0,
+    creator_name: str | None = None,
+    n_seen: int = 0,
+    n_unseen: int = 0,
+    seen_ref: str | None = None,
+) -> dict:
+    return {
+        "id": s.id,
+        "name": s.name,
+        "note": s.note,
+        "frozen": s.frozen_at is not None,
+        "frozen_at": s.frozen_at.isoformat() if s.frozen_at else None,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "created_by": s.created_by,
+        "creator_name": creator_name,
+        "is_demo": _is_demo_set(s),
+        "n_items": n_items,
+        "n_samples": n_samples,
+        "n_checked": n_checked,
+        "n_seen": n_seen,
+        "n_unseen": n_unseen,
+        "seen_ref": seen_ref,
+    }
 
 
 @router.get("/sets")
 async def list_sets(db: AsyncSession = Depends(get_db)):
+    import asyncio
+    from sqlalchemy import case
+    from app.models.model_version import ModelVersion
+    from app.models.sample import Sample
+
     sets = (await db.execute(select(ModelTestSet).order_by(ModelTestSet.id.desc()))).scalars().all()
-    cnt = {sid: (n, m) for sid, n, m in (await db.execute(
-        select(ModelTestItem.set_id, func.count(ModelTestItem.id), func.count(func.distinct(ModelTestItem.sample_id)))
-        .group_by(ModelTestItem.set_id))).all()}
+    cnt = {
+        sid: (int(n), int(m), int(chk or 0))
+        for sid, n, m, chk in (await db.execute(
+            select(
+                ModelTestItem.set_id,
+                func.count(ModelTestItem.id),
+                func.count(func.distinct(ModelTestItem.sample_id)),
+                func.sum(case((ModelTestItem.checked_at.is_not(None), 1), else_=0)),
+            ).group_by(ModelTestItem.set_id)
+        )).all()
+    }
+    uids = {s.created_by for s in sets if s.created_by is not None}
+    users = {
+        uid: (dn or un)
+        for uid, un, dn in (await db.execute(
+            select(User.id, User.username, User.display_name).where(User.id.in_(uids))
+        )).all()
+    } if uids else {}
+
+    # 相对最新一条带数据集的训练模型，快速统计每个测试集「见过 / 没见过」条数（dataset_sample_codes 已有内存 mtime 缓存）
+    seen_ref: str | None = None
+    ref_codes: frozenset[str] = frozenset()
+    mvs = (await db.execute(
+        select(ModelVersion).where(ModelVersion.dataset_spec.is_not(None)).order_by(ModelVersion.id.desc()).limit(20)
+    )).scalars().all()
+    for mv in mvs:
+        ds_names = svc.datasets_of_spec(mv.dataset_spec)
+        if not ds_names:
+            continue
+        merged: set[str] = set()
+        for dn in ds_names:
+            c = await asyncio.to_thread(svc.dataset_sample_codes, dn)
+            if c:
+                merged |= c
+        if merged:
+            ref_codes = frozenset(merged)
+            seen_ref = f"#{mv.id}"
+            break
+
+    seen_by_set: dict[int, tuple[int, int]] = {}
+    if seen_ref and sets:
+        item_rows = (await db.execute(
+            select(ModelTestItem.set_id, Sample.sample_code)
+            .join(Sample, Sample.id == ModelTestItem.sample_id)
+        )).all()
+        tmp: dict[int, list[int]] = {}
+        for sid, scode in item_rows:
+            pair = tmp.setdefault(sid, [0, 0])
+            if scode and scode in ref_codes:
+                pair[0] += 1
+            else:
+                pair[1] += 1
+        seen_by_set = {sid: (a, b) for sid, (a, b) in tmp.items()}
+
     excluded = len(await svc.test_sample_ids(db))
-    return ok({"sets": [_set_out(s, *cnt.get(s.id, (0, 0))) for s in sets], "n_excluded_samples": excluded})
+    out_sets = []
+    for s in sets:
+        n_it, n_sm, n_chk = cnt.get(s.id, (0, 0, 0))
+        n_s, n_u = seen_by_set.get(s.id, (0, n_it if seen_ref else 0))
+        out_sets.append(_set_out(
+            s, n_it, n_sm,
+            n_checked=n_chk,
+            creator_name=users.get(s.created_by) if s.created_by is not None else None,
+            n_seen=n_s,
+            n_unseen=n_u,
+            seen_ref=seen_ref,
+        ))
+    return ok({"sets": out_sets, "n_excluded_samples": excluded})
 
 
 @router.post("/sets")
