@@ -2127,7 +2127,7 @@ function SetDetail({ setId }: { setId: number }) {
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
               </Space>
               <Table<TestItem>
-                size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }} scroll={{ x: 1860 }}
+                size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }}
                 rowSelection={!frozen ? {
                   selectedRowKeys: pickedTestIds,
                   onChange: (keys) => setPickedTestIds(keys as number[]),
@@ -2135,8 +2135,8 @@ function SetDetail({ setId }: { setId: number }) {
                 onRow={(r) => (r.checked && itemCheckFilter === "all" ? { style: { opacity: 0.68 } } : {})}
                 columns={[
                   {
-                    title: <Tooltip title="人工看过这段窗口、疑似片段和 AI 预标都确认无误后勾上。测试集打分默认只用已核对的段">核对状态</Tooltip>,
-                    width: 165,
+                    title: <Tooltip title="人工看过这段窗口、疑似片段和 AI 预标都确认无误后勾上。测试集打分默认只用已核对的段">核对</Tooltip>,
+                    width: 126,
                     render: (_, r) => {
                       const pendCand = pendingCandsOf(r);
                       const pendAi = r.n_ai_pending ?? 0;
@@ -2144,42 +2144,64 @@ function SetDetail({ setId }: { setId: number }) {
                       if (pendCand > 0) parts.push(`${pendCand} 疑似`);
                       if (pendAi > 0) parts.push(`${pendAi} 待确认`);
                       return (
-                        <Space size={6}>
+                        <Space size={5}>
                           <Checkbox checked={!!r.checked} disabled={frozen} onChange={(e) => toggleCheck(r.id, e.target.checked)} />
                           {r.checked ? (
-                            <Tag color="green" style={{ marginInlineEnd: 0 }}>✓ 已核对</Tag>
+                            <Tag color="green" style={{ marginInlineEnd: 0, fontSize: 11 }}>✓ 已核对</Tag>
                           ) : parts.length > 0 ? (
                             <Tooltip title={`窗口内还有 ${parts.join("、")} 未处理，点右侧「看 / 标」处理完后点「保存并标记已核对」`}>
-                              <Tag color="orange" style={{ marginInlineEnd: 0 }}>余 {parts.join(" · ")}</Tag>
+                              <Tag color="orange" style={{ marginInlineEnd: 0, fontSize: 11 }}>余 {parts.join("·")}</Tag>
                             </Tooltip>
                           ) : (
                             <Tooltip title="窗口内疑似片段和 AI 预标已全部确认完，勾上左侧核对框或进工作台点「保存并标记已核对」">
-                              <Tag color="blue" style={{ marginInlineEnd: 0 }}>待确认核对</Tag>
+                              <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 11 }}>待核对</Tag>
                             </Tooltip>
                           )}
                         </Space>
                       );
                     },
                   },
-                  { title: "任务", dataIndex: "task_id", width: 80 },
-                  { title: "项目", dataIndex: "project_name", width: 160, ellipsis: true },
-                  { title: "日期", dataIndex: "date", width: 100 },
-                  { title: "场地", dataIndex: "site", width: 120 },
-                  { title: "狗", width: 130, render: (_, r) => (
-                    <span>{r.dog_name ?? "未知"}{r.size ? `（${r.size}）` : ""}
-                      {r.dog_source === "推断" && <Tooltip title="按场地 + IMU 号推断的"><Tag style={{ marginLeft: 4 }}>推断</Tag></Tooltip>}
-                      {r.dog_unsure && <Tooltip title="老影棚数据，推断常对不上：按狗 / 体型统计不可靠"><Tag color="red">不可靠</Tag></Tooltip>}
-                    </span>) },
-                  { title: "窗口", width: 140, render: (_, r) => `${fmtMs(r.start_ms)}–${fmtMs(r.end_ms)}` },
                   {
-                    title: "长短", dataIndex: "kind", width: 82,
-                    render: (k: TestItem["kind"]) => (
-                      <Tag color={k === "短片段" ? "cyan" : k === "中片段" ? "blue" : "purple"} style={{ marginInlineEnd: 0 }}>
-                        {k}
-                      </Tag>
+                    title: "任务 / 项目",
+                    width: 118,
+                    render: (_, r) => (
+                      <div style={{ lineHeight: 1.35 }}>
+                        <div style={{ fontWeight: 600, fontSize: 12 }}>#{r.task_id}</div>
+                        <Tooltip title={[r.project_name, r.date].filter(Boolean).join(" · ")}>
+                          <div style={{ fontSize: 11, color: "#888", maxWidth: 108, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {r.project_name || r.date || "—"}
+                          </div>
+                        </Tooltip>
+                      </div>
                     ),
                   },
-                  { title: "标了什么", width: 280, render: (_, r) => (
+                  {
+                    title: "狗 / 场地",
+                    width: 124,
+                    render: (_, r) => (
+                      <div style={{ lineHeight: 1.35 }}>
+                        <div style={{ fontSize: 12 }}>
+                          {r.dog_name ?? "未知"}{r.size ? `（${r.size}）` : ""}
+                          {r.dog_source === "推断" && <Tooltip title="按场地 + IMU 号推断的"><Tag style={{ marginLeft: 3, marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", padding: "0 3px" }}>推</Tag></Tooltip>}
+                          {r.dog_unsure && <Tooltip title="老影棚数据，推断常对不上：按狗 / 体型统计不可靠"><Tag color="red" style={{ marginLeft: 3, marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", padding: "0 3px" }}>?</Tag></Tooltip>}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#888" }}>{(r.site ?? "未知").replace("狗场", "")}</div>
+                      </div>
+                    ),
+                  },
+                  {
+                    title: "窗口",
+                    width: 112,
+                    render: (_, r) => (
+                      <div style={{ lineHeight: 1.35 }}>
+                        <div style={{ fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" }}>{fmtMs(r.start_ms)}–{fmtMs(r.end_ms)}</div>
+                        <Tag color={r.kind === "短片段" ? "cyan" : r.kind === "中片段" ? "blue" : "purple"} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "15px", padding: "0 4px", marginTop: 2 }}>
+                          {r.kind}
+                        </Tag>
+                      </div>
+                    ),
+                  },
+                  { title: "标了什么", render: (_, r) => (
                     <Space size={[4, 4]} wrap>
                       {/* 颜色跟工作台里的标签一样；抓挠排最前。实心 = 已有片段，虚线框 = 疑似片段待判 */}
                       {Object.entries(r.labels).sort(([a], [b]) => labelRank(a) - labelRank(b)).map(([k, v]) => (
@@ -2193,12 +2215,20 @@ function SetDetail({ setId }: { setId: number }) {
                       {!Object.keys(r.labels).length && !Object.values(r.cands ?? {}).some((v) => (v.pending ?? 0) > 0)
                         && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
                     </Space>) },
-                  { title: <Tooltip title="窗口里有多少时间标了东西。测试数据要窗口内全标，低于 80% 标红">标注覆盖</Tooltip>, width: 90,
-                    render: (_, r) => <span style={{ color: r.label_cover < 0.8 ? "#ff4d4f" : undefined }}>{pct(r.label_cover)}</span> },
-                  { title: "任务状态", dataIndex: "task_status", width: 100,
-                    render: (s: TaskStatus | null) => (s ? <TaskStatusTag status={s} /> : "-") },
                   {
-                    title: "来源 / 备注", dataIndex: "note", width: 215,
+                    title: <Tooltip title="上方为窗口标注覆盖率（低于 80% 标红），下方为原任务状态">覆盖 / 状态</Tooltip>,
+                    width: 90,
+                    render: (_, r) => (
+                      <div style={{ lineHeight: 1.4 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: r.label_cover < 0.8 ? "#ff4d4f" : "#ccc", fontVariantNumeric: "tabular-nums" }}>
+                          {pct(r.label_cover)}
+                        </div>
+                        <div style={{ marginTop: 2 }}>{r.task_status ? <TaskStatusTag status={r.task_status as TaskStatus} /> : "-"}</div>
+                      </div>
+                    ),
+                  },
+                  {
+                    title: "来源 / 备注", dataIndex: "note", width: 175,
                     render: (note: string | null) => {
                       if (!note) return <span style={{ color: "#666" }}>—</span>;
                       if (note.startsWith("选样·") || note.startsWith("按条件挑·") || note.startsWith("替换影棚·")) {
@@ -2220,9 +2250,9 @@ function SetDetail({ setId }: { setId: number }) {
                         };
                         return (
                           <Tooltip title={note}>
-                            <Space size={[4, 4]} wrap>
+                            <Space size={[3, 3]} wrap>
                               {parts.map((t, idx) => (
-                                <Tag key={`${idx}-${t}`} color={tagColor(t)} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                                <Tag key={`${idx}-${t}`} color={tagColor(t)} style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "17px", padding: "0 4px" }}>
                                   {t}
                                 </Tag>
                               ))}
@@ -2232,18 +2262,18 @@ function SetDetail({ setId }: { setId: number }) {
                       }
                       return (
                         <Tooltip title={note}>
-                          <span style={{ display: "inline-block", maxWidth: 195, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
+                          <span style={{ display: "inline-block", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
                             {note}
                           </span>
                         </Tooltip>
                       );
                     },
                   },
-                  { title: "", width: 130, fixed: "right", render: (_, r) => (
-                    <Space size={8}>
+                  { title: "操作", width: 96, render: (_, r) => (
+                    <Space size={6}>
                       <Tooltip title="打开工作台，从窗口开头放。管理员不用认领、直接改（已通过的要先「继续编辑」）；其他人认领了才能标">
                         <Button size="small" type="link" style={{ padding: 0 }} loading={opening === r.task_id}
-                          onClick={() => openTask(r.task_id, r.start_ms, { winStartMs: r.start_ms, winEndMs: r.end_ms, itemId: r.id })}>看 / 标</Button>
+                          onClick={() => openTask(r.task_id, r.start_ms, { winStartMs: r.start_ms, winEndMs: r.end_ms, itemId: r.id })}>看/标</Button>
                       </Tooltip>
                       {!frozen && <Popconfirm title="从测试集拿掉这段？" onConfirm={() => del(r.id)}><a>拿掉</a></Popconfirm>}
                     </Space>) },
