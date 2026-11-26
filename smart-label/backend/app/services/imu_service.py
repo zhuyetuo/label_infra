@@ -268,6 +268,71 @@ def get_series(csv_path: str, start_ms: int, end_ms: int, max_points: int) -> di
     return _safe(_get_series, csv_path, start_ms, end_ms, max_points)
 
 
+def _find_zero_signal_spans(
+    csv_path: str,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    min_zero_ms: int = 250,
+    merge_gap_ms: int = 100,
+) -> list[tuple[int, int]]:
+    """检测三轴加速度全接近 0（|acc| < 0.05g 或全 NaN）的信号中断区间，返回 [(start_ms, end_ms), ...]。
+    在地球重力下 |acc| ≈ 1g，持续 ≥ min_zero_ms 的全零段必然是传感器断连/补零。"""
+    df = _load_dataframe(csv_path)
+    if start_ms is not None:
+        df = df[df["_t_ms"] >= start_ms]
+    if end_ms is not None:
+        df = df[df["_t_ms"] <= end_ms]
+    if len(df) == 0:
+        return []
+
+    t = df["_t_ms"].to_numpy(dtype=np.int64)
+    ax = df["acc_x"].to_numpy(dtype=np.float64)
+    ay = df["acc_y"].to_numpy(dtype=np.float64)
+    az = df["acc_z"].to_numpy(dtype=np.float64)
+    mag2 = ax * ax + ay * ay + az * az
+    is_zero = (~np.isfinite(mag2)) | (mag2 < 0.0025)   # |acc| < 0.05g
+
+    if not np.any(is_zero):
+        return []
+
+    # 找出所有连续 True 段的起止下标
+    padded = np.concatenate(([False], is_zero, [False]))
+    diff = np.diff(padded.astype(np.int8))
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0] - 1
+
+    raw: list[tuple[int, int]] = []
+    n = len(t)
+    for si, ei in zip(starts, ends):
+        # 边界贴到紧邻的有效采样点，确保切开后保留片段里不残留零点
+        s_ms = int(t[si])
+        e_ms = int(t[ei])
+        if ei + 1 < n:
+            e_ms = int(t[ei + 1])
+        if e_ms - s_ms >= min_zero_ms:
+            raw.append((s_ms, e_ms))
+
+    if not raw:
+        return []
+    merged: list[tuple[int, int]] = [raw[0]]
+    for s_ms, e_ms in raw[1:]:
+        if s_ms - merged[-1][1] <= merge_gap_ms:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e_ms))
+        else:
+            merged.append((s_ms, e_ms))
+    return merged
+
+
+def find_zero_signal_spans(
+    csv_path: str,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    min_zero_ms: int = 250,
+    merge_gap_ms: int = 100,
+) -> list[tuple[int, int]]:
+    return _safe(_find_zero_signal_spans, csv_path, start_ms, end_ms, min_zero_ms, merge_gap_ms)
+
+
 # ------------------------------------------------------------ 只要起点时间 ----
 #
 # 「AI 片段的绝对时间 → 工作台相对毫秒」这个换算只用得上 CSV 第一行的时间戳，

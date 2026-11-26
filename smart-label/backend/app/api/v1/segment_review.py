@@ -618,6 +618,194 @@ async def merge_adjacent(body: MergeAdjacentIn, db: AsyncSession = Depends(get_d
     return ok({"groups_merged": n_groups, "removed": n_removed})
 
 
+class TrimZeroIn(BaseModel):
+    task_id: int
+    start_ms: int | None = None
+    end_ms: int | None = None
+    item_id: int | None = None
+    min_zero_ms: int = Field(default=250, ge=50, le=5000)
+    min_keep_ms: int = Field(default=200, ge=0, le=5000)
+
+
+@router.post("/trim-zero-signal")
+async def trim_zero_signal(
+    body: TrimZeroIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """智能检测三轴加速度全为 0（信号中断）的区间：
+      1. 自动将覆盖到零信号的片段切开，剔除全零部分（原已通过的片段保持已通过）；
+      2. 在这些零信号区间自动标上「无信号」（device 轨，不参与模型训练，方便标注员一眼识别）。
+    """
+    import asyncio
+    from app.models.sample import Sample
+    from app.services import imu_service
+    from app.services.media_resolver import resolve_nas_path
+    from app.services.task_service import _append_boundary_edit
+
+    task = await db.get(Task, body.task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+    sample = await db.get(Sample, task.sample_id)
+    if sample is None or not sample.imu_csv_path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "该样本没有 IMU CSV，无法检测无信号区间")
+
+    rec = (await db.execute(
+        select(AnnotationRecord).where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+    )).scalar_one_or_none()
+    if rec is None:
+        return ok({"zero_runs": 0, "items_carved": 0, "items_deleted": 0, "pieces_created": 0, "no_signal_added": 0})
+
+    items = (await db.execute(
+        select(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id == rec.id)
+    )).scalars().all()
+
+    # 确定扫描时间范围
+    scan_s = body.start_ms
+    scan_e = body.end_ms
+    target_item: AnnotationLabelItem | None = None
+    if body.item_id is not None:
+        target_item = next((x for x in items if x.id == body.item_id), None)
+        if target_item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "片段不存在")
+        scan_s = target_item.start_time_ms if scan_s is None else max(scan_s, target_item.start_time_ms)
+        scan_e = target_item.end_time_ms if scan_e is None else min(scan_e, target_item.end_time_ms)
+
+    csv_path = resolve_nas_path(sample.imu_csv_path)
+    try:
+        dropouts = await asyncio.to_thread(
+            imu_service.find_zero_signal_spans, csv_path, scan_s, scan_e, body.min_zero_ms
+        )
+    except imu_service.ImuReadError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    if not dropouts:
+        return ok({"zero_runs": 0, "items_carved": 0, "items_deleted": 0, "pieces_created": 0, "no_signal_added": 0})
+
+    # 找到或自动补建该项目的「无信号」(NO_SIGNAL) 标签
+    no_sig_lb = (await db.execute(
+        select(LabelDefinition).where(
+            LabelDefinition.project_id == task.project_id,
+            (LabelDefinition.code == "NO_SIGNAL") | (LabelDefinition.display_name == "无信号"),
+        )
+    )).scalars().first()
+    if no_sig_lb is None:
+        no_sig_lb = LabelDefinition(
+            project_id=task.project_id,
+            code="NO_SIGNAL",
+            display_name="无信号",
+            color="#546E7A",
+            track="device",
+            sort_order=1460,
+            is_active=True,
+            created_by=user.id,
+        )
+        db.add(no_sig_lb)
+        await db.flush()
+
+    now = _now()
+    items_carved = 0
+    items_deleted = 0
+    pieces_created = 0
+
+    cand_items = [target_item] if target_item is not None else [
+        x for x in items
+        if x.label_id != no_sig_lb.id
+        and (scan_s is None or x.end_time_ms > scan_s)
+        and (scan_e is None or x.start_time_ms < scan_e)
+    ]
+
+    for it in cand_items:
+        hits = [(zs, ze) for zs, ze in dropouts if ze > it.start_time_ms and zs < it.end_time_ms]
+        if not hits:
+            continue
+        # 从 [it.start_time_ms, it.end_time_ms] 挖掉所有 hits
+        pieces: list[tuple[int, int]] = [(it.start_time_ms, it.end_time_ms)]
+        for zs, ze in hits:
+            nxt: list[tuple[int, int]] = []
+            for ps, pe in pieces:
+                if ze <= ps or zs >= pe:
+                    nxt.append((ps, pe))
+                else:
+                    if zs > ps:
+                        nxt.append((ps, zs))
+                    if ze < pe:
+                        nxt.append((ze, pe))
+            pieces = nxt
+        pieces = [(ps, pe) for ps, pe in pieces if pe - ps >= body.min_keep_ms]
+
+        if not pieces:
+            await db.delete(it)
+            items_deleted += 1
+            continue
+
+        old = (it.start_time_ms, it.end_time_ms)
+        it.start_time_ms, it.end_time_ms = pieces[0]
+        if (it.start_time_ms, it.end_time_ms) != old:
+            it.boundary_edits = _append_boundary_edit(it.boundary_edits, old, (it.start_time_ms, it.end_time_ms), user)
+            if it.source_type == LabelItemSource.ai_generated:
+                it.is_modified = True
+            it.touched_at, it.touched_by = now, user.id
+        items_carved += 1
+
+        for ps, pe in pieces[1:]:
+            db.add(AnnotationLabelItem(
+                annotation_record_id=rec.id,
+                label_id=it.label_id,
+                start_time_ms=ps,
+                end_time_ms=pe,
+                source_type=it.source_type,
+                ai_confidence=it.ai_confidence,
+                ai_confirmed=it.ai_confirmed,
+                is_modified=True,
+                uncertain=it.uncertain,
+                uncertain_reason=it.uncertain_reason,
+                seg_status=it.seg_status,
+                seg_reviewed_by=it.seg_reviewed_by,
+                seg_reviewed_at=it.seg_reviewed_at,
+                marks=it.marks,
+                mark_note=it.mark_note,
+                touched_at=now,
+                touched_by=user.id,
+                created_by=user.id,
+            ))
+            pieces_created += 1
+
+    # 在检测到的零信号区间自动标上「无信号」（避免与已有无信号片段重复）
+    existing_no_sig = [(x.start_time_ms, x.end_time_ms) for x in items if x.label_id == no_sig_lb.id]
+    no_signal_added = 0
+    for zs, ze in dropouts:
+        if any(min(ze, es) - max(zs, ss) >= 150 for ss, es in existing_no_sig):
+            continue
+        db.add(AnnotationLabelItem(
+            annotation_record_id=rec.id,
+            label_id=no_sig_lb.id,
+            start_time_ms=zs,
+            end_time_ms=ze,
+            source_type=LabelItemSource.human_added,
+            is_modified=False,
+            seg_status="approved",
+            seg_reviewed_by=user.id,
+            seg_reviewed_at=now,
+            touched_at=now,
+            touched_by=user.id,
+            created_by=user.id,
+        ))
+        existing_no_sig.append((zs, ze))
+        no_signal_added += 1
+
+    await db.commit()
+    return ok({
+        "zero_runs": len(dropouts),
+        "items_carved": items_carved,
+        "items_deleted": items_deleted,
+        "pieces_created": pieces_created,
+        "no_signal_added": no_signal_added,
+    })
+
+
 class DedupeProjectIn(BaseModel):
     project_id: int
 

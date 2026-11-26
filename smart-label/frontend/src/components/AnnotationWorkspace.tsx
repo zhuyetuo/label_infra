@@ -63,7 +63,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LinkedAdjust, type LinkedNeighbor, type LoopInfo } from "@/components/LoopWaveform";
-import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segSendBackReviewer, segSplit } from "@/api/segReview";
+import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segSendBackReviewer, segSplit, segTrimZeroSignal } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -971,7 +971,8 @@ export default function AnnotationWorkspace({
     if (it) {
       const isMainTimeline = (id: number) => {
         const tr = trackOf(labelById, id);
-        return tr === "motion" || isBehaviorTrack(labelById, id) || nameOf(id) === "未佩戴";
+        const nm = nameOf(id);
+        return tr === "motion" || isBehaviorTrack(labelById, id) || nm === "未佩戴" || nm === "无信号";
       };
       const canLink = (aId: number, bId: number) =>
         trackOf(labelById, aId) === trackOf(labelById, bId) || (isMainTimeline(aId) && isMainTimeline(bId));
@@ -1517,6 +1518,11 @@ export default function AnnotationWorkspace({
       {it.seg_status === "approved" && <Tag color="success" style={{ marginInlineEnd: 0 }}>✓ 已通过</Tag>}
       {it.review_note && <Tag color="red" style={{ marginInlineEnd: 0 }}>退回：{it.review_note}</Tag>}
       {withSplit && splitControls}
+      {hasCsv && (!readOnly || canFlag) && (
+        <Tooltip title="自动检测这条片段内三轴全为 0 的无信号区，切开并标成「无信号」">
+          <Button size="small" onClick={() => void handleTrimZeroSignal(it.id)}>⚡ 切无信号</Button>
+        </Tooltip>
+      )}
       <span style={{ flex: 1 }} />
       {readOnly && (
         <Tooltip title="类别不对就在这里改（只读任务里也能改，不用认领）">
@@ -1606,6 +1612,33 @@ export default function AnnotationWorkspace({
         (r.conflicts_left ? `；还有 ${r.conflicts_left} 段是不同类别冲突，要人看` : ""),
       4,
     );
+  };
+  const handleTrimZeroSignal = async (itemId?: number) => {
+    if (taskId == null) return;
+    if (!readOnly) await saveDraft(taskId, toDraftPayload(items));
+    const r = await segTrimZeroSignal({
+      task_id: taskId,
+      start_ms: win?.s ?? null,
+      end_ms: win?.e ?? null,
+      item_id: itemId ?? null,
+    });
+    const d = await getDraft(taskId);
+    loadItems(d.items);
+    if (r.zero_runs === 0) {
+      message.info("当前范围没有检测到三轴全为 0 的无信号区间");
+      return;
+    }
+    const parts = [
+      r.items_carved ? `切开 ${r.items_carved} 条片段` : "",
+      r.pieces_created ? `拆出 ${r.pieces_created} 段` : "",
+      r.items_deleted ? `移除全零段 ${r.items_deleted} 条` : "",
+      r.no_signal_added ? `自动标出 ${r.no_signal_added} 段「无信号」` : "",
+    ].filter(Boolean);
+    message.success(
+      `检测到 ${r.zero_runs} 处无信号${parts.length ? `：${parts.join("，")}` : "（已标过无信号）"}`,
+      5,
+    );
+    onSaved?.();
   };
   const handleCarveMotion = async () => {
     if (taskId == null) return;
@@ -3193,6 +3226,7 @@ export default function AnnotationWorkspace({
         onDedupe={taskId != null && !segReview && (!readOnly || canFlag) ? handleDedupe : undefined}
         onCarveMotion={taskId != null && !segReview && (!readOnly || canFlag) ? handleCarveMotion : undefined}
         onMergeAdjacent={taskId != null && !segReview && (!readOnly || canFlag) ? handleMergeAdjacent : undefined}
+        onTrimZeroSignal={taskId != null && hasCsv && !segReview && (!readOnly || canFlag) ? () => handleTrimZeroSignal() : undefined}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];

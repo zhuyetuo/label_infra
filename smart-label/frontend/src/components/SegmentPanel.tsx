@@ -207,6 +207,8 @@ interface Props {
   onCarveMotion?: () => Promise<void>;
   /** 合并相邻同类别片段：传入要合并的多组片段 id */
   onMergeAdjacent?: (groups: number[][]) => Promise<void>;
+  /** 智能切无信号：自动检测三轴全零断流区间，切开片段并自动标出「无信号」 */
+  onTrimZeroSignal?: () => Promise<void>;
   /** 只读时也能删（管理员 / 审核员直接删到服务器，不用认领）。删前都要确认 */
   canDeleteReadOnly?: boolean;
   /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
@@ -277,6 +279,7 @@ export default function SegmentPanel({
   onDedupe,
   onCarveMotion,
   onMergeAdjacent,
+  onTrimZeroSignal,
   onSplit,
   onLowlight,
   onReturnToCandidate,
@@ -818,6 +821,24 @@ export default function SegmentPanel({
             onConfirm={onDedupe}
           >
             <Button size="small">一键去重</Button>
+          </Popconfirm>
+        )}
+        {onTrimZeroSignal && (
+          <Popconfirm
+            title="智能切分并标出「无信号」？"
+            description={
+              <div style={{ maxWidth: 320, fontSize: 12 }}>
+                自动扫描三轴加速度全为 0（信号中断 ≥0.25s）的区间：<br />
+                · 将覆盖到零信号的片段自动切开（原已通过状态保留）<br />
+                · 在断流处自动标上「无信号」（不进模型训练，方便一眼识别）
+              </div>
+            }
+            okText="智能处理"
+            onConfirm={() => onTrimZeroSignal()}
+          >
+            <Button size="small" style={{ borderColor: "#607d8b", color: "#90a4ae" }}>
+              ⚡ 切无信号
+            </Button>
           </Popconfirm>
         )}
         {nMotionOverlap > 0 && onCarveMotion && (

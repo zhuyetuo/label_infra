@@ -101,6 +101,22 @@ export const segMergeAdjacent = (taskId: number, groups: number[][]) =>
   request.post<never, { groups_merged: number; removed: number }>(
     "/segments/merge-adjacent", { task_id: taskId, groups });
 
+/** 智能检测三轴加速度全为 0（信号中断）的区间，自动切开重叠片段并标出「无信号」 */
+export const segTrimZeroSignal = (body: {
+  task_id: number;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  item_id?: number | null;
+  min_zero_ms?: number;
+}) =>
+  request.post<never, {
+    zero_runs: number;
+    items_carved: number;
+    items_deleted: number;
+    pieces_created: number;
+    no_signal_added: number;
+  }>("/segments/trim-zero-signal", body);
+
 /** 整个项目一键去重（每个任务各跑一遍上面那套）。只给审核员 / 管理员 */
 export const segDedupeProject = (projectId: number) =>
   request.post<never, { tasks: number; tasks_changed: number; merged: number; removed_parent: number; conflicts_left: number }>(
