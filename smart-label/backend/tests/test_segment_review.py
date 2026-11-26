@@ -123,20 +123,29 @@ def test_审核员改起止不改状态_标注员不能动别人的(db, run):
         run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.ann))   # 标注员不能通过
 
 
-def test_工作台里改了通过的片段_回到待审(db, run):
+def test_工作台里改了通过的片段_调边界保留通过_改类别回待审(db, run):
     w = _world(db, run)
     it = w.items[2]
     run(api.decide(it.id, api.DecideIn(decision="approved"), db, w.rev))
     w.t.status = TaskStatus.IN_PROGRESS
     w.t.locked_by = w.ann.id
     run(db.commit())
+    # 1. 仅调整边界：保持原「已通过」状态
     payload = [SimpleNamespace(label_id=x.label_id, start_time_ms=x.start_time_ms + (100 if x.id == it.id else 0),
                                end_time_ms=x.end_time_ms, origin_item_id=x.id, source_type=None, ai_confidence=None,
                                ai_confirmed=None, uncertain=None, uncertain_reason=None)
                for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()]
     run(task_service.save_draft(db, w.t.id, w.ann, payload))
     got = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == it.id))).scalar_one()
-    assert got.seg_status is None
+    assert got.seg_status == "approved"
+    # 2. 改了类别：回到待审
+    payload2 = [SimpleNamespace(label_id=(w.other.id if x.id == it.id else x.label_id), start_time_ms=x.start_time_ms,
+                                end_time_ms=x.end_time_ms, origin_item_id=x.id, source_type=None, ai_confidence=None,
+                                ai_confirmed=None, uncertain=None, uncertain_reason=None)
+                for x in run(db.execute(select(AnnotationLabelItem))).scalars().all()]
+    run(task_service.save_draft(db, w.t.id, w.ann, payload2))
+    got2 = run(db.execute(select(AnnotationLabelItem).where(AnnotationLabelItem.id == it.id))).scalar_one()
+    assert got2.seg_status is None
 
 
 def test_导出只要审核通过的片段(db, run, tmp_path, monkeypatch):
