@@ -414,12 +414,36 @@ async def seen_codes_of(model_ids: list[int], db: AsyncSession) -> set[str]:
 COMPOSE_ROW_CAP = 400_000
 
 
+def _unclear_reason_of(uncertain: bool, uncertain_reason: str | None, marks: str | list | None) -> str | None:
+    """判断一条片段是否因画面看不清 / 没拍到 / 遮挡而应自动过滤。返回中文原因；None = 画面可用。"""
+    import json
+    if uncertain:
+        if uncertain_reason == "no_view":
+            return "没拍到/遮挡(待定)"
+        if uncertain_reason == "ambiguous":
+            return "拍到但看不准(待定)"
+        if uncertain_reason == "needs_split":
+            return "需细切(待定)"
+        return "待定(画面不清)"
+    if marks:
+        arr = marks
+        if isinstance(marks, str):
+            try:
+                arr = json.loads(marks)
+            except Exception:
+                arr = []
+        if isinstance(arr, list) and "unclear" in arr:
+            return "画面看不清(备忘)"
+    return None
+
+
 async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] | None = None,
                   dog_ids: list[int] | None = None, date_from=None, date_to=None, source: str = "any",
                   seen_mode: str = "any", model_ids: list[int] | None = None, per_group: int = 10,
                   max_total: int = 200, pad_sec: float = 60, min_sec: float = 0, set_id: int | None = None,
                   seed: int = 1, mode: str = "positive", anchor_names: list[str] | None = None,
                   per_dog: int | None = None, extra_taken: dict[int, list[tuple[int, int]]] | None = None,
+                  exclude_unclear: bool = True,
                   _cache: dict | None = None) -> dict:
     """按条件从已有片段里挑。返回 {picks: [...], stats, warnings}；不写库（写库见 compose_apply）。
 
@@ -460,12 +484,13 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
     else:
         label_cond = it.label_id.notin_(ids)
     q = (select(it.label_id, it.start_time_ms, it.end_time_ms, it.source_type, it.ai_confirmed, it.is_modified,
+                it.uncertain, it.uncertain_reason, it.marks,
                 Task.id, Task.status, Sample.id, Sample.sample_code, Sample.video_cam1_path, Sample.imu_csv_path,
                 Sample.dog_id, Sample.video_duration_sec, Sample.session_date)
          .join(AnnotationRecord, it.annotation_record_id == AnnotationRecord.id)
          .join(Task, Task.id == AnnotationRecord.task_id)
          .join(Sample, Sample.id == Task.sample_id)
-         .where(label_cond, AnnotationRecord.round_no == Task.round_no, it.uncertain.is_(False),
+         .where(label_cond, AnnotationRecord.round_no == Task.round_no,
                 Task.segment_start_ms.is_(None),
                 Task.project_id.in_(select(Project.id).where(Project.is_active.is_(True)))))
     if date_from is not None:
@@ -512,7 +537,11 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     n_in = Counter()
-    for lid, a, b, src, conf, mod, tid, tst, sid, code, cam, csv, sdog, dur, sday in rows:
+    skipped_unclear_cnt: Counter = Counter()
+    skipped_unclear_site: Counter = Counter()
+    skipped_unclear_dog: dict[str, dict] = {}
+    skipped_unclear_items: list[dict] = []
+    for lid, a, b, src, conf, mod, unc, u_reason, marks, tid, tst, sid, code, cam, csv, sdog, dur, sday in rows:
         human = tst in (TaskStatus.SUBMITTED, TaskStatus.APPROVED) or src != LabelItemSource.ai_generated or conf or mod
         if (source == "human" and not human) or (source == "ai" and human):
             continue
@@ -534,6 +563,26 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
         if did is None and (want_dogs or want_sites):
             continue
         leaf = neg_name if negative else lname.get(lid, "?")
+        ureason = _unclear_reason_of(bool(unc), u_reason, marks)
+        if ureason is not None and (unc or exclude_unclear):
+            skipped_unclear_cnt[ureason] += 1
+            skipped_unclear_site[site_name or "未知"] += 1
+            dname = dogs[did].name if did in dogs else "未知狗"
+            dk = str(did) if did is not None else "unknown"
+            entry = skipped_unclear_dog.setdefault(
+                dk,
+                {"dog_id": did, "dog_name": dname, "site": site_name or "未知", "n": 0, "reasons": Counter()},
+            )
+            entry["n"] += 1
+            entry["reasons"][ureason] += 1
+            if len(skipped_unclear_items) < 200:
+                skipped_unclear_items.append({
+                    "task_id": tid, "sample_code": code, "dog_name": dname,
+                    "site": site_name or "未知", "label": leaf,
+                    "start_ms": int(a), "end_ms": int(b), "reason": ureason,
+                    "date": str(sday) if sday else None,
+                })
+            continue
         n_in[(did, leaf)] += 1
         groups[(did, leaf)].append({"task_id": tid, "sample_id": sid, "a": int(a), "b": int(b), "human": bool(human),
                                     "dur_ms": int((dur or 0) * 1000), "date": sday, "label": leaf,
@@ -666,6 +715,16 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
     for (did, leaf), n in n_in.items():
         if did is not None:
             avail_by_id[did][leaf] = n
+    skipped_unclear = {
+        "total": sum(skipped_unclear_cnt.values()),
+        "by_reason": dict(skipped_unclear_cnt),
+        "by_site": dict(skipped_unclear_site),
+        "by_dog": [
+            {**v, "reasons": dict(v["reasons"])}
+            for v in sorted(skipped_unclear_dog.values(), key=lambda x: -x["n"])
+        ],
+        "items": skipped_unclear_items,
+    }
     stats = {
         "n_found": sum(n_in.values()), "n_picked": len(picks),
         "video_hours": round(sum(p["end_ms"] - p["start_ms"] for p in picks) / 3600_000, 2),
@@ -677,6 +736,7 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
         "by_source": dict(Counter("人工标过" if p["human"] else "AI 预标" for p in picks)),
         "by_date": dict(sorted(Counter(str(p["date"]) for p in picks).items())),
         "dur_buckets": [{"label": lb, "n": cnt} for (lb, _lo, _hi), cnt in zip(dur_buckets_def, dur_bucket_cnt)],
+        "skipped_unclear": skipped_unclear,
     }
     for p in picks:
         p["date"] = str(p["date"])
@@ -688,13 +748,15 @@ async def compose(db: AsyncSession, *, label_names: list[str], sites: list[str] 
 # ───────────── 选样计划：每只狗 × 时长 × 有/无 × 部位 的配额，一次挑完 ─────────────
 
 async def plan_availability(db: AsyncSession, plan: dict) -> dict:
-    """每只狗在条件范围里有多少这类片段（按细类）及真实动作时长阶梯分布，给选样页显示「可用」"""
+    """每只狗在条件范围里有多少这类片段（按细类）、真实动作时长阶梯分布，以及因画面看不清/遮挡被自动跳过的明细"""
     r = await compose(db, label_names=[plan["target"]], date_from=plan.get("date_from"), date_to=plan.get("date_to"),
                       source=plan.get("source", "any"), seen_mode=plan.get("seen_mode", "any"),
-                      model_ids=plan.get("model_ids"), per_group=1, max_total=1)
+                      model_ids=plan.get("model_ids"), per_group=1, max_total=1,
+                      exclude_unclear=plan.get("exclude_unclear", True))
     return {
         "by_dog": r["stats"].get("available_by_id", {}),
         "dur_buckets": r["stats"].get("dur_buckets", []),
+        "skipped_unclear": r["stats"].get("skipped_unclear"),
         "warnings": r["warnings"],
     }
 
@@ -762,6 +824,7 @@ async def plan_run(db: AsyncSession, set_id: int, plan: dict) -> dict:
     seed = int(plan.get("seed") or 1)
     common = dict(date_from=plan.get("date_from"), date_to=plan.get("date_to"), source=plan.get("source", "any"),
                   seen_mode=plan.get("seen_mode", "any"), model_ids=plan.get("model_ids"), set_id=set_id,
+                  exclude_unclear=plan.get("exclude_unclear", True),
                   _cache=cache, extra_taken=taken)
     picks: list[dict] = []
     report: dict[str, dict] = {}

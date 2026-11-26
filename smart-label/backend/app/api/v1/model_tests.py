@@ -68,6 +68,7 @@ class ComposeIn(BaseModel):
     # 无这类时以哪类片段为中心（比如相似动作 舔 / 甩头，或 活动 / 休息）；不给 = 任何别的类别
     anchor_names: list[str] | None = None
     per_dog: int | None = Field(default=None, ge=1, le=3000)   # 每只狗最多几段
+    exclude_unclear: bool = True   # 自动过滤画面看不清/遮挡（备忘=unclear 或待定）
 
 
 class CheckIn(BaseModel):
@@ -105,6 +106,7 @@ class PlanIn(BaseModel):
     seen_mode: Literal["any", "unseen", "seen"] = "any"
     model_ids: list[int] | None = None
     seed: int = 1
+    exclude_unclear: bool = True   # 自动过滤画面看不清/遮挡（备忘=unclear 或待定）
 
 
 async def _set_or_404(db: AsyncSession, set_id: int) -> ModelTestSet:
@@ -389,11 +391,23 @@ async def compose_apply(set_id: int, body: ComposeIn, db: AsyncSession = Depends
     if s.frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
     r = await svc.compose(db, set_id=set_id, **body.model_dump())
+    created: list[ModelTestItem] = []
     for p in r["picks"]:
-        db.add(ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
-                             end_ms=p["end_ms"], added_by=user.id,
-                             note=(f"按条件挑·{p['label']}" + (f"（以{p['anchor']}为中心）" if p.get("anchor") else "")
-                                   + f"·{round((p['end_ms'] - p['start_ms']) / 60000, 1)}分钟·{'人工标过' if p['human'] else 'AI 预标'}")[:300]))
+        it = ModelTestItem(set_id=set_id, task_id=p["task_id"], sample_id=p["sample_id"], start_ms=p["start_ms"],
+                           end_ms=p["end_ms"], added_by=user.id,
+                           note=(f"按条件挑·{p['label']}" + (f"（以{p['anchor']}为中心）" if p.get("anchor") else "")
+                                 + f"·{round((p['end_ms'] - p['start_ms']) / 60000, 1)}分钟·{'人工标过' if p['human'] else 'AI 预标'}")[:300])
+        db.add(it)
+        created.append(it)
+    if created:
+        from app.services import test_pool
+        await test_pool.inherit_checked_from_pool(db, created)
+        for it in created:
+            await test_pool.sync_window_to_test_pool(
+                db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+                user_id=user.id, checked=None, checked_by=it.checked_by, checked_at=it.checked_at,
+                note=it.note, source_set_id=set_id,
+            )
     await db.commit()
     return ok({"added": len(r["picks"]), "stats": r["stats"], "warnings": r["warnings"]})
 
@@ -433,9 +447,15 @@ async def plan_apply(set_id: int, body: PlanIn, db: AsyncSession = Depends(get_d
     s = await _set_or_404(db, set_id)
     if s.frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，不能再加；要补数据请先复制成新版本")
-    # 重新生成：先删掉这个测试集原来的片段记录（任务、标注不动），再按配比挑；不累加
+    # 重新生成：先同步原条目到测试数据池（保留已核对记录），再删掉本测试集原有条目，最后按配比重新挑
+    from app.services import test_pool
     old = (await db.execute(select(ModelTestItem).where(ModelTestItem.set_id == set_id))).scalars().all()
     for it in old:
+        await test_pool.sync_window_to_test_pool(
+            db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+            user_id=user.id, checked=(it.checked_at is not None), checked_by=it.checked_by, checked_at=it.checked_at,
+            note=it.note, source_set_id=set_id,
+        )
         await db.delete(it)
     await db.flush()
     r = await svc.plan_run(db, set_id, body.model_dump())
@@ -516,16 +536,57 @@ async def get_task_segments(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/items/{item_id}")
-async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_item(item_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """从测试集移出单条窗口：先沉淀到测试数据池（保留已核对与原任务标注），方便后续其他测试集直接续用。"""
+    from app.services import test_pool
+
     it = await db.get(ModelTestItem, item_id)
     if it is None:
         raise HTTPException(404, "不存在")
     s = await _set_or_404(db, it.set_id)
     if s.frozen_at is not None:
         raise HTTPException(400, "这一版已冻结，不能删")
+    await test_pool.sync_window_to_test_pool(
+        db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+        user_id=user.id, checked=(it.checked_at is not None), checked_by=it.checked_by, checked_at=it.checked_at,
+        note=it.note, source_set_id=it.set_id,
+    )
     await db.delete(it)
     await db.commit()
-    return ok({"deleted": 1})
+    return ok({"deleted": 1, "preserved_in_pool": 1})
+
+
+class BatchRemoveIn(BaseModel):
+    item_ids: list[int] = Field(min_length=1, max_length=2000)
+
+
+@router.post("/sets/{set_id}/items/remove")
+async def batch_remove_items(
+    set_id: int,
+    body: BatchRemoveIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """批量从测试集移出窗口（如剔除整个场地），同时把这些窗口（含已核对状态与原标注）保留在测试数据池，后续其他测试集复用可继续续上。"""
+    from app.services import test_pool
+
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，不能移出")
+    items = (await db.execute(
+        select(ModelTestItem).where(ModelTestItem.set_id == set_id, ModelTestItem.id.in_(body.item_ids))
+    )).scalars().all()
+    if not items:
+        return ok({"removed": 0, "preserved_in_pool": 0})
+    for it in items:
+        await test_pool.sync_window_to_test_pool(
+            db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
+            user_id=user.id, checked=(it.checked_at is not None), checked_by=it.checked_by, checked_at=it.checked_at,
+            note=it.note, source_set_id=set_id,
+        )
+        await db.delete(it)
+    await db.commit()
+    return ok({"removed": len(items), "preserved_in_pool": len(items)})
 
 
 class PromoteIn(BaseModel):

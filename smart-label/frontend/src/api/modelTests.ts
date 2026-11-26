@@ -88,6 +88,7 @@ export interface ComposeStats {
   by_site: Record<string, number>;
   by_source: Record<string, number>;
   by_date: Record<string, number>;
+  skipped_unclear?: SkippedUnclear;
 }
 export const getLabelTree = () => request.get<never, { name: string; parent: string | null }[]>("/model-tests/label-tree");
 export const composePreview = (setId: number, body: ComposeBody) =>
@@ -179,8 +180,18 @@ export interface PlanResult {
   /** 重新生成时删掉的原有片段数 */
   removed?: number;
 }
+export interface SkippedUnclear {
+  total: number;
+  by_reason: Record<string, number>;
+  by_site: Record<string, number>;
+  by_dog: { dog_id: number | null; dog_name: string; site: string; n: number; reasons: Record<string, number> }[];
+  items: {
+    task_id: number; sample_code: string; dog_name: string; site: string;
+    label: string; start_ms: number; end_ms: number; reason: string; date: string | null;
+  }[];
+}
 export const planAvailability = (plan: Plan) =>
-  request.post<never, { by_dog: Record<string, Record<string, number>>; dur_buckets?: { label: string; n: number }[]; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });
+  request.post<never, { by_dog: Record<string, Record<string, number>>; dur_buckets?: { label: string; n: number }[]; skipped_unclear?: SkippedUnclear; warnings: string[] }>("/model-tests/plan/availability", plan, { timeout: 300_000 });
 export const planPreview = (setId: number, plan: Plan) =>
   request.post<never, PlanResult>(`/model-tests/sets/${setId}/plan/preview`, plan, { timeout: 600_000 });
 export const planSave = (setId: number, plan: Plan) => request.post<never, { saved: boolean }>(`/model-tests/sets/${setId}/plan/save`, plan);
@@ -197,7 +208,10 @@ export const getTaskSegments = (taskId: number) =>
 /** pad_to_sec：凑够多少秒，围绕起止前后各延长一半（碰到头尾往另一边补），要先给起止 */
 export const addTestItems = (id: number, items: { task_id: number; start_ms?: number | null; end_ms?: number | null; note?: string; pad_to_sec?: number | null }[]) =>
   request.post<never, { added: number; skipped: { task_id: number; reason: string }[] }>(`/model-tests/sets/${id}/items`, { items });
-export const deleteTestItem = (itemId: number) => request.delete<never, { deleted: number }>(`/model-tests/items/${itemId}`);
+export const deleteTestItem = (itemId: number) => request.delete<never, { deleted: number; preserved_in_pool?: number }>(`/model-tests/items/${itemId}`);
+export const batchRemoveTestItems = (setId: number, item_ids: number[]) =>
+  request.post<never, { removed: number; preserved_in_pool: number }>(
+    `/model-tests/sets/${setId}/items/remove`, { item_ids });
 export const batchPromoteTestItems = (item_ids: number[]) =>
   request.post<never, { moved_windows: number; pooled_segments: number; removed_from_sets: number }>(
     "/model-tests/items/batch-promote", { item_ids });

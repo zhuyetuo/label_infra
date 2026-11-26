@@ -5,7 +5,7 @@
  * 「检查够不够」按这份配比在真实数据里试挑一遍（不写库）；「生成」写进测试集。
  */
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { Button, Collapse, DatePicker, Input, InputNumber, Popconfirm, Popover, Segmented, Select, Space, Spin, Tooltip, TreeSelect, message, theme } from "antd";
+import { Button, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Popover, Segmented, Select, Space, Spin, Table, Tag, Tooltip, TreeSelect, message, theme } from "antd";
 import { CloseOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -117,6 +117,7 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
   const alloc = (plan.alloc ?? DEFAULT_ALLOC) as Alloc;
   const [result, setResult] = useState<PlanResult | null>(null);
   const [busy, setBusy] = useState<"" | "check" | "apply" | "save">("");
+  const [unclearOpen, setUnclearOpen] = useState(false);
   const update = (fn: (p: Plan) => Plan) => { setPlan(fn); setResult(null); };
   const setAlloc = (patch: Partial<Alloc>) => update((p) => ({ ...p, alloc: { ...((p.alloc ?? DEFAULT_ALLOC) as Alloc), ...patch } }));
 
@@ -479,6 +480,36 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
         </Space>
       </div>
 
+      {/* 自动过滤的「画面看不清 / 遮挡」数据透明提示 */}
+      {avail?.skipped_unclear && avail.skipped_unclear.total > 0 && (
+        <div style={{
+          ...card,
+          padding: "10px 14px",
+          borderColor: token.colorInfoBorder,
+          background: token.colorInfoBg,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 8,
+        }}>
+          <Space wrap size={[6, 4]}>
+            <span style={{ fontSize: 13 }}>
+              已自动过滤 <b>{avail.skipped_unclear.total}</b> 条本符合条件的「画面看不清 / 遮挡」{plan.target}片段（不纳入测试）：
+            </span>
+            {Object.entries(avail.skipped_unclear.by_reason).map(([reason, n]) => (
+              <Tag key={reason} color="cyan" style={{ marginInlineEnd: 0, fontSize: 11 }}>{reason} {n}</Tag>
+            ))}
+            {Object.entries(avail.skipped_unclear.by_site).map(([site, n]) => (
+              <Tag key={site} style={{ marginInlineEnd: 0, fontSize: 11 }}>{SITE_SHORT[site] ?? site} {n}</Tag>
+            ))}
+          </Space>
+          <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setUnclearOpen(true)}>
+            查看被过滤的数据明细 ({avail.skipped_unclear.items.length}{avail.skipped_unclear.total > avail.skipped_unclear.items.length ? "+" : ""})
+          </Button>
+        </div>
+      )}
+
       {/* 检查结果 */}
       {busy === "check" && <div style={{ ...card, color: muted }}><Spin size="small" /> 正在按这份配比在真实数据里试挑（{total} 段，约 20 秒）…</div>}
       {result && busy !== "check" && (
@@ -706,6 +737,53 @@ export default function ModelTestPlan({ setId, initial, frozen, accent = "#27AE6
           );
         })(),
       }]} />
+      {/* 被自动过滤的「画面看不清 / 遮挡」明细弹窗 */}
+      <Modal
+        title={`因画面看不清 / 遮挡被自动过滤的${plan.target}片段（共 ${avail?.skipped_unclear?.total ?? 0} 条）`}
+        open={unclearOpen}
+        onCancel={() => setUnclearOpen(false)}
+        footer={null}
+        width={860}
+      >
+        {avail?.skipped_unclear && (
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <div style={{ fontSize: 12, color: muted }}>
+              以下片段满足当前筛选条件（类别 / 来源 / 模型见没见过 / 日期），原本可用，但因为已标记「看不清狗（备忘）」或「待定（没拍到/遮挡/看不准）」，在构建测试集时自动剔除。
+            </div>
+            {avail.skipped_unclear.by_dog.length > 0 && (
+              <Space wrap size={[6, 6]}>
+                {avail.skipped_unclear.by_dog.map((d) => (
+                  <Tag key={`${d.dog_id ?? d.dog_name}`} color="default" style={{ marginInlineEnd: 0 }}>
+                    {d.dog_name}（{SITE_SHORT[d.site] ?? d.site}）：<b>{d.n}</b> 条
+                  </Tag>
+                ))}
+              </Space>
+            )}
+            <Table
+              size="small"
+              rowKey={(r, i) => `${r.task_id}-${r.start_ms}-${i}`}
+              pagination={{ pageSize: 12 }}
+              dataSource={avail.skipped_unclear.items}
+              columns={[
+                { title: "任务", dataIndex: "task_id", width: 76 },
+                { title: "狗", dataIndex: "dog_name", width: 84 },
+                { title: "场地", dataIndex: "site", width: 110, render: (v: string) => SITE_SHORT[v] ?? v },
+                { title: "类别", dataIndex: "label", width: 110 },
+                {
+                  title: "时段",
+                  width: 130,
+                  render: (_, r) => {
+                    const fmt = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+                    return <span style={{ fontFamily: "monospace", fontSize: 12 }}>{fmt(r.start_ms)}–{fmt(r.end_ms)}</span>;
+                  },
+                },
+                { title: "跳过原因", dataIndex: "reason", width: 130, render: (v: string) => <Tag color="cyan">{v}</Tag> },
+                { title: "样本", dataIndex: "sample_code", ellipsis: true },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, batchPromoteTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, promoteTestItemToPool, updateTestSet,
+  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, promoteTestItemToPool, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -440,6 +440,24 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
               {Object.entries(st.by_source).map(([k, n]) => <Tag key={k} color={k === "人工标过" ? "green" : "orange"}>{k} {n}</Tag>)}
               <span style={{ color: "#888" }}>日期 {Object.keys(st.by_date).length} 天</span>
             </Space>
+            {st.skipped_unclear && st.skipped_unclear.total > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ padding: "6px 12px" }}
+                message={
+                  <Space wrap size={[6, 4]}>
+                    <span>已自动过滤 <b>{st.skipped_unclear.total}</b> 条本符合条件的「画面看不清 / 遮挡」片段（不纳入测试）：</span>
+                    {Object.entries(st.skipped_unclear.by_reason).map(([reason, n]) => (
+                      <Tag key={reason} color="cyan" style={{ marginInlineEnd: 0, fontSize: 11 }}>{reason} {n}</Tag>
+                    ))}
+                    {Object.entries(st.skipped_unclear.by_site).map(([site, n]) => (
+                      <Tag key={site} style={{ marginInlineEnd: 0, fontSize: 11 }}>{site} {n}</Tag>
+                    ))}
+                  </Space>
+                }
+              />
+            )}
             <Table size="small" bordered pagination={false} rowKey="dog" scroll={{ x: true }}
               dataSource={dogRows.map((dog) => ({ dog }))}
               columns={[
@@ -1614,7 +1632,26 @@ function SetDetail({ setId }: { setId: number }) {
   const [promoting, setPromoting] = useState<number | null>(null);
   const [pickedTestIds, setPickedTestIds] = useState<number[]>([]);
   const [batchPromoting, setBatchPromoting] = useState(false);
-  useEffect(() => { setPickedTestIds([]); }, [setId]);
+  const [batchRemoving, setBatchRemoving] = useState(false);
+  const [itemSiteFilter, setItemSiteFilter] = useState<string | null>(null);
+  useEffect(() => { setPickedTestIds([]); setItemSiteFilter(null); }, [setId]);
+  const batchRemoveSelected = async () => {
+    if (!pickedTestIds.length) return;
+    setBatchRemoving(true);
+    try {
+      const r = await batchRemoveTestItems(setId, pickedTestIds);
+      message.success(
+        `已从本测试集移出 ${r.removed} 段，并保留在测试数据池（原标注和已核对状态不丢失，其他测试集复用可继续续上）`,
+        5,
+      );
+      setPickedTestIds([]);
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+      qc.invalidateQueries({ queryKey: ["model-test-sets"] });
+      qc.invalidateQueries({ queryKey: ["test-pool"] });
+    } finally {
+      setBatchRemoving(false);
+    }
+  };
   const batchPromoteSelected = async () => {
     if (!pickedTestIds.length) return;
     setBatchPromoting(true);
@@ -1711,11 +1748,17 @@ function SetDetail({ setId }: { setId: number }) {
   const uncheckedCount = data.items.length - checkedCount;
   const pendingCandsOf = (r: TestItem) =>
     Object.values(r.cands ?? {}).reduce((sum, v) => sum + (v.pending ?? 0), 0);
-  const filteredItems = itemCheckFilter === "all"
-    ? data.items
-    : itemCheckFilter === "checked"
-      ? data.items.filter((i) => i.checked)
-      : data.items.filter((i) => !i.checked);
+  const siteCounts = new Map<string, number>();
+  for (const it of data.items) {
+    const sk = it.site || "未知场地";
+    siteCounts.set(sk, (siteCounts.get(sk) ?? 0) + 1);
+  }
+  const filteredItems = data.items.filter((i) => {
+    if (itemCheckFilter === "checked" && !i.checked) return false;
+    if (itemCheckFilter === "unchecked" && i.checked) return false;
+    if (itemSiteFilter && (i.site || "未知场地") !== itemSiteFilter) return false;
+    return true;
+  });
   const wsFromEval = !!wsWin?.evalHint;
   const checkAll = async (checked: boolean) => {
     setCheckingAll(true);
@@ -1770,17 +1813,43 @@ function SetDetail({ setId }: { setId: number }) {
                         { label: `已核对 ${checkedCount}`, value: "checked" },
                       ]}
                     />
+                    {siteCounts.size > 1 && (
+                      <Select
+                        size="small"
+                        allowClear
+                        placeholder="按场地筛"
+                        style={{ minWidth: 150 }}
+                        value={itemSiteFilter}
+                        onChange={(v) => { setItemSiteFilter(v ?? null); setPickedTestIds([]); }}
+                        options={Array.from(siteCounts.entries()).map(([site, n]) => ({
+                          value: site,
+                          label: `${site} (${n})`,
+                        }))}
+                      />
+                    )}
                     {!frozen && pickedTestIds.length > 0 && (
-                      <Popconfirm
-                        title={`将勾选的 ${pickedTestIds.length} 段拨到训练数据池？`}
-                        description="拨出后解除测试隔离、从未冻结测试集移出，窗内已核对标注直接进入训练数据池（下次训练立刻可用）。"
-                        okText="确认拨入训练池"
-                        onConfirm={batchPromoteSelected}
-                      >
-                        <Button size="small" type="primary" loading={batchPromoting}>
-                          ➡️ 拨到训练数据池（{pickedTestIds.length}）
-                        </Button>
-                      </Popconfirm>
+                      <>
+                        <Popconfirm
+                          title={`从本测试集移出勾选的 ${pickedTestIds.length} 段？`}
+                          description="移出后会保留在测试数据池，原标注和已核对进度不会丢失，下次其他测试集用到可直接续上。"
+                          okText="确认移出（保留标注）"
+                          onConfirm={batchRemoveSelected}
+                        >
+                          <Button size="small" loading={batchRemoving}>
+                            移出测试集·保留标注（{pickedTestIds.length}）
+                          </Button>
+                        </Popconfirm>
+                        <Popconfirm
+                          title={`将勾选的 ${pickedTestIds.length} 段拨到训练数据池？`}
+                          description="拨出后解除测试隔离、从未冻结测试集移出，窗内已核对标注直接进入训练数据池（下次训练立刻可用）。"
+                          okText="确认拨入训练池"
+                          onConfirm={batchPromoteSelected}
+                        >
+                          <Button size="small" type="primary" loading={batchPromoting}>
+                            ➡️ 拨到训练数据池（{pickedTestIds.length}）
+                          </Button>
+                        </Popconfirm>
+                      </>
                     )}
                     <Typography.Text style={{ fontSize: 12, color: uncheckedCount > 0 ? "#faad14" : "#52c41a" }}>
                       {uncheckedCount > 0
