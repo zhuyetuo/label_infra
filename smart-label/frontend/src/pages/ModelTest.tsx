@@ -2127,7 +2127,7 @@ function SetDetail({ setId }: { setId: number }) {
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
               </Space>
               <Table<TestItem>
-                size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }} scroll={{ x: 1260 }}
+                size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }} scroll={{ x: 1860 }}
                 rowSelection={!frozen ? {
                   selectedRowKeys: pickedTestIds,
                   onChange: (keys) => setPickedTestIds(keys as number[]),
@@ -2179,16 +2179,16 @@ function SetDetail({ setId }: { setId: number }) {
                       </Tag>
                     ),
                   },
-                  { title: "标了什么", render: (_, r) => (
-                    <Space size={4} wrap>
+                  { title: "标了什么", width: 280, render: (_, r) => (
+                    <Space size={[4, 4]} wrap>
                       {/* 颜色跟工作台里的标签一样；抓挠排最前。实心 = 已有片段，虚线框 = 疑似片段待判 */}
                       {Object.entries(r.labels).sort(([a], [b]) => labelRank(a) - labelRank(b)).map(([k, v]) => (
-                        <Tag key={k} color={colorOf(k)} style={TAG_SOLID}>{k} {v.n}次 · {fmtSec(v.sec)}</Tag>))}
-                      {r.n_uncertain > 0 && <Tag color="gold" style={TAG_SOLID}>待定 {r.n_uncertain}</Tag>}
+                        <Tag key={k} color={colorOf(k)} style={{ ...TAG_SOLID, marginInlineEnd: 0 }}>{k} {v.n}次 · {fmtSec(v.sec)}</Tag>))}
+                      {r.n_uncertain > 0 && <Tag color="gold" style={{ ...TAG_SOLID, marginInlineEnd: 0 }}>待定 {r.n_uncertain}</Tag>}
                       {Object.entries(r.cands ?? {}).map(([k, v]) => (v.pending ?? 0) > 0 && (
                         <Tooltip key={`c-${k}`} title="疑似片段（还没判）：工作台往下滚到「疑似片段」面板，确认 / 排除 / 调起止">
-                          <Tag style={{ ...TAG_SOLID, background: "transparent", color: colorOf(k) ?? "#2f54eb",
-                            border: `1.5px dashed ${colorOf(k) ?? "#2f54eb"}` }}>？疑似{k} {v.pending} 待判</Tag>
+                          <Tag style={{ ...TAG_SOLID, marginInlineEnd: 0, background: "transparent", color: colorOf(k) ?? "#2f54eb",
+                            border: `1.5px dashed ${colorOf(k) ?? "#2f54eb"}` }}>？疑似{k.replace(/^疑似/, "")} {v.pending} 待判</Tag>
                         </Tooltip>))}
                       {!Object.keys(r.labels).length && !Object.values(r.cands ?? {}).some((v) => (v.pending ?? 0) > 0)
                         && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
@@ -2201,7 +2201,7 @@ function SetDetail({ setId }: { setId: number }) {
                     title: "来源 / 备注", dataIndex: "note", width: 215,
                     render: (note: string | null) => {
                       if (!note) return <span style={{ color: "#666" }}>—</span>;
-                      if (note.startsWith("选样·") || note.startsWith("按条件挑·")) {
+                      if (note.startsWith("选样·") || note.startsWith("按条件挑·") || note.startsWith("替换影棚·")) {
                         const parts = note.split("·").slice(1).filter(Boolean);
                         const tagColor = (t: string) => {
                           if (t.startsWith("有")) return "red";
