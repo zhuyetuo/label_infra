@@ -101,63 +101,329 @@ type OpenTaskOpts = {
 // ───────────────────────── 配额表 ─────────────────────────
 function CoverageView({ cov }: { cov: Coverage }) {
   const sizes = Object.keys(cov.matrix);
+  const nChecked = cov.n_checked ?? 0;
+  const checkPct = cov.n_items > 0 ? Math.round((nChecked / cov.n_items) * 100) : 0;
+  const nDays = Object.keys(cov.dates ?? {}).length;
+
+  // 归并同类提示，压成一行紧凑胶囊（不再占满半屏）
+  const dogShareWarns: string[] = [];
+  const otherWarns: string[] = [];
+  for (const w of cov.warnings ?? []) {
+    if (w.includes("占总时长") && w.includes("超过")) dogShareWarns.push(w);
+    else otherWarns.push(w);
+  }
+
+  // 汇总抓挠总事件数与时长
+  let scratchEvents = 0;
+  let scratchSec = 0;
+  for (const sz of sizes) {
+    const cell = cov.matrix[sz]?.["抓挠"] as { items: number; n: number; sec: number } | undefined;
+    if (cell) {
+      scratchEvents += cell.n ?? 0;
+      scratchSec += cell.sec ?? 0;
+    }
+  }
+
+  // 每列最大事件数（用于热力进度条归一化；抓挠以 100 次为满条参考）
+  const colMax: Record<string, number> = {};
+  for (const tp of TOPS) {
+    let m = tp === "抓挠" ? 100 : 1;
+    for (const sz of sizes) {
+      const c = cov.matrix[sz]?.[tp] as { n?: number } | undefined;
+      if (c?.n && c.n > m) m = c.n;
+    }
+    colMax[tp] = m;
+  }
+
+  const TOP_COLOR: Record<string, string> = {
+    抓挠: "#52c41a",
+    活动: "#faad14",
+    "静止/休息": "#4096ff",
+    未佩戴: "#8c8c8c",
+  };
+
+  const durRows = Object.entries(cov.by_dur ?? {}).map(([dur, m]) => ({
+    dur,
+    yes: m["有抓挠"] ?? 0,
+    no: m["无抓挠"] ?? 0,
+    total: (m["有抓挠"] ?? 0) + (m["无抓挠"] ?? 0),
+  }));
+  const maxDurTotal = Math.max(1, ...durRows.map((r) => r.total));
+
+  const sortedDogs = [...(cov.dogs ?? [])].sort((a, b) => b.share - a.share);
+  const maxDogShare = Math.max(0.2, ...sortedDogs.map((d) => d.share));
+
+  const leafEntries = Object.entries(cov.leaf ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 24);
+  const maxLeaf = Math.max(1, ...leafEntries.map(([, n]) => n));
+
+  const cardStyle: React.CSSProperties = {
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.09)",
+    borderRadius: 8,
+    padding: "10px 14px",
+  };
+
   return (
-    <Space direction="vertical" style={{ width: "100%" }} size={12}>
-      {cov.warnings.map((w) => <Alert key={w} type="warning" showIcon message={w} />)}
-      <Space wrap>
-        <span>共 <b>{cov.n_items}</b> 段，<b>{fmtSec(cov.total_sec)}</b>，<b>{cov.n_dogs}</b> 只狗</span>
-        {Object.entries(cov.kinds).map(([k, n]) => <Tag key={k}>{k} {n}</Tag>)}
-        {Object.entries(cov.sites).map(([k, n]) => <Tag key={k} color="blue">{k} {n}</Tag>)}
-        <span style={{ color: "#888" }}>日期 {Object.keys(cov.dates).length} 天</span>
-      </Space>
-      <Table
-        size="small" pagination={false} rowKey="size" bordered
-        dataSource={sizes.map((sz) => ({ size: sz, ...cov.matrix[sz] }))}
-        columns={[
-          { title: "体型", dataIndex: "size", width: 70 },
-          ...TOPS.map((tp) => ({
-            title: tp, key: tp,
-            render: (_: unknown, r: Record<string, unknown>) => {
-              const c = (r[tp] ?? { items: 0, n: 0, sec: 0 }) as { items: number; n: number; sec: number };
-              if (!c.items) return <span style={{ color: "#ff4d4f" }}>缺</span>;
-              return (
-                <Tooltip title={`${c.items} 段测试数据里有「${tp}」，一共 ${c.n} 次（事件），${fmtSec(c.sec)}`}>
-                  <span><b>{c.n}</b> 次 · {fmtSec(c.sec)} <span style={{ color: "#888" }}>（{c.items} 段）</span></span>
-                </Tooltip>
-              );
-            },
-          })),
-        ]}
-      />
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        数事件数，不是段数：抓挠每种体型 30 次左右，召回率的误差约 ±15%；100 次左右才稳到 ±8%。红色「缺」的格子是下一批要补的。
-      </Typography.Text>
-      {Object.keys(cov.by_dur ?? {}).length > 0 && (
-        <Table size="small" bordered pagination={false} rowKey="dur" style={{ maxWidth: 520 }}
-          dataSource={Object.entries(cov.by_dur ?? {}).map(([dur, m]) => ({ dur, yes: m["有抓挠"] ?? 0, no: m["无抓挠"] ?? 0 }))}
-          columns={[
-            { title: "时长", dataIndex: "dur" },
-            { title: "有抓挠", dataIndex: "yes", render: (v: number) => <b style={{ color: "#27AE60" }}>{v}</b> },
-            { title: "无抓挠", dataIndex: "no", render: (v: number) => <b style={{ color: "#5D6D7E" }}>{v}</b> },
-            { title: "合计", render: (_, r) => r.yes + r.no },
-          ]} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* 1. 顶部一行紧凑提醒条（同类归并，悬停看详情） */}
+      {(dogShareWarns.length > 0 || otherWarns.length > 0) && (
+        <div style={{
+          display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8,
+          padding: "6px 12px", borderRadius: 6,
+          background: "rgba(250, 173, 20, 0.08)", border: "1px solid rgba(250, 173, 20, 0.28)",
+          fontSize: 12,
+        }}>
+          <span style={{ color: "#faad14", fontWeight: 600 }}>体检提醒</span>
+          {dogShareWarns.length > 0 && (
+            <Popover
+              placement="bottomLeft"
+              content={
+                <div style={{ maxWidth: 320, fontSize: 12, lineHeight: 1.7 }}>
+                  {dogShareWarns.map((w) => <div key={w}>• {w}</div>)}
+                  <div style={{ color: "#888", marginTop: 4 }}>单只狗占比过高会让测试分偏向那只狗；狗数较少（如 6 只平均约 17%）时属正常现象。</div>
+                </div>
+              }
+            >
+              <Tag color="warning" style={{ marginInlineEnd: 0, cursor: "pointer" }}>
+                {dogShareWarns.length} 只狗占比 &gt;15%（悬停看明细）
+              </Tag>
+            </Popover>
+          )}
+          {otherWarns.map((w) => {
+            const short = w.includes("：") ? w.split("：")[0] : (w.length > 26 ? `${w.slice(0, 26)}…` : w);
+            return (
+              <Tooltip key={w} title={w}>
+                <Tag color="orange" style={{ marginInlineEnd: 0, cursor: "help" }}>{short}</Tag>
+              </Tooltip>
+            );
+          })}
+        </div>
       )}
-      <Space wrap>
-        <span>人工核对过 <b>{cov.n_checked ?? 0}</b> / {cov.n_items} 段</span>
-        {Object.keys(cov.leaf ?? {}).length > 0 && <span style={{ color: "#888" }}>细类（部位）：</span>}
-        {Object.entries(cov.leaf ?? {}).slice(0, 30).map(([k, n]) => <Tag key={k}>{k} {n}</Tag>)}
-      </Space>
-      <Table
-        size="small" pagination={false} rowKey={(r) => `${r.site}-${r.dog}`}
-        dataSource={cov.dogs}
-        columns={[
-          { title: "场地", dataIndex: "site", render: (v) => v ?? "未知" },
-          { title: "狗", dataIndex: "dog", render: (v) => v ?? "未知" },
-          { title: "时长", dataIndex: "sec", render: (v: number) => fmtSec(v) },
-          { title: "占比", dataIndex: "share", render: (v: number) => <span style={{ color: v > 0.15 ? "#ff4d4f" : undefined }}>{pct(v)}</span> },
-        ]}
-      />
-    </Space>
+
+      {/* 2. 顶部 5 张简约 KPI 卡片 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 10 }}>
+        <div style={cardStyle}>
+          <div style={{ fontSize: 11, color: "#888" }}>总段数 / 长短分布</div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, marginTop: 2 }}>{cov.n_items} <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>段</span></div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4, fontSize: 11, color: "#aaa" }}>
+            {Object.entries(cov.kinds ?? {}).map(([k, n]) => (
+              <span key={k}>{k.replace("片段", "")} <b style={{ color: "#ddd" }}>{n}</b></span>
+            ))}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontSize: 11, color: "#888" }}>总时长 / 跨度</div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, marginTop: 2 }}>{fmtSec(cov.total_sec)}</div>
+          <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>覆盖 <b style={{ color: "#ddd" }}>{nDays}</b> 天数据</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888" }}>
+            <span>人工核对进度</span>
+            <span style={{ color: checkPct === 100 ? "#52c41a" : "#faad14", fontWeight: 600 }}>{checkPct}%</span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, marginTop: 2 }}>
+            {nChecked} <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>/ {cov.n_items}</span>
+          </div>
+          <div style={{ height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden", marginTop: 6 }}>
+            <div style={{ width: `${checkPct}%`, height: "100%", background: checkPct === 100 ? "#52c41a" : "#1677ff" }} />
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontSize: 11, color: "#888" }}>抓挠事件量（核心评测）</div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, marginTop: 2, color: "#52c41a" }}>
+            {scratchEvents} <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>次</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>累计 <b style={{ color: "#ddd" }}>{fmtSec(scratchSec)}</b></div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontSize: 11, color: "#888" }}>狗数 / 场地</div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.3, marginTop: 2 }}>{cov.n_dogs} <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>只狗</span></div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+            {Object.entries(cov.sites ?? {}).map(([k, n]) => (
+              <Tag key={k} color="blue" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "16px", padding: "0 5px" }}>
+                {k.replace("狗场", "")} {n}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. 体型 × 类别 热力矩阵 */}
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <Space size={6}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>体型 × 类别 覆盖矩阵</span>
+            <Tooltip title="数事件数而非段数：抓挠每种体型 30 次左右召回率误差约 ±15%，100 次左右稳到 ±8%。红色「缺」表示该体型缺少该类别样本。">
+              <QuestionCircleOutlined style={{ color: "#888", fontSize: 12, cursor: "help" }} />
+            </Tooltip>
+          </Space>
+          <span style={{ fontSize: 11, color: "#888" }}>进度条：抓挠以 100 次为满格，其余按同列最高归一化</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: `64px repeat(${TOPS.length}, minmax(130px, 1fr))`, gap: 6, alignItems: "stretch" }}>
+          <div style={{ fontSize: 11, color: "#888", padding: "4px 6px" }}>体型</div>
+          {TOPS.map((tp) => (
+            <div key={tp} style={{ fontSize: 12, fontWeight: 600, padding: "4px 8px", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: TOP_COLOR[tp] ?? "#888" }} />
+              {tp}
+            </div>
+          ))}
+          {sizes.map((sz) => (
+            <div key={sz} style={{ display: "contents" }}>
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontWeight: 600, fontSize: 13, background: "rgba(255,255,255,0.02)", borderRadius: 6,
+              }}>
+                {sz}型
+              </div>
+              {TOPS.map((tp) => {
+                const c = (cov.matrix[sz]?.[tp] ?? { items: 0, n: 0, sec: 0 }) as { items: number; n: number; sec: number };
+                const clr = TOP_COLOR[tp] ?? "#1677ff";
+                if (!c.items) {
+                  return (
+                    <div key={`${sz}-${tp}`} style={{
+                      padding: "8px 10px", borderRadius: 6,
+                      background: "rgba(255, 77, 79, 0.06)", border: "1px dashed rgba(255, 77, 79, 0.25)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      <Tag color="error" style={{ marginInlineEnd: 0, fontSize: 11 }}>缺</Tag>
+                    </div>
+                  );
+                }
+                const ratio = Math.min(1, c.n / colMax[tp]);
+                return (
+                  <Tooltip key={`${sz}-${tp}`} title={`${sz}型 · ${tp}：${c.n} 次事件，累计 ${fmtSec(c.sec)}，分布在 ${c.items} 段窗口`}>
+                    <div style={{
+                      padding: "7px 10px", borderRadius: 6,
+                      background: `color-mix(in srgb, ${clr} ${Math.round(5 + ratio * 12)}%, transparent)`,
+                      border: `1px solid color-mix(in srgb, ${clr} 24%, transparent)`,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                        <span style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{c.n} <span style={{ fontSize: 11, fontWeight: 400, color: "#aaa" }}>次</span></span>
+                        <span style={{ fontSize: 11, color: "#aaa", fontVariantNumeric: "tabular-nums" }}>{fmtSec(c.sec)} · {c.items}段</span>
+                      </div>
+                      <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", overflow: "hidden", marginTop: 5 }}>
+                        <div style={{ width: `${Math.max(4, Math.round(ratio * 100))}%`, height: "100%", background: clr }} />
+                      </div>
+                    </div>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 4. 下方双栏：左「时长 × 有/无抓挠」双向条形图，右「各狗时长占比」条形图 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        {durRows.length > 0 && (
+          <div style={cardStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>时长 × 有/无抓挠</span>
+              <Space size={10} style={{ fontSize: 11, color: "#aaa" }}>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#52c41a", marginRight: 4 }} />有抓挠</span>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#4a6fa5", marginRight: 4 }} />无抓挠</span>
+              </Space>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {durRows.map((r) => {
+                const wPct = Math.round((r.total / maxDurTotal) * 100);
+                const yPct = r.total > 0 ? Math.round((r.yes / r.total) * 100) : 0;
+                return (
+                  <div key={r.dur} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <span style={{ width: 54, flex: "none", color: "#ccc" }}>{r.dur}</span>
+                    <div style={{ flex: 1, height: 18, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{ width: `${Math.max(6, wPct)}%`, height: "100%", display: "flex" }}>
+                        {r.yes > 0 && (
+                          <Tooltip title={`${r.dur} · 有抓挠：${r.yes} 段（${yPct}%）`}>
+                            <div style={{
+                              width: `${yPct}%`, background: "#52c41a", color: "#fff", fontSize: 11,
+                              display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                            }}>{r.yes}</div>
+                          </Tooltip>
+                        )}
+                        {r.no > 0 && (
+                          <Tooltip title={`${r.dur} · 无抓挠：${r.no} 段（${100 - yPct}%）`}>
+                            <div style={{
+                              width: `${100 - yPct}%`, background: "#4a6fa5", color: "#fff", fontSize: 11,
+                              display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                            }}>{r.no}</div>
+                          </Tooltip>
+                        )}
+                      </div>
+                    </div>
+                    <span style={{ width: 42, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{r.total}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>各狗时长占比</span>
+            <span style={{ fontSize: 11, color: "#888" }}>警戒线 15%（橙色偏重）</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7, position: "relative" }}>
+            {sortedDogs.map((d) => {
+              const barPct = Math.round((d.share / maxDogShare) * 100);
+              const linePct = Math.round((0.15 / maxDogShare) * 100);
+              const over = d.share > 0.15;
+              return (
+                <div key={`${d.site}-${d.dog}`} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <Tooltip title={`${d.site ?? "未知"} · ${d.dog ?? "未知"}`}>
+                    <span style={{ width: 64, flex: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#ddd" }}>
+                      {d.dog ?? "未知"}
+                    </span>
+                  </Tooltip>
+                  <div style={{ flex: 1, height: 14, background: "rgba(255,255,255,0.05)", borderRadius: 4, position: "relative", overflow: "hidden" }}>
+                    <div style={{
+                      width: `${Math.max(2, barPct)}%`, height: "100%",
+                      background: over ? "#faad14" : "#1677ff", borderRadius: 4,
+                    }} />
+                    <div style={{
+                      position: "absolute", left: `${linePct}%`, top: 0, bottom: 0,
+                      borderLeft: "1px dashed rgba(255, 77, 79, 0.7)",
+                    }} />
+                  </div>
+                  <span style={{ width: 44, textAlign: "right", color: over ? "#faad14" : "#ccc", fontWeight: over ? 600 : 400, fontVariantNumeric: "tabular-nums" }}>
+                    {pct(d.share)}
+                  </span>
+                  <span style={{ width: 46, textAlign: "right", color: "#888", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+                    {fmtSec(d.sec)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 5. 细类（部位）分布 */}
+      {leafEntries.length > 0 && (
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>细类 / 部位分布</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {leafEntries.map(([k, n]) => {
+              const r = Math.round((n / maxLeaf) * 100);
+              return (
+                <div key={k} style={{
+                  padding: "3px 8px", borderRadius: 4, fontSize: 12,
+                  background: `linear-gradient(90deg, rgba(22,119,255,0.18) ${r}%, rgba(255,255,255,0.04) ${r}%)`,
+                  border: "1px solid rgba(255,255,255,0.08)",
+                }}>
+                  <span style={{ color: "#ddd" }}>{k}</span> <b style={{ marginLeft: 4, fontVariantNumeric: "tabular-nums" }}>{n}</b>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
