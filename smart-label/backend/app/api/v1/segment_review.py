@@ -806,6 +806,93 @@ async def trim_zero_signal(
     })
 
 
+class ResolveOverlapIn(BaseModel):
+    winner_id: int
+    loser_id: int
+    min_keep_ms: int = Field(default=150, ge=0, le=5000)
+
+
+@router.post("/resolve-overlap")
+async def resolve_overlap(
+    body: ResolveOverlapIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """解决两条重叠/冲突片段：winner 保持不变，从 loser 中挖掉与 winner 重叠的区间
+    （loser 被完全盖住则删除，单侧露出则裁剪，两侧露出则拆成两段；原审核状态保留）。"""
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.services.task_service import _append_boundary_edit
+
+    if body.winner_id == body.loser_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "不能用自己覆盖自己")
+    winner, task = await _load(db, body.winner_id, user)
+    loser, task2 = await _load(db, body.loser_id, user)
+    if winner.annotation_record_id != loser.annotation_record_id or task.id != task2.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "两条片段不在同一个任务中")
+    if not _is_reviewer(user) and task.assigned_to != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "这个任务不在你名下")
+
+    ws, we = winner.start_time_ms, winner.end_time_ms
+    ls, le = loser.start_time_ms, loser.end_time_ms
+    if min(we, le) <= max(ws, ls):
+        return ok({"action": "noop", "winner_id": winner.id, "loser_id": loser.id, "pieces_left": 1})
+
+    pieces: list[tuple[int, int]] = []
+    if ws > ls and (ws - ls) >= body.min_keep_ms:
+        pieces.append((ls, ws))
+    if le > we and (le - we) >= body.min_keep_ms:
+        pieces.append((we, le))
+
+    now = _now()
+    if not pieces:
+        cid = loser.from_candidate_id
+        await db.delete(loser)
+        if cid is not None:
+            cand = await db.get(AiCandidate, cid)
+            if cand is not None and cand.status == CandidateStatus.confirmed:
+                cand.status = CandidateStatus.rejected
+                cand.decided_by, cand.decided_at = user.id, _decided_at()
+        await db.commit()
+        return ok({"action": "deleted", "winner_id": winner.id, "loser_id": loser.id, "pieces_left": 0})
+
+    old = (loser.start_time_ms, loser.end_time_ms)
+    loser.start_time_ms, loser.end_time_ms = pieces[0]
+    loser.boundary_edits = _append_boundary_edit(loser.boundary_edits, old, pieces[0], user)
+    if loser.source_type == LabelItemSource.ai_generated:
+        loser.is_modified = True
+    loser.touched_at, loser.touched_by = now, user.id
+
+    for ps, pe in pieces[1:]:
+        db.add(AnnotationLabelItem(
+            annotation_record_id=loser.annotation_record_id,
+            label_id=loser.label_id,
+            start_time_ms=ps,
+            end_time_ms=pe,
+            source_type=loser.source_type,
+            ai_confidence=loser.ai_confidence,
+            ai_confirmed=loser.ai_confirmed,
+            is_modified=True,
+            uncertain=loser.uncertain,
+            uncertain_reason=loser.uncertain_reason,
+            seg_status=loser.seg_status,
+            seg_reviewed_by=loser.seg_reviewed_by,
+            seg_reviewed_at=loser.seg_reviewed_at,
+            marks=loser.marks,
+            mark_note=loser.mark_note,
+            touched_at=now,
+            touched_by=user.id,
+            created_by=user.id,
+        ))
+
+    await db.commit()
+    return ok({
+        "action": "split" if len(pieces) > 1 else "trimmed",
+        "winner_id": winner.id,
+        "loser_id": loser.id,
+        "pieces_left": len(pieces),
+    })
+
+
 class DedupeProjectIn(BaseModel):
     project_id: int
 

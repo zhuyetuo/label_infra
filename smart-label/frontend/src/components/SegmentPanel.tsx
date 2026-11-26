@@ -209,6 +209,8 @@ interface Props {
   onMergeAdjacent?: (groups: number[][]) => Promise<void>;
   /** 智能切无信号：自动检测三轴全零断流区间，切开片段并自动标出「无信号」 */
   onTrimZeroSignal?: () => Promise<void>;
+  /** 冲突/重叠解决：由 winner 覆盖 loser（自动裁剪/拆分/删除 loser 的重叠部分） */
+  onResolveOverlap?: (winnerId: number, loserId: number) => Promise<void>;
   /** 只读时也能删（管理员 / 审核员直接删到服务器，不用认领）。删前都要确认 */
   canDeleteReadOnly?: boolean;
   /** 拆开这一段：播放线压在这段上就从播放线拆，否则对半拆 */
@@ -280,6 +282,7 @@ export default function SegmentPanel({
   onCarveMotion,
   onMergeAdjacent,
   onTrimZeroSignal,
+  onResolveOverlap,
   onSplit,
   onLowlight,
   onReturnToCandidate,
@@ -532,6 +535,24 @@ export default function SegmentPanel({
                       onClick={() => onLoop({ startMs: o.start_time_ms, endMs: o.end_time_ms })}>
                       看对方
                     </Button>
+                  )}
+                  {onResolveOverlap && (
+                    <Space size={4} style={{ marginTop: 2, marginBottom: 4, display: "flex", flexWrap: "wrap" }}>
+                      <Button
+                        size="small"
+                        style={{ fontSize: 11, height: 22, paddingInline: 7 }}
+                        onClick={() => void onResolveOverlap(i.id, o.id)}
+                      >
+                        本段覆盖对方（留{nameOf(i.label_id)}）
+                      </Button>
+                      <Button
+                        size="small"
+                        style={{ fontSize: 11, height: 22, paddingInline: 7 }}
+                        onClick={() => void onResolveOverlap(o.id, i.id)}
+                      >
+                        对方覆盖本段（留{nameOf(o.label_id)}）
+                      </Button>
+                    </Space>
                   )}
                 </div>
               );

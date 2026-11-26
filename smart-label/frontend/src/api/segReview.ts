@@ -117,6 +117,11 @@ export const segTrimZeroSignal = (body: {
     no_signal_added: number;
   }>("/segments/trim-zero-signal", body);
 
+/** 解决两条重叠/冲突片段：winner 保留，从 loser 中挖掉重叠部分（裁剪 / 拆分 / 删除） */
+export const segResolveOverlap = (winnerId: number, loserId: number) =>
+  request.post<never, { action: "deleted" | "trimmed" | "split" | "noop"; winner_id: number; loser_id: number; pieces_left: number }>(
+    "/segments/resolve-overlap", { winner_id: winnerId, loser_id: loserId });
+
 /** 整个项目一键去重（每个任务各跑一遍上面那套）。只给审核员 / 管理员 */
 export const segDedupeProject = (projectId: number) =>
   request.post<never, { tasks: number; tasks_changed: number; merged: number; removed_parent: number; conflicts_left: number }>(

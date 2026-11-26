@@ -63,7 +63,7 @@ import "./AnnotationWorkspace.css";
 import type { LabelDefinition, LabelItem, Task } from "@/types";
 import { candTitle } from "@/utils/candReason";
 import LoopWaveform, { type AdjustTarget, type LinkedAdjust, type LinkedNeighbor, type LoopInfo } from "@/components/LoopWaveform";
-import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segSendBackReviewer, segSplit, segTrimZeroSignal } from "@/api/segReview";
+import { segCarveMotion, segCreate, segDecide, segDedupe, segDelete, segEdit, segMarks, segMergeAdjacent, segResolveOverlap, segSendBackReviewer, segSplit, segTrimZeroSignal } from "@/api/segReview";
 
 interface Props {
   task: Task | null;
@@ -1612,6 +1612,36 @@ export default function AnnotationWorkspace({
         (r.conflicts_left ? `；还有 ${r.conflicts_left} 段是不同类别冲突，要人看` : ""),
       4,
     );
+  };
+  const handleResolveOverlap = async (winnerId: number, loserId: number) => {
+    if (taskId == null) return;
+    const winItem = items.find((x) => x.id === winnerId);
+    const loseItem = items.find((x) => x.id === loserId);
+    let resolvedWinner = winnerId;
+    let resolvedLoser = loserId;
+    if (!readOnly) {
+      await saveDraft(taskId, toDraftPayload(items));
+      const fresh = await getDraft(taskId);
+      loadItems(fresh.items);
+      if (winItem && loseItem) {
+        const w2 = fresh.items.find((x) => x.label_id === winItem.label_id && x.start_time_ms === winItem.start_time_ms && x.end_time_ms === winItem.end_time_ms);
+        const l2 = fresh.items.find((x) => x.label_id === loseItem.label_id && x.start_time_ms === loseItem.start_time_ms && x.end_time_ms === loseItem.end_time_ms);
+        if (w2) resolvedWinner = w2.id;
+        if (l2) resolvedLoser = l2.id;
+      }
+    }
+    const r = await segResolveOverlap(resolvedWinner, resolvedLoser);
+    const d = await getDraft(taskId);
+    loadItems(d.items);
+    const wName = winItem ? nameOf(winItem.label_id) : "保留段";
+    const lName = loseItem ? nameOf(loseItem.label_id) : "被覆盖段";
+    const actTxt = r.action === "deleted"
+      ? `已删除被完全覆盖的「${lName}」`
+      : r.action === "split"
+        ? `「${lName}」已绕开拆分为 ${r.pieces_left} 段`
+        : `已裁剪「${lName}」的重叠部分`;
+    message.success(`已由「${wName}」覆盖：${actTxt}`, 4);
+    onSaved?.();
   };
   const handleTrimZeroSignal = async (itemId?: number) => {
     if (taskId == null) return;
@@ -3227,6 +3257,7 @@ export default function AnnotationWorkspace({
         onCarveMotion={taskId != null && !segReview && (!readOnly || canFlag) ? handleCarveMotion : undefined}
         onMergeAdjacent={taskId != null && !segReview && (!readOnly || canFlag) ? handleMergeAdjacent : undefined}
         onTrimZeroSignal={taskId != null && hasCsv && !segReview && (!readOnly || canFlag) ? () => handleTrimZeroSignal() : undefined}
+        onResolveOverlap={taskId != null && !segReview && (!readOnly || canFlag) ? handleResolveOverlap : undefined}
         onSplit={(id) => {
           const idx = items.findIndex((x) => x.id === id);
           const it = items[idx];
