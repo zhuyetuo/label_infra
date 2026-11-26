@@ -933,7 +933,15 @@ export default function AnnotationWorkspace({
     if (!viewRange) return null;
     const { startMs, endMs } = viewRange;
     const near = (a: number, b: number) => Math.abs(a - b) <= 2;
-    const it = items.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
+    const it = items.find((x) => {
+      if (near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs)) return true;
+      if (win) {
+        const cs = Math.max(x.start_time_ms, win.s);
+        const ce = Math.min(x.end_time_ms, win.e);
+        if (ce > cs && near(cs, startMs) && near(ce, endMs)) return true;
+      }
+      return false;
+    });
     const c = it ? undefined : candidates.find((x) => near(x.start_time_ms, startMs) && near(x.end_time_ms, endMs));
     // 附近 1 分钟内别的片段 / 还没判的疑似片段：浮窗顶上画细色带，看得出前后挨着的是什么。
     // 压在具体行为下面的「活动 / 静止/休息」按重叠区间挖空分几段显示，避免被盖住看不清
@@ -961,11 +969,12 @@ export default function AnnotationWorkspace({
         .map((x) => ({ s: x.start_time_ms, e: x.end_time_ms, color: "#999", label: `疑似${x.label_name}` })),
     ];
     if (it) {
-      const canLink = (aId: number, bId: number) => {
-        const ta = trackOf(labelById, aId);
-        const tb = trackOf(labelById, bId);
-        return ta === tb || (ta === "motion" && isBehaviorTrack(labelById, bId)) || (isBehaviorTrack(labelById, aId) && tb === "motion");
+      const isMainTimeline = (id: number) => {
+        const tr = trackOf(labelById, id);
+        return tr === "motion" || isBehaviorTrack(labelById, id) || nameOf(id) === "未佩戴";
       };
+      const canLink = (aId: number, bId: number) =>
+        trackOf(labelById, aId) === trackOf(labelById, bId) || (isMainTimeline(aId) && isMainTimeline(bId));
       const pickClosest = (cands: LabelItem[], dist: (x: LabelItem) => number): LinkedNeighbor | null => {
         if (!cands.length) return null;
         cands.sort((a, b) => dist(a) - dist(b));
@@ -982,12 +991,12 @@ export default function AnnotationWorkspace({
       // 找到左右最近的相邻片段（不管原本是贴边还是中间有空隙）：
       // 原本贴边（≤150ms）直接双向联动；原本有空隙的拖到贴合时磁吸补齐，继续推过即自动转联动
       const leftNeighbor = pickClosest(
-        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.end_time_ms <= it.start_time_ms + 150 && x.start_time_ms < it.start_time_ms - 250),
-        (x) => Math.abs(it.start_time_ms - x.end_time_ms),
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.end_time_ms <= startMs + 150 && x.start_time_ms < startMs - 250),
+        (x) => Math.abs(startMs - x.end_time_ms),
       );
       const rightNeighbor = pickClosest(
-        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.start_time_ms >= it.end_time_ms - 150 && x.end_time_ms > it.end_time_ms + 250),
-        (x) => Math.abs(x.start_time_ms - it.end_time_ms),
+        nearItems.filter((x) => x !== it && canLink(it.label_id, x.label_id) && x.start_time_ms >= endMs - 150 && x.end_time_ms > endMs + 250),
+        (x) => Math.abs(x.start_time_ms - endMs),
       );
       return {
         startMs, endMs, title: `已标注 · ${nameOf(it.label_id)}`, color: colorOf(it.label_id),
@@ -1712,14 +1721,24 @@ export default function AnnotationWorkspace({
   // 浮窗里保存起止：片段审核那条走 /segments 接口（审核员不用认领整个任务）；其它走存草稿
   // 保存起止出错 / 超时：不知道服务器到底存没存上。重新拉一次看实际的起止，明确告诉人
   const adjustFromWave = async (target: AdjustTarget, startMs: number, endMs: number, linked?: LinkedAdjust) => {
+    let realStart = startMs;
+    let realEnd = endMs;
+    if (target.kind === "item" && win) {
+      const orig = items.find((x) => x.id === target.id);
+      if (orig) {
+        // 跨窗片段如果只调了窗内这一侧的边界，没动贴在窗边界上的另一侧，保留其窗外原始起止
+        if (orig.start_time_ms < win.s && Math.abs(startMs - win.s) <= 2) realStart = orig.start_time_ms;
+        if (orig.end_time_ms > win.e && Math.abs(endMs - win.e) <= 2) realEnd = orig.end_time_ms;
+      }
+    }
     try {
-      await adjustFromWaveInner(target, startMs, endMs, linked);
+      await adjustFromWaveInner(target, realStart, realEnd, linked);
     } catch (e) {
       if (target.kind !== "item" || taskId == null) throw e;
       try {
         const d = await getDraft(taskId);
         const it = d.items.find((x) => x.id === target.id);
-        if (it && Math.abs(it.start_time_ms - startMs) < 2 && Math.abs(it.end_time_ms - endMs) < 2) {
+        if (it && Math.abs(it.start_time_ms - realStart) < 2 && Math.abs(it.end_time_ms - realEnd) < 2) {
           loadItems(d.items);
           showRange({ startMs, endMs });
           message.success({ content: "刚才服务器回得慢，但起止其实已经保存上了", key: "timeout" });
