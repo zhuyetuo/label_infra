@@ -904,7 +904,9 @@ const styleGroupCols = <T extends Record<string, unknown>>(
   }),
 }));
 
-const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string) => string | undefined) => [
+const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string) => string | undefined, iouMin?: number) => {
+  const iouTxt = iouMin != null ? `IoU ≥ ${Math.round(iouMin * 100)}%` : "IoU 达标";
+  return [
   ...(showLabel ? [{
     title: "类别", dataIndex: "label", width: 92,
     render: (lb: string) => <Tag color={colorOf?.(lb)} style={{ marginInlineEnd: 0 }}>{lb}</Tag>,
@@ -951,8 +953,10 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title="窗口内每次预测动作和每次人工标注逐一配对（IoU 达标算命中）">
-        <span style={{ color: EVAL_GROUP_THEME.event.accent, fontWeight: 700 }}>● 事件（片段）级</span>
+      <Tooltip title={`窗口内每次预测动作和每次人工标注逐一配对，交并比 ${iouTxt} 即算命中（可在上方「设置」里修改 IoU 阈值）`}>
+        <span style={{ color: EVAL_GROUP_THEME.event.accent, fontWeight: 700 }}>
+          ● 事件（片段）级{iouMin != null ? `（${iouTxt}）` : ""}
+        </span>
       </Tooltip>
     ),
     onHeaderCell: () => ({
@@ -1005,7 +1009,8 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   { title: "样本", key: "ran", width: 68, render: (_: unknown, x: EvalRow) => (
     <span style={{ color: x.r.n_samples_with_result < x.n ? "#ff4d4f" : undefined }}>{x.r.n_samples_with_result}/{x.n}</span>) },
-];
+  ];
+};
 
 /** 单个测试窗口的双轨迷你时间轴：上轨 = 人工标注（绿），下轨 = 模型预测（蓝/橙） */
 function MiniTimeline({ d }: { d: WindowDetail }) {
@@ -1739,7 +1744,7 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
       {rows.length === 0 && <EvalNotes notes={notes} hasRows={false} />}
       <Table
         size="small" bordered rowKey="key" pagination={false} loading={busy} scroll={{ x: 1320 }} dataSource={rows}
-        columns={evalColumns("范围", p.label === "ALL", colorOf)}
+        columns={evalColumns("范围", p.label === "ALL", colorOf, p.iou)}
         onRow={(r) => ({
           onClick: () => setSelectedKey(r.key),
           style: { cursor: "pointer", background: (selectedKey ?? rows[0]?.key) === r.key ? "rgba(22, 119, 255, 0.08)" : undefined },
@@ -1831,7 +1836,7 @@ function CrossTab({ sets }: { sets: TestSet[] }) {
             { title: "最差一批 F1", render: (_, x) => pct(Math.min(...x.F)) },
           ]} />
       )}
-      <Table size="small" rowKey="key" pagination={false} dataSource={rows} columns={evalColumns("测试集")} />
+      <Table size="small" rowKey="key" pagination={false} dataSource={rows} columns={evalColumns("测试集", false, undefined, p.iou)} />
       {rows.length > 0 && <EvalNotes notes={notes} hasRows />}
     </Space>
   );
