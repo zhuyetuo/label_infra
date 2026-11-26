@@ -3954,15 +3954,17 @@ export default function AnnotationWorkspace({
             fps={fps}
             fill
             controlsPortalTarget={controlsHost}
-            renderFullscreenImu={hasCsv && sampleId != null ? () => (
+            renderFullscreenImu={hasCsv && sampleId != null ? ({ fullRange, allChannels }) => (
               <ImuChart
+                key={`fs-${fullRange ? "full" : "win"}-${allChannels ? "all" : "x"}`}
                 sampleId={sampleId}
                 bus={bus}
-                onlyChannel="acc_x"
-                rowHeight={118}
+                onlyChannel={allChannels ? undefined : "acc_x"}
+                rowHeight={allChannels ? 46 : 112}
+                timeAxisOnlyLast={allChannels}
                 segments={segments}
                 wheelZoomNoShift
-                initialWindowSec={30}
+                initialWindowSec={fullRange ? undefined : 30}
               />
             ) : undefined}
           />

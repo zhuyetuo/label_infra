@@ -50,7 +50,7 @@ interface Props {
   /** 每一路固定不动的形状（公用机位里各单间的区域），虚线画、带名字 */
   statics?: ({ label: string; x: number; y: number; w: number; h: number }[] | null)[];
   /** 全屏放大画面时，叠加在底部半透明可拖拽浮动框里的 IMU 波形 */
-  renderFullscreenImu?: () => ReactNode;
+  renderFullscreenImu?: (opts: { fullRange: boolean; allChannels: boolean }) => ReactNode;
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -195,7 +195,73 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
 
   // ── 单路画面全屏 + 半透明可拖拽 IMU 浮动框（退出全屏自动一并退出）──
   const [fsIdx, setFsIdx] = useState<number | null>(null);
-  const [fsHud, setFsHud] = useState({ x: 80, y: 520, w: 820, opacity: 0.65, collapsed: false });
+  const [fsHud, setFsHud] = useState({
+    x: 80, y: 520, w: 840, opacity: 0.65, collapsed: false,
+    fullRange: false, allChannels: false,
+  });
+  const [fsNowSec, setFsNowSec] = useState(0);
+  const [fsDurSec, setFsDurSec] = useState(0);
+  const fsScrubbingRef = useRef(false);
+
+  // 全屏时实时同步底部进度条的当前时间与总时长
+  useEffect(() => {
+    if (fsIdx == null) return;
+    const v = refs.current[fsIdx];
+    const off = offAt(fsIdx);
+    const updateDur = () => {
+      if (v && Number.isFinite(v.duration) && v.duration > 0) {
+        setFsDurSec(v.duration + off);
+      }
+    };
+    updateDur();
+    if (v) setFsNowSec(v.currentTime + off);
+    let lastUi = 0;
+    const offTime = bus.onTime((sec) => {
+      if (fsScrubbingRef.current) return;
+      const now = Date.now();
+      if (now - lastUi >= 80) {
+        lastUi = now;
+        setFsNowSec(sec);
+        updateDur();
+      }
+    });
+    return () => offTime();
+  }, [fsIdx, bus]);
+
+  const fmtClock = (sec: number) => {
+    const s = Math.max(0, Math.floor(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`
+      : `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  };
+
+  const startFsScrub = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const track = e.currentTarget;
+    const dur = fsDurSec;
+    if (dur <= 0) return;
+    fsScrubbingRef.current = true;
+    const seekAt = (clientX: number) => {
+      const rect = track.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+      const target = pct * dur;
+      setFsNowSec(target);
+      bus.seek(target);
+    };
+    seekAt(e.clientX);
+    const onMove = (ev: MouseEvent) => seekAt(ev.clientX);
+    const onUp = () => {
+      fsScrubbingRef.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   useEffect(() => {
     const onFsChange = () => {
       const el = document.fullscreenElement;
@@ -1613,6 +1679,45 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                           {r}x
                         </button>
                       ))}
+                      {/* 波形范围：局部 30s vs 全波形 */}
+                      <span style={{ display: "inline-flex", background: "rgba(255,255,255,0.08)", borderRadius: 4, padding: 1, marginLeft: 4 }}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => setFsHud((p) => ({ ...p, fullRange: false }))}
+                          title="显示当前播放点附近 30 秒局部波形（可左右拖拽）"
+                          style={{
+                            background: !fsHud.fullRange ? "#13c2c2" : "transparent",
+                            color: "#fff", border: "none", borderRadius: 3, padding: "1px 6px", cursor: "pointer", fontSize: 11,
+                          }}
+                        >局部30s</button>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => setFsHud((p) => ({ ...p, fullRange: true }))}
+                          title="显示整段完整时间轴全波形"
+                          style={{
+                            background: fsHud.fullRange ? "#13c2c2" : "transparent",
+                            color: "#fff", border: "none", borderRadius: 3, padding: "1px 6px", cursor: "pointer", fontSize: 11,
+                          }}
+                        >全波形</button>
+                      </span>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => setFsHud((p) => ({
+                          ...p,
+                          allChannels: !p.allChannels,
+                          y: !p.allChannels ? Math.max(24, p.y - 140) : p.y,
+                        }))}
+                        title="切换单通道（Acc X）或全部 6 轴通道"
+                        style={{
+                          background: fsHud.allChannels ? "#722ed1" : "rgba(255,255,255,0.1)",
+                          color: "#fff", border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >
+                        {fsHud.allChannels ? "6轴" : "单轴"}
+                      </button>
                       <span style={{ flex: 1 }} />
                       <button
                         type="button"
@@ -1655,18 +1760,64 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                     {!fsHud.collapsed && (
                       <div style={{ padding: "4px 8px 6px" }}>
                         {renderFullscreenImu ? (
-                          <>
-                            {renderFullscreenImu()}
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", marginTop: 2, display: "flex", justifyContent: "space-between" }}>
-                              <span>左键拖波形可左右平移 · 滚轮直接缩放 · 单击跳到该时刻</span>
-                              <span>按 Esc 退出全屏</span>
-                            </div>
-                          </>
+                          renderFullscreenImu({ fullRange: fsHud.fullRange, allChannels: fsHud.allChannels })
                         ) : (
                           <div style={{ padding: "14px 8px", textAlign: "center", fontSize: 12, color: "#aaa" }}>
                             当前样本无 IMU 波形数据
                           </div>
                         )}
+                        {/* 底部可随意拖拽的同步播放进度条：拖动时画面与波形实时同步进退 */}
+                        {fsDurSec > 0 && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                            <span style={{ fontFamily: "monospace", fontSize: 11, color: "#ddd", minWidth: 46 }}>
+                              {fmtClock(fsNowSec)}
+                            </span>
+                            <div
+                              onMouseDown={startFsScrub}
+                              title="按住拖动进度条，画面与 IMU 波形同步进退"
+                              style={{
+                                flex: 1, height: 14, display: "flex", alignItems: "center", cursor: "pointer", position: "relative",
+                              }}
+                            >
+                              <div style={{
+                                width: "100%", height: 5, borderRadius: 3, background: "rgba(255,255,255,0.18)",
+                                position: "relative", overflow: "visible",
+                              }}>
+                                {(() => {
+                                  const lp = bus.getLoop();
+                                  if (!lp || fsDurSec <= 0) return null;
+                                  const lPct = Math.max(0, Math.min(100, (lp.start / fsDurSec) * 100));
+                                  const wPct = Math.max(0.5, Math.min(100 - lPct, ((lp.end - lp.start) / fsDurSec) * 100));
+                                  return (
+                                    <div style={{
+                                      position: "absolute", left: `${lPct}%`, width: `${wPct}%`, top: 0, bottom: 0,
+                                      background: "rgba(146, 84, 222, 0.75)", borderRadius: 3,
+                                    }} />
+                                  );
+                                })()}
+                                <div style={{
+                                  width: `${Math.max(0, Math.min(100, (fsNowSec / fsDurSec) * 100))}%`,
+                                  height: "100%", background: "#1677ff", borderRadius: 3,
+                                }} />
+                                <div style={{
+                                  position: "absolute",
+                                  left: `${Math.max(0, Math.min(100, (fsNowSec / fsDurSec) * 100))}%`,
+                                  top: "50%", transform: "translate(-50%, -50%)",
+                                  width: 12, height: 12, borderRadius: "50%",
+                                  background: "#fff", border: "2px solid #1677ff",
+                                  boxShadow: "0 0 6px rgba(0,0,0,0.6)",
+                                }} />
+                              </div>
+                            </div>
+                            <span style={{ fontFamily: "monospace", fontSize: 11, color: "#999", minWidth: 46, textAlign: "right" }}>
+                              {fmtClock(fsDurSec)}
+                            </span>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 2, display: "flex", justifyContent: "space-between" }}>
+                          <span>左键拖波形平移 · 滚轮缩放 · 拖动下方进度条同步进退画面</span>
+                          <span>按 Esc 退出全屏</span>
+                        </div>
                       </div>
                     )}
                     {/* 右边缘拖拽改宽度 */}
