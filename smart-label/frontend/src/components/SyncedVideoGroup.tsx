@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button, Checkbox, InputNumber, Radio, Slider, Space, Tooltip, Typography } from "antd";
 import {
-  BlockOutlined, LockOutlined, PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined,
+  BlockOutlined, CompressOutlined, ExpandOutlined, LockOutlined, PauseCircleOutlined, PlayCircleOutlined, QuestionCircleOutlined, StepBackwardOutlined,
   StepForwardOutlined, UnlockOutlined,
 } from "@ant-design/icons";
 import type { TimeBus } from "@/utils/timeBus";
@@ -49,6 +49,8 @@ interface Props {
   overlays?: (((timeSec: number) => number[][] | null) | null)[];
   /** 每一路固定不动的形状（公用机位里各单间的区域），虚线画、带名字 */
   statics?: ({ label: string; x: number; y: number; w: number; h: number }[] | null)[];
+  /** 全屏放大画面时，叠加在底部半透明可拖拽浮动框里的 IMU 波形 */
+  renderFullscreenImu?: () => ReactNode;
 }
 
 // 三路视频完全对等，没有"主控"概念：任意一路播放/暂停/拖拽进度条/调速，
@@ -102,7 +104,7 @@ interface ZoomState {
   ty: number;
 }
 
-export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays, statics }: Props) {
+export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPortalTarget, shrinkToFit, overlays, statics, renderFullscreenImu }: Props) {
   const overlayRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   // 夜视用的画布：把视频逐帧画上去、顺手提亮，盖在原视频上面
   const nightRefs = useRef<(HTMLCanvasElement | null)[]>([]);
@@ -190,6 +192,84 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
   const refs = useRef<(HTMLVideoElement | null)[]>([]);
   const wrapperRefs = useRef<(HTMLDivElement | null)[]>([]);
   const rowRef = useRef<HTMLDivElement | null>(null);
+
+  // ── 单路画面全屏 + 半透明可拖拽 IMU 浮动框（退出全屏自动一并退出）──
+  const [fsIdx, setFsIdx] = useState<number | null>(null);
+  const [fsHud, setFsHud] = useState({ x: 80, y: 520, w: 820, opacity: 0.65, collapsed: false });
+  useEffect(() => {
+    const onFsChange = () => {
+      const el = document.fullscreenElement;
+      if (!el) {
+        setFsIdx(null);
+        return;
+      }
+      const wIdx = wrapperRefs.current.findIndex((w) => w === el);
+      if (wIdx >= 0) {
+        setFsIdx(wIdx);
+        const vw = window.innerWidth || 1280;
+        const vh = window.innerHeight || 720;
+        const w = Math.min(860, Math.max(460, vw - 80));
+        setFsHud((prev) => ({
+          ...prev,
+          w,
+          x: Math.max(20, Math.round((vw - w) / 2)),
+          y: Math.max(40, vh - 235),
+        }));
+        return;
+      }
+      // 若浏览器原生把 <video> 本身全屏了，立刻切回外层 wrapper 全屏，确保浮动框能叠在上面
+      const vIdx = refs.current.findIndex((v) => v === el);
+      if (vIdx >= 0 && wrapperRefs.current[vIdx]) {
+        document.exitFullscreen().then(() => {
+          wrapperRefs.current[vIdx]?.requestFullscreen().catch(() => {});
+        }).catch(() => {});
+      }
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  const toggleCamFullscreen = (i: number) => {
+    const target = wrapperRefs.current[i];
+    if (!target) return;
+    if (document.fullscreenElement === target) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      target.requestFullscreen().catch(() => {});
+    }
+  };
+
+  const startFsHudDrag = (e: React.MouseEvent, mode: "move" | "resize") => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const init = { ...fsHud };
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - sx;
+      const dy = ev.clientY - sy;
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 720;
+      if (mode === "move") {
+        setFsHud((p) => ({
+          ...p,
+          x: Math.max(8, Math.min(vw - 160, init.x + dx)),
+          y: Math.max(8, Math.min(vh - 60, init.y + dy)),
+        }));
+      } else {
+        setFsHud((p) => ({
+          ...p,
+          w: Math.max(380, Math.min(vw - init.x - 12, init.w + dx)),
+        }));
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   // 程序化操作的抑制截止时间（performance.now()），见文件顶部说明
   const suppressUntil = useRef(0);
   const markProgrammatic = (ms = SUPPRESS_MS) => {
@@ -1403,6 +1483,7 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                   // canvas 会被当成"脏了"，getImageData 直接抛错
                   crossOrigin="anonymous"
                   controls
+                  controlsList="nofullscreen"
                   preload="auto"
                   style={{
                     ...(fill
@@ -1410,6 +1491,194 @@ export default function SyncedVideoGroup({ videos, bus, fps, fill, controlsPorta
                       : { width: "100%", maxHeight: "45vh", display: "block", transformOrigin: "center" }),
                   }}
                 />
+                {/* 全屏按钮：全屏外层 wrapper，进入全屏后自动浮出半透明可拖拽 IMU 波形与倍速控制框 */}
+                <Tooltip title={fsIdx === i ? "退出全屏（浮动框一并退出）" : "全屏放大画面（带半透明可拖拽 IMU 波形与倍速控制）"}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCamFullscreen(i);
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 8,
+                      right: 8,
+                      zIndex: 20,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "3px 8px",
+                      borderRadius: 4,
+                      border: "1px solid rgba(255,255,255,0.28)",
+                      background: "rgba(0,0,0,0.52)",
+                      color: "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                      backdropFilter: "blur(4px)",
+                    }}
+                  >
+                    {fsIdx === i ? <CompressOutlined /> : <ExpandOutlined />}
+                    <span>{fsIdx === i ? "退出全屏" : "全屏"}</span>
+                  </button>
+                </Tooltip>
+                {/* 全屏专属半透明可拖拽浮动框：播放倍速 + 可左右拖动的 IMU 波形；退出全屏自动卸载 */}
+                {fsIdx === i && (
+                  <div
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onWheel={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: "absolute",
+                      left: fsHud.x,
+                      top: fsHud.y,
+                      width: fsHud.w,
+                      zIndex: 30,
+                      borderRadius: 8,
+                      background: `rgba(14, 17, 23, ${fsHud.opacity})`,
+                      backdropFilter: "blur(8px)",
+                      border: "1px solid rgba(255,255,255,0.22)",
+                      boxShadow: "0 10px 32px rgba(0,0,0,0.55)",
+                      color: "#eee",
+                      userSelect: "none",
+                    }}
+                  >
+                    {/* 顶部拖拽栏 + 播放/逐帧/倍速/透明度控制 */}
+                    <div
+                      onMouseDown={(e) => startFsHudDrag(e, "move")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        flexWrap: "wrap",
+                        padding: "5px 10px",
+                        borderBottom: fsHud.collapsed ? "none" : "1px solid rgba(255,255,255,0.12)",
+                        cursor: "move",
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: "#aaa", fontWeight: 600, marginRight: 2 }} title="按住此处拖动浮动框位置">
+                        ⋮⋮ IMU 波形
+                      </span>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => bus.play("toggle")}
+                        style={{
+                          background: "rgba(114, 46, 209, 0.78)", color: "#fff", border: "none",
+                          borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontSize: 12,
+                        }}
+                      >
+                        {playing ? "⏸ 暂停" : "▶ 播放"}
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => bus.step(-1)}
+                        title="上一帧"
+                        style={{
+                          background: "rgba(255,255,255,0.12)", color: "#eee", border: "none",
+                          borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >◀</button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => bus.step(1)}
+                        title="下一帧"
+                        style={{
+                          background: "rgba(255,255,255,0.12)", color: "#eee", border: "none",
+                          borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >▶</button>
+                      <span style={{ color: "#aaa", fontSize: 11, marginLeft: 4 }}>倍速</span>
+                      {[0.25, 0.5, 1, 1.5, 2, 4].map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => bus.setSpeed(r)}
+                          style={{
+                            background: Math.abs(speed - r) < 0.01 ? "#1677ff" : "rgba(255,255,255,0.1)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: 4,
+                            padding: "2px 6px",
+                            cursor: "pointer",
+                            fontSize: 11,
+                            fontWeight: Math.abs(speed - r) < 0.01 ? 600 : 400,
+                          }}
+                        >
+                          {r}x
+                        </button>
+                      ))}
+                      <span style={{ flex: 1 }} />
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => setFsHud((p) => ({
+                          ...p,
+                          opacity: p.opacity > 0.75 ? 0.42 : p.opacity > 0.55 ? 0.82 : 0.65,
+                        }))}
+                        title="切换浮动框透明度"
+                        style={{
+                          background: "rgba(255,255,255,0.1)", color: "#ccc", border: "none",
+                          borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >
+                        透明 {Math.round(fsHud.opacity * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => setFsHud((p) => ({ ...p, collapsed: !p.collapsed }))}
+                        style={{
+                          background: "rgba(255,255,255,0.1)", color: "#ccc", border: "none",
+                          borderRadius: 4, padding: "2px 6px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >
+                        {fsHud.collapsed ? "展开" : "收起"}
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={() => document.exitFullscreen().catch(() => {})}
+                        style={{
+                          background: "rgba(255,77,79,0.28)", color: "#ffccc7", border: "none",
+                          borderRadius: 4, padding: "2px 7px", cursor: "pointer", fontSize: 11,
+                        }}
+                      >
+                        退出全屏
+                      </button>
+                    </div>
+                    {!fsHud.collapsed && (
+                      <div style={{ padding: "4px 8px 6px" }}>
+                        {renderFullscreenImu ? (
+                          <>
+                            {renderFullscreenImu()}
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", marginTop: 2, display: "flex", justifyContent: "space-between" }}>
+                              <span>左键拖波形可左右平移 · 滚轮直接缩放 · 单击跳到该时刻</span>
+                              <span>按 Esc 退出全屏</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ padding: "14px 8px", textAlign: "center", fontSize: 12, color: "#aaa" }}>
+                            当前样本无 IMU 波形数据
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* 右边缘拖拽改宽度 */}
+                    <div
+                      onMouseDown={(e) => startFsHudDrag(e, "resize")}
+                      title="拖动调整浮动框宽度"
+                      style={{
+                        position: "absolute", top: 6, right: 0, bottom: 6, width: 7, cursor: "ew-resize",
+                      }}
+                    />
+                  </div>
+                )}
                 {/* 夜视画布：逐帧把视频画上来并提亮，盖住原画面。不接鼠标，
                     底部留出控制条那一条；放在框叠层**前面**，绿框不会被糊掉 */}
                 <canvas

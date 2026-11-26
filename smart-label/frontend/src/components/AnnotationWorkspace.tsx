@@ -3954,6 +3954,17 @@ export default function AnnotationWorkspace({
             fps={fps}
             fill
             controlsPortalTarget={controlsHost}
+            renderFullscreenImu={hasCsv && sampleId != null ? () => (
+              <ImuChart
+                sampleId={sampleId}
+                bus={bus}
+                onlyChannel="acc_x"
+                rowHeight={118}
+                segments={segments}
+                wheelZoomNoShift
+                initialWindowSec={30}
+              />
+            ) : undefined}
           />
         ) : (
           !loading && (

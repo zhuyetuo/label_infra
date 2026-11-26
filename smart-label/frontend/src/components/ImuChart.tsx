@@ -147,6 +147,10 @@ interface Props {
   onSplitSegment?: (index: number, atMs: number) => void;
   /** 在片段上点右键：弹菜单（改类别 / 拆开 / 删除）。clientX/Y 是菜单出现的位置 */
   onSegmentMenu?: (index: number, atMs: number, clientX: number, clientY: number) => void;
+  /** 滚轮直接缩放（不用按 Shift），全屏浮动波形框里用 */
+  wheelZoomNoShift?: boolean;
+  /** 打开时自动缩放到当前播放位置附近这么宽的窗口（秒），方便直接左右拖拽活动 */
+  initialWindowSec?: number;
 }
 
 // 拖拽划区间/改边缘要在 uPlot 插件里读到最新的回调和选中颜色，但插件只在图表
@@ -197,6 +201,8 @@ export default function ImuChart({
   onReadOnlyEdit,
   onSplitSegment,
   onSegmentMenu,
+  wheelZoomNoShift,
+  initialWindowSec,
 }: Props) {
   // 坐标轴文字 / 网格跟着明亮 / 暗黑走（uPlot 默认是黑字，暗黑底上看不见）
   const { token } = theme.useToken();
@@ -448,7 +454,7 @@ export default function ImuChart({
               () => startEpochRef.current,
               playheadHoverRef
             ),
-            wheelZoomPlugin(),
+            wheelZoomPlugin(!!wheelZoomNoShift),
             segmentHighlightPlugin(segmentsRef, highlightRef, annotateRef, () => startEpochRef.current, getFullRange),
             playheadPlugin(playheadState, i === 0, playheadHoverRef, inkRef),
           ],
@@ -479,8 +485,31 @@ export default function ImuChart({
         scheduleRefetch(newMin, newMax);
       };
 
+      let initZoomed = false;
+      const applyInitialZoom = (centerEpoch: number) => {
+        if (initZoomed || !initialWindowSec || initialWindowSec <= 0) return;
+        const first = plotRefs.current[0];
+        if (!first) return;
+        const fullMin = startEpochRef.current;
+        const fullMax = fullMin + durationRef.current / 1000;
+        if (fullMax - fullMin <= initialWindowSec) {
+          initZoomed = true;
+          return;
+        }
+        initZoomed = true;
+        let lo = centerEpoch - initialWindowSec / 2;
+        let hi = centerEpoch + initialWindowSec / 2;
+        if (lo < fullMin) { lo = fullMin; hi = Math.min(fullMax, lo + initialWindowSec); }
+        if (hi > fullMax) { hi = fullMax; lo = Math.max(fullMin, hi - initialWindowSec); }
+        syncingRef.current = true;
+        plotRefs.current.forEach((p) => p?.setScale("x", { min: lo, max: hi }));
+        syncingRef.current = false;
+        scheduleRefetch(lo, hi);
+      };
+
       const unsubscribe = bus.onTime((sec) => {
         playheadState.current = startEpochRef.current + sec;
+        applyInitialZoom(playheadState.current);
         followPlayhead(playheadState.current);
         plotRefs.current.forEach((p) => p?.redraw(false));
       });
@@ -978,7 +1007,7 @@ function playheadPlugin(
 }
 
 // 滚轮缩放：以光标位置为中心，不能超出数据整体范围
-function wheelZoomPlugin() {
+function wheelZoomPlugin(noShift = false) {
   const factor = 0.9;
   let xMin: number, xMax: number;
 
@@ -992,7 +1021,7 @@ function wheelZoomPlugin() {
         over.addEventListener(
           "wheel",
           (e: WheelEvent) => {
-            if (!e.shiftKey) return; // 不按shift就是正常滚动页面，不缩放
+            if (!noShift && !e.shiftKey) return; // 不按shift就是正常滚动页面，不缩放
             e.preventDefault();
             const { left } = u.cursor;
             if (left == null) return;
