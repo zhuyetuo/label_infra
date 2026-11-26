@@ -651,6 +651,8 @@ async def merge_adjacent_test_set(
     from collections import defaultdict
     from app.models.ai_candidate import AiCandidate, CandidateStatus
     from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+    from app.models.label import LabelDefinition
+    from app.services.label_tracks import track_of as _track_of
     from app.services.task_service import _append_boundary_edit
 
     s = await _set_or_404(db, set_id)
@@ -662,6 +664,12 @@ async def merge_adjacent_test_set(
     items = (await db.execute(q)).scalars().all()
     if not items:
         return ok({"groups_merged": 0, "removed": 0, "windows_cleaned": 0})
+
+    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id, LabelDefinition.track))).all()
+    lname = {i: n for i, n, _p, _tr in lrows}
+    parent = {i: p for i, _n, p, _tr in lrows}
+    own_track = {i: tr for i, _n, _p, tr in lrows}
+    ltrack = {i: _track_of(parent, own_track, i, lname) for i, _n, _p, _tr in lrows}
 
     tids = list(dict.fromkeys(it.task_id for it in items))
     segs_all = (await db.execute(
@@ -688,24 +696,39 @@ async def merge_adjacent_test_set(
     for it in items:
         ws = it.start_ms if it.start_ms is not None else 0
         we = it.end_ms if it.end_ms is not None else 10 ** 12
+        win_segs = [
+            seg for seg in segs_by_task.get(it.task_id, [])
+            if seg.id not in deleted_ids and not seg.uncertain and seg.end_time_ms > ws and seg.start_time_ms < we
+        ]
         by_lid: dict[int, list[AnnotationLabelItem]] = defaultdict(list)
-        for seg in segs_by_task.get(it.task_id, []):
-            if seg.id in deleted_ids or seg.uncertain:
-                continue
-            if seg.end_time_ms <= ws or seg.start_time_ms >= we:
-                continue
+        for seg in win_segs:
             by_lid[seg.label_id].append(seg)
+
+        def _blocks_merge(my_lid: int, my_tr: str | None, gap_lo: int, gap_hi: int) -> bool:
+            if gap_hi <= gap_lo:
+                return False
+            for o in win_segs:
+                if o.id in deleted_ids or o.label_id == my_lid:
+                    continue
+                if min(o.end_time_ms, gap_hi) <= max(o.start_time_ms, gap_lo):
+                    continue
+                o_tr = ltrack.get(o.label_id)
+                if (my_tr is not None and o_tr == my_tr) or (my_tr == "motion" and o_tr == "behavior") or (my_tr == "behavior" and o_tr == "motion"):
+                    return True
+            return False
 
         win_merged = 0
         for lid, arr in by_lid.items():
             if len(arr) < 2:
                 continue
             arr.sort(key=lambda x: (x.start_time_ms, x.end_time_ms))
+            my_tr = ltrack.get(lid)
             cur_grp = [arr[0]]
             groups: list[list[AnnotationLabelItem]] = []
             for nxt in arr[1:]:
-                gap = nxt.start_time_ms - cur_grp[-1].end_time_ms
-                if 0 <= gap <= body.max_gap_ms:
+                gap_lo, gap_hi = cur_grp[-1].end_time_ms, nxt.start_time_ms
+                gap = gap_hi - gap_lo
+                if 0 <= gap <= body.max_gap_ms and not _blocks_merge(lid, my_tr, gap_lo, gap_hi):
                     cur_grp.append(nxt)
                 else:
                     if len(cur_grp) >= 2:

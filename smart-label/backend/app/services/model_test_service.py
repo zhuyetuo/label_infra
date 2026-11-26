@@ -310,7 +310,21 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
                 elif tr1 is not None and tr1 == tr2:
                     n_conflict += 1
 
-        # 相邻同类（同 label_id，0 <= gap <= 1500ms）可合并组数
+        # 相邻同类（同 label_id，0 <= gap <= 1500ms）可合并组数：
+        # 严禁跨越中间的其他互斥/行为片段合并（比如 [活动]→[甩头/抖身 0.7s]→[活动]，合并后会跟甩头重叠、去重又会挖开）
+        def _blocks_merge(my_lid: int, my_tr: str | None, gap_lo: int, gap_hi: int) -> bool:
+            if gap_hi <= gap_lo:
+                return False
+            for o_lid, _ok, o_tr, oa, ob in win_segs:
+                if o_lid == my_lid:
+                    continue
+                if min(ob, gap_hi) <= max(oa, gap_lo):
+                    continue
+                # 同轨异类，或 motion 跨越 behavior，都不允许合并
+                if (my_tr is not None and o_tr == my_tr) or (my_tr == "motion" and o_tr == "behavior") or (my_tr == "behavior" and o_tr == "motion"):
+                    return True
+            return False
+
         by_lid: dict[int, list[tuple[int, int]]] = defaultdict(list)
         for lid, _k, _tr, a, b in win_segs:
             by_lid[lid].append((a, b))
@@ -319,10 +333,12 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             if len(pts) < 2:
                 continue
             pts.sort()
+            my_tr = ltrack.get(lid)
             in_grp = False
             for idx_p in range(1, len(pts)):
-                gap = pts[idx_p][0] - pts[idx_p - 1][1]
-                if 0 <= gap <= 1500:
+                gap_lo, gap_hi = pts[idx_p - 1][1], pts[idx_p][0]
+                gap = gap_hi - gap_lo
+                if 0 <= gap <= 1500 and not _blocks_merge(lid, my_tr, gap_lo, gap_hi):
                     if not in_grp:
                         n_mergeable += 1
                         in_grp = True
