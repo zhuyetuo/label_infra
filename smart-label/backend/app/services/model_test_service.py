@@ -190,9 +190,22 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
     idx = await DN.dog_index(db)
     prof = await DN.dog_profiles(db)
 
-    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id))).all()
-    lname = {i: n for i, n, _p in lrows}
-    parent = {i: p for i, _n, p in lrows}
+    from app.services.label_tracks import OVERLAP_MIN_MS, track_of as _track_of
+
+    lrows = (await db.execute(select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id, LabelDefinition.track))).all()
+    lname = {i: n for i, n, _p, _tr in lrows}
+    parent = {i: p for i, _n, p, _tr in lrows}
+    own_track = {i: tr for i, _n, _p, tr in lrows}
+    ltrack = {i: _track_of(parent, own_track, i, lname) for i, _n, _p, _tr in lrows}
+
+    def is_ancestor(anc: int, desc: int) -> bool:
+        cur, seen = parent.get(desc), set()
+        while cur is not None and cur not in seen:
+            if cur == anc:
+                return True
+            seen.add(cur)
+            cur = parent.get(cur)
+        return False
 
     def top(lid: int) -> str:
         cur, seen = lid, set()
@@ -202,7 +215,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         n = lname.get(cur, "?")
         return ALIASES.get(n, n)
 
-    segs: dict[int, list[tuple[str, int, int, bool, bool]]] = defaultdict(list)
+    segs: dict[int, list[tuple[int, str, int, int, bool, bool]]] = defaultdict(list)
     leaf_segs: dict[int, list[tuple[str, int, int]]] = defaultdict(list)
     for tid, lid, s, e, unc, src, is_mod, ai_conf, seg_st, marks in (await db.execute(
         select(
@@ -230,7 +243,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             and seg_st != "approved"
             and (not marks)
         )
-        segs[tid].append((top(lid), int(s), int(e), bool(unc), ai_pend))
+        segs[tid].append((int(lid), top(lid), int(s), int(e), bool(unc), ai_pend))
         if not unc and parent.get(lid) is not None:
             leaf_segs[tid].append((lname.get(lid, "?"), int(s), int(e)))   # 细类（抓挠-头颈耳…），配额表按部位看
 
@@ -261,7 +274,8 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
         n_uncertain = 0
         n_ai_pending = 0
         spans: list[tuple[int, int]] = []
-        for k, a, b, unc, ai_pend in segs.get(it.task_id, []):
+        win_segs: list[tuple[int, str, str | None, int, int]] = []   # (lid, top_name, track, a, b)
+        for lid, k, a, b, unc, ai_pend in segs.get(it.task_id, []):
             ov = min(b, we) - max(a, ws)
             if ov <= 0:
                 continue
@@ -274,6 +288,46 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             x = labels.setdefault(k, {"n": 0, "sec": 0.0})
             x["n"] += 1
             x["sec"] = round(x["sec"] + ov / 1000, 1)
+            win_segs.append((lid, k, ltrack.get(lid), a, b))
+
+        # 统计窗口内「可去重重叠」和「相邻同类可合并（≤1.5s）」数量
+        n_dedupe = 0
+        n_conflict = 0
+        n_ws = len(win_segs)
+        for ii in range(n_ws):
+            l1, k1, tr1, a1, b1 = win_segs[ii]
+            for jj in range(ii + 1, n_ws):
+                l2, k2, tr2, a2, b2 = win_segs[jj]
+                ov_ms = min(b1, b2) - max(a1, a2)
+                if ov_ms < OVERLAP_MIN_MS:
+                    continue
+                if l1 == l2 or is_ancestor(l1, l2) or is_ancestor(l2, l1):
+                    n_dedupe += 1
+                elif (tr1 == "behavior" and tr2 == "motion") or (tr2 == "behavior" and tr1 == "motion"):
+                    n_dedupe += 1
+                elif tr1 == "motion" and tr2 == "motion" and {k1, k2} == {"活动", "静止/休息"}:
+                    n_dedupe += 1
+                elif tr1 is not None and tr1 == tr2:
+                    n_conflict += 1
+
+        # 相邻同类（同 label_id，0 <= gap <= 1500ms）可合并组数
+        by_lid: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for lid, _k, _tr, a, b in win_segs:
+            by_lid[lid].append((a, b))
+        n_mergeable = 0
+        for lid, pts in by_lid.items():
+            if len(pts) < 2:
+                continue
+            pts.sort()
+            in_grp = False
+            for idx_p in range(1, len(pts)):
+                gap = pts[idx_p][0] - pts[idx_p - 1][1]
+                if 0 <= gap <= 1500:
+                    if not in_grp:
+                        n_mergeable += 1
+                        in_grp = True
+                else:
+                    in_grp = False
         covered, end = 0, None
         for a, b in sorted(spans):
             if end is None or a > end:
@@ -300,6 +354,7 @@ async def describe_items(db: AsyncSession, items: list[ModelTestItem]) -> list[d
             "start_ms": ws, "end_ms": we, "dur_sec": round(dur, 1),
             "kind": "短片段" if dur <= SHORT_MAX_SEC else ("中片段" if dur <= MID_MAX_SEC else "长片段"),
             "labels": labels, "n_uncertain": n_uncertain, "n_ai_pending": n_ai_pending, "note": it.note,
+            "n_dedupe": n_dedupe, "n_conflict": n_conflict, "n_mergeable": n_mergeable,
             # 窗口里的疑似片段：{类别: {状态: 条数}}
             "cands": {k: dict(v) for k, v in _cand_count(cands.get(it.task_id, []), ws, we).items()},
             "leaf": dict(Counter(n for n, a, b in leaf_segs.get(it.task_id, []) if a < we and b > ws)),

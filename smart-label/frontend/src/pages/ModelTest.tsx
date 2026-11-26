@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, promoteTestItemToPool, updateTestSet,
+  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, dedupeTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, mergeAdjacentTestSet, promoteTestItemToPool, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -1938,6 +1938,38 @@ function SetDetail({ setId }: { setId: number }) {
   };
   const [checkingAll, setCheckingAll] = useState(false);
   const [itemCheckFilter, setItemCheckFilter] = useState<"all" | "unchecked" | "checked">("all");
+  const [itemCleanFilter, setItemCleanFilter] = useState<"all" | "dedupe" | "merge">("all");
+  const [itemSort, setItemSort] = useState<"default" | "dedupe" | "merge">("default");
+  const [cleaning, setCleaning] = useState<"" | "dedupe" | "merge">("");
+  const runDedupe = async (ids?: number[]) => {
+    setCleaning("dedupe");
+    try {
+      const r = await dedupeTestSet(setId, ids);
+      const parts: string[] = [];
+      if (r.removed) parts.push(`合并/删重 ${r.removed} 条`);
+      if (r.carved) parts.push(`挖空运动 ${r.carved} 处`);
+      if (r.conflicts) parts.push(`剩余异类冲突 ${r.conflicts} 处需人工看`);
+      message.success(parts.length ? `一键去重完成（${r.tasks_cleaned} 个任务）：${parts.join("，")}` : "没有需要自动去重的重叠片段", 5);
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+    } finally {
+      setCleaning("");
+    }
+  };
+  const runMergeAdjacent = async (ids?: number[]) => {
+    setCleaning("merge");
+    try {
+      const r = await mergeAdjacentTestSet(setId, ids, 1500);
+      message.success(
+        r.groups_merged
+          ? `一键合并完成（${r.windows_cleaned} 个窗口）：合并 ${r.groups_merged} 组、消掉 ${r.removed} 条碎片`
+          : "没有间隔 ≤1.5s 的相邻同类可合并",
+        5,
+      );
+      qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+    } finally {
+      setCleaning("");
+    }
+  };
   const [detailTab, setDetailTab] = useState<string>(() => {
     try { return localStorage.getItem("smart-label:model-test-tab") || "plan"; } catch { return "plan"; }
   });
@@ -2012,6 +2044,10 @@ function SetDetail({ setId }: { setId: number }) {
   };
   const checkedCount = data.items.filter((i) => i.checked).length;
   const uncheckedCount = data.items.length - checkedCount;
+  const dedupeWinCount = data.items.filter((i) => (i.n_dedupe ?? 0) > 0 || (i.n_conflict ?? 0) > 0).length;
+  const dedupeAutoWinCount = data.items.filter((i) => (i.n_dedupe ?? 0) > 0).length;
+  const mergeWinCount = data.items.filter((i) => (i.n_mergeable ?? 0) > 0).length;
+  const totalMergeGroups = data.items.reduce((s, i) => s + (i.n_mergeable ?? 0), 0);
   const pendingCandsOf = (r: TestItem) =>
     Object.values(r.cands ?? {}).reduce((sum, v) => sum + (v.pending ?? 0), 0);
   const siteCounts = new Map<string, number>();
@@ -2019,12 +2055,24 @@ function SetDetail({ setId }: { setId: number }) {
     const sk = it.site || "未知场地";
     siteCounts.set(sk, (siteCounts.get(sk) ?? 0) + 1);
   }
-  const filteredItems = data.items.filter((i) => {
-    if (itemCheckFilter === "checked" && !i.checked) return false;
-    if (itemCheckFilter === "unchecked" && i.checked) return false;
-    if (itemSiteFilter && (i.site || "未知场地") !== itemSiteFilter) return false;
-    return true;
-  });
+  const filteredItems = data.items
+    .filter((i) => {
+      if (itemCheckFilter === "checked" && !i.checked) return false;
+      if (itemCheckFilter === "unchecked" && i.checked) return false;
+      if (itemSiteFilter && (i.site || "未知场地") !== itemSiteFilter) return false;
+      if (itemCleanFilter === "dedupe" && !((i.n_dedupe ?? 0) > 0 || (i.n_conflict ?? 0) > 0)) return false;
+      if (itemCleanFilter === "merge" && !(i.n_mergeable ?? 0)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (itemSort === "dedupe") {
+        return ((b.n_dedupe ?? 0) + (b.n_conflict ?? 0)) - ((a.n_dedupe ?? 0) + (a.n_conflict ?? 0));
+      }
+      if (itemSort === "merge") {
+        return (b.n_mergeable ?? 0) - (a.n_mergeable ?? 0);
+      }
+      return 0;
+    });
   const wsFromEval = !!wsWin?.evalHint;
   const checkAll = async (checked: boolean) => {
     setCheckingAll(true);
@@ -2079,6 +2127,61 @@ function SetDetail({ setId }: { setId: number }) {
                         { label: `已核对 ${checkedCount}`, value: "checked" },
                       ]}
                     />
+                    <Segmented
+                      size="small"
+                      value={itemCleanFilter}
+                      onChange={(v) => setItemCleanFilter(v as "all" | "dedupe" | "merge")}
+                      options={[
+                        { label: "全部质量", value: "all" },
+                        {
+                          label: <span style={{ color: dedupeWinCount > 0 ? "#fa8c16" : undefined }}>可去重 {dedupeWinCount}</span>,
+                          value: "dedupe",
+                        },
+                        {
+                          label: <span style={{ color: mergeWinCount > 0 ? "#13c2c2" : undefined }}>可合并 {mergeWinCount}</span>,
+                          value: "merge",
+                        },
+                      ]}
+                    />
+                    <Select
+                      size="small"
+                      style={{ width: 126 }}
+                      value={itemSort}
+                      onChange={(v) => setItemSort(v)}
+                      options={[
+                        { value: "default", label: "默认排序" },
+                        { value: "dedupe", label: "可去重排前" },
+                        { value: "merge", label: "可合并排前" },
+                      ]}
+                    />
+                    {!frozen && (dedupeAutoWinCount > 0 || pickedTestIds.length > 0) && (
+                      <Popconfirm
+                        title={pickedTestIds.length > 0
+                          ? `对勾选的 ${pickedTestIds.length} 段执行一键去重？`
+                          : `对整个测试集可去重的 ${dedupeAutoWinCount} 段执行一键去重？`}
+                        description="自动合并同类重叠、细类压粗类、行为/活动挖空静止（不动已核对状态，异类冲突留给人工看）。"
+                        okText="一键去重"
+                        onConfirm={() => runDedupe(pickedTestIds.length > 0 ? pickedTestIds : undefined)}
+                      >
+                        <Button size="small" danger={dedupeAutoWinCount > 0} ghost loading={cleaning === "dedupe"}>
+                          一键去重{pickedTestIds.length > 0 ? `（已选 ${pickedTestIds.length}）` : ` (${dedupeAutoWinCount}段)`}
+                        </Button>
+                      </Popconfirm>
+                    )}
+                    {!frozen && (mergeWinCount > 0 || pickedTestIds.length > 0) && (
+                      <Popconfirm
+                        title={pickedTestIds.length > 0
+                          ? `合并勾选的 ${pickedTestIds.length} 段内相邻同类（间隔 ≤1.5s）？`
+                          : `合并整个测试集 ${mergeWinCount} 段内的 ${totalMergeGroups} 组相邻同类（间隔 ≤1.5s）？`}
+                        description="仅合并窗口内同类别且间隔 ≤1.5 秒的碎片；原本全部已通过的合并后继续保持已通过。"
+                        okText="一键合并"
+                        onConfirm={() => runMergeAdjacent(pickedTestIds.length > 0 ? pickedTestIds : undefined)}
+                      >
+                        <Button size="small" loading={cleaning === "merge"} style={{ borderColor: "#13c2c2", color: "#13c2c2" }}>
+                          一键合并相邻{pickedTestIds.length > 0 ? `（已选 ${pickedTestIds.length}）` : ` (${totalMergeGroups}组)`}
+                        </Button>
+                      </Popconfirm>
+                    )}
                     {siteCounts.size > 1 && (
                       <Select
                         size="small"
@@ -2214,6 +2317,38 @@ function SetDetail({ setId }: { setId: number }) {
                         </Tooltip>))}
                       {!Object.keys(r.labels).length && !Object.values(r.cands ?? {}).some((v) => (v.pending ?? 0) > 0)
                         && <span style={{ color: "#ff4d4f" }}>窗口里没有标注</span>}
+                      {(r.n_dedupe ?? 0) > 0 && (!frozen ? (
+                        <Popconfirm
+                          title={`对这条任务 #${r.task_id} 执行单条去重？`}
+                          description="合并同类重叠、细类压粗类、行为/活动挖空静止。"
+                          okText="去重"
+                          onConfirm={() => runDedupe([r.id])}
+                        >
+                          <Tag color="warning" style={{ marginInlineEnd: 0, fontSize: 11, cursor: "pointer" }}>
+                            ⚠ 可去重 {r.n_dedupe}
+                          </Tag>
+                        </Popconfirm>
+                      ) : (
+                        <Tag color="warning" style={{ marginInlineEnd: 0, fontSize: 11 }}>⚠ 可去重 {r.n_dedupe}</Tag>
+                      ))}
+                      {(r.n_conflict ?? 0) > 0 && (
+                        <Tooltip title="窗口内有同轨异类重叠冲突，需点右侧「看/标」人工判断">
+                          <Tag color="error" style={{ marginInlineEnd: 0, fontSize: 11 }}>冲突 {r.n_conflict}</Tag>
+                        </Tooltip>
+                      )}
+                      {(r.n_mergeable ?? 0) > 0 && (!frozen ? (
+                        <Popconfirm
+                          title={`合并该窗口内 ${r.n_mergeable} 组相邻同类（≤1.5s）？`}
+                          okText="合并"
+                          onConfirm={() => runMergeAdjacent([r.id])}
+                        >
+                          <Tag color="cyan" style={{ marginInlineEnd: 0, fontSize: 11, cursor: "pointer" }}>
+                            🔗 可合并 {r.n_mergeable}组
+                          </Tag>
+                        </Popconfirm>
+                      ) : (
+                        <Tag color="cyan" style={{ marginInlineEnd: 0, fontSize: 11 }}>🔗 可合并 {r.n_mergeable}组</Tag>
+                      ))}
                     </Space>) },
                   {
                     title: <Tooltip title="上方为窗口标注覆盖率（低于 80% 标红），下方为原任务状态">覆盖 / 状态</Tooltip>,

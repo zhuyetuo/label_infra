@@ -45,6 +45,12 @@ export interface TestItem {
   n_uncertain: number;
   /** 窗口内还没人工确认/通过的 AI 预标片段数 */
   n_ai_pending?: number;
+  /** 窗口内可自动去重的重叠对数（同类重叠 / 父子覆盖 / 行为压运动 / 活动压静止） */
+  n_dedupe?: number;
+  /** 窗口内同轨异类冲突对数（需人工判断） */
+  n_conflict?: number;
+  /** 窗口内相邻同类（间隔 ≤1.5s）可合并组数 */
+  n_mergeable?: number;
   /** 窗口里有多少时间标了东西（0~1）。测试数据要窗口内全标 */
   label_cover: number;
   /** 窗口里的疑似片段：{类别: {pending/confirmed/rejected/uncertain: 条数}} */
@@ -215,6 +221,15 @@ export const batchRemoveTestItems = (setId: number, item_ids: number[]) =>
 export const batchPromoteTestItems = (item_ids: number[]) =>
   request.post<never, { moved_windows: number; pooled_segments: number; removed_from_sets: number }>(
     "/model-tests/items/batch-promote", { item_ids });
+export const dedupeTestSet = (setId: number, item_ids?: number[]) =>
+  request.post<never, { tasks_cleaned: number; removed: number; carved: number; conflicts: number }>(
+    `/model-tests/sets/${setId}/dedupe`, { item_ids: item_ids?.length ? item_ids : null }, { timeout: 180_000 });
+export const mergeAdjacentTestSet = (setId: number, item_ids?: number[], max_gap_ms = 1500) =>
+  request.post<never, { groups_merged: number; removed: number; windows_cleaned: number }>(
+    `/model-tests/sets/${setId}/merge-adjacent`,
+    { item_ids: item_ids?.length ? item_ids : null, max_gap_ms },
+    { timeout: 180_000 },
+  );
 export const getTestSeen = (id: number, modelIds?: number[]) =>
   request.get<never, { models: SeenModel[]; n_items: number }>(`/model-tests/sets/${id}/seen`, {
     params: modelIds?.length ? { model_ids: modelIds.join(",") } : undefined,

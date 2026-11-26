@@ -548,7 +548,7 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db), user: Us
         raise HTTPException(400, "这一版已冻结，不能删")
     await test_pool.sync_window_to_test_pool(
         db, task_id=it.task_id, sample_id=it.sample_id, start_ms=it.start_ms, end_ms=it.end_ms,
-        user_id=user.id, checked=(it.checked_at is not None), checked_by=it.checked_by, checked_at=it.checked_at,
+        user_id=getattr(user, "id", None), checked=(it.checked_at is not None), checked_by=it.checked_by, checked_at=it.checked_at,
         note=it.note, source_set_id=it.set_id,
     )
     await db.delete(it)
@@ -587,6 +587,170 @@ async def batch_remove_items(
         await db.delete(it)
     await db.commit()
     return ok({"removed": len(items), "preserved_in_pool": len(items)})
+
+
+class SetCleanIn(BaseModel):
+    item_ids: list[int] | None = None
+    max_gap_ms: int = Field(default=1500, ge=0, le=10000)
+
+
+@router.post("/sets/{set_id}/dedupe")
+async def dedupe_test_set(
+    set_id: int,
+    body: SetCleanIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """对整个测试集（或勾选/单个片段）一键去重：同类重叠合并、父子细类压粗类、行为/活动挖空静止。"""
+    from app.api.v1.segment_review import _dedupe_task
+
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，不能修改")
+    q = select(ModelTestItem).where(ModelTestItem.set_id == set_id)
+    if body.item_ids:
+        q = q.where(ModelTestItem.id.in_(body.item_ids))
+    items = (await db.execute(q)).scalars().all()
+    if not items:
+        return ok({"tasks_cleaned": 0, "removed": 0, "carved": 0, "conflicts": 0})
+    tids = list(dict.fromkeys(it.task_id for it in items))
+    tasks = {t.id: t for t in (await db.execute(select(Task).where(Task.id.in_(tids)))).scalars().all()}
+    total_removed = 0
+    total_carved = 0
+    total_conflicts = 0
+    tasks_cleaned = 0
+    for tid in tids:
+        t = tasks.get(tid)
+        if t is None:
+            continue
+        r = await _dedupe_task(db, t, user, approve=False)
+        rem = int(r.get("removed", 0))
+        crv = int(r.get("carved", 0))
+        if rem or crv:
+            tasks_cleaned += 1
+        total_removed += rem
+        total_carved += crv
+        total_conflicts += int(r.get("conflicts", 0))
+    await db.commit()
+    return ok({
+        "tasks_cleaned": tasks_cleaned,
+        "removed": total_removed,
+        "carved": total_carved,
+        "conflicts": total_conflicts,
+    })
+
+
+@router.post("/sets/{set_id}/merge-adjacent")
+async def merge_adjacent_test_set(
+    set_id: int,
+    body: SetCleanIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """对整个测试集（或勾选/单个窗口）一键合并窗口内相邻同类片段（间隔 ≤ max_gap_ms）。"""
+    from collections import defaultdict
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
+    from app.services.task_service import _append_boundary_edit
+
+    s = await _set_or_404(db, set_id)
+    if s.frozen_at is not None:
+        raise HTTPException(400, "这一版已冻结，不能修改")
+    q = select(ModelTestItem).where(ModelTestItem.set_id == set_id)
+    if body.item_ids:
+        q = q.where(ModelTestItem.id.in_(body.item_ids))
+    items = (await db.execute(q)).scalars().all()
+    if not items:
+        return ok({"groups_merged": 0, "removed": 0, "windows_cleaned": 0})
+
+    tids = list(dict.fromkeys(it.task_id for it in items))
+    segs_all = (await db.execute(
+        select(AnnotationRecord.task_id, AnnotationLabelItem)
+        .join(AnnotationLabelItem, AnnotationLabelItem.annotation_record_id == AnnotationRecord.id)
+        .join(Task, Task.id == AnnotationRecord.task_id)
+        .where(AnnotationRecord.task_id.in_(tids), AnnotationRecord.round_no == Task.round_no)
+    )).all()
+    segs_by_task: dict[int, list[AnnotationLabelItem]] = defaultdict(list)
+    for tid, seg in segs_all:
+        segs_by_task[tid].append(seg)
+
+    def rank(x: AnnotationLabelItem):
+        human = bool(x.ai_confirmed or x.is_modified or x.source_type == LabelItemSource.human_added)
+        return (x.seg_status == "approved", human, x.end_time_ms - x.start_time_ms, -x.id)
+
+    now = datetime.now()
+    deleted_ids: set[int] = set()
+    cand_to_reject: set[int] = set()
+    groups_merged = 0
+    removed = 0
+    windows_cleaned = 0
+
+    for it in items:
+        ws = it.start_ms if it.start_ms is not None else 0
+        we = it.end_ms if it.end_ms is not None else 10 ** 12
+        by_lid: dict[int, list[AnnotationLabelItem]] = defaultdict(list)
+        for seg in segs_by_task.get(it.task_id, []):
+            if seg.id in deleted_ids or seg.uncertain:
+                continue
+            if seg.end_time_ms <= ws or seg.start_time_ms >= we:
+                continue
+            by_lid[seg.label_id].append(seg)
+
+        win_merged = 0
+        for lid, arr in by_lid.items():
+            if len(arr) < 2:
+                continue
+            arr.sort(key=lambda x: (x.start_time_ms, x.end_time_ms))
+            cur_grp = [arr[0]]
+            groups: list[list[AnnotationLabelItem]] = []
+            for nxt in arr[1:]:
+                gap = nxt.start_time_ms - cur_grp[-1].end_time_ms
+                if 0 <= gap <= body.max_gap_ms:
+                    cur_grp.append(nxt)
+                else:
+                    if len(cur_grp) >= 2:
+                        groups.append(cur_grp)
+                    cur_grp = [nxt]
+            if len(cur_grp) >= 2:
+                groups.append(cur_grp)
+
+            for grp in groups:
+                keeper = max(grp, key=rank)
+                old = (keeper.start_time_ms, keeper.end_time_ms)
+                keeper.start_time_ms = min(x.start_time_ms for x in grp)
+                keeper.end_time_ms = max(x.end_time_ms for x in grp)
+                if all(x.seg_status == "approved" for x in grp):
+                    keeper.seg_status = "approved"
+                if (keeper.start_time_ms, keeper.end_time_ms) != old:
+                    keeper.boundary_edits = _append_boundary_edit(
+                        keeper.boundary_edits, old, (keeper.start_time_ms, keeper.end_time_ms), user
+                    )
+                    if keeper.source_type == LabelItemSource.ai_generated:
+                        keeper.is_modified = True
+                    keeper.touched_at, keeper.touched_by = now, user.id
+                for x in grp:
+                    if x is keeper:
+                        continue
+                    deleted_ids.add(x.id)
+                    await db.delete(x)
+                    removed += 1
+                    if x.from_candidate_id is not None:
+                        if keeper.from_candidate_id is None:
+                            keeper.from_candidate_id = x.from_candidate_id
+                        else:
+                            cand_to_reject.add(x.from_candidate_id)
+                groups_merged += 1
+                win_merged += 1
+        if win_merged:
+            windows_cleaned += 1
+
+    for cid in cand_to_reject:
+        cand = await db.get(AiCandidate, cid)
+        if cand is not None and cand.status == CandidateStatus.confirmed:
+            cand.status = CandidateStatus.rejected
+            cand.decided_by, cand.decided_at = user.id, now
+    await db.commit()
+    return ok({"groups_merged": groups_merged, "removed": removed, "windows_cleaned": windows_cleaned})
 
 
 class PromoteIn(BaseModel):
