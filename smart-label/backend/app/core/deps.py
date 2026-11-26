@@ -13,11 +13,13 @@ from app.models.user import User, UserRole
 
 _bearer = HTTPBearer(auto_error=False)
 
-# 访客能用的非 GET 接口：改自己的密码、退出登录，外加几个只是"算一下给你看"、不写库的 POST
+# 访客能用的非 GET 接口：改自己的密码、退出登录，外加换取只读媒体播放 token 和"算一下给你看"、不写库的 POST
 VIEWER_ALLOWED_POSTS = (
     "/auth/change-password",
     "/auth/logout",
+    "/token",
     "/model-eval/compare",
+    "/model-tests/plan/availability",
     "/data-pool/compare-preview",
     "/skin/ml/preview",
     "/candidates/similar/preview",
@@ -43,7 +45,6 @@ def _viewer_gate(request: Request | None, user: User) -> None:
     if method not in _SAFE_METHODS:
         if not any(path.endswith(p) for p in VIEWER_ALLOWED_POSTS):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "访客账号只能查看，不能修改")
-        return
     user.read_only = True
     set_committed_value(user, "role", UserRole.admin)
 
