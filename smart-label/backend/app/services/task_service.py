@@ -447,12 +447,13 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             continue        # 别人刚改过，前端这份是旧的：保留别人的（下面也不删）
         if origin is not None:
             keep_ids.add(origin.id)
-            changed = (
-                origin.label_id != incoming.label_id
-                or origin.start_time_ms != incoming.start_time_ms
+            label_changed = origin.label_id != incoming.label_id
+            span_changed = (
+                origin.start_time_ms != incoming.start_time_ms
                 or origin.end_time_ms != incoming.end_time_ms
             )
-            if (origin.start_time_ms, origin.end_time_ms) != (incoming.start_time_ms, incoming.end_time_ms):
+            changed = label_changed or span_changed
+            if span_changed:
                 origin.boundary_edits = _append_boundary_edit(
                     origin.boundary_edits,
                     (origin.start_time_ms, origin.end_time_ms),
@@ -468,11 +469,14 @@ async def save_draft(db: AsyncSession, task_id: int, user: User, items: list[Lab
             if changed:
                 origin.is_modified = True
                 origin.created_by = user.id
-                # 改过的片段要重新审：通过的、退回的都回到待审
-                origin.seg_status = None
-                # 手动加进数据池的也一样：改过的要重新认可，不能带着「在池里」
-                if origin.pool_state == "in":
-                    origin.pool_state = None
+                # 仅调整起止边界时，原来已经「通过」的保持原通过状态（不用再回来点一遍通过）；
+                # 改了类别、或原来是退回状态，则回到待审
+                keep_approved = (origin.seg_status == "approved") and (not label_changed)
+                if not keep_approved:
+                    origin.seg_status = None
+                    # 手动加进数据池的也一样：改了类别的要重新认可
+                    if origin.pool_state == "in":
+                        origin.pool_state = None
                 # 审核标过「有问题」的，改了就算处理过了
                 origin.review_note = None
                 origin.review_flag_by = None
