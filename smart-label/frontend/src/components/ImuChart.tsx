@@ -989,16 +989,19 @@ function playheadPlugin(
 
         if (showLabel) {
           const label = formatTimestamp(stateRef.current);
-          ctx.font = "12px sans-serif";
+          ctx.font = "11px monospace";
           const textWidth = ctx.measureText(label).width;
           const nearRightEdge = x + 6 + textWidth > u.bbox.left + u.bbox.width;
           const labelX = nearRightEdge ? x - 6 - textWidth : x + 6;
-          const labelY = Math.max(u.bbox.top + 1, bandTop - 19);
-          ctx.fillStyle = ink.halo;
-          ctx.fillRect(labelX - 3, labelY, textWidth + 6, 16);
-          ctx.fillStyle = ink.line;
+          // 贴着顶部画、只用描边不用实心黑块，绝不挡住中间的波形曲线
+          const labelY = u.bbox.top + 2;
           ctx.textBaseline = "top";
-          ctx.fillText(label, labelX, labelY + 2);
+          ctx.lineWidth = 3;
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = ink.halo;
+          ctx.strokeText(label, labelX, labelY);
+          ctx.fillStyle = ink.line;
+          ctx.fillText(label, labelX, labelY);
         }
         ctx.restore();
       },
