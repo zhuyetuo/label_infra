@@ -610,8 +610,8 @@ export default function CandidatePanel({
                 <Tag color={REASON_COLOR[c.reason] ?? "orange"}>
                   {c.reason === "similar" ? SRC_CN[srcOf(c)] ?? REASON_LABEL.similar : REASON_LABEL[c.reason] ?? c.reason}
                 </Tag>
-                {/* 不是抓挠的候选要看得出是哪类——列表里混着两种，光看时间分不出 */}
-                {c.label_name !== "抓挠" && (
+                {/* 所有候选都明确标出类别标签（包括抓挠），避免混排时只看到「模型低置信」看不出是哪类 */}
+                {c.label_name && (
                   <Tag color={findLabel(labels, c.label_name)?.color || undefined}>{currentName(c.label_name)}</Tag>
                 )}
                 {/* 两个模型各跑一遍时并排放着，得看得出哪条是谁给的 */}
