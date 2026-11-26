@@ -13,8 +13,16 @@ export interface ApiEnvelope<T = unknown> {
 const request = axios.create({ baseURL: "/api/v1", timeout: 60000 });
 
 // 访客能发的非 GET 请求，跟后端 app/core/deps.py 的 VIEWER_ALLOWED_POSTS 一致
-const VIEWER_ALLOWED = ["/auth/logout", "/model-eval/compare", "/data-pool/compare-preview",
-  "/skin/ml/preview", "/candidates/similar/preview"];
+const VIEWER_ALLOWED = [
+  "/auth/change-password",
+  "/auth/logout",
+  "/token",
+  "/model-eval/compare",
+  "/model-tests/plan/availability",
+  "/data-pool/compare-preview",
+  "/skin/ml/preview",
+  "/candidates/similar/preview",
+];
 
 request.interceptors.request.use((config) => {
   const { accessToken: token, userInfo } = useAuthStore.getState();
