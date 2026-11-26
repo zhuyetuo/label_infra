@@ -4024,6 +4024,7 @@ export default function AnnotationWorkspace({
       sampleId={sampleId}
       startMs={camFixRange[0]}
       endMs={camFixRange[1]}
+      bus={bus}
       onClose={() => setCamFixOpen(false)}
       onApplied={reloadAfterCamFix}
     />

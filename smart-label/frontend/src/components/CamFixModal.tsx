@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Col, ConfigProvider, Modal, Row, Select, Space, Spin, Tag, Typography, message } from "antd";
 import { getMediaToken, mediaStreamUrl } from "@/api/media";
 import { getSampleCams, saveCamBatch, type CamSampleCams } from "@/api/camMap";
+import type { TimeBus } from "@/utils/timeBus";
 
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -9,16 +10,21 @@ function fmt(sec: number): string {
   return m ? `${m}:${s.toFixed(1).padStart(4, "0")}` : `${s.toFixed(1)}s`;
 }
 
-/** 一路画面循环播这一段：先停到起点，播过终点就跳回去。
+/** 一路画面循环播这一段：优先锁死在工作台 TimeBus（与 IMU 波形同帧循环），
+ *  若工作台当前暂停则自身在 [start, end] 内循环播放；每次 seek 后显式 play() 防浏览器暂停。
  *  offsetMs：跨机的机位，这一路第 0 秒在本样本时间轴上的位置。 */
-function CamClip({ mediaId, startS, endS, offsetMs }: {
+function CamClip({ mediaId, startS, endS, offsetMs, bus, paused }: {
   mediaId: number | null;
   startS: number;
   endS: number;
   offsetMs: number;
+  bus?: TimeBus | null;
+  paused?: boolean;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const busActiveRef = useRef(0);
   const off = offsetMs / 1000;
   const start = Math.max(0, startS - off);
   const end = endS - off;
@@ -36,6 +42,65 @@ function CamClip({ mediaId, startS, endS, offsetMs }: {
       alive = false;
     };
   }, [mediaId]);
+
+  // 与工作台 TimeBus 锁步：波形红线走到哪，三路画面同步走到哪（偏差 > 0.35s 立即对齐）
+  useEffect(() => {
+    if (!bus || empty) return;
+    const applySpeed = (rate: number) => {
+      const v = videoRef.current;
+      if (v) v.playbackRate = rate;
+    };
+    applySpeed(bus.getSpeed());
+    const offSpeed = bus.onSpeedChange(applySpeed);
+    const offTime = bus.onTime((sec) => {
+      busActiveRef.current = Date.now();
+      const v = videoRef.current;
+      if (!v || v.readyState < 1) return;
+      const target = Math.max(0, sec - off);
+      if (Math.abs(v.currentTime - target) > 0.35) {
+        try { v.currentTime = target; } catch { /* ignore */ }
+      }
+      if (!paused && v.paused && v.readyState >= 2) {
+        v.play().catch(() => {});
+      }
+    });
+    return () => {
+      offTime();
+      offSpeed();
+    };
+  }, [bus, off, empty, paused]);
+
+  // 响应弹窗内暂停 / 继续切换
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || empty) return;
+    if (paused) {
+      v.pause();
+    } else if (v.readyState >= 2) {
+      v.play().catch(() => {});
+    }
+  }, [paused, empty]);
+
+  // 独立保底循环：即使用户打开机位纠正时主视频暂停或未传 bus，也稳定循环 [start, end]
+  useEffect(() => {
+    if (empty || !url) return;
+    const timer = window.setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 2) return;
+      if (paused) return;
+      // 如果 TimeBus 刚在 500ms 内驱动过，交给 TimeBus 控制回跳，避免打架
+      const busDriving = bus && (Date.now() - busActiveRef.current < 500);
+      if (!busDriving) {
+        if (v.currentTime < start - 0.1 || v.currentTime >= end) {
+          v.currentTime = start;
+        }
+      }
+      if (v.paused) {
+        v.play().catch(() => {});
+      }
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, [url, start, end, empty, paused, bus]);
 
   if (empty) {
     return (
@@ -55,16 +120,37 @@ function CamClip({ mediaId, startS, endS, offsetMs }: {
   }
   return (
     <video
+      ref={videoRef}
       src={url}
       muted
       playsInline
       autoPlay
       preload="auto"
       onLoadedMetadata={(e) => {
-        e.currentTarget.currentTime = start;
+        const v = e.currentTarget;
+        if (bus) v.playbackRate = bus.getSpeed();
+        v.currentTime = start;
+      }}
+      onCanPlay={(e) => {
+        const v = e.currentTarget;
+        if (!paused && v.paused) v.play().catch(() => {});
+      }}
+      onSeeked={(e) => {
+        const v = e.currentTarget;
+        if (!paused && v.paused) v.play().catch(() => {});
       }}
       onTimeUpdate={(e) => {
-        if (e.currentTarget.currentTime >= end) e.currentTarget.currentTime = start;
+        const v = e.currentTarget;
+        const busDriving = bus && (Date.now() - busActiveRef.current < 500);
+        if (!busDriving && v.currentTime >= end) {
+          v.currentTime = start;
+          if (!paused && v.paused) v.play().catch(() => {});
+        }
+      }}
+      onEnded={(e) => {
+        const v = e.currentTarget;
+        v.currentTime = start;
+        if (!paused) v.play().catch(() => {});
       }}
       style={{ width: "100%", aspectRatio: "16 / 9", objectFit: "cover", background: "#111", borderRadius: 4 }}
     />
@@ -73,11 +159,12 @@ function CamClip({ mediaId, startS, endS, offsetMs }: {
 
 /** 标注工作台里就地核对机位：循环看这一段，把这只狗那一间换到画面对的那一路。
  *  改的是整场录制（同一时段所有样本一起换），进来时已经写清楚。 */
-export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, onApplied }: {
+export default function CamFixModal({ open, sampleId, startMs, endMs, bus, onClose, onApplied }: {
   open: boolean;
   sampleId: number | null;
   startMs: number;
   endMs: number;
+  bus?: TimeBus | null;
   onClose: () => void;
   onApplied?: () => void;
 }) {
@@ -85,6 +172,27 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
   const [loading, setLoading] = useState(false);
   const [map, setMap] = useState<Record<number, number>>({});
   const [saving, setSaving] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [nowS, setNowS] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setPaused(false);
+      setNowS(null);
+      return;
+    }
+    if (!bus) return;
+    // 打开机位纠正时如果主画面正在循环但处于暂停，自动恢复播放让波形和三路画面一起动
+    bus.play("play");
+    let lastUi = 0;
+    return bus.onTime((sec) => {
+      const now = Date.now();
+      if (now - lastUi >= 120) {
+        lastUi = now;
+        setNowS(sec);
+      }
+    });
+  }, [open, bus]);
 
   useEffect(() => {
     if (!open || sampleId == null) return;
@@ -163,15 +271,35 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
     <Modal
       open={open}
       zIndex={1300}
+      mask={false}
+      style={{ top: "min(330px, 34vh)" }}
       title={
         <Space wrap>
           <span>机位纠正</span>
           {data?.sample_code && <Tag>{data.sample_code}</Tag>}
           {data?.room_label && <Tag color="green">这只狗应该是 {data.room_label}</Tag>}
+          {nowS != null && (
+            <Tag color="purple" style={{ fontFamily: "monospace" }}>
+              同步播放中 {fmt(nowS)}
+            </Tag>
+          )}
+          <Button
+            size="small"
+            onClick={() => {
+              const next = !paused;
+              setPaused(next);
+              bus?.play(next ? "pause" : "play");
+            }}
+          >
+            {paused ? "▶ 继续同步循环" : "⏸ 暂停"}
+          </Button>
         </Space>
       }
       width={1180}
-      styles={{ body: { maxHeight: "70vh", overflowY: "auto", paddingRight: 4 } }}
+      styles={{
+        content: { boxShadow: "0 12px 42px rgba(0,0,0,0.78)", border: "1px solid rgba(255,255,255,0.16)" },
+        body: { maxHeight: "calc(100vh - 440px)", minHeight: 260, overflowY: "auto", paddingRight: 4 },
+      }}
       onCancel={onClose}
       destroyOnClose
       footer={
@@ -225,6 +353,8 @@ export default function CamFixModal({ open, sampleId, startMs, endMs, onClose, o
                     startS={startS}
                     endS={endS}
                     offsetMs={c.offset_ms ?? 0}
+                    bus={bus}
+                    paused={paused}
                   />
                   <Select
                     size="small"
