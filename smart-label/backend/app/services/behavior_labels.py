@@ -85,7 +85,7 @@ ROOTS: list[tuple[str, str, str, str, list]] = [
         ("rump", "臀尾会阴（坐地/拖屁股）", [("butt", "臀", []), ("anus", "肛周/肛门", []), ("tail", f"尾{RARE}", [])]),
     ]),
     ("CARE_HEADSHAKE", "甩头/抖身", "behavior", "#16A085", [("head", "甩头", []), ("body", "抖身", [])]),
-    ("ING_EAT", "进食", "behavior", "#D35400", []),
+    ("ING_EAT", "进食", "behavior", "#D35400", [("bone", "啃骨头/零食", [])]),
     ("ING_DRINK", "饮水", "behavior", "#2980B9", []),
     ("ACT_SNIFF", "嗅闻", "behavior", "#7F8C8D", []),
     ("ELIM_POSSIBLE", "疑似如厕", "behavior", "#A04000", [("urinate", "排尿", []), ("defecate", "排便", [])]),
