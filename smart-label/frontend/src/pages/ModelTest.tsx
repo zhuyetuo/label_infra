@@ -1194,6 +1194,25 @@ function EvalVisualPanel({ row, siblingRows, onSelectRow, iouMin, edgeTolSec = 2
     return m;
   }, [items]);
 
+  // 汇总同一窗口下模型对全部类别的实际预测，避免看单类「标 0 / 预 0」时误以为其他类别没预测
+  const predsByWin = useMemo(() => {
+    const m = new Map<string, { label: string; n: number; sec: number }[]>();
+    const src = siblingRows?.length ? siblingRows : [row];
+    for (const sr of src) {
+      if (!sr.label || !sr.r.window_details?.length) continue;
+      for (const wd of sr.r.window_details) {
+        if (!wd.pred_segs?.length) continue;
+        const k = `${wd.sample_id}:${wd.start_ms}:${wd.end_ms}`;
+        const sec = wd.pred_segs.reduce((acc, [s, e]) => acc + Math.max(0, e - s) / 1000, 0);
+        const list = m.get(k);
+        const entry = { label: sr.label, n: wd.pred_segs.length, sec };
+        if (list) list.push(entry);
+        else m.set(k, [entry]);
+      }
+    }
+    return m;
+  }, [siblingRows, row]);
+
   const openDetailAt = (d: WindowDetail, it: TestItem, targetSeg?: [number, number]) => {
     const absTruth: [number, number][] = d.truth_segs.map(([s, e]) => [d.start_ms + s, d.start_ms + e]);
     const absPred: [number, number, number | null][] = d.pred_segs.map(([s, e, c]) => [d.start_ms + s, d.start_ms + e, c]);
@@ -1481,7 +1500,7 @@ function EvalVisualPanel({ row, siblingRows, onSelectRow, iouMin, edgeTolSec = 2
                 <div>
                   <MiniTimeline d={d} />
                   <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-                    标 {d.truth_n} / 预 {d.pred_n}
+                    {row.label ? `${row.label} ` : ""}标 {d.truth_n} / 预 {d.pred_n}
                     {d.mean_iou != null && ` · IoU ${Math.round(d.mean_iou * 100)}%`}
                     {d.max_edge_err_ms != null && (
                       <span style={{ color: d.edge_aligned === false ? "#b37feb" : undefined }}>
@@ -1561,15 +1580,36 @@ function EvalVisualPanel({ row, siblingRows, onSelectRow, iouMin, edgeTolSec = 2
             },
           },
           {
-            title: "窗口内实际动作", width: 185,
+            title: "窗口内全类别（实标 vs 预测）", width: 245,
             render: (_: unknown, d: WindowDetail) => {
-              const it = itemByWin.get(`${d.sample_id}:${d.start_ms}:${d.end_ms}`);
+              const winKey = `${d.sample_id}:${d.start_ms}:${d.end_ms}`;
+              const it = itemByWin.get(winKey);
               const lbs = Object.entries(it?.labels ?? {});
-              return lbs.length ? (
-                <Space size={4} wrap>
-                  {lbs.map(([k, v]) => <Tag key={k} color={colorOf(k)} style={{ marginInlineEnd: 0 }}>{k} {v.n}次·{fmtSec(v.sec)}</Tag>)}
-                </Space>
-              ) : <span style={{ color: "#888", fontSize: 12 }}>无标注</span>;
+              const preds = predsByWin.get(winKey) ?? [];
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, color: "#888", flex: "none", lineHeight: "22px" }}>实标:</span>
+                    {lbs.length ? (
+                      <Space size={4} wrap>
+                        {lbs.map(([k, v]) => <Tag key={k} color={colorOf(k)} style={{ marginInlineEnd: 0 }}>{k} {v.n}次·{fmtSec(v.sec)}</Tag>)}
+                      </Space>
+                    ) : <span style={{ color: "#666", fontSize: 11, lineHeight: "22px" }}>无标注</span>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, color: "#888", flex: "none", lineHeight: "22px" }}>预测:</span>
+                    {preds.length ? (
+                      <Space size={4} wrap>
+                        {preds.map((pr) => (
+                          <Tag key={pr.label} color={colorOf(pr.label)} bordered={false} style={{ marginInlineEnd: 0, opacity: 0.9 }}>
+                            {pr.label} {pr.n}次·{fmtSec(pr.sec)}
+                          </Tag>
+                        ))}
+                      </Space>
+                    ) : <span style={{ color: "#666", fontSize: 11, lineHeight: "22px" }}>无输出</span>}
+                  </div>
+                </div>
+              );
             },
           },
           {
