@@ -1401,17 +1401,57 @@ async def start_eval_run(
     modes: list[str],
     test_set_id: int | None = None,
     user_id: int | None = None,
+    force: bool = False,
 ) -> bool:
     """
     后台把这批样本按每个版本各跑一遍。返回 False = 已经有一批在跑。
+    默认开启断点续跑（force=False）：自动跳过库里已跑过且 JSON 存在的样本。
     若传了 test_set_id，跑出结果后会自动登记到该测试集的已跑记录中。
     """
     global _eval_running
     if _eval_running:
         return False
     _eval_running = True
-    asyncio.create_task(_run_eval(sample_ids, modes, test_set_id=test_set_id, user_id=user_id))
+    asyncio.create_task(_run_eval(sample_ids, modes, test_set_id=test_set_id, user_id=user_id, force=force))
     return True
+
+
+async def _existing_run_sample_ids(
+    db: AsyncSession,
+    sample_ids: list[int],
+    mode: str,
+) -> tuple[set[int], str | None]:
+    """查询这批样本中该 mode 已落库且 NAS JSON 存在的 sample_id 集合，返回 (done_ids, produced_key)。"""
+    from app.services import algo_client, edge_client
+    from app.services.ai_prelabel_service import model_tag_of
+
+    if not sample_ids:
+        return set(), None
+    if edge_client.is_edge(mode):
+        tag = model_tag_of(f"edge://{edge_client.model_of(mode)}.edge")
+        post = edge_client.post_mode_of(mode)
+        q = select(SampleInferenceRun).where(
+            SampleInferenceRun.sample_id.in_(sample_ids),
+            SampleInferenceRun.model_tag == tag,
+            SampleInferenceRun.mode == post,
+        )
+    elif algo_client.is_srv(mode):
+        q = select(SampleInferenceRun).where(
+            SampleInferenceRun.sample_id.in_(sample_ids),
+            SampleInferenceRun.mode == mode,
+        )
+    else:
+        return set(), None
+
+    rows = (await db.execute(q)).scalars().all()
+    done_ids: set[int] = set()
+    pkey: str | None = None
+    for r in rows:
+        if r.json_path and os.path.isfile(os.path.join(settings.nas_root, r.json_path)):
+            done_ids.add(r.sample_id)
+            if pkey is None:
+                pkey = f"{r.model_tag}::{r.mode}"
+    return done_ids, pkey
 
 
 async def _run_eval(
@@ -1419,6 +1459,7 @@ async def _run_eval(
     modes: list[str],
     test_set_id: int | None = None,
     user_id: int | None = None,
+    force: bool = False,
 ) -> None:
     global _eval_running
     from app.db.session import SessionLocal
@@ -1439,10 +1480,28 @@ async def _run_eval(
         if no_csv:
             _eval_progress["detail"].append(f"{len(no_csv)} 个样本没有 IMU 数据，跳过")
         chunk = max(1, settings.algo_infer_batch_size)
+        all_ids = [s.id for s in samples]
         for mode in modes:
-            for i in range(0, len(samples), chunk):
-                part = samples[i : i + chunk]
-                _eval_progress["current"] = f"{mode} · {i + 1}~{i + len(part)} / {len(samples)}"
+            todo = samples
+            if not force:
+                async with SessionLocal() as db:
+                    done_ids, existing_pkey = await _existing_run_sample_ids(db, all_ids, mode)
+                if done_ids:
+                    todo = [s for s in samples if s.id not in done_ids]
+                    _eval_progress["done"] += len(done_ids)
+                    if existing_pkey and existing_pkey not in _eval_progress["produced"]:
+                        _eval_progress["produced"].append(existing_pkey)
+                        if test_set_id is not None:
+                            async with SessionLocal() as rdb:
+                                await record_test_set_runs(rdb, test_set_id, [existing_pkey], user_id=user_id)
+                    if todo:
+                        _eval_progress["detail"].append(f"{mode}：跳过 {len(done_ids)} 个已跑样本，补跑剩余 {len(todo)} 个")
+                    else:
+                        _eval_progress["detail"].append(f"{mode}：全部 {len(done_ids)} 个样本已存在，直接复用")
+                        continue
+            for i in range(0, len(todo), chunk):
+                part = todo[i : i + chunk]
+                _eval_progress["current"] = f"{mode} · 补跑 {i + 1}~{i + len(part)} / {len(todo)}" if len(todo) < len(samples) else f"{mode} · {i + 1}~{i + len(part)} / {len(samples)}"
                 batch = [{"path": s.imu_csv_path, "sample_id": s.id} for s in part]
                 try:
                     results = await edge_client.dispatch_batch(batch, mode)

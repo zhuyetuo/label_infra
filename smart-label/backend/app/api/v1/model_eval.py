@@ -340,6 +340,7 @@ class EvalRunIn(BaseModel):
     # 都是"同一批样本、另一种算法"，对比逻辑完全一样。
     # 可选的标签从 GET /model-eval/edge-models 拿。
     modes: list[str] = Field(..., min_length=1)
+    force: bool = False
 
 
 @router.post("/run")
@@ -365,7 +366,7 @@ async def run_eval(
         )).scalars().all())
     if not ids:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有选中样本：选评测集、日期范围或者项目")
-    started = await start_eval_run(ids, body.modes, test_set_id=body.test_set_id, user_id=user.id)
+    started = await start_eval_run(ids, body.modes, test_set_id=body.test_set_id, user_id=user.id, force=body.force)
     return ok({"started": started, "n_samples": len(ids), "modes": body.modes})
 
 
