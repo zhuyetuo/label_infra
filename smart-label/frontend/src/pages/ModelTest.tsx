@@ -16,7 +16,7 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs, type Dog } from "@/api/dogs";
-import { CopyOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
@@ -1614,6 +1614,16 @@ function buildEvalCacheKey(
   return `v1_${(h1 >>> 0).toString(16).padStart(8, "0")}${(h2 >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+const EVAL_THRESH_KEY = (setId: number) => `smart-label:eval-thresh:${setId}`;
+function loadEvalThresh(setId: number): { iou?: number; edgeTolSec?: number; confMin?: number; locked?: boolean } {
+  try {
+    const raw = localStorage.getItem(EVAL_THRESH_KEY(setId)) ?? localStorage.getItem("smart-label:eval-thresh:last");
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
   setId: number; testSet: TestSet; coverage?: Coverage | null; planTarget?: string | null; items: TestItem[]; colors: Record<string, string>;
   opening: number | null; promoting: number | null; frozen?: boolean;
@@ -1633,8 +1643,9 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
-  const [edgeTolSec, setEdgeTolSec] = useState<number>(2);
-  const [confMin, setConfMin] = useState<number>(0);
+  const [edgeTolSec, setEdgeTolSec] = useState<number>(() => loadEvalThresh(setId).edgeTolSec ?? 2);
+  const [confMin, setConfMin] = useState<number>(() => loadEvalThresh(setId).confMin ?? 0);
+  const [threshLocked, setThreshLocked] = useState<boolean>(() => Boolean(loadEvalThresh(setId).locked));
   const [showIouDetail, setShowIouDetail] = useState(false);
   const [iouBucketFilter, setIouBucketFilter] = useState<{ label: string; min: number; max: number } | null>(null);
   const [focusEdgeSeq, setFocusEdgeSeq] = useState(0);
@@ -1642,6 +1653,24 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [shareModal, setShareModal] = useState<{ url: string; title: string } | null>(null);
   const evalSeqRef = useRef(0);
   const forceNextRef = useRef(false);
+
+  // 切换测试集或首次进入时，恢复该测试集（或上次）保存的置信度 / IoU / 起止容差与锁定状态
+  useEffect(() => {
+    const saved = loadEvalThresh(setId);
+    if (typeof saved.iou === "number" && Number.isFinite(saved.iou)) p.setIou(saved.iou);
+    if (typeof saved.edgeTolSec === "number" && Number.isFinite(saved.edgeTolSec)) setEdgeTolSec(saved.edgeTolSec);
+    if (typeof saved.confMin === "number" && Number.isFinite(saved.confMin)) setConfMin(saved.confMin);
+    setThreshLocked(Boolean(saved.locked));
+  }, [setId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 自动记住当前配置（锁定与否都持久化，刷新/重进直接保留上次配置）
+  useEffect(() => {
+    try {
+      const payload = JSON.stringify({ iou: p.iou, edgeTolSec, confMin, locked: threshLocked });
+      localStorage.setItem(EVAL_THRESH_KEY(setId), payload);
+      localStorage.setItem("smart-label:eval-thresh:last", payload);
+    } catch { /* ignore */ }
+  }, [setId, p.iou, edgeTolSec, confMin, threshLocked]);
   const prevStatus = useRef<string | undefined>(undefined);
   const { data: prog, refetch: refetchProg } = useQuery({
     queryKey: ["eval-run-progress"], queryFn: getEvalRunProgress,
@@ -2035,12 +2064,12 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 </span>
               </Tooltip>
               <Slider
-                min={0} max={0.95} step={0.05} value={confMin}
+                min={0} max={0.95} step={0.05} value={confMin} disabled={threshLocked}
                 onChange={(v) => setConfMin(v)}
                 tooltip={{ formatter: (v) => (v ? `置信度 ≥ ${Math.round(v * 100)}%` : "不限（使用模型原输出）") }}
                 style={{ width: 110, margin: "0 4px" }}
               />
-              {confMin > 0 && (
+              {confMin > 0 && !threshLocked && (
                 <Button size="small" type="link" style={{ padding: 0, fontSize: 11, height: 20 }} onClick={() => setConfMin(0)}>重置</Button>
               )}
             </Space>
@@ -2051,14 +2080,14 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 </span>
               </Tooltip>
               <Slider
-                min={0.05} max={0.8} step={0.05} value={p.iou}
+                min={0.05} max={0.8} step={0.05} value={p.iou} disabled={threshLocked}
                 onChange={(v) => p.setIou(v)}
                 tooltip={{ formatter: (v) => `IoU ≥ ${Math.round((v ?? 0) * 100)}%` }}
                 style={{ width: 150, margin: "0 4px" }}
               />
               <Space size={4}>
                 {[0.1, 0.2, 0.3, 0.5].map((v) => (
-                  <Button key={v} size="small" type={Math.abs(p.iou - v) < 0.001 ? "primary" : "default"}
+                  <Button key={v} size="small" disabled={threshLocked} type={Math.abs(p.iou - v) < 0.001 ? "primary" : "default"}
                     style={{ padding: "0 7px", fontSize: 11, height: 22 }}
                     onClick={() => p.setIou(v)}>
                     {Math.round(v * 100)}%
@@ -2073,20 +2102,32 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 </span>
               </Tooltip>
               <Slider
-                min={0.5} max={10} step={0.5} value={edgeTolSec}
+                min={0.5} max={10} step={0.5} value={edgeTolSec} disabled={threshLocked}
                 onChange={(v) => setEdgeTolSec(v)}
                 tooltip={{ formatter: (v) => `±${v ?? 2}s` }}
                 style={{ width: 110, margin: "0 4px" }}
               />
               <Space size={4}>
                 {[1, 2, 3, 5].map((s) => (
-                  <Button key={s} size="small" type={Math.abs(edgeTolSec - s) < 0.01 ? "primary" : "default"}
+                  <Button key={s} size="small" disabled={threshLocked} type={Math.abs(edgeTolSec - s) < 0.01 ? "primary" : "default"}
                     style={{ padding: "0 6px", fontSize: 11, height: 22 }}
                     onClick={() => setEdgeTolSec(s)}>
                     ±{s}s
                   </Button>
                 ))}
               </Space>
+              <Tooltip title={threshLocked ? "已锁定当前置信度 / IoU / 起止容差配置（刷新或重进保持不变），点击解锁后可继续调整" : "锁定当前置信度 / IoU / 起止容差配置，防误触且下次进入自动沿用"}>
+                <Button size="small"
+                  type={threshLocked ? "primary" : "default"}
+                  icon={threshLocked ? <LockOutlined /> : <UnlockOutlined />}
+                  onClick={() => {
+                    const next = !threshLocked;
+                    setThreshLocked(next);
+                    message.success(next ? "已锁定当前评估门槛配置，下次进入自动沿用" : "已解锁，可自由调整门槛");
+                  }}>
+                  {threshLocked ? "已锁定" : "锁定配置"}
+                </Button>
+              </Tooltip>
               {iouAnalysis && (
                 <Button size="small" type={showIouDetail ? "primary" : "default"} ghost={showIouDetail}
                   onClick={() => setShowIouDetail((v) => !v)}>
