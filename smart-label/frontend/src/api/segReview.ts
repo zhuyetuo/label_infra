@@ -144,6 +144,66 @@ export const segSmartCleanProject = (projectId: number, maxGapMs = 1500) =>
     conflicts_left: number;
   }>("/segments/smart-clean-project", { project_id: projectId, max_gap_ms: maxGapMs }, { timeout: 600000 } as never);
 
+export type SmartCleanScan = {
+  scanned_at: string;
+  elapsed_sec: number;
+  projects_total: number;
+  projects_need_clean: number;
+  tasks_total: number;
+  tasks_need_clean: number;
+  n_carve: number;
+  n_dedupe: number;
+  n_merge: number;
+  n_conflicts: number;
+  project_ids: number[];
+  by_project: { project_id: number; project_name: string; tasks_need: number; n_carve: number; n_dedupe: number; n_merge: number; n_conflicts: number }[];
+};
+
+export type SmartCleanProgress = {
+  status: "idle" | "running" | "done" | "cancelled" | "error";
+  projects_total: number;
+  projects_done: number;
+  tasks_total: number;
+  tasks_done: number;
+  current_project: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  elapsed_sec: number;
+  eta_sec: number | null;
+  error: string | null;
+  summary: {
+    tasks_changed: number;
+    zero_runs: number;
+    zero_carved: number;
+    zero_deleted: number;
+    no_signal_added: number;
+    carved_motion: number;
+    dedupe_merged: number;
+    removed_parent: number;
+    adj_groups_merged: number;
+    adj_removed: number;
+    conflicts_left: number;
+  };
+};
+
+export const segSmartCleanScanGet = () =>
+  request.get<never, SmartCleanScan>("/segments/smart-clean/scan");
+
+export const segSmartCleanScanNow = () =>
+  request.post<never, SmartCleanScan>("/segments/smart-clean/scan");
+
+export const segSmartCleanStart = (projectIds?: number[] | null, maxGapMs = 1500) =>
+  request.post<never, { started: boolean; progress: SmartCleanProgress }>(
+    "/segments/smart-clean/start",
+    { project_ids: projectIds && projectIds.length ? projectIds : null, max_gap_ms: maxGapMs },
+  );
+
+export const segSmartCleanProgress = () =>
+  request.get<never, SmartCleanProgress>("/segments/smart-clean/progress");
+
+export const segSmartCleanCancel = () =>
+  request.post<never, { cancelled: boolean }>("/segments/smart-clean/cancel");
+
 /** 从 at_ms 拆成两条（类别不变，两条都回到待审）。退回原因是「应该拆成几段」时用 */
 export const segSplit = (id: number, atMs: number) =>
   request.post<never, { left: { id: number; start_time_ms: number; end_time_ms: number };

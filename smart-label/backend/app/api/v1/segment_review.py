@@ -1198,6 +1198,65 @@ class SmartCleanProjectIn(BaseModel):
     max_gap_ms: int = Field(1500, ge=0, le=10000)
 
 
+class SmartCleanStartIn(BaseModel):
+    project_ids: list[int] | None = None
+    max_gap_ms: int = Field(1500, ge=0, le=10000)
+
+
+@router.get("/smart-clean/scan")
+async def smart_clean_scan_get(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """获取最近一次每日自动检测结果；若尚未生成则立刻扫一次（约 1~3 秒）。"""
+    from app.services import smart_clean_service as scs
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能查看检测结果")
+    cached = scs.load_cached_scan()
+    if cached is not None:
+        return ok(cached)
+    return ok(await scs.scan_all_projects(db))
+
+
+@router.post("/smart-clean/scan")
+async def smart_clean_scan_now(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """手动触发一次全量快速检测（只查 DB，约 1~3 秒）。"""
+    from app.services import smart_clean_service as scs
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能触发检测")
+    return ok(await scs.scan_all_projects(db))
+
+
+@router.post("/smart-clean/start")
+async def smart_clean_start(body: SmartCleanStartIn, user: User = Depends(get_current_user)):
+    """后台启动一键批量智能处理（不阻塞请求），前端轮询 /smart-clean/progress 看任务级实时进度。"""
+    from app.services import smart_clean_service as scs
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能执行批量智能处理")
+    started = await scs.start_smart_clean(body.project_ids, user.id, max_gap_ms=body.max_gap_ms)
+    return ok({"started": started, "progress": scs.get_progress()})
+
+
+@router.get("/smart-clean/progress")
+async def smart_clean_progress(user: User = Depends(get_current_user)):
+    """查询后台批量智能处理的实时进度。"""
+    from app.services import smart_clean_service as scs
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限")
+    return ok(scs.get_progress())
+
+
+@router.post("/smart-clean/cancel")
+async def smart_clean_cancel(user: User = Depends(get_current_user)):
+    """停止正在运行的后台批量智能处理（当前任务收尾后停下）。"""
+    from app.services import smart_clean_service as scs
+
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限")
+    return ok({"cancelled": scs.request_cancel()})
+
+
 @router.post("/smart-clean-project")
 async def smart_clean_project(
     body: SmartCleanProjectIn,

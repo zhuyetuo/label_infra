@@ -1,4 +1,13 @@
-import { segDedupeProject, segSmartCleanProject } from "@/api/segReview";
+import {
+  segDedupeProject,
+  segSmartCleanCancel,
+  segSmartCleanProgress,
+  segSmartCleanScanGet,
+  segSmartCleanScanNow,
+  segSmartCleanStart,
+  type SmartCleanProgress,
+  type SmartCleanScan,
+} from "@/api/segReview";
 import PrivacyMaskPanel from "@/components/PrivacyMaskPanel";
 import { PRIVACY_MASK } from "@/config/features";
 import dayjs from "dayjs";
@@ -370,7 +379,63 @@ export default function Projects() {
     try { localStorage.setItem("projects-mask-only", v ? "0" : "1"); } catch { /* 隐私模式 */ }
     return !v;
   });
-  const [dedupeRun, setDedupeRun] = useState<{ done: number; total: number } | null>(null);
+  const [cleanScan, setCleanScan] = useState<SmartCleanScan | null>(null);
+  const [cleanScanning, setCleanScanning] = useState(false);
+  const [cleanProg, setCleanProg] = useState<SmartCleanProgress | null>(null);
+  const [cleanBannerClosed, setCleanBannerClosed] = useState(false);
+  const prevCleanStatusRef = useRef<string>("idle");
+
+  // 管理员打开页面时拉取每日自动检测结果与后台智能处理进度
+  useEffect(() => {
+    if (!isAdmin) return;
+    segSmartCleanScanGet().then(setCleanScan).catch(() => {});
+    segSmartCleanProgress().then((p) => {
+      prevCleanStatusRef.current = p.status;
+      if (p.status !== "idle") setCleanProg(p);
+    }).catch(() => {});
+  }, [isAdmin]);
+
+  // 后台智能处理运行期间每 1.5s 轮询任务级进度，结束后自动刷新项目列表与检测提示
+  useEffect(() => {
+    if (!isAdmin || cleanProg?.status !== "running") return;
+    const t = setInterval(() => {
+      segSmartCleanProgress().then((p) => {
+        setCleanProg(p);
+        if (prevCleanStatusRef.current === "running" && p.status !== "running") {
+          refresh();
+          segSmartCleanScanGet().then(setCleanScan).catch(() => {});
+        }
+        prevCleanStatusRef.current = p.status;
+      }).catch(() => {});
+    }, 1500);
+    return () => clearInterval(t);
+  }, [isAdmin, cleanProg?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const triggerSmartClean = async (projectIds?: number[] | null) => {
+    const r = await segSmartCleanStart(projectIds, 1500);
+    prevCleanStatusRef.current = r.progress.status;
+    setCleanProg(r.progress);
+    setDedupeSel([]);
+    if (!r.started) {
+      message.info("已有批量智能处理正在后台运行");
+    }
+  };
+
+  const triggerScanNow = async () => {
+    setCleanScanning(true);
+    try {
+      const rep = await segSmartCleanScanNow();
+      setCleanScan(rep);
+      setCleanBannerClosed(false);
+      message.success(
+        rep.tasks_need_clean > 0
+          ? `检测完成：发现 ${rep.projects_need_clean} 个项目 / ${rep.tasks_need_clean} 个任务待清理`
+          : "检测完成：所有启用项目均已干净，无需清理",
+      );
+    } finally {
+      setCleanScanning(false);
+    }
+  };
   const [editing, setEditing] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
 
@@ -1493,60 +1558,13 @@ export default function Projects() {
         )}
         {isAdmin && (() => {
           const targets = (data ?? []).filter((p) => p.is_active && (dedupeSel.length === 0 || dedupeSel.includes(p.id)));
-          const runSmartClean = async () => {
-            const sum = {
-              tasks: 0, changed: 0,
-              zeroRuns: 0, zeroCarved: 0, zeroDeleted: 0, noSigAdded: 0,
-              dedupeMerged: 0, removedParent: 0, carvedMotion: 0,
-              adjGroups: 0, adjRemoved: 0, conflicts: 0,
-            };
-            const failed: string[] = [];
-            setDedupeRun({ done: 0, total: targets.length });
-            for (const [i, p] of targets.entries()) {
-              try {
-                const r = await segSmartCleanProject(p.id, 1500);
-                sum.tasks += r.tasks;
-                sum.changed += r.tasks_changed;
-                sum.zeroRuns += r.zero_runs;
-                sum.zeroCarved += r.zero_carved;
-                sum.zeroDeleted += r.zero_deleted;
-                sum.noSigAdded += r.no_signal_added;
-                sum.dedupeMerged += r.dedupe_merged;
-                sum.removedParent += r.removed_parent;
-                sum.carvedMotion += r.carved_motion;
-                sum.adjGroups += r.adj_groups_merged;
-                sum.adjRemoved += r.adj_removed;
-                sum.conflicts += r.conflicts_left;
-              } catch {
-                failed.push(p.name);
-              }
-              setDedupeRun({ done: i + 1, total: targets.length });
-            }
-            setDedupeRun(null);
-            setDedupeSel([]);
-            refresh();
-            Modal.info({
-              title: `批量智能处理完成：${targets.length} 个项目`,
-              width: 480,
-              content: (
-                <div style={{ lineHeight: 1.8 }}>
-                  <div>处理了 <b>{sum.changed}</b> / {sum.tasks} 个任务</div>
-                  <div>① <b>去无信号</b>：检测 {sum.zeroRuns} 处断流，切开 {sum.zeroCarved} 段，删除全零 {sum.zeroDeleted} 段，标出「无信号」{sum.noSigAdded} 段</div>
-                  <div>② <b>智能挖洞</b>：共挖空被具体行为 / 活动 / 未佩戴覆盖的底层段 {sum.carvedMotion} 段</div>
-                  <div>③⑤ <b>自动去重（两轮）</b>：合并重叠 {sum.dedupeMerged} 段，删粗类 {sum.removedParent} 段</div>
-                  <div>④⑥ <b>自动合并（两轮）</b>：合并相邻碎片 {sum.adjGroups} 组（消掉 {sum.adjRemoved} 条碎片）</div>
-                  {sum.conflicts > 0 && <div style={{ color: "#fa8c16" }}>还剩 {sum.conflicts} 段类别冲突（同一处标了不同类别），需人工看画面判断</div>}
-                  {failed.length > 0 && <div style={{ color: "#d03b3b" }}>没做成：{failed.join("、")}（再点一次试试）</div>}
-                </div>
-              ),
-            });
-          };
+          const isRunning = cleanProg?.status === "running";
           return (
             <Popconfirm
               title={dedupeSel.length ? `对勾选的 ${targets.length} 个项目一键批量智能处理？` : `对全部 ${targets.length} 个项目一键批量智能处理？`}
               description={
                 <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
-                  每个任务依次自动执行 6 步：<br />
+                  后台异步执行（不卡页面、实时显示任务进度条，可随时停止），每个任务自动执行 6 步：<br />
                   ① 自动切无信号（三轴全 0 断流处切开并标「无信号」）<br />
                   ② 自动智能挖洞（具体行为 / 未佩戴挖空活动，活动挖空静止）<br />
                   ③ 自动去重（同类重叠合并 + 删父级粗类）<br />
@@ -1555,13 +1573,13 @@ export default function Projects() {
                   <span style={{ opacity: 0.75 }}>类别冲突不动只报个数；只想做某几个项目请先在左边勾选。</span>
                 </div>
               }
-              okText="开始智能处理"
-              disabled={!!dedupeRun || targets.length === 0}
-              onConfirm={runSmartClean}
+              okText="后台开始处理"
+              disabled={isRunning || targets.length === 0}
+              onConfirm={() => void triggerSmartClean(dedupeSel.length ? targets.map((p) => p.id) : null)}
             >
-              <Button loading={!!dedupeRun} disabled={targets.length === 0}>
-                {dedupeRun
-                  ? `智能处理中 ${dedupeRun.done}/${dedupeRun.total}`
+              <Button loading={isRunning} disabled={targets.length === 0}>
+                {isRunning
+                  ? `智能处理中 ${cleanProg.tasks_done}/${cleanProg.tasks_total || "?"}`
                   : dedupeSel.length
                     ? `一键批量智能处理（勾选的 ${dedupeSel.length} 个）`
                     : "一键批量智能处理（全部项目）"}
@@ -1666,6 +1684,89 @@ export default function Projects() {
           </Tooltip>
         ) : null}
       </Space>
+      {isAdmin && cleanProg?.status === "running" && (() => {
+        const pct = cleanProg.tasks_total ? Math.min(99, Math.round((cleanProg.tasks_done / cleanProg.tasks_total) * 100)) : 0;
+        const s = cleanProg.summary;
+        const fmtSec = (sec: number) => sec >= 60 ? `${Math.floor(sec / 60)}分${sec % 60}秒` : `${sec}秒`;
+        return (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <Space wrap size={12}>
+                  <b>正在后台智能处理</b>
+                  <span>项目 {cleanProg.projects_done}/{cleanProg.projects_total}</span>
+                  <span>任务 <b>{cleanProg.tasks_done}/{cleanProg.tasks_total}</b></span>
+                  {cleanProg.current_project && <span>当前：{cleanProg.current_project}</span>}
+                  <span>已用 {fmtSec(cleanProg.elapsed_sec)}{cleanProg.eta_sec != null ? ` · 预计剩余 ${fmtSec(cleanProg.eta_sec)}` : ""}</span>
+                </Space>
+                <Progress percent={pct} size="small" status="active" style={{ margin: 0 }} />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  已改动 {s.tasks_changed} 个任务 · 无信号切分 {s.zero_carved}（标出 {s.no_signal_added}）· 智能挖洞 {s.carved_motion} · 去重 {s.dedupe_merged + s.removed_parent} · 合并 {s.adj_groups_merged} 组
+                </Typography.Text>
+              </Space>
+            }
+            action={
+              <Button size="small" danger onClick={() => void segSmartCleanCancel().then(() => message.info("正在停止，当前任务收尾后停下"))}>
+                停止
+              </Button>
+            }
+          />
+        );
+      })()}
+      {isAdmin && cleanProg && cleanProg.status !== "running" && cleanProg.status !== "idle" && (
+        <Alert
+          type={cleanProg.status === "error" ? "error" : cleanProg.status === "cancelled" ? "warning" : "success"}
+          showIcon
+          closable
+          onClose={() => setCleanProg(null)}
+          style={{ marginBottom: 8 }}
+          message={
+            cleanProg.status === "error"
+              ? `批量智能处理出错：${cleanProg.error}`
+              : `${cleanProg.status === "cancelled" ? "批量智能处理已停止" : "批量智能处理完成"}（处理 ${cleanProg.tasks_done}/${cleanProg.tasks_total} 任务，改动 ${cleanProg.summary.tasks_changed} 个，耗时 ${cleanProg.elapsed_sec}s）`
+          }
+          description={
+            cleanProg.status !== "error" ? (
+              <div style={{ fontSize: 12 }}>
+                去无信号：检测 {cleanProg.summary.zero_runs} 处断流，切开 {cleanProg.summary.zero_carved} 段，标出「无信号」{cleanProg.summary.no_signal_added} 段 ·
+                智能挖洞 {cleanProg.summary.carved_motion} 段 ·
+                去重合并 {cleanProg.summary.dedupe_merged} 段 / 删粗类 {cleanProg.summary.removed_parent} 段 ·
+                相邻合并 {cleanProg.summary.adj_groups_merged} 组（消掉 {cleanProg.summary.adj_removed} 条碎片）
+                {cleanProg.summary.conflicts_left > 0 ? ` · 还剩 ${cleanProg.summary.conflicts_left} 处类别冲突需人工核对` : ""}
+              </div>
+            ) : undefined
+          }
+        />
+      )}
+      {isAdmin && !cleanBannerClosed && cleanProg?.status !== "running" && cleanScan && cleanScan.tasks_need_clean > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setCleanBannerClosed(true)}
+          style={{ marginBottom: 8 }}
+          message={
+            <span>
+              每日自动检测（{cleanScan.scanned_at.slice(5, 16).replace("T", " ")}）：发现 <b>{cleanScan.projects_need_clean}</b> 个项目 / <b>{cleanScan.tasks_need_clean}</b> 个任务可自动清理
+              （智能挖洞 <b>{cleanScan.n_carve}</b> 段 · 自动去重 <b>{cleanScan.n_dedupe}</b> 段 · 自动合并 <b>{cleanScan.n_merge}</b> 组
+              {cleanScan.n_conflicts > 0 ? ` · 类别冲突 ${cleanScan.n_conflicts} 处` : ""}）
+            </span>
+          }
+          action={
+            <Space size={6}>
+              <Button size="small" type="primary" onClick={() => void triggerSmartClean(cleanScan.project_ids)}>
+                一键处理这 {cleanScan.projects_need_clean} 个项目
+              </Button>
+              <Button size="small" loading={cleanScanning} onClick={() => void triggerScanNow()}>
+                重新检测
+              </Button>
+            </Space>
+          }
+        />
+      )}
       {fillOnly && (
         <Alert type="info" showIcon style={{ marginBottom: 8 }}
           message={<span>补标模式：只显示有「补标·抓挠」待判的项目（共 {scratchReview?.fill_total ?? 0} 段），点开哪个都只看有补标待判的任务。
