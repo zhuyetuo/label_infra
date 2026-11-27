@@ -127,6 +127,23 @@ export const segDedupeProject = (projectId: number) =>
   request.post<never, { tasks: number; tasks_changed: number; merged: number; removed_parent: number; conflicts_left: number }>(
     "/segments/dedupe-project", { project_id: projectId }, { timeout: 300000 } as never);
 
+/** 整个项目一键批量智能处理：去无信号 → 去重 → 合并 → 再去重 → 再合并 */
+export const segSmartCleanProject = (projectId: number, maxGapMs = 1500) =>
+  request.post<never, {
+    tasks: number;
+    tasks_changed: number;
+    zero_runs: number;
+    zero_carved: number;
+    zero_deleted: number;
+    no_signal_added: number;
+    dedupe_merged: number;
+    removed_parent: number;
+    carved_motion: number;
+    adj_groups_merged: number;
+    adj_removed: number;
+    conflicts_left: number;
+  }>("/segments/smart-clean-project", { project_id: projectId, max_gap_ms: maxGapMs }, { timeout: 600000 } as never);
+
 /** 从 at_ms 拆成两条（类别不变，两条都回到待审）。退回原因是「应该拆成几段」时用 */
 export const segSplit = (id: number, atMs: number) =>
   request.post<never, { left: { id: number; start_time_ms: number; end_time_ms: number };

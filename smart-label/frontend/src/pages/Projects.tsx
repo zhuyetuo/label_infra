@@ -1,4 +1,4 @@
-import { segDedupeProject } from "@/api/segReview";
+import { segDedupeProject, segSmartCleanProject } from "@/api/segReview";
 import PrivacyMaskPanel from "@/components/PrivacyMaskPanel";
 import { PRIVACY_MASK } from "@/config/features";
 import dayjs from "dayjs";
@@ -1493,15 +1493,30 @@ export default function Projects() {
         )}
         {isAdmin && (() => {
           const targets = (data ?? []).filter((p) => p.is_active && (dedupeSel.length === 0 || dedupeSel.includes(p.id)));
-          const runDedupe = async () => {
-            const sum = { tasks: 0, changed: 0, merged: 0, removed: 0, conflicts: 0 };
+          const runSmartClean = async () => {
+            const sum = {
+              tasks: 0, changed: 0,
+              zeroRuns: 0, zeroCarved: 0, zeroDeleted: 0, noSigAdded: 0,
+              dedupeMerged: 0, removedParent: 0, carvedMotion: 0,
+              adjGroups: 0, adjRemoved: 0, conflicts: 0,
+            };
             const failed: string[] = [];
             setDedupeRun({ done: 0, total: targets.length });
             for (const [i, p] of targets.entries()) {
               try {
-                const r = await segDedupeProject(p.id);
-                sum.tasks += r.tasks; sum.changed += r.tasks_changed; sum.merged += r.merged;
-                sum.removed += r.removed_parent; sum.conflicts += r.conflicts_left;
+                const r = await segSmartCleanProject(p.id, 1500);
+                sum.tasks += r.tasks;
+                sum.changed += r.tasks_changed;
+                sum.zeroRuns += r.zero_runs;
+                sum.zeroCarved += r.zero_carved;
+                sum.zeroDeleted += r.zero_deleted;
+                sum.noSigAdded += r.no_signal_added;
+                sum.dedupeMerged += r.dedupe_merged;
+                sum.removedParent += r.removed_parent;
+                sum.carvedMotion += r.carved_motion;
+                sum.adjGroups += r.adj_groups_merged;
+                sum.adjRemoved += r.adj_removed;
+                sum.conflicts += r.conflicts_left;
               } catch {
                 failed.push(p.name);
               }
@@ -1511,12 +1526,15 @@ export default function Projects() {
             setDedupeSel([]);
             refresh();
             Modal.info({
-              title: `去重完成：${targets.length} 个项目`,
+              title: `批量智能处理完成：${targets.length} 个项目`,
+              width: 480,
               content: (
-                <div>
-                  <div>处理了 {sum.changed} / {sum.tasks} 个任务</div>
-                  <div>并掉重复片段 {sum.merged} 段，删掉被细类盖住的粗类 {sum.removed} 段</div>
-                  {sum.conflicts > 0 && <div>还剩 {sum.conflicts} 段类别冲突（同一处标了不同类别），要人看画面判断，用「有重叠」筛出来看</div>}
+                <div style={{ lineHeight: 1.8 }}>
+                  <div>处理了 <b>{sum.changed}</b> / {sum.tasks} 个任务</div>
+                  <div>① <b>去无信号</b>：检测 {sum.zeroRuns} 处断流，切开 {sum.zeroCarved} 段，删除全零 {sum.zeroDeleted} 段，标出「无信号」{sum.noSigAdded} 段</div>
+                  <div>②④ <b>自动去重（两轮）</b>：合并重叠 {sum.dedupeMerged} 段，删粗类 {sum.removedParent} 段，挖空活动 {sum.carvedMotion} 段</div>
+                  <div>③⑤ <b>自动合并（两轮）</b>：合并相邻碎片 {sum.adjGroups} 组（消掉 {sum.adjRemoved} 条碎片）</div>
+                  {sum.conflicts > 0 && <div style={{ color: "#fa8c16" }}>还剩 {sum.conflicts} 段类别冲突（同一处标了不同类别），需人工看画面判断</div>}
                   {failed.length > 0 && <div style={{ color: "#d03b3b" }}>没做成：{failed.join("、")}（再点一次试试）</div>}
                 </div>
               ),
@@ -1524,14 +1542,27 @@ export default function Projects() {
           };
           return (
             <Popconfirm
-              title={dedupeSel.length ? `给勾选的 ${targets.length} 个项目去重？` : `给全部 ${targets.length} 个项目去重？`}
-              description={<div style={{ maxWidth: 380 }}>每个任务（当前这一轮）：同类别互相重叠的并成一条（留审核通过 / 人确认过的那条，起止取并集）；父子类别压在一起的删粗的。类别冲突要人看画面，不动，只报个数。只想做某几个项目，先在左边勾上</div>}
-              okText="去重"
+              title={dedupeSel.length ? `对勾选的 ${targets.length} 个项目一键批量智能处理？` : `对全部 ${targets.length} 个项目一键批量智能处理？`}
+              description={
+                <div style={{ maxWidth: 400, lineHeight: 1.6 }}>
+                  每个任务依次自动执行 5 步：<br />
+                  ① 自动切无信号（三轴全 0 断流处切开并标「无信号」）<br />
+                  ② 自动去重（同类重叠合并 + 删父级粗类 + 挖空活动）<br />
+                  ③ 自动合并（间隔 ≤1.5s 相邻同类碎片）<br />
+                  ④ 再自动去重 → ⑤ 再自动合并<br />
+                  <span style={{ opacity: 0.75 }}>类别冲突不动只报个数；只想做某几个项目请先在左边勾选。</span>
+                </div>
+              }
+              okText="开始智能处理"
               disabled={!!dedupeRun || targets.length === 0}
-              onConfirm={runDedupe}
+              onConfirm={runSmartClean}
             >
               <Button loading={!!dedupeRun} disabled={targets.length === 0}>
-                {dedupeRun ? `去重中 ${dedupeRun.done}/${dedupeRun.total}` : dedupeSel.length ? `一键去重（勾选的 ${dedupeSel.length} 个）` : "一键去重（全部项目）"}
+                {dedupeRun
+                  ? `智能处理中 ${dedupeRun.done}/${dedupeRun.total}`
+                  : dedupeSel.length
+                    ? `一键批量智能处理（勾选的 ${dedupeSel.length} 个）`
+                    : "一键批量智能处理（全部项目）"}
               </Button>
             </Popconfirm>
           );

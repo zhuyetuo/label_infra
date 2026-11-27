@@ -920,6 +920,343 @@ async def dedupe_project(body: DedupeProjectIn, db: AsyncSession = Depends(get_d
     return ok(tot)
 
 
+async def _trim_zero_signal_task(
+    db: AsyncSession,
+    task: Task,
+    user: User,
+    min_zero_ms: int = 300,
+    min_keep_ms: int = 300,
+) -> dict:
+    """单个任务自动检测三轴全 0 无信号区间，切开重叠片段并标出「无信号」。无 CSV 或读失败静默跳过。"""
+    import asyncio
+    from app.models.sample import Sample
+    from app.services import imu_service
+    from app.services.media_resolver import resolve_nas_path
+    from app.services.task_service import _append_boundary_edit
+
+    empty = {"zero_runs": 0, "items_carved": 0, "items_deleted": 0, "pieces_created": 0, "no_signal_added": 0}
+    sample = await db.get(Sample, task.sample_id)
+    if sample is None or not sample.imu_csv_path:
+        return empty
+    rec = (await db.execute(
+        select(AnnotationRecord).where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+    )).scalar_one_or_none()
+    if rec is None:
+        return empty
+    items = (await db.execute(
+        select(AnnotationLabelItem).where(AnnotationLabelItem.annotation_record_id == rec.id)
+    )).scalars().all()
+    if not items:
+        return empty
+
+    try:
+        csv_path = resolve_nas_path(sample.imu_csv_path)
+        dropouts = await asyncio.to_thread(imu_service.find_zero_signal_spans, csv_path, None, None, min_zero_ms)
+    except Exception:  # noqa: BLE001 单个样本无文件/损坏不阻断批量任务
+        return empty
+    if not dropouts:
+        return empty
+
+    no_sig_lb = (await db.execute(
+        select(LabelDefinition).where(
+            LabelDefinition.project_id == task.project_id,
+            (LabelDefinition.code == "NO_SIGNAL") | (LabelDefinition.display_name == "无信号"),
+        )
+    )).scalars().first()
+    if no_sig_lb is None:
+        no_sig_lb = LabelDefinition(
+            project_id=task.project_id,
+            code="NO_SIGNAL",
+            display_name="无信号",
+            color="#546E7A",
+            track="device",
+            sort_order=1460,
+            is_active=True,
+            created_by=user.id,
+        )
+        db.add(no_sig_lb)
+        await db.flush()
+
+    now = _now()
+    items_carved = 0
+    items_deleted = 0
+    pieces_created = 0
+
+    for it in [x for x in items if x.label_id != no_sig_lb.id]:
+        hits = [(zs, ze) for zs, ze in dropouts if ze > it.start_time_ms and zs < it.end_time_ms]
+        if not hits:
+            continue
+        pieces: list[tuple[int, int]] = [(it.start_time_ms, it.end_time_ms)]
+        for zs, ze in hits:
+            nxt: list[tuple[int, int]] = []
+            for ps, pe in pieces:
+                if ze <= ps or zs >= pe:
+                    nxt.append((ps, pe))
+                else:
+                    if zs > ps:
+                        nxt.append((ps, zs))
+                    if ze < pe:
+                        nxt.append((ze, pe))
+            pieces = nxt
+        pieces = [(ps, pe) for ps, pe in pieces if pe - ps >= min_keep_ms]
+        if not pieces:
+            await db.delete(it)
+            items_deleted += 1
+            continue
+        old = (it.start_time_ms, it.end_time_ms)
+        it.start_time_ms, it.end_time_ms = pieces[0]
+        if (it.start_time_ms, it.end_time_ms) != old:
+            it.boundary_edits = _append_boundary_edit(it.boundary_edits, old, (it.start_time_ms, it.end_time_ms), user)
+            if it.source_type == LabelItemSource.ai_generated:
+                it.is_modified = True
+            it.touched_at, it.touched_by = now, user.id
+        items_carved += 1
+        for ps, pe in pieces[1:]:
+            db.add(AnnotationLabelItem(
+                annotation_record_id=rec.id,
+                label_id=it.label_id,
+                start_time_ms=ps,
+                end_time_ms=pe,
+                source_type=it.source_type,
+                ai_confidence=it.ai_confidence,
+                ai_confirmed=it.ai_confirmed,
+                is_modified=True,
+                uncertain=it.uncertain,
+                uncertain_reason=it.uncertain_reason,
+                seg_status=it.seg_status,
+                seg_reviewed_by=it.seg_reviewed_by,
+                seg_reviewed_at=it.seg_reviewed_at,
+                marks=it.marks,
+                mark_note=it.mark_note,
+                touched_at=now,
+                touched_by=user.id,
+                created_by=user.id,
+            ))
+            pieces_created += 1
+
+    existing_no_sig = [(x.start_time_ms, x.end_time_ms) for x in items if x.label_id == no_sig_lb.id]
+    no_signal_added = 0
+    for zs, ze in dropouts:
+        if any(min(ze, es) - max(zs, ss) >= 150 for ss, es in existing_no_sig):
+            continue
+        db.add(AnnotationLabelItem(
+            annotation_record_id=rec.id,
+            label_id=no_sig_lb.id,
+            start_time_ms=zs,
+            end_time_ms=ze,
+            source_type=LabelItemSource.human_added,
+            is_modified=False,
+            seg_status="approved",
+            seg_reviewed_by=user.id,
+            seg_reviewed_at=now,
+            touched_at=now,
+            touched_by=user.id,
+            created_by=user.id,
+        ))
+        existing_no_sig.append((zs, ze))
+        no_signal_added += 1
+
+    await db.flush()
+    return {
+        "zero_runs": len(dropouts),
+        "items_carved": items_carved,
+        "items_deleted": items_deleted,
+        "pieces_created": pieces_created,
+        "no_signal_added": no_signal_added,
+    }
+
+
+async def _merge_adjacent_task(
+    db: AsyncSession,
+    task: Task,
+    user: User,
+    max_gap_ms: int = 1500,
+) -> dict:
+    """单个任务自动合并相邻同类别非存疑片段（0 <= gap <= max_gap_ms，且中间不被同轨/互斥轨/无信号隔断）。"""
+    from collections import defaultdict
+    from app.models.ai_candidate import AiCandidate, CandidateStatus
+    from app.services.label_tracks import track_of as _track_of
+    from app.services.task_service import _append_boundary_edit
+
+    items = (await db.execute(
+        select(AnnotationLabelItem)
+        .join(AnnotationRecord, AnnotationRecord.id == AnnotationLabelItem.annotation_record_id)
+        .where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
+    )).scalars().all()
+    if len(items) < 2:
+        return {"groups_merged": 0, "removed": 0}
+
+    lrows = (await db.execute(
+        select(LabelDefinition.id, LabelDefinition.display_name, LabelDefinition.parent_id, LabelDefinition.track)
+        .where(LabelDefinition.project_id == task.project_id)
+    )).all()
+    lname = {i: n for i, n, _p, _tr in lrows}
+    parent = {i: p for i, _n, p, _tr in lrows}
+    own_track = {i: tr for i, _n, _p, tr in lrows}
+    ltrack = {i: _track_of(parent, own_track, i, lname) for i, _n, _p, _tr in lrows}
+
+    def rank(x: AnnotationLabelItem):
+        human = bool(x.ai_confirmed or x.is_modified or x.source_type == LabelItemSource.human_added)
+        return (x.seg_status == "approved", human, x.end_time_ms - x.start_time_ms, -x.id)
+
+    deleted_ids: set[int] = set()
+    cand_to_reject: set[int] = set()
+    groups_merged = 0
+    removed = 0
+    now = _now()
+
+    valid_items = [x for x in items if not x.uncertain]
+    by_lid: dict[int, list[AnnotationLabelItem]] = defaultdict(list)
+    for x in valid_items:
+        by_lid[x.label_id].append(x)
+
+    def _blocks_merge(my_lid: int, my_tr: str | None, gap_lo: int, gap_hi: int) -> bool:
+        if gap_hi <= gap_lo:
+            return False
+        for o in items:
+            if o.id in deleted_ids or o.label_id == my_lid:
+                continue
+            if min(o.end_time_ms, gap_hi) <= max(o.start_time_ms, gap_lo):
+                continue
+            o_tr = ltrack.get(o.label_id)
+            if (
+                o_tr == "device"
+                or (my_tr is not None and o_tr == my_tr)
+                or (my_tr == "motion" and o_tr == "behavior")
+                or (my_tr == "behavior" and o_tr == "motion")
+            ):
+                return True
+        return False
+
+    for lid, arr in by_lid.items():
+        if len(arr) < 2:
+            continue
+        arr.sort(key=lambda x: (x.start_time_ms, x.end_time_ms))
+        my_tr = ltrack.get(lid)
+        cur_grp = [arr[0]]
+        groups: list[list[AnnotationLabelItem]] = []
+        for nxt in arr[1:]:
+            gap_lo, gap_hi = cur_grp[-1].end_time_ms, nxt.start_time_ms
+            gap = gap_hi - gap_lo
+            if 0 <= gap <= max_gap_ms and not _blocks_merge(lid, my_tr, gap_lo, gap_hi):
+                cur_grp.append(nxt)
+            else:
+                if len(cur_grp) >= 2:
+                    groups.append(cur_grp)
+                cur_grp = [nxt]
+        if len(cur_grp) >= 2:
+            groups.append(cur_grp)
+
+        for grp in groups:
+            keeper = max(grp, key=rank)
+            old = (keeper.start_time_ms, keeper.end_time_ms)
+            keeper.start_time_ms = min(x.start_time_ms for x in grp)
+            keeper.end_time_ms = max(x.end_time_ms for x in grp)
+            merged_marks: list[str] = []
+            for x in grp:
+                for mk in (x.marks or "").split(","):
+                    mk = mk.strip()
+                    if mk and mk not in merged_marks:
+                        merged_marks.append(mk)
+            if merged_marks:
+                keeper.marks = ",".join(merged_marks)
+            if all(x.seg_status == "approved" for x in grp):
+                keeper.seg_status = "approved"
+            if (keeper.start_time_ms, keeper.end_time_ms) != old:
+                keeper.boundary_edits = _append_boundary_edit(
+                    keeper.boundary_edits, old, (keeper.start_time_ms, keeper.end_time_ms), user
+                )
+                if keeper.source_type == LabelItemSource.ai_generated:
+                    keeper.is_modified = True
+                keeper.touched_at, keeper.touched_by = now, user.id
+            for x in grp:
+                if x is keeper:
+                    continue
+                deleted_ids.add(x.id)
+                await db.delete(x)
+                removed += 1
+                if x.from_candidate_id is not None:
+                    if keeper.from_candidate_id is None:
+                        keeper.from_candidate_id = x.from_candidate_id
+                    else:
+                        cand_to_reject.add(x.from_candidate_id)
+            groups_merged += 1
+
+    for cid in cand_to_reject:
+        cand = await db.get(AiCandidate, cid)
+        if cand is not None and cand.status == CandidateStatus.confirmed:
+            cand.status = CandidateStatus.rejected
+            cand.decided_by, cand.decided_at = user.id, _decided_at()
+    await db.flush()
+    return {"groups_merged": groups_merged, "removed": removed}
+
+
+class SmartCleanProjectIn(BaseModel):
+    project_id: int
+    max_gap_ms: int = Field(1500, ge=0, le=10000)
+
+
+@router.post("/smart-clean-project")
+async def smart_clean_project(
+    body: SmartCleanProjectIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """整个项目一键批量智能处理（5 步流水线）：
+      1. 自动去无信号（切开三轴全 0 断流区并标出「无信号」）
+      2. 自动去重（同类重叠合并 + 删被细类盖住的粗类 + 挖空活动）
+      3. 自动合并（间隔 ≤ max_gap_ms 的相邻同类碎片）
+      4. 再自动去重
+      5. 再自动合并
+    按任务逐个提交，避免长事务锁表。"""
+    if not _is_reviewer(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能执行批量智能处理")
+    tasks = (await db.execute(select(Task).where(Task.project_id == body.project_id).order_by(Task.id))).scalars().all()
+    tot = {
+        "tasks": len(tasks),
+        "tasks_changed": 0,
+        "zero_runs": 0,
+        "zero_carved": 0,
+        "zero_deleted": 0,
+        "no_signal_added": 0,
+        "dedupe_merged": 0,
+        "removed_parent": 0,
+        "carved_motion": 0,
+        "adj_groups_merged": 0,
+        "adj_removed": 0,
+        "conflicts_left": 0,
+    }
+    for t in tasks:
+        z = await _trim_zero_signal_task(db, t, user)
+        d1 = await _dedupe_task(db, t, user)
+        m1 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
+        d2 = await _dedupe_task(db, t, user)
+        m2 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
+        await db.commit()
+
+        tot["zero_runs"] += z["zero_runs"]
+        tot["zero_carved"] += z["items_carved"]
+        tot["zero_deleted"] += z["items_deleted"]
+        tot["no_signal_added"] += z["no_signal_added"]
+        tot["dedupe_merged"] += d1["merged"] + d2["merged"]
+        tot["removed_parent"] += d1["removed_parent"] + d2["removed_parent"]
+        tot["carved_motion"] += d1.get("carved_motion", 0) + d2.get("carved_motion", 0)
+        tot["adj_groups_merged"] += m1["groups_merged"] + m2["groups_merged"]
+        tot["adj_removed"] += m1["removed"] + m2["removed"]
+        tot["conflicts_left"] += d2["conflicts_left"]
+
+        if (
+            z["items_carved"] or z["items_deleted"] or z["no_signal_added"]
+            or d1["merged"] or d1["removed_parent"] or d1.get("carved_motion", 0)
+            or m1["groups_merged"]
+            or d2["merged"] or d2["removed_parent"] or d2.get("carved_motion", 0)
+            or m2["groups_merged"]
+        ):
+            tot["tasks_changed"] += 1
+
+    return ok(tot)
+
+
 def _subtract_spans(
     start_ms: int,
     end_ms: int,
