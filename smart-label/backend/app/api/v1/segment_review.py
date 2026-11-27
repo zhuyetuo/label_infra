@@ -927,6 +927,7 @@ async def _trim_zero_signal_task(
     user: User,
     min_zero_ms: int = 300,
     min_keep_ms: int = 300,
+    precomputed_dropouts: list[tuple[int, int]] | None = None,
 ) -> dict:
     """单个任务自动检测三轴全 0 无信号区间，切开重叠片段并标出「无信号」。无 CSV 或读失败静默跳过。"""
     import asyncio
@@ -936,8 +937,7 @@ async def _trim_zero_signal_task(
     from app.services.task_service import _append_boundary_edit
 
     empty = {"zero_runs": 0, "items_carved": 0, "items_deleted": 0, "pieces_created": 0, "no_signal_added": 0}
-    sample = await db.get(Sample, task.sample_id)
-    if sample is None or not sample.imu_csv_path:
+    if precomputed_dropouts is not None and not precomputed_dropouts:
         return empty
     rec = (await db.execute(
         select(AnnotationRecord).where(AnnotationRecord.task_id == task.id, AnnotationRecord.round_no == task.round_no)
@@ -950,11 +950,17 @@ async def _trim_zero_signal_task(
     if not items:
         return empty
 
-    try:
-        csv_path = resolve_nas_path(sample.imu_csv_path)
-        dropouts = await asyncio.to_thread(imu_service.find_zero_signal_spans, csv_path, None, None, min_zero_ms)
-    except Exception:  # noqa: BLE001 单个样本无文件/损坏不阻断批量任务
-        return empty
+    if precomputed_dropouts is not None:
+        dropouts = precomputed_dropouts
+    else:
+        sample = await db.get(Sample, task.sample_id)
+        if sample is None or not sample.imu_csv_path:
+            return empty
+        try:
+            csv_path = resolve_nas_path(sample.imu_csv_path)
+            dropouts = await asyncio.to_thread(imu_service.find_zero_signal_spans, csv_path, None, None, min_zero_ms)
+        except Exception:  # noqa: BLE001 单个样本无文件/损坏不阻断批量任务
+            return empty
     if not dropouts:
         return empty
 
