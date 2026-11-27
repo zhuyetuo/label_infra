@@ -336,9 +336,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
   </div>`;
 
-  // 归因统计（按类型聚合，用于横向条形图与建议）
+  // 归因统计（只统计误报/漏报/边界超差，用于横向条形图与建议）
   const reasonMap = new Map<string, { kind: "fp" | "fn" | "bd"; tag: string; n: number; advice: string }>();
   for (const c of errorCases) {
+    if (c.verdict !== "fp" && c.verdict !== "fn" && !c.boundaryBad) continue;
     const kind: "fp" | "fn" | "bd" = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : "bd";
     const key = `${kind}::${c.tag}`;
     const prev = reasonMap.get(key);
@@ -494,20 +495,35 @@ export function buildTestReportHtml(input: TestReportInput): string {
     })
     .join("");
 
-  // 错例明细（优先排误报/漏报，再排边界偏差）
+  // 窗口明细（排序：漏报 → 误报 → 边界偏差 → 命中 → 正常通过）
   const sortedCases = [...errorCases].sort((a, b) => {
-    const rank = (x: ReportErrorCase) => (x.verdict === "fn" ? 0 : x.verdict === "fp" ? 1 : 2);
+    const rank = (x: ReportErrorCase) =>
+      x.verdict === "fn" ? 0 : x.verdict === "fp" ? 1 : x.boundaryBad ? 2 : x.verdict === "tp" ? 3 : 4;
     return rank(a) - rank(b);
   });
   const caseRowsHtml = sortedCases
     .map((c, idx) => {
-      const kind = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : "bd";
+      const kind = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : c.verdict === "tp" ? "tp" : "tn";
       const badge =
         c.verdict === "fp"
           ? `<span class="pill pill-orange">误报</span>`
           : c.verdict === "fn"
             ? `<span class="pill pill-red">漏报</span>`
-            : `<span class="pill pill-purple">偏差&gt;2s</span>`;
+            : c.verdict === "tp"
+              ? c.boundaryBad
+                ? `<span class="pill pill-purple">偏差&gt;${edgeTolSec}s</span>`
+                : `<span class="pill pill-green">命中</span>`
+              : `<span class="pill pill-gray">正常通过</span>`;
+      const tagCls =
+        c.verdict === "fn"
+          ? "pill-red"
+          : c.verdict === "fp"
+            ? "pill-orange"
+            : c.boundaryBad
+              ? "pill-purple"
+              : c.verdict === "tp"
+                ? "pill-green"
+                : "pill-gray";
       const labelsHtml = c.actualLabels.length
         ? c.actualLabels.slice(0, 3).map((lb) => `<span class="pill pill-gray">${esc(lb)}</span>`).join("")
         : `<span class="muted">无标注</span>`;
@@ -517,7 +533,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
       const videoBtn = c.sampleId
         ? `<button class="btn-play" data-sid="${c.sampleId}" data-seek="${(c.seekSec ?? c.winStartSec ?? 0).toFixed(2)}" data-ws="${(c.winStartSec ?? 0).toFixed(2)}" data-we="${(c.winEndSec ?? 0).toFixed(2)}" data-verdict="${c.verdict}" data-tseg="${esc(tSegJson)}" data-pseg="${esc(pSegJson)}" data-title="${esc(videoTitle)}" data-reason="${esc(c.reason || "")}">▶ 看视频</button>`
         : `<span class="muted">-</span>`;
-      return `<tr class="case-row" data-kind="${kind}" data-idx="${idx}">
+      return `<tr class="case-row" data-kind="${kind}" data-bd="${c.boundaryBad ? "1" : "0"}" data-idx="${idx}">
         <td class="muted">${idx + 1}</td>
         <td>${badge}</td>
         <td>
@@ -531,7 +547,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
           <div class="sub">标 ${c.truthN} / 预 ${c.predN}${c.maxConf != null ? ` · 置信 ${c.maxConf}` : ""}${c.minIou != null ? ` · IoU ${(c.minIou * 100).toFixed(0)}%` : ""}</div>
         </td>
         <td>
-          <span class="pill ${c.verdict === "fn" ? "pill-red" : c.verdict === "fp" ? "pill-orange" : "pill-purple"}">${esc(c.tag)}</span>
+          <span class="pill ${tagCls}">${esc(c.tag)}</span>
           ${c.reason ? `<div class="sub" style="margin-top:2px;color:#334155">${esc(c.reason)}</div>` : ""}
         </td>
         <td>${labelsHtml}</td>
@@ -1278,7 +1294,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
         <button class="f-btn active" data-f="err">仅看错误 (${sc.err})</button>
         <button class="f-btn" data-f="fp">误报 (${sc.fp})</button>
         <button class="f-btn" data-f="fn">漏报 (${sc.fn})</button>
-        <button class="f-btn" data-f="bd">偏差 &gt;2s (${sc.boundaryBad})</button>
+        <button class="f-btn" data-f="bd">偏差 &gt;${edgeTolSec}s (${sc.boundaryBad})</button>
+        <button class="f-btn" data-f="tp">命中 (${sc.tp})</button>
+        <button class="f-btn" data-f="tn">正常通过 (${sc.tn})</button>
         <button class="f-btn" data-f="all">全部 (${sortedCases.length})</button>
       </div>
       <input class="search-in" id="caseSearch" placeholder="按狗名 / 场地 / 原因搜索..." />
@@ -1421,8 +1439,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
     var matched = [];
     rows.forEach(function(tr) {
       var k = tr.getAttribute("data-kind");
+      var bd = tr.getAttribute("data-bd") === "1";
       var okKind = curFilter === "all"
         || (curFilter === "err" && (k === "fp" || k === "fn"))
+        || (curFilter === "bd" && bd)
         || k === curFilter;
       var okKw = !kw || tr.textContent.toLowerCase().indexOf(kw) >= 0;
       if (okKind && okKw) matched.push(tr);

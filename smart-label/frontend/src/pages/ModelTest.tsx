@@ -1519,44 +1519,42 @@ function buildReportPayload(
     else tn += 1;
     const isEdgeBad = d.edge_aligned === false;
     if (isEdgeBad) boundaryBad += 1;
-    if (d.verdict === "fp" || d.verdict === "fn" || isEdgeBad) {
-      const it = itemByWin.get(`${d.sample_id}:${d.start_ms}:${d.end_ms}`);
-      const maxConf = d.pred_segs.reduce<number | null>((mx, seg) => {
-        const c = seg[2];
-        return c != null && (mx == null || c > mx) ? c : mx;
-      }, null);
-      const actualLabels = Object.entries(it?.labels ?? {}).map(([k, v]) => `${k} ${v.n}次·${fmtSec(v.sec)}`);
-      const dgInfo = (it?.dog_id != null ? dogById.get(it.dog_id) : undefined)
-        ?? (it?.dog_name ? dogByName.get(it.dog_name) : undefined);
-      const firstSeg = d.verdict === "fn" ? d.truth_segs[0] : d.verdict === "fp" ? d.pred_segs[0] : (d.truth_segs[0] ?? d.pred_segs[0]);
-      const seekMs = firstSeg ? Math.max(d.start_ms, d.start_ms + firstSeg[0] - 2000) : d.start_ms;
-      errorCases.push({
-        verdict: d.verdict,
-        boundaryBad: isEdgeBad,
-        sampleId: d.sample_id,
-        seekSec: seekMs / 1000,
-        winStartSec: d.start_ms / 1000,
-        winEndSec: d.end_ms / 1000,
-        dog: it?.dog_name ?? `样本 #${d.sample_id}`,
-        breed: dgInfo?.breed ?? undefined,
-        skinLevel: dgInfo?.skin_level ?? dgInfo?.intake_skin_level ?? undefined,
-        site: it?.site ?? "",
-        size: it?.size ?? dgInfo?.size ?? "",
-        winText: `${fmtMs(d.start_ms)}–${fmtMs(d.end_ms)}`,
-        durText: fmtSec((d.end_ms - d.start_ms) / 1000),
-        truthN: d.truth_n,
-        predN: d.pred_n,
-        maxConf,
-        minIou: d.mean_iou ?? null,
-        truthSegs: d.truth_segs,
-        predSegs: d.pred_segs,
-        winDurMs: Math.max(1, d.end_ms - d.start_ms),
-        actualLabels,
-        tag: d.diag?.title ?? (isEdgeBad ? `起止边界偏差 >${edgeTolSec}s` : d.verdict === "fp" ? "误报" : "漏报"),
-        reason: d.diag?.detail ?? (isEdgeBad && d.max_edge_err_ms != null ? `边界最大偏差 ${(d.max_edge_err_ms / 1000).toFixed(1)}s` : ""),
-        advice: d.diag?.tip ?? "",
-      });
-    }
+    const it = itemByWin.get(`${d.sample_id}:${d.start_ms}:${d.end_ms}`);
+    const maxConf = d.pred_segs.reduce<number | null>((mx, seg) => {
+      const c = seg[2];
+      return c != null && (mx == null || c > mx) ? c : mx;
+    }, null);
+    const actualLabels = Object.entries(it?.labels ?? {}).map(([k, v]) => `${k} ${v.n}次·${fmtSec(v.sec)}`);
+    const dgInfo = (it?.dog_id != null ? dogById.get(it.dog_id) : undefined)
+      ?? (it?.dog_name ? dogByName.get(it.dog_name) : undefined);
+    const firstSeg = d.verdict === "fn" ? d.truth_segs[0] : d.verdict === "fp" ? d.pred_segs[0] : (d.truth_segs[0] ?? d.pred_segs[0]);
+    const seekMs = firstSeg ? Math.max(d.start_ms, d.start_ms + firstSeg[0] - 2000) : d.start_ms;
+    errorCases.push({
+      verdict: d.verdict,
+      boundaryBad: isEdgeBad,
+      sampleId: d.sample_id,
+      seekSec: seekMs / 1000,
+      winStartSec: d.start_ms / 1000,
+      winEndSec: d.end_ms / 1000,
+      dog: it?.dog_name ?? `样本 #${d.sample_id}`,
+      breed: dgInfo?.breed ?? undefined,
+      skinLevel: dgInfo?.skin_level ?? dgInfo?.intake_skin_level ?? undefined,
+      site: it?.site ?? "",
+      size: it?.size ?? dgInfo?.size ?? "",
+      winText: `${fmtMs(d.start_ms)}–${fmtMs(d.end_ms)}`,
+      durText: fmtSec((d.end_ms - d.start_ms) / 1000),
+      truthN: d.truth_n,
+      predN: d.pred_n,
+      maxConf,
+      minIou: d.mean_iou ?? null,
+      truthSegs: d.truth_segs,
+      predSegs: d.pred_segs,
+      winDurMs: Math.max(1, d.end_ms - d.start_ms),
+      actualLabels,
+      tag: d.diag?.title ?? (isEdgeBad ? `起止边界偏差 >${edgeTolSec}s` : d.verdict === "fp" ? "误报" : d.verdict === "fn" ? "漏报" : d.verdict === "tp" ? "命中" : "正常通过"),
+      reason: d.diag?.detail ?? (isEdgeBad && d.max_edge_err_ms != null ? `边界最大偏差 ${(d.max_edge_err_ms / 1000).toFixed(1)}s` : d.verdict === "tp" && d.mean_iou != null ? `平均重叠 ${Math.round(d.mean_iou * 100)}%` : d.verdict === "tn" ? "无动作未乱报" : ""),
+      advice: d.diag?.tip ?? "",
+    });
   }
   return {
     testSet,
