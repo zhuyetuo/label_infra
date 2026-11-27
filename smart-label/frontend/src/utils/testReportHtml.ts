@@ -267,27 +267,51 @@ export function buildTestReportHtml(input: TestReportInput): string {
   const winGrade = gradeOf(pw?.f1);
   const evGrade = gradeOf(evF1);
   const rubricTiers = [
-    { code: "D", name: "不达标", range: "< 60%", bg: "#fee2e2", fg: "#b91c1c", desc: "不可上线，需重点排查" },
-    { code: "C", name: "一般", range: "60% ~ 75%", bg: "#fef3c7", fg: "#b45309", desc: "偏弱，需针对性优化" },
-    { code: "B", name: "良好", range: "75% ~ 85%", bg: "#dbeafe", fg: "#1d4ed8", desc: "基本可用，仍有提升空间" },
-    { code: "A", name: "优秀", range: "85% ~ 95%", bg: "#dcfce7", fg: "#15803d", desc: "达到上线交付标准" },
-    { code: "S", name: "卓越", range: "≥ 95%", bg: "#d1fae5", fg: "#047857", desc: "标杆级表现" },
+    { code: "D", name: "不达标", range: "< 60%", bar: "#ef4444", grad: "linear-gradient(135deg,#dc2626,#ef4444)", desc: "不可上线，需重点排查" },
+    { code: "C", name: "一般", range: "60% ~ 75%", bar: "#f59e0b", grad: "linear-gradient(135deg,#d97706,#f59e0b)", desc: "偏弱，需针对性优化" },
+    { code: "B", name: "良好", range: "75% ~ 85%", bar: "#3b82f6", grad: "linear-gradient(135deg,#2563eb,#3b82f6)", desc: "基本可用，仍有提升空间" },
+    { code: "A", name: "优秀", range: "85% ~ 95%", bar: "#10b981", grad: "linear-gradient(135deg,#059669,#10b981)", desc: "达到上线交付标准" },
+    { code: "S", name: "卓越", range: "≥ 95%", bar: "#047857", grad: "linear-gradient(135deg,#065f46,#10b981)", desc: "标杆级表现" },
   ];
+  // 将 0~100% 映射到 5 段等宽刻度尺（每段占 20% 视觉宽度，避免 60~100% 挤在最右边）
+  const scoreToBarPct = (v: number | null | undefined): number | null => {
+    if (v == null || !Number.isFinite(v)) return null;
+    const x = Math.max(0, Math.min(1, v));
+    if (x < 0.6) return (x / 0.6) * 20;
+    if (x < 0.75) return 20 + ((x - 0.6) / 0.15) * 20;
+    if (x < 0.85) return 40 + ((x - 0.75) / 0.1) * 20;
+    if (x < 0.95) return 60 + ((x - 0.85) / 0.1) * 20;
+    return 80 + ((x - 0.95) / 0.05) * 20;
+  };
+  const winPos = scoreToBarPct(pw?.f1);
+  const evPos = scoreToBarPct(evF1);
   const rubricHtml = `<div class="rubric-box">
     <div class="rubric-hd">
       <b>客观评级标准（按 F1 分数划档）</b>
-      <span class="muted">当前主测模型：窗口 F1 <b>${pct(pw?.f1)}</b>（${winGrade.code}·${winGrade.name}） / 事件 F1 <b>${pct(evF1)}</b>（${evGrade.code}·${evGrade.name}）</span>
+      <span class="muted">窗口 F1 <b style="color:#2563eb">${pct(pw?.f1)}（${winGrade.code}·${winGrade.name}）</b> · 事件 F1 <b style="color:#7c3aed">${pct(evF1)}（${evGrade.code}·${evGrade.name}）</b></span>
+    </div>
+    <div class="rubric-track-wrap">
+      ${winPos != null ? `<div class="rubric-pin pin-top" style="left:${Math.max(5, Math.min(95, winPos)).toFixed(1)}%;background:#2563eb">窗口 ${pct(pw?.f1)}</div>` : ""}
+      <div class="rubric-spectrum">
+        <div style="width:20%;background:linear-gradient(90deg,#dc2626,#ef4444)"></div>
+        <div style="width:20%;background:linear-gradient(90deg,#ef4444,#f59e0b)"></div>
+        <div style="width:20%;background:linear-gradient(90deg,#f59e0b,#3b82f6)"></div>
+        <div style="width:20%;background:linear-gradient(90deg,#3b82f6,#10b981)"></div>
+        <div style="width:20%;background:linear-gradient(90deg,#10b981,#047857)"></div>
+      </div>
+      ${evPos != null ? `<div class="rubric-pin pin-bot" style="left:${Math.max(5, Math.min(95, evPos)).toFixed(1)}%;background:#7c3aed">事件 ${pct(evF1)}</div>` : ""}
     </div>
     <div class="rubric-grid">
       ${rubricTiers
         .map((t) => {
           const hitW = winGrade.code === t.code;
           const hitE = evGrade.code === t.code;
+          const hit = hitW || hitE;
           const tags = [
-            hitW ? `<span class="r-pin" style="background:#2563eb">窗口</span>` : "",
-            hitE ? `<span class="r-pin" style="background:#7c3aed">事件</span>` : "",
+            hitW ? `<span class="r-pin" style="background:rgba(37,99,235,0.92)">● 窗口</span>` : "",
+            hitE ? `<span class="r-pin" style="background:rgba(124,58,237,0.92)">● 事件</span>` : "",
           ].filter(Boolean).join("");
-          return `<div class="rubric-cell${hitW || hitE ? " hit" : ""}" style="background:${t.bg};color:${t.fg}">
+          return `<div class="rubric-cell${hit ? " hit" : ""}" style="${hit ? `background:${t.grad};color:#fff;` : `border-top:3px solid ${t.bar};`}">
             <div class="r-top"><b>${t.code} · ${t.name}</b><span>${t.range}</span></div>
             <div class="r-desc">${t.desc}</div>
             ${tags ? `<div class="r-pins">${tags}</div>` : ""}
@@ -725,16 +749,41 @@ export function buildTestReportHtml(input: TestReportInput): string {
     .edu-grid { grid-template-columns: 1fr; }
   }
 
-  /* 客观 5 档评级刻度尺 */
-  .rubric-box { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
-  .rubric-hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; margin-bottom: 8px; color: #334155; }
-  .rubric-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-  .rubric-cell { border-radius: 6px; padding: 7px 8px; font-size: 11.5px; border: 1.5px solid transparent; opacity: 0.72; }
-  .rubric-cell.hit { opacity: 1; border-color: currentColor; box-shadow: 0 1px 4px rgba(15,23,42,0.1); }
-  .r-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; font-size: 12px; }
-  .r-desc { font-size: 10.5px; opacity: 0.85; margin-top: 2px; }
-  .r-pins { display: flex; gap: 4px; margin-top: 5px; }
-  .r-pin { color: #fff; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+  /* 客观 5 档渐变刻度尺 */
+  .rubric-box { margin-bottom: 14px; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+  .rubric-hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; margin-bottom: 6px; color: #0f172a; }
+  .rubric-track-wrap { position: relative; padding: 26px 0 26px; margin: 2px 0 10px; }
+  .rubric-spectrum {
+    height: 12px; border-radius: 999px; overflow: hidden; display: flex;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.12);
+  }
+  .rubric-pin {
+    position: absolute; transform: translateX(-50%); color: #fff; font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap; box-shadow: 0 2px 6px rgba(15,23,42,0.22);
+  }
+  .rubric-pin.pin-top { top: 0; }
+  .rubric-pin.pin-top::after {
+    content: ""; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: #2563eb; border-bottom: 0;
+  }
+  .rubric-pin.pin-bot { bottom: 0; }
+  .rubric-pin.pin-bot::after {
+    content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
+    border: 5px solid transparent; border-bottom-color: #7c3aed; border-top: 0;
+  }
+  .rubric-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .rubric-cell {
+    border-radius: 8px; padding: 8px 10px; font-size: 11.5px;
+    background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; opacity: 0.7;
+  }
+  .rubric-cell.hit {
+    opacity: 1; border: none; transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(15,23,42,0.16);
+  }
+  .r-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; font-size: 12.5px; }
+  .r-desc { font-size: 11px; opacity: 0.9; margin-top: 3px; }
+  .r-pins { display: flex; gap: 5px; margin-top: 6px; }
+  .r-pin { color: #fff; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.45); }
   .btn-print {
     background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.28);
     border-radius: 7px; padding: 6px 12px; font-size: 12px; cursor: pointer;
