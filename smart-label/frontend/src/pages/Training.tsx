@@ -1883,7 +1883,7 @@ export default function Training() {
                               </Button>
                             </Tooltip>
                           )}
-                          {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
+                          {v.status === "done" && v.model_path && ["rf", "cnn", "xgb"].includes(v.model_type) && (
                             <Tooltip
                               title={
                                 edgeOf(v)
@@ -1917,7 +1917,7 @@ export default function Training() {
                               </Button>
                             </Tooltip>
                           )}
-                          {v.status === "done" && v.model_path && (v.model_type === "rf" || v.model_type === "cnn") && (
+                          {v.status === "done" && v.model_path && ["rf", "cnn", "xgb"].includes(v.model_type) && (
                             <Dropdown
                               trigger={["click"]}
                               disabled={(downloadingEdge != null && downloadingEdge !== v.id) || exportingEdge === v.id}
