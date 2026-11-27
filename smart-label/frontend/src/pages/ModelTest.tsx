@@ -16,9 +16,9 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs, type Dog } from "@/api/dogs";
-import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined, UnlockOutlined } from "@ant-design/icons";
+import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ModelArchMeta, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
-import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
+import { analyzeIouAndEdge, findBestConfMin, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
@@ -825,7 +825,9 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
 }
 
 // ───────────────────────── 打分 ─────────────────────────
-type EvalRow = { key: string; label?: string; group: string; n: number; version: string; modelMeta?: ModelArchMeta; r: VersionResult };
+type EvalRow = { key: string; label?: string; group: string; n: number; version: string; modelMeta?: ModelArchMeta; confMin?: number; r: VersionResult };
+const confKeyOf = (x: { label?: string; r: { model_tag: string; mode: string } }) =>
+  `${x.r.model_tag}::${x.r.mode}::${x.label ?? "ALL"}`;
 
 /** 选哪些模型版本、哪个类别；测试集严格只列「在本测试集上主动跑过并记录」的模型 */
 function useEvalPicker(testSetId?: number, defaultLabel = "抓挠", testSetIds?: number[]) {
@@ -999,14 +1001,21 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
     render: (v: string, row: EvalRow) => (
       <div style={{ lineHeight: 1.35 }}>
         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</div>
-        {row.modelMeta && (
+        {(row.modelMeta || (row.confMin != null && row.confMin > 0)) && (
           <div style={{ marginTop: 2, display: "flex", gap: 4, flexWrap: "wrap" }}>
-            <Tag color={row.modelMeta.isDL ? "purple" : "green"} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
-              {row.modelMeta.shortTag}
-            </Tag>
-            {row.modelMeta.extra && (
+            {row.modelMeta && (
+              <Tag color={row.modelMeta.isDL ? "purple" : "green"} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+                {row.modelMeta.shortTag}
+              </Tag>
+            )}
+            {row.modelMeta?.extra && (
               <Tag style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
                 {row.modelMeta.extra}
+              </Tag>
+            )}
+            {row.confMin != null && row.confMin > 0 && (
+              <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+                置信≥{Math.round(row.confMin * 100)}%
               </Tag>
             )}
           </div>
@@ -1771,7 +1780,13 @@ function buildEvalCacheKey(
 }
 
 const EVAL_THRESH_KEY = (setId: number) => `smart-label:eval-thresh:${setId}`;
-function loadEvalThresh(setId: number): { iou?: number; edgeTolSec?: number; confMin?: number; locked?: boolean } {
+function loadEvalThresh(setId: number): {
+  iou?: number;
+  edgeTolSec?: number;
+  confMin?: number;
+  modelConfMap?: Record<string, number>;
+  locked?: boolean;
+} {
   try {
     const raw = localStorage.getItem(EVAL_THRESH_KEY(setId)) ?? localStorage.getItem("smart-label:eval-thresh:last");
     return raw ? JSON.parse(raw) : {};
@@ -1801,6 +1816,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [edgeTolSec, setEdgeTolSec] = useState<number>(() => loadEvalThresh(setId).edgeTolSec ?? 2);
   const [confMin, setConfMin] = useState<number>(() => loadEvalThresh(setId).confMin ?? 0);
+  const [modelConfMap, setModelConfMap] = useState<Record<string, number>>(() => loadEvalThresh(setId).modelConfMap ?? {});
   const [threshLocked, setThreshLocked] = useState<boolean>(() => Boolean(loadEvalThresh(setId).locked));
   const [showIouDetail, setShowIouDetail] = useState(false);
   const [iouBucketFilter, setIouBucketFilter] = useState<{ label: string; min: number; max: number } | null>(null);
@@ -1816,17 +1832,18 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     if (typeof saved.iou === "number" && Number.isFinite(saved.iou)) p.setIou(saved.iou);
     if (typeof saved.edgeTolSec === "number" && Number.isFinite(saved.edgeTolSec)) setEdgeTolSec(saved.edgeTolSec);
     if (typeof saved.confMin === "number" && Number.isFinite(saved.confMin)) setConfMin(saved.confMin);
+    setModelConfMap(saved.modelConfMap && typeof saved.modelConfMap === "object" ? saved.modelConfMap : {});
     setThreshLocked(Boolean(saved.locked));
   }, [setId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 自动记住当前配置（锁定与否都持久化，刷新/重进直接保留上次配置）
+  // 自动记住当前配置（含每个模型独立的最佳置信度，刷新/重进直接保留）
   useEffect(() => {
     try {
-      const payload = JSON.stringify({ iou: p.iou, edgeTolSec, confMin, locked: threshLocked });
+      const payload = JSON.stringify({ iou: p.iou, edgeTolSec, confMin, modelConfMap, locked: threshLocked });
       localStorage.setItem(EVAL_THRESH_KEY(setId), payload);
       localStorage.setItem("smart-label:eval-thresh:last", payload);
     } catch { /* ignore */ }
-  }, [setId, p.iou, edgeTolSec, confMin, threshLocked]);
+  }, [setId, p.iou, edgeTolSec, confMin, modelConfMap, threshLocked]);
   const prevStatus = useRef<string | undefined>(undefined);
   const { data: prog, refetch: refetchProg } = useQuery({
     queryKey: ["eval-run-progress"], queryFn: getEvalRunProgress,
@@ -2012,12 +2029,17 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   };
 
   const allRecomputedRows = useMemo(
-    () => allRows.map((x) => ({
-      ...x,
-      modelMeta: x.modelMeta ?? describeModelArch(x.r.model_tag, x.r.mode, p.mvByJob),
-      r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin),
-    })),
-    [allRows, p.iou, edgeTolSec, confMin, p.mvByJob],
+    () => allRows.map((x) => {
+      const ck = confKeyOf(x);
+      const effConf = typeof modelConfMap[ck] === "number" ? modelConfMap[ck] : confMin;
+      return {
+        ...x,
+        confMin: effConf,
+        modelMeta: x.modelMeta ?? describeModelArch(x.r.model_tag, x.r.mode, p.mvByJob),
+        r: recomputeVersionAt(x.r, p.iou, edgeTolSec, effConf),
+      };
+    }),
+    [allRows, p.iou, edgeTolSec, confMin, modelConfMap, p.mvByJob],
   );
   const rows = useMemo(
     () => (p.label === "ALL" ? allRecomputedRows : allRecomputedRows.filter((r) => r.label === p.label)),
@@ -2028,6 +2050,34 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     () => rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0] ?? null,
     [rows, selectedKey],
   );
+  const activeConfKey = activeRowForPanel ? confKeyOf(activeRowForPanel) : null;
+  const activeConfMin = activeConfKey && typeof modelConfMap[activeConfKey] === "number" ? modelConfMap[activeConfKey] : confMin;
+  const setActiveConfMin = (v: number) => {
+    if (activeConfKey) {
+      setModelConfMap((prev) => ({ ...prev, [activeConfKey]: v }));
+    } else {
+      setConfMin(v);
+    }
+  };
+  const autoTuneAllModels = () => {
+    const targetRows = p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label);
+    if (!targetRows.length) return;
+    const nextMap: Record<string, number> = { ...modelConfMap };
+    const summary: string[] = [];
+    const seenKeys = new Set<string>();
+    for (const raw of targetRows) {
+      const ck = confKeyOf(raw);
+      if (seenKeys.has(ck) || !raw.r.window_details?.length) continue;
+      seenKeys.add(ck);
+      const { bestConf, bestEvF1 } = findBestConfMin(raw.r, p.iou, edgeTolSec);
+      nextMap[ck] = bestConf;
+      summary.push(`${raw.version.slice(0, 22)}${p.label === "ALL" && raw.label ? `[${raw.label}]` : ""} → ${bestConf > 0 ? `≥${Math.round(bestConf * 100)}%` : "不限"} (事件F1 ${(bestEvF1 * 100).toFixed(1)}%)`);
+    }
+    setModelConfMap(nextMap);
+    if (summary.length) {
+      message.success(`已为 ${summary.length} 组模型独立寻优：${summary.slice(0, 3).join("；")}${summary.length > 3 ? " …" : ""}`, 6);
+    }
+  };
 
   const iouAnalysis = useMemo(
     () => (activeRowForPanel?.r.window_details?.length ? analyzeIouAndEdge(activeRowForPanel.r.window_details, p.iou) : null),
@@ -2217,20 +2267,39 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
           background: "rgba(128,128,128,0.04)", display: "flex", flexDirection: "column", gap: 8,
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-            <Space wrap size={10} align="center">
-              <Tooltip title="提高输出置信度门槛，过滤低置信度误报（0ms 实时联动窗口级 + 事件级指标；若要放宽到比模型原输出更低，需选更宽松的后处理版本重跑）">
+            <Space wrap size={8} align="center">
+              <Tooltip title={
+                activeRowForPanel
+                  ? `当前调节模型：${activeRowForPanel.version}（每个模型各自独立保存最佳置信度，互不干扰；点击表格不同行可切换要调的模型）`
+                  : "提高输出置信度门槛，过滤低置信度误报（0ms 实时联动）"
+              }>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#69b1ff", cursor: "help" }}>
-                  置信度过滤 ({confMin > 0 ? `≥ ${Math.round(confMin * 100)}%` : "不限"})
+                  {rows.length > 1 ? "当前模型置信度" : "置信度过滤"} ({activeConfMin > 0 ? `≥ ${Math.round(activeConfMin * 100)}%` : "不限"})
                 </span>
               </Tooltip>
               <Slider
-                min={0} max={0.95} step={0.05} value={confMin} disabled={threshLocked}
-                onChange={(v) => setConfMin(v)}
+                min={0} max={0.94} step={0.02} value={activeConfMin} disabled={threshLocked}
+                onChange={(v) => setActiveConfMin(v)}
                 tooltip={{ formatter: (v) => (v ? `置信度 ≥ ${Math.round(v * 100)}%` : "不限（使用模型原输出）") }}
                 style={{ width: 110, margin: "0 4px" }}
               />
-              {confMin > 0 && !threshLocked && (
-                <Button size="small" type="link" style={{ padding: 0, fontSize: 11, height: 20 }} onClick={() => setConfMin(0)}>重置</Button>
+              <Tooltip title="0ms 本地遍历 0%~94%，为当前列表里每个模型各自独立找出事件级 F1 最高的最佳置信度门槛">
+                <Button
+                  size="small"
+                  type="dashed"
+                  icon={<ThunderboltOutlined />}
+                  disabled={threshLocked || !rows.length}
+                  onClick={autoTuneAllModels}
+                  style={{ fontSize: 11, height: 22, paddingInline: 8, color: "#69b1ff", borderColor: "rgba(105,177,255,0.45)" }}
+                >
+                  自动寻优
+                </Button>
+              </Tooltip>
+              {(activeConfMin > 0 || Object.values(modelConfMap).some((v) => v > 0)) && !threshLocked && (
+                <Button size="small" type="link" style={{ padding: 0, fontSize: 11, height: 20 }} onClick={() => {
+                  setConfMin(0);
+                  setModelConfMap({});
+                }}>重置</Button>
               )}
             </Space>
             <Space wrap size={10} align="center">

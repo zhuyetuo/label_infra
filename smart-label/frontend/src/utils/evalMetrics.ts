@@ -168,6 +168,32 @@ export function recomputeVersionAt(
   };
 }
 
+/** 0ms 本地网格搜索单个模型的最佳置信度门槛（以事件级 F1 最大为主、片段级 F1 为辅） */
+export function findBestConfMin(
+  r: VersionResult,
+  iouMin: number,
+  edgeTolSec = 2,
+): { bestConf: number; bestEvF1: number; bestWinF1: number } {
+  if (!r.window_details?.length) {
+    return { bestConf: 0, bestEvF1: r.f1 ?? 0, bestWinF1: r.window?.f1 ?? 0 };
+  }
+  let bestConf = 0;
+  let bestEvF1 = -1;
+  let bestWinF1 = -1;
+  for (let i = 0; i <= 47; i++) {
+    const c = Math.round(i * 2) / 100; // 0.00, 0.02, ..., 0.94
+    const res = recomputeVersionAt(r, iouMin, edgeTolSec, c);
+    const ev = res.f1 ?? 0;
+    const win = res.window?.f1 ?? 0;
+    if (ev > bestEvF1 + 1e-6 || (Math.abs(ev - bestEvF1) <= 1e-6 && win > bestWinF1 + 1e-6)) {
+      bestConf = c;
+      bestEvF1 = ev;
+      bestWinF1 = win;
+    }
+  }
+  return { bestConf, bestEvF1, bestWinF1 };
+}
+
 export interface IouBucket {
   label: string;
   min: number;

@@ -22,6 +22,8 @@ export interface ReportEvalRow {
   n: number;
   version: string;
   modelMeta?: ModelArchMeta;
+  /** 该模型独立的后处理置信度过滤门槛（0~0.95） */
+  confMin?: number;
   r: VersionResult;
 }
 
@@ -417,7 +419,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
       return `<tr class="${isAct ? "row-primary" : ""}">
         ${showLabelCol ? `<td><span class="pill pill-gray">${esc(x.label ?? "-")}</span></td>` : ""}
         <td>${esc(x.group)}</td>
-        <td class="mono-sm"><div><b>${esc(x.version)}</b></div>${x.modelMeta ? `<div style="margin-top:3px">${renderArchBadge(x.modelMeta)}</div>` : ""}</td>
+        <td class="mono-sm"><div><b>${esc(x.version)}</b></div>${x.modelMeta || (x.confMin && x.confMin > 0) ? `<div style="margin-top:3px">${renderArchBadge(x.modelMeta)}${x.confMin && x.confMin > 0 ? ` <span class="pill pill-gray">置信≥${Math.round(x.confMin * 100)}%</span>` : ""}</div>` : ""}</td>
         <td class="col-w">${w ? pct(w.accuracy) : "-"}</td>
         <td class="col-w">${w ? pct(w.precision) : "-"}</td>
         <td class="col-w">${w ? pct(w.recall) : "-"}</td>
