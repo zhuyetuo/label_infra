@@ -487,6 +487,24 @@ async def start_smart_clean(
         return False
     _running = True
     _cancel_req = False
+    # 立即把状态置为 running，避免 create_task 尚未调度时接口把上一次的 done 状态返给前端导致不轮询
+    _progress.update({
+        "status": "running",
+        "phase": "prescan",
+        "scan_total": 0,
+        "scan_done": 0,
+        "projects_total": len(project_ids) if project_ids else 0,
+        "projects_done": 0,
+        "tasks_total": 0,
+        "tasks_done": 0,
+        "current_project": "准备中...",
+        "started_at": time.time(),
+        "phase_started_at": time.time(),
+        "finished_at": None,
+        "elapsed_sec": 0,
+        "eta_sec": None,
+        "error": None,
+    })
     asyncio.create_task(_run_smart_clean(project_ids, user_id, max_gap_ms))
     return True
 
