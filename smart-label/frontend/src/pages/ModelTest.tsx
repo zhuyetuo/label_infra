@@ -1496,6 +1496,7 @@ function buildReportPayload(
   iouMin: number,
   edgeTolSec: number,
   rows: EvalRow[],
+  allCategoryRows: EvalRow[],
   active: EvalRow | null | undefined,
   reporter?: string,
 ): TestReportInput {
@@ -1548,6 +1549,7 @@ function buildReportPayload(
     iouMin,
     edgeTolSec,
     rows,
+    allCategoryRows,
     activeRow: active ?? rows[0] ?? null,
     errorCases,
     summaryCounts: { total: details.length, err: fp + fn, fp, fn, boundaryBad, tp, tn },
@@ -1805,10 +1807,14 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     }
   };
 
-  const rows = useMemo(() => {
-    const filtered = p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label);
-    return filtered.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin) }));
-  }, [allRows, p.label, p.iou, edgeTolSec, confMin]);
+  const allRecomputedRows = useMemo(
+    () => allRows.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin) })),
+    [allRows, p.iou, edgeTolSec, confMin],
+  );
+  const rows = useMemo(
+    () => (p.label === "ALL" ? allRecomputedRows : allRecomputedRows.filter((r) => r.label === p.label)),
+    [allRecomputedRows, p.label],
+  );
 
   const activeRowForPanel = useMemo(
     () => rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0] ?? null,
@@ -1966,7 +1972,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
               <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
                 const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
                 const html = buildTestReportHtml(buildReportPayload(
-                  testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, activeRow, user?.display_name || user?.username,
+                  testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
                 ));
                 const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
                 const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
@@ -1991,7 +1997,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                   const lbName = p.label === "ALL" ? "全部类别" : p.label;
                   const title = `${testSet.name} · ${lbName} 测试报告`;
                   const html = buildTestReportHtml(buildReportPayload(
-                    testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, activeRow, user?.display_name || user?.username,
+                    testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
                   ));
                   const res = await publishTestReport(setId, html, title);
                   const fullUrl = `${window.location.origin}${res.url}`;

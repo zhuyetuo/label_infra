@@ -40,6 +40,7 @@ export interface TestReportInput {
   iouMin: number;
   edgeTolSec?: number;
   rows: ReportEvalRow[];
+  allCategoryRows?: ReportEvalRow[];
   activeRow?: ReportEvalRow | null;
   errorCases: ReportErrorCase[];
   summaryCounts: {
@@ -225,7 +226,7 @@ function renderMiniTimelineSvg(c: ReportErrorCase): string {
 /** 生成独立可离线打开、可打印 PDF、也可分享链接的标准 QA 测试报告 HTML */
 export function buildTestReportHtml(input: TestReportInput): string {
   const {
-    testSet, coverage, items, evalLabel, iouMin, edgeTolSec = 2, rows, activeRow, errorCases, summaryCounts, reporter,
+    testSet, coverage, items, evalLabel, iouMin, edgeTolSec = 2, rows, allCategoryRows, activeRow, errorCases, summaryCounts, reporter,
   } = input;
 
   const now = new Date();
@@ -451,6 +452,65 @@ export function buildTestReportHtml(input: TestReportInput): string {
           </div>
         </div>`;
       })()
+    : "";
+
+  // 全类别总览（无论当前选的是单类还是全部类别，只要有多种类别就自动展示「抓挠 / 甩头 / 活动 / 静止休息 / 未佩戴」全览）
+  const distinctCats = new Set((allCategoryRows ?? []).map((x) => x.label).filter(Boolean));
+  const showAllCatSection = evalLabel !== "ALL" && distinctCats.size > 1 && (allCategoryRows?.length ?? 0) > 0;
+  const allCatRowsHtml = showAllCatSection
+    ? (allCategoryRows ?? [])
+        .map((x) => {
+          const w = x.r.window;
+          const eF1 = f1(x.r.precision, x.r.recall);
+          const isCur = x.label === evalLabel;
+          const errDiff =
+            x.r.d_start_abs_mean_ms != null && x.r.d_end_abs_mean_ms != null
+              ? `${(x.r.d_start_abs_mean_ms / 1000).toFixed(1)}s / ${(x.r.d_end_abs_mean_ms / 1000).toFixed(1)}s`
+              : "-";
+          return `<tr class="${isCur ? "row-primary" : ""}">
+            <td><span class="pill ${isCur ? "pill-purple" : "pill-gray"}">${esc(x.label ?? "-")}</span></td>
+            <td>${esc(x.group)}</td>
+            <td class="mono-sm">${esc(x.version)}</td>
+            <td class="col-w">${w ? pct(w.accuracy) : "-"}</td>
+            <td class="col-w"><b>${w ? pct(w.f1) : "-"}</b></td>
+            <td class="col-w">${w ? `<span class="c-green">${w.tp + w.tn}</span>/<span class="c-orange">${w.fp}</span>/<span class="c-red">${w.fn}</span>` : "-"}</td>
+            <td class="col-e">${pct(x.r.precision)}</td>
+            <td class="col-e">${pct(x.r.recall)}</td>
+            <td class="col-e"><b>${pct(eF1)}</b></td>
+            <td class="col-e"><span class="c-green">${x.r.tp}</span>/<span class="c-orange">${x.r.fp}</span>/<span class="c-red">${x.r.fn}</span></td>
+            <td class="col-b">${pct(x.r.mean_iou)}</td>
+            <td class="col-b"><b>${pct(x.r.within_2s_ratio)}</b></td>
+            <td class="col-b">${errDiff}</td>
+          </tr>`;
+        })
+        .join("")
+    : "";
+  const allCatSectionHtml = showAllCatSection
+    ? `<div class="card">
+        <div class="sec-hd">
+          <h2>全类别综合表现总览（${[...distinctCats].join(" / ")}）</h2>
+          <span class="sub">同一测试集下各行为与状态类别的横向表现 · IoU ≥ ${iouPct}% · 容差 ±${edgeTolSec}s</span>
+        </div>
+        ${renderModelCompareChartSvg(allCategoryRows ?? [], true)}
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th rowspan="2">类别</th><th rowspan="2">范围</th><th rowspan="2">模型版本</th>
+                <th colspan="3" class="th-w">窗口级（有无）</th>
+                <th colspan="4" class="th-e">事件级（IoU ≥ ${iouPct}%）</th>
+                <th colspan="3" class="th-b">起止对齐（±${edgeTolSec}s）</th>
+              </tr>
+              <tr>
+                <th class="th-w">准确率</th><th class="th-w">F1</th><th class="th-w">对/误/漏</th>
+                <th class="th-e">精确率</th><th class="th-e">召回率</th><th class="th-e">F1</th><th class="th-e">对/误/漏</th>
+                <th class="th-b">平均重叠</th><th class="th-b">±${edgeTolSec}s 对齐</th><th class="th-b">起/止均差</th>
+              </tr>
+            </thead>
+            <tbody>${allCatRowsHtml}</tbody>
+          </table>
+        </div>
+      </div>`
     : "";
 
   const sc = summaryCounts;
@@ -731,6 +791,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
     ${iouPanelHtml}
   </div>
+
+  ${allCatSectionHtml}
 
   <!-- 四、测试集数据分布 -->
   <div class="card">
