@@ -995,9 +995,9 @@ async def publish_report(
     db.add(AuditLog(
         user_id=user.id,
         action="model_test.publish_report",
-        resource_type="model_test_set",
-        resource_id=set_id,
-        detail={"report_id": report_id, "title": body.title, "size": len(body.html)},
+        target_type="model_test_set",
+        target_id=set_id,
+        detail=json.dumps({"report_id": report_id, "title": body.title, "size": len(body.html)}, ensure_ascii=False),
     ))
     await db.commit()
     return ok({
