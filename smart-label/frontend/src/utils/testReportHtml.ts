@@ -255,14 +255,47 @@ export function buildTestReportHtml(input: TestReportInput): string {
   const nDogs = coverage?.n_dogs ?? new Set(items.map((x) => x.dog_id).filter(Boolean)).size;
   const sitesTxt = Object.entries(coverage?.sites ?? {}).map(([k, v]) => `${k}(${v}段)`).join("、") || "-";
 
-  // 自动判定等级（便于测试人员快速汇报）
-  const mainF1 = pw?.f1 ?? evF1 ?? 0;
-  const verdictBadge =
-    mainF1 >= 0.85
-      ? { text: "表现优秀", cls: "badge-pass" }
-      : mainF1 >= 0.7
-        ? { text: "基本达标 · 建议微调", cls: "badge-warn" }
-        : { text: "未达预期 · 需重点优化", cls: "badge-fail" };
+  // 客观 5 档评级标准（透明展示区间，不搞笼统自夸；窗口级与事件级分别定级）
+  const gradeOf = (v: number | null | undefined) => {
+    if (v == null || !Number.isFinite(v)) return { code: "-", name: "无数据", cls: "badge-warn", color: "#64748b" };
+    if (v >= 0.95) return { code: "S", name: "卓越", cls: "badge-pass", color: "#059669" };
+    if (v >= 0.85) return { code: "A", name: "优秀", cls: "badge-pass", color: "#16a34a" };
+    if (v >= 0.75) return { code: "B", name: "良好", cls: "badge-info", color: "#2563eb" };
+    if (v >= 0.6) return { code: "C", name: "一般", cls: "badge-warn", color: "#d97706" };
+    return { code: "D", name: "不达标", cls: "badge-fail", color: "#dc2626" };
+  };
+  const winGrade = gradeOf(pw?.f1);
+  const evGrade = gradeOf(evF1);
+  const rubricTiers = [
+    { code: "D", name: "不达标", range: "< 60%", bg: "#fee2e2", fg: "#b91c1c", desc: "不可上线，需重点排查" },
+    { code: "C", name: "一般", range: "60% ~ 75%", bg: "#fef3c7", fg: "#b45309", desc: "偏弱，需针对性优化" },
+    { code: "B", name: "良好", range: "75% ~ 85%", bg: "#dbeafe", fg: "#1d4ed8", desc: "基本可用，仍有提升空间" },
+    { code: "A", name: "优秀", range: "85% ~ 95%", bg: "#dcfce7", fg: "#15803d", desc: "达到上线交付标准" },
+    { code: "S", name: "卓越", range: "≥ 95%", bg: "#d1fae5", fg: "#047857", desc: "标杆级表现" },
+  ];
+  const rubricHtml = `<div class="rubric-box">
+    <div class="rubric-hd">
+      <b>客观评级标准（按 F1 分数划档）</b>
+      <span class="muted">当前主测模型：窗口 F1 <b>${pct(pw?.f1)}</b>（${winGrade.code}·${winGrade.name}） / 事件 F1 <b>${pct(evF1)}</b>（${evGrade.code}·${evGrade.name}）</span>
+    </div>
+    <div class="rubric-grid">
+      ${rubricTiers
+        .map((t) => {
+          const hitW = winGrade.code === t.code;
+          const hitE = evGrade.code === t.code;
+          const tags = [
+            hitW ? `<span class="r-pin" style="background:#2563eb">窗口</span>` : "",
+            hitE ? `<span class="r-pin" style="background:#7c3aed">事件</span>` : "",
+          ].filter(Boolean).join("");
+          return `<div class="rubric-cell${hitW || hitE ? " hit" : ""}" style="background:${t.bg};color:${t.fg}">
+            <div class="r-top"><b>${t.code} · ${t.name}</b><span>${t.range}</span></div>
+            <div class="r-desc">${t.desc}</div>
+            ${tags ? `<div class="r-pins">${tags}</div>` : ""}
+          </div>`;
+        })
+        .join("")}
+    </div>
+  </div>`;
 
   // 归因统计（按类型聚合，用于横向条形图与建议）
   const reasonMap = new Map<string, { kind: "fp" | "fn" | "bd"; tag: string; n: number; advice: string }>();
@@ -653,8 +686,20 @@ export function buildTestReportHtml(input: TestReportInput): string {
   .banner-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .verdict-badge { padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; }
   .badge-pass { background: rgba(16,185,129,0.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.45); }
+  .badge-info { background: rgba(59,130,246,0.22); color: #93c5fd; border: 1px solid rgba(59,130,246,0.45); }
   .badge-warn { background: rgba(245,158,11,0.2); color: #fcd34d; border: 1px solid rgba(245,158,11,0.45); }
   .badge-fail { background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.45); }
+
+  /* 客观 5 档评级刻度尺 */
+  .rubric-box { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+  .rubric-hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; margin-bottom: 8px; color: #334155; }
+  .rubric-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .rubric-cell { border-radius: 6px; padding: 7px 8px; font-size: 11.5px; border: 1.5px solid transparent; opacity: 0.72; }
+  .rubric-cell.hit { opacity: 1; border-color: currentColor; box-shadow: 0 1px 4px rgba(15,23,42,0.1); }
+  .r-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; font-size: 12px; }
+  .r-desc { font-size: 10.5px; opacity: 0.85; margin-top: 2px; }
+  .r-pins { display: flex; gap: 4px; margin-top: 5px; }
+  .r-pin { color: #fff; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
   .btn-print {
     background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.28);
     border-radius: 7px; padding: 6px 12px; font-size: 12px; cursor: pointer;
@@ -864,7 +909,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
       <div class="banner-sub">测试集：${esc(testSet.name)} · 评估类别：${esc(labelTitle)} · 报告生成：${esc(genTime)}</div>
     </div>
     <div class="banner-right">
-      <span class="verdict-badge ${verdictBadge.cls}">${verdictBadge.text}</span>
+      <span class="verdict-badge ${winGrade.cls}">窗口 ${winGrade.code}·${winGrade.name} (${pct(pw?.f1)})</span>
+      <span class="verdict-badge ${evGrade.cls}">事件 ${evGrade.code}·${evGrade.name} (${pct(evF1)})</span>
       <button class="btn-print" onclick="window.print()">打印 / 另存为 PDF</button>
     </div>
   </div>
@@ -901,6 +947,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
       ${renderGaugeSvg(evF1, "#7c3aed", `事件级 F1（每次计次）`, pr ? `IoU≥${iouPct}% · 命中 ${pr.tp}/误 ${pr.fp}/漏 ${pr.fn}` : "-")}
       ${renderGaugeSvg(pr?.within_2s_ratio, "#0d9488", `起止 ±${edgeTolSec}s 对齐率`, pr ? `命中平均重叠 ${pct(pr.mean_iou)}` : "-")}
     </div>
+
+    ${rubricHtml}
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-bottom:14px;font-size:12px;color:#475569">
       <div style="background:#eff6ff;padding:8px 10px;border-radius:6px"><b style="color:#1d4ed8">① 窗口级（这段有没有）</b>：把每段视频当成“有没有动作”的是非题，衡量<b>有无报警/记录准不准</b>。</div>
