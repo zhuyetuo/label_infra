@@ -1569,22 +1569,8 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, iouBucketFilter, onClear
 }
 
 function EvalNotes({ notes, hasRows }: { notes: string[]; hasRows: boolean }) {
-  if (!notes.length) return null;
-  if (!hasRows) return <Alert type="warning" showIcon message={notes.join("；")} />;
-  return (
-    <Collapse
-      size="small"
-      items={[{
-        key: "notes",
-        label: <span style={{ fontSize: 12, color: "#888" }}>评测说明（{notes.length} 条，点此展开）</span>,
-        children: (
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#aaa", lineHeight: 1.7 }}>
-            {notes.map((n) => <li key={n}>{n}</li>)}
-          </ul>
-        ),
-      }]}
-    />
-  );
+  if (!notes.length || hasRows) return null;
+  return <Alert type="warning" showIcon message={notes.join("；")} />;
 }
 
 function buildReportPayload(
