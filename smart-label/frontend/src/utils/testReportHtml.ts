@@ -469,7 +469,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     })
     .join("");
   const dogSummaryHtml = dogsArr.length
-    ? `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:10px;padding:7px 10px;background:#f8fafc;border-radius:6px;font-size:11.5px;color:#475569">
+    ? `<div class="dog-summary-bar" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:10px;padding:7px 10px;background:#f8fafc;border-radius:6px;font-size:11.5px;color:#475569">
         <span><b>体型覆盖：</b>${[...sizeCount.entries()].map(([k, n]) => `${k} ${n}只`).join(" · ")}</span>
         <span><b>皮肤状态：</b>${[...skinCount.entries()].map(([k, n]) => `${k} ${n}只`).join(" · ")}</span>
       </div>`
@@ -927,6 +927,60 @@ export function buildTestReportHtml(input: TestReportInput): string {
   }
   .footer { text-align: center; font-size: 11.5px; color: #94a3b8; margin-top: 18px; }
 
+  /* 可选暗黑模式（默认明亮模式；打印时自动恢复明亮） */
+  body.dark { background: #0b1120; color: #e2e8f0; }
+  body.dark .toc-aside, body.dark .card, body.dark .edu-card, body.dark .rubric-box {
+    background: #111827; border-color: #1f2937; box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  }
+  body.dark .sec-hd { border-bottom-color: #1f2937; }
+  body.dark .sec-hd h2, body.dark .toc-title, body.dark .meta-v, body.dark .gauge-label,
+  body.dark .chart-title, body.dark .rubric-hd, body.dark .dog-meta, body.dark .donut-leg-name { color: #f1f5f9; }
+  body.dark .muted, body.dark .sub, body.dark .meta-k, body.dark .gauge-sub, body.dark .edu-desc,
+  body.dark .bar-val, body.dark .bar-val-sm, body.dark .bar-name, body.dark .bar-name-wide, body.dark .chart-legend { color: #94a3b8; }
+  body.dark .gauge-card, body.dark .donut-wrap, body.dark .cm-box, body.dark .chart-box,
+  body.dark .edu-vis, body.dark .empty-tip, body.dark .rubric-cell:not(.hit) {
+    background: #1e293b; border-color: #334155; color: #cbd5e1;
+  }
+  body.dark .takeaways { background: #1e1b4b; border-left-color: #6366f1; }
+  body.dark .takeaways div { color: #e2e8f0; }
+  body.dark .toc-link { color: #cbd5e1; }
+  body.dark .toc-link:hover { background: #1e293b; color: #fff; }
+  body.dark .toc-link.active { background: #1e1b4b; color: #a5b4fc; border-left-color: #6366f1; }
+  body.dark .toc-foot { border-top-color: #1f2937; }
+  body.dark .toc-btn, body.dark .f-btn, body.dark .btn-more, body.dark .edu-pbtn, body.dark .edu-wbtn, body.dark .search-in {
+    background: #1e293b; border-color: #334155; color: #e2e8f0;
+  }
+  body.dark .toc-btn:hover, body.dark .btn-more:hover { background: #334155; }
+  body.dark .f-btn.active { background: #4f46e5; border-color: #6366f1; color: #fff; }
+  body.dark th, body.dark td { border-color: #273449; color: #e2e8f0; }
+  body.dark th { background: #1e293b; color: #cbd5e1; }
+  body.dark .th-w { background: #172554; color: #93c5fd; }
+  body.dark .th-e { background: #2e1065; color: #c4b5fd; }
+  body.dark .th-b { background: #042f2e; color: #5eead4; }
+  body.dark .col-w, body.dark .col-e, body.dark .col-b { background: #111827; }
+  body.dark .row-primary td { background: rgba(99,102,241,0.12); }
+  body.dark .bar-track { background: #273449; }
+  body.dark .pill-gray { background: #1e293b; color: #cbd5e1; }
+  body.dark .pill-green { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+  body.dark .pill-orange { background: rgba(245,158,11,0.2); color: #fcd34d; }
+  body.dark .pill-red { background: rgba(239,68,68,0.2); color: #fca5a5; }
+  body.dark .pill-purple { background: rgba(139,92,246,0.22); color: #c4b5fd; }
+  body.dark .cm-tp { background: rgba(16,185,129,0.22); color: #6ee7b7; }
+  body.dark .cm-fn { background: rgba(239,68,68,0.22); color: #fca5a5; }
+  body.dark .cm-fp { background: rgba(245,158,11,0.22); color: #fcd34d; }
+  body.dark .cm-tn { background: rgba(59,130,246,0.22); color: #93c5fd; }
+  body.dark .btn-play { background: #1e1b4b; color: #a5b4fc; border-color: #6366f1; }
+  body.dark .btn-play:hover { background: #4f46e5; color: #fff; }
+  body.dark .signoff { border-top-color: #334155; color: #94a3b8; }
+  body.dark svg circle[stroke="#eef2f7"], body.dark svg circle[stroke="#f1f5f9"] { stroke: #334155; }
+  body.dark svg line[stroke="#e2e8f0"] { stroke: #334155; }
+  body.dark svg rect[fill="#e2e8f0"] { fill: #334155; }
+  body.dark svg text[fill="#0f172a"], body.dark svg text[fill="#1e293b"], body.dark svg text[fill="#334155"] { fill: #f1f5f9; }
+  body.dark svg text[fill="#64748b"], body.dark svg text[fill="#94a3b8"] { fill: #94a3b8; }
+  body.dark svg tspan[fill="#64748b"] { fill: #94a3b8; }
+  body.dark .edu-banner-bar { background: #1e293b !important; border-color: #334155 !important; color: #cbd5e1 !important; }
+  body.dark .dog-summary-bar { background: #1e293b !important; color: #cbd5e1 !important; }
+
   @media (max-width: 1020px) {
     .toc-aside { display: none; }
     .page { max-width: 100%; }
@@ -953,6 +1007,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="toc-code">${esc(reportCode)}</div>
     <nav class="toc-nav">${tocHtml}</nav>
     <div class="toc-foot">
+      <button class="toc-btn theme-toggle-btn" type="button">🌙 暗黑模式</button>
       <a class="toc-btn" href="#top">↑ 回到顶部</a>
       <button class="toc-btn" onclick="window.print()">打印 / 另存 PDF</button>
     </div>
@@ -969,6 +1024,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="banner-right">
       <span class="verdict-badge ${winGrade.cls}">窗口 ${winGrade.code}·${winGrade.name} (${pct(pw?.f1)})</span>
       <span class="verdict-badge ${evGrade.cls}">事件 ${evGrade.code}·${evGrade.name} (${pct(evF1)})</span>
+      <button class="btn-print theme-toggle-btn" type="button">🌙 暗黑模式</button>
       <button class="btn-print" onclick="window.print()">打印 / 另存为 PDF</button>
     </div>
   </div>
@@ -1009,7 +1065,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     ${rubricHtml}
 
     <!-- 三大核心指标：一层比一层严的三关，用具体时间例子讲清楚 -->
-    <div style="margin-bottom:8px;padding:7px 12px;border-radius:7px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;color:#334155">
+    <div class="edu-banner-bar" style="margin-bottom:8px;padding:7px 12px;border-radius:7px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;color:#334155">
       <b>三个指标其实是「一层比一层严」的三道关：</b>
       <span style="color:#1d4ed8;font-weight:600">第 1 关看这 1 分钟有没有</span> →
       <span style="color:#6d28d9;font-weight:600">第 2 关看具体那一次有没有重叠上</span> →
@@ -1270,6 +1326,32 @@ export function buildTestReportHtml(input: TestReportInput): string {
 <script>
 (function(){
   var VIDEO_BASE = "__REPORT_VIDEO_BASE__";
+  // 明亮 / 暗黑模式切换（默认明亮，打印时自动恢复明亮）
+  var themeBtns = Array.prototype.slice.call(document.querySelectorAll(".theme-toggle-btn"));
+  function applyTheme(dark) {
+    if (dark) document.body.classList.add("dark");
+    else document.body.classList.remove("dark");
+    themeBtns.forEach(function(b) { b.textContent = dark ? "☀ 明亮模式" : "🌙 暗黑模式"; });
+  }
+  try {
+    if (localStorage.getItem("smart-label:report-theme") === "dark") applyTheme(true);
+  } catch (e) {}
+  themeBtns.forEach(function(b) {
+    b.addEventListener("click", function() {
+      var next = !document.body.classList.contains("dark");
+      applyTheme(next);
+      try { localStorage.setItem("smart-label:report-theme", next ? "dark" : "light"); } catch (e) {}
+    });
+  });
+  var wasDarkBeforePrint = false;
+  window.addEventListener("beforeprint", function() {
+    wasDarkBeforePrint = document.body.classList.contains("dark");
+    if (wasDarkBeforePrint) document.body.classList.remove("dark");
+  });
+  window.addEventListener("afterprint", function() {
+    if (wasDarkBeforePrint) document.body.classList.add("dark");
+  });
+
   // 左侧目录大纲滚动高亮联动
   var tocLinks = Array.prototype.slice.call(document.querySelectorAll(".toc-link"));
   var sections = tocLinks.map(function(a) { return document.getElementById(a.getAttribute("data-target")); }).filter(Boolean);
