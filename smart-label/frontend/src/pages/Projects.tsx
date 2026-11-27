@@ -1532,8 +1532,9 @@ export default function Projects() {
                 <div style={{ lineHeight: 1.8 }}>
                   <div>处理了 <b>{sum.changed}</b> / {sum.tasks} 个任务</div>
                   <div>① <b>去无信号</b>：检测 {sum.zeroRuns} 处断流，切开 {sum.zeroCarved} 段，删除全零 {sum.zeroDeleted} 段，标出「无信号」{sum.noSigAdded} 段</div>
-                  <div>②④ <b>自动去重（两轮）</b>：合并重叠 {sum.dedupeMerged} 段，删粗类 {sum.removedParent} 段，挖空活动 {sum.carvedMotion} 段</div>
-                  <div>③⑤ <b>自动合并（两轮）</b>：合并相邻碎片 {sum.adjGroups} 组（消掉 {sum.adjRemoved} 条碎片）</div>
+                  <div>② <b>智能挖洞</b>：共挖空被具体行为 / 活动 / 未佩戴覆盖的底层段 {sum.carvedMotion} 段</div>
+                  <div>③⑤ <b>自动去重（两轮）</b>：合并重叠 {sum.dedupeMerged} 段，删粗类 {sum.removedParent} 段</div>
+                  <div>④⑥ <b>自动合并（两轮）</b>：合并相邻碎片 {sum.adjGroups} 组（消掉 {sum.adjRemoved} 条碎片）</div>
                   {sum.conflicts > 0 && <div style={{ color: "#fa8c16" }}>还剩 {sum.conflicts} 段类别冲突（同一处标了不同类别），需人工看画面判断</div>}
                   {failed.length > 0 && <div style={{ color: "#d03b3b" }}>没做成：{failed.join("、")}（再点一次试试）</div>}
                 </div>
@@ -1544,12 +1545,13 @@ export default function Projects() {
             <Popconfirm
               title={dedupeSel.length ? `对勾选的 ${targets.length} 个项目一键批量智能处理？` : `对全部 ${targets.length} 个项目一键批量智能处理？`}
               description={
-                <div style={{ maxWidth: 400, lineHeight: 1.6 }}>
-                  每个任务依次自动执行 5 步：<br />
+                <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
+                  每个任务依次自动执行 6 步：<br />
                   ① 自动切无信号（三轴全 0 断流处切开并标「无信号」）<br />
-                  ② 自动去重（同类重叠合并 + 删父级粗类 + 挖空活动）<br />
-                  ③ 自动合并（间隔 ≤1.5s 相邻同类碎片）<br />
-                  ④ 再自动去重 → ⑤ 再自动合并<br />
+                  ② 自动智能挖洞（具体行为 / 未佩戴挖空活动，活动挖空静止）<br />
+                  ③ 自动去重（同类重叠合并 + 删父级粗类）<br />
+                  ④ 自动合并（间隔 ≤1.5s 相邻同类碎片）<br />
+                  ⑤ 再自动去重 → ⑥ 再自动合并 + 终轮智能挖洞<br />
                   <span style={{ opacity: 0.75 }}>类别冲突不动只报个数；只想做某几个项目请先在左边勾选。</span>
                 </div>
               }

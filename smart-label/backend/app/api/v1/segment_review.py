@@ -1230,10 +1230,12 @@ async def smart_clean_project(
     }
     for t in tasks:
         z = await _trim_zero_signal_task(db, t, user)
+        c1 = await _carve_motion_task(db, t, user)
         d1 = await _dedupe_task(db, t, user)
         m1 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
         d2 = await _dedupe_task(db, t, user)
         m2 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
+        c2 = await _carve_motion_task(db, t, user)
         await db.commit()
 
         tot["zero_runs"] += z["zero_runs"]
@@ -1242,13 +1244,14 @@ async def smart_clean_project(
         tot["no_signal_added"] += z["no_signal_added"]
         tot["dedupe_merged"] += d1["merged"] + d2["merged"]
         tot["removed_parent"] += d1["removed_parent"] + d2["removed_parent"]
-        tot["carved_motion"] += d1.get("carved_motion", 0) + d2.get("carved_motion", 0)
+        tot["carved_motion"] += c1["carved"] + d1.get("carved_motion", 0) + d2.get("carved_motion", 0) + c2["carved"]
         tot["adj_groups_merged"] += m1["groups_merged"] + m2["groups_merged"]
         tot["adj_removed"] += m1["removed"] + m2["removed"]
         tot["conflicts_left"] += d2["conflicts_left"]
 
         if (
             z["items_carved"] or z["items_deleted"] or z["no_signal_added"]
+            or c1["carved"] or c2["carved"]
             or d1["merged"] or d1["removed_parent"] or d1.get("carved_motion", 0)
             or m1["groups_merged"]
             or d2["merged"] or d2["removed_parent"] or d2.get("carved_motion", 0)
@@ -1320,7 +1323,7 @@ async def _carve_motion_task(db: AsyncSession, task: Task, user: User) -> dict:
     behaviors = [
         (x.start_time_ms, x.end_time_ms)
         for x in items
-        if track_of(parent_of, own, x.label_id, names) in ("behavior", "")
+        if track_of(parent_of, own, x.label_id, names) in ("behavior", "", "device")
     ]
     activities = [
         (x.start_time_ms, x.end_time_ms)
