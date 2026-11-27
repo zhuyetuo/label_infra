@@ -1103,23 +1103,29 @@ export function buildTestReportHtml(input: TestReportInput): string {
         <div class="edu-desc"><b>加严一步：</b>真正在 11:11:10~16s 抓挠，模型预测的那段必须跟它<b>重叠占比 ≥ ${iouPct}%</b>（交集÷并集）才算抓对；没重叠上或漏掉某一次都要扣分。</div>
       </div>
 
-      <!-- ③ 起止对齐（可切换容差交互演示） -->
+      <!-- ③ 起止对齐（可滑动 + 快捷档位交互演示） -->
       <div class="edu-card c-edg">
         <div class="edu-hd">
           <span style="color:#0f766e">第 3 关 · 起止对齐（两头差≤${edgeTolSec}s）</span>
-          <span class="edu-tag" style="background:#f0fdfa;color:#0f766e">点击切换</span>
+          <span class="edu-tag" style="background:#f0fdfa;color:#0f766e">拖动交互</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 66" width="100%" style="display:block">
-            <text x="4" y="12" font-size="9.5" fill="#64748b">例：在已抓对的基础上，看开头和结尾各差几秒</text>
+            <text x="4" y="12" font-size="9.5" fill="#64748b">例：在已抓对的基础上，拖看开头/结尾各差几秒</text>
             <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
             <rect x="64" y="20" width="96" height="10" rx="3" fill="#10b981" />
             <line x1="64" y1="16" x2="64" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
             <line x1="160" y1="16" x2="160" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect id="eduEdgPred" x="78" y="36" width="94" height="10" rx="3" fill="#0d9488" style="transition:all .3s" />
-            <text id="eduEdgTxt" x="4" y="61" font-size="10" font-weight="700" fill="#0f766e">开头差 +0.8s / 结尾差 +0.6s（都 ≤ ${edgeTolSec}s ✓）</text>
+            <rect id="eduEdgPred" x="72" y="36" width="94" height="10" rx="3" fill="#0d9488" />
+            <text id="eduEdgTxt" x="4" y="61" font-size="10" font-weight="700" fill="#0f766e">起 +0.8s / 止 +0.6s（≤ ±${edgeTolSec}s 对齐 ✓）</text>
           </svg>
+          <div class="edu-ctrl">
+            <span>起点差：</span>
+            <input type="range" id="eduEdgStart" class="edu-slider" style="accent-color:#0d9488;min-width:58px" min="-5" max="5" step="0.2" value="0.8" />
+            <span>终点差：</span>
+            <input type="range" id="eduEdgEnd" class="edu-slider" style="accent-color:#0d9488;min-width:58px" min="-5" max="5" step="0.2" value="0.6" />
+          </div>
           <div class="edu-ctrl">
             <button class="edu-pbtn active" data-ds="0.8" data-de="0.6">很准 (±0.8s)</button>
             <button class="edu-pbtn" data-ds="1.8" data-de="-1.5">微偏 (±1.8s)</button>
@@ -1478,15 +1484,15 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var edgBtns = Array.prototype.slice.call(document.querySelectorAll(".edu-pbtn"));
   var edgPred = document.getElementById("eduEdgPred");
   var edgTxt = document.getElementById("eduEdgTxt");
-  function applyEduEdge(btn) {
+  var edgStart = document.getElementById("eduEdgStart");
+  var edgEnd = document.getElementById("eduEdgEnd");
+  function renderEduEdge(ds, de) {
     if (!edgPred || !edgTxt) return;
-    var ds = parseFloat(btn.getAttribute("data-ds") || "0") || 0;
-    var de = parseFloat(btn.getAttribute("data-de") || "0") || 0;
     var pxPerSec = 10;
-    var p0 = 64 + ds * pxPerSec;
-    var p1 = 160 + de * pxPerSec;
+    var p0 = Math.max(4, Math.min(200, 64 + ds * pxPerSec));
+    var p1 = Math.max(p0 + 18, Math.min(236, 160 + de * pxPerSec));
     edgPred.setAttribute("x", p0.toFixed(1));
-    edgPred.setAttribute("width", Math.max(20, p1 - p0).toFixed(1));
+    edgPred.setAttribute("width", (p1 - p0).toFixed(1));
     var maxE = Math.max(Math.abs(ds), Math.abs(de));
     var ok = maxE <= REPORT_EDGE_TOL;
     edgPred.setAttribute("fill", ok ? "#0d9488" : "#ef4444");
@@ -1495,14 +1501,26 @@ export function buildTestReportHtml(input: TestReportInput): string {
     var eStr = (de >= 0 ? "+" : "") + de.toFixed(1) + "s";
     edgTxt.textContent = "起 " + sStr + " / 止 " + eStr + (ok ? "（≤ ±" + REPORT_EDGE_TOL + "s 对齐 ✓）" : "（> ±" + REPORT_EDGE_TOL + "s 未对齐 ✗）");
   }
+  function onEduEdgeSlide() {
+    edgBtns.forEach(function(x) { x.classList.remove("active"); });
+    var ds = edgStart ? parseFloat(edgStart.value) || 0 : 0;
+    var de = edgEnd ? parseFloat(edgEnd.value) || 0 : 0;
+    renderEduEdge(ds, de);
+  }
+  if (edgStart) edgStart.addEventListener("input", onEduEdgeSlide);
+  if (edgEnd) edgEnd.addEventListener("input", onEduEdgeSlide);
   edgBtns.forEach(function(b) {
     b.addEventListener("click", function() {
       edgBtns.forEach(function(x) { x.classList.remove("active"); });
       b.classList.add("active");
-      applyEduEdge(b);
+      var ds = parseFloat(b.getAttribute("data-ds") || "0") || 0;
+      var de = parseFloat(b.getAttribute("data-de") || "0") || 0;
+      if (edgStart) edgStart.value = String(ds);
+      if (edgEnd) edgEnd.value = String(de);
+      renderEduEdge(ds, de);
     });
   });
-  if (edgBtns.length) applyEduEdge(edgBtns[0]);
+  renderEduEdge(0.8, 0.6);
 
   // 内置视频验证播放器
   var vModal = document.getElementById("videoModal");
