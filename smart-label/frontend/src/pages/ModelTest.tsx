@@ -1016,8 +1016,8 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title="按 1 秒滑动时间窗逐窗比对：这一秒人工标了 vs 模型报了是否一致（对齐真实连续流推理，不按 1 分钟片段凑数）">
-        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 滑动时间窗级（1s 步长）</span>
+      <Tooltip title="测试片段级检出：预测与真实动作必须有实际重叠（>0s）才算命中，完全不重叠不算对（舍弃 1 分钟框凑数）">
+        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 片段级检出（须有重叠）</span>
       </Tooltip>
     ),
     onHeaderCell: () => ({
@@ -1028,7 +1028,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
       },
     }),
     children: styleGroupCols(EVAL_GROUP_THEME.window, [
-      { title: "窗数", key: "w_n", width: 64, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows.toLocaleString() : "-" },
+      { title: "段数", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
       { title: "准确率", key: "w_acc", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.accuracy) : "-" },
       { title: "精确率", key: "w_p", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.precision) : "-" },
       { title: "召回率", key: "w_r", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.recall) : "-" },
