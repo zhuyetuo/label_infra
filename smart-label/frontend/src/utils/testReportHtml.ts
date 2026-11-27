@@ -74,26 +74,153 @@ const fmtSec = (sec: number): string => {
   return `${Math.round(sec)}s`;
 };
 
+/** 单个指标的 SVG 环形仪表盘 */
+function renderGaugeSvg(value: number | null | undefined, color: string, label: string, sub: string): string {
+  const v = value != null && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null;
+  const r = 34;
+  const circ = 2 * Math.PI * r;
+  const dash = v != null ? (v * circ).toFixed(1) : "0";
+  const txt = v != null ? `${(v * 100).toFixed(1)}%` : "-";
+  return `<div class="gauge-card">
+    <svg width="88" height="88" viewBox="0 0 88 88" class="gauge-svg">
+      <circle cx="44" cy="44" r="${r}" fill="none" stroke="#eef2f7" stroke-width="8" />
+      <circle cx="44" cy="44" r="${r}" fill="none" stroke="${color}" stroke-width="8"
+        stroke-linecap="round" stroke-dasharray="${dash} ${circ.toFixed(1)}"
+        transform="rotate(-90 44 44)" />
+      <text x="44" y="48" text-anchor="middle" font-size="16" font-weight="700" fill="#0f172a">${txt}</text>
+    </svg>
+    <div class="gauge-label">${esc(label)}</div>
+    <div class="gauge-sub">${esc(sub)}</div>
+  </div>`;
+}
+
+/** 窗口判定分布 SVG 环形图（TP / TN / FP / FN） */
+function renderVerdictDonutSvg(tp: number, tn: number, fp: number, fn: number): string {
+  const total = Math.max(1, tp + tn + fp + fn);
+  const segs = [
+    { name: "命中 (TP)", n: tp, color: "#10b981" },
+    { name: "正常通过 (TN)", n: tn, color: "#3b82f6" },
+    { name: "误报 (FP)", n: fp, color: "#f59e0b" },
+    { name: "漏报 (FN)", n: fn, color: "#ef4444" },
+  ];
+  const r = 46;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = segs
+    .filter((s) => s.n > 0)
+    .map((s) => {
+      const len = (s.n / total) * circ;
+      const el = `<circle cx="62" cy="62" r="${r}" fill="none" stroke="${s.color}" stroke-width="14"
+        stroke-dasharray="${len.toFixed(2)} ${(circ - len).toFixed(2)}"
+        stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 62 62)" />`;
+      offset += len;
+      return el;
+    })
+    .join("");
+  const passRate = (((tp + tn) / total) * 100).toFixed(1);
+  const legend = segs
+    .map(
+      (s) => `<div class="donut-leg-row">
+        <span class="dot" style="background:${s.color}"></span>
+        <span class="donut-leg-name">${s.name}</span>
+        <b>${s.n}</b>
+        <span class="muted">(${((s.n / total) * 100).toFixed(1)}%)</span>
+      </div>`,
+    )
+    .join("");
+  return `<div class="donut-wrap">
+    <svg width="124" height="124" viewBox="0 0 124 124" style="flex:none">
+      <circle cx="62" cy="62" r="${r}" fill="none" stroke="#f1f5f9" stroke-width="14" />
+      ${arcs}
+      <text x="62" y="59" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">${passRate}%</text>
+      <text x="62" y="75" text-anchor="middle" font-size="11" fill="#64748b">窗口准确率</text>
+    </svg>
+    <div class="donut-legend">${legend}</div>
+  </div>`;
+}
+
+/** 多模型核心指标对比 SVG 分组柱状图 */
+function renderModelCompareChartSvg(rows: ReportEvalRow[], showLabel: boolean): string {
+  if (!rows.length) return "";
+  const items = rows.slice(0, 8);
+  const barH = 12;
+  const rowGap = 14;
+  const groupH = barH * 3 + 8 + rowGap;
+  const topPad = 26;
+  const leftPad = 175;
+  const rightPad = 52;
+  const plotW = 460;
+  const svgW = leftPad + plotW + rightPad;
+  const svgH = topPad + items.length * groupH + 12;
+
+  const gridLines = [0, 25, 50, 75, 100]
+    .map((p) => {
+      const x = leftPad + (p / 100) * plotW;
+      return `<line x1="${x}" y1="${topPad - 4}" x2="${x}" y2="${svgH - 12}" stroke="#e2e8f0" stroke-dasharray="${p === 0 ? "" : "3,3"}" />
+        <text x="${x}" y="14" text-anchor="middle" font-size="10.5" fill="#94a3b8">${p}%</text>`;
+    })
+    .join("");
+
+  const bars = items
+    .map((row, idx) => {
+      const y0 = topPad + idx * groupH;
+      const wf1 = row.r.window?.f1 ?? 0;
+      const ef1 = f1(row.r.precision, row.r.recall) ?? 0;
+      const b2s = row.r.within_2s_ratio ?? 0;
+      const rawName = showLabel && row.label ? `[${row.label}] ${row.version}` : row.version;
+      const shortName = rawName.length > 22 ? `${rawName.slice(0, 21)}…` : rawName;
+      const drawBar = (val: number, dy: number, fill: string) => {
+        const w = Math.max(2, Math.min(1, val) * plotW);
+        return `<rect x="${leftPad}" y="${y0 + dy}" width="${w.toFixed(1)}" height="${barH}" rx="3" fill="${fill}" />
+          <text x="${(leftPad + w + 5).toFixed(1)}" y="${y0 + dy + 9.5}" font-size="10.5" font-weight="600" fill="#334155">${(val * 100).toFixed(1)}%</text>`;
+      };
+      return `<g>
+        <text x="${leftPad - 10}" y="${y0 + 18}" text-anchor="end" font-size="11.5" font-weight="600" fill="#1e293b">${esc(shortName)}</text>
+        <text x="${leftPad - 10}" y="${y0 + 32}" text-anchor="end" font-size="10" fill="#64748b">${esc(row.group)} · ${row.n}样本</text>
+        ${drawBar(wf1, 0, "#2563eb")}
+        ${drawBar(ef1, barH + 3, "#7c3aed")}
+        ${drawBar(b2s, (barH + 3) * 2, "#0d9488")}
+      </g>`;
+    })
+    .join("");
+
+  return `<div class="chart-box">
+    <div class="chart-head">
+      <span class="chart-title">核心指标横向对比（%）</span>
+      <span class="chart-legend">
+        <span><i class="dot" style="background:#2563eb"></i>窗口级 F1</span>
+        <span><i class="dot" style="background:#7c3aed"></i>事件级 F1</span>
+        <span><i class="dot" style="background:#0d9488"></i>±2s 边界对齐</span>
+      </span>
+    </div>
+    <svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-width:${svgW}px;display:block">
+      ${gridLines}
+      ${bars}
+    </svg>
+  </div>`;
+}
+
+/** 单个窗口双轨迷你时间轴 SVG */
 function renderMiniTimelineSvg(c: ReportErrorCase): string {
   const dur = Math.max(1, c.winDurMs);
   const segRects = (segs: [number, number, ...unknown[]][], y: number, fill: string) =>
     segs
       .map(([s, e]) => {
         const x = Math.max(0, Math.min(100, (s / dur) * 100));
-        const w = Math.max(1.8, Math.min(100 - x, ((e - s) / dur) * 100));
+        const w = Math.max(2, Math.min(100 - x, ((e - s) / dur) * 100));
         return `<rect x="${x.toFixed(2)}%" y="${y}" width="${w.toFixed(2)}%" height="6" rx="2" fill="${fill}" />`;
       })
       .join("");
-  const predColor = c.verdict === "fp" ? "#fa8c16" : "#1677ff";
+  const predColor = c.verdict === "fp" ? "#f59e0b" : "#3b82f6";
   return `<svg width="100%" height="20" style="display:block;min-width:120px">
-    <rect x="0" y="2" width="100%" height="6" rx="2" fill="#e5e7eb" />
-    ${segRects(c.truthSegs, 2, "#22c55e")}
-    <rect x="0" y="12" width="100%" height="6" rx="2" fill="#e5e7eb" />
+    <rect x="0" y="2" width="100%" height="6" rx="2" fill="#e2e8f0" />
+    ${segRects(c.truthSegs, 2, "#10b981")}
+    <rect x="0" y="12" width="100%" height="6" rx="2" fill="#e2e8f0" />
     ${segRects(c.predSegs, 12, predColor)}
   </svg>`;
 }
 
-/** 生成独立可离线打开、可打印 PDF、也可分享链接的标准 HTML 算法测试报告 */
+/** 生成独立可离线打开、可打印 PDF、也可分享链接的标准 QA 测试报告 HTML */
 export function buildTestReportHtml(input: TestReportInput): string {
   const {
     testSet, coverage, items, evalLabel, iouMin, rows, activeRow, errorCases, summaryCounts, reporter,
@@ -101,7 +228,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
+  const dateCompact = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const genTime = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const reportCode = `TR-${dateCompact}-S${testSet.id}`;
   const iouPct = Math.round(iouMin * 100);
   const labelTitle = evalLabel === "ALL" ? "全部类别" : evalLabel;
   const primary = activeRow ?? rows[0] ?? null;
@@ -113,93 +242,109 @@ export function buildTestReportHtml(input: TestReportInput): string {
   const nTotal = items.length || testSet.n_items;
   const totalSec = coverage?.total_sec ?? items.reduce((s, x) => s + (x.dur_sec || 0), 0);
   const nDogs = coverage?.n_dogs ?? new Set(items.map((x) => x.dog_id).filter(Boolean)).size;
-  const sitesMap = coverage?.sites ?? {};
-  const sitesTxt = Object.entries(sitesMap).map(([k, v]) => `${k} ${v}段`).join(" / ") || "-";
+  const sitesTxt = Object.entries(coverage?.sites ?? {}).map(([k, v]) => `${k}(${v}段)`).join("、") || "-";
 
-  // 归因汇总
-  const fnReasons = new Map<string, number>();
-  const fpReasons = new Map<string, number>();
+  // 自动判定等级（便于测试人员快速汇报）
+  const mainF1 = pw?.f1 ?? evF1 ?? 0;
+  const verdictBadge =
+    mainF1 >= 0.85
+      ? { text: "表现优秀", cls: "badge-pass" }
+      : mainF1 >= 0.7
+        ? { text: "基本达标 · 建议微调", cls: "badge-warn" }
+        : { text: "未达预期 · 需重点优化", cls: "badge-fail" };
+
+  // 归因统计（按类型聚合，用于横向条形图与建议）
+  const reasonMap = new Map<string, { kind: "fp" | "fn" | "bd"; tag: string; n: number; advice: string }>();
   for (const c of errorCases) {
-    if (c.verdict === "fn") fnReasons.set(c.tag, (fnReasons.get(c.tag) ?? 0) + 1);
-    if (c.verdict === "fp") fpReasons.set(c.tag, (fpReasons.get(c.tag) ?? 0) + 1);
+    const kind: "fp" | "fn" | "bd" = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : "bd";
+    const key = `${kind}::${c.tag}`;
+    const prev = reasonMap.get(key);
+    if (prev) prev.n += 1;
+    else reasonMap.set(key, { kind, tag: c.tag, n: 1, advice: c.advice });
   }
+  const reasonsSorted = [...reasonMap.values()].sort((a, b) => b.n - a.n);
+  const maxReasonN = Math.max(1, ...reasonsSorted.map((x) => x.n));
 
-  // 自动生成结论摘要
-  const conclusionLines: string[] = [];
+  const reasonBarsHtml = reasonsSorted.length
+    ? reasonsSorted
+        .map((r) => {
+          const bw = Math.max(6, Math.round((r.n / maxReasonN) * 100));
+          const color = r.kind === "fn" ? "#ef4444" : r.kind === "fp" ? "#f59e0b" : "#8b5cf6";
+          const tagLabel = r.kind === "fn" ? "漏报" : r.kind === "fp" ? "误报" : "边界";
+          return `<div class="bar-row">
+            <span class="pill ${r.kind === "fn" ? "pill-red" : r.kind === "fp" ? "pill-orange" : "pill-purple"}" style="width:42px;text-align:center">${tagLabel}</span>
+            <span class="bar-name-wide">${esc(r.tag)}</span>
+            <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${color}"></div></div>
+            <span class="bar-val-sm"><b>${r.n}</b> 段</span>
+          </div>`;
+        })
+        .join("")
+    : `<div class="empty-tip">当前模型无错例记录，全部窗口均判定正确。</div>`;
+
+  // 自动提炼 3 条精简测试结论与建议
+  const takeaways: string[] = [];
   if (primary && pw && pr) {
-    const wf1 = pw.f1 != null ? (pw.f1 * 100).toFixed(1) : "-";
-    const wacc = (pw.accuracy * 100).toFixed(1);
-    conclusionLines.push(
-      `主测模型 <b>${esc(primary.version)}</b>（范围：${esc(primary.group)}）在「${esc(labelTitle)}」上的<strong>窗口级准确率 ${wacc}%、F1 ${wf1}%</strong>（精确率 ${pct(pw.precision)} / 召回率 ${pct(pw.recall)}，${pw.tp + pw.tn} 对 / ${pw.fp} 误 / ${pw.fn} 漏）。`,
-    );
-    conclusionLines.push(
-      `<strong>事件（片段）级（IoU ≥ ${iouPct}%）F1 ${pct(evF1)}</strong>（精确率 ${pct(pr.precision)} / 召回率 ${pct(pr.recall)}，命中 ${pr.tp} / 误报 ${pr.fp} / 漏报 ${pr.fn}）；命中事件平均 IoU <b>${pct(pr.mean_iou)}</b>，±2s 边界对齐率 <b>${pct(pr.within_2s_ratio)}</b>。`,
+    takeaways.push(
+      `<strong>整体表现：</strong>主测模型 <b>${esc(primary.version)}</b>（${esc(primary.group)}）在「${esc(labelTitle)}」上的窗口级准确率 <b>${pct(pw.accuracy)}</b>（F1 <b>${pct(pw.f1)}</b>），事件级（IoU ≥ ${iouPct}%）F1 <b>${pct(evF1)}</b>，命中边界 ±2s 对齐率 <b>${pct(pr.within_2s_ratio)}</b>。`,
     );
   }
-  if (fpReasons.size > 0 || fnReasons.size > 0) {
-    const topFp = [...fpReasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join("、");
-    const topFn = [...fnReasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join("、");
-    conclusionLines.push(
-      `错例主因：${topFp ? `误报主要集中在 <b>${esc(topFp)}</b>` : "无误报"}${topFn ? `；漏报主要集中在 <b>${esc(topFn)}</b>` : "；无漏报"}。`,
-    );
+  if (reasonsSorted.length > 0) {
+    const top2 = reasonsSorted.slice(0, 2).map((x) => `「${x.tag}」(${x.n}段)`).join("、");
+    takeaways.push(`<strong>主要失误点：</strong>共 ${summaryCounts.err} 个错误窗口（误报 ${summaryCounts.fp} / 漏报 ${summaryCounts.fn}），最集中于 ${esc(top2)}。`);
+    const topAdvice = reasonsSorted.find((x) => x.advice)?.advice;
+    if (topAdvice) {
+      takeaways.push(`<strong>优化建议：</strong>${esc(topAdvice)}`);
+    }
+  } else {
+    takeaways.push(`<strong>主要失误点：</strong>全部 ${summaryCounts.total} 个测试窗口零误报、零漏报。`);
   }
 
-  // 通过率堆叠条百分比
-  const sc = summaryCounts;
-  const denom = Math.max(1, sc.total);
-  const segTn = (sc.tn / denom) * 100;
-  const segTpClean = (Math.max(0, sc.tp - sc.boundaryBad) / denom) * 100;
-  const segBd = (sc.boundaryBad / denom) * 100;
-  const segFp = (sc.fp / denom) * 100;
-  const segFn = (sc.fn / denom) * 100;
-
-  // 多模型对比表行
+  // 多模型对比表
   const showLabelCol = evalLabel === "ALL";
   const rowsHtml = rows
     .map((x) => {
       const w = x.r.window;
       const eF1 = f1(x.r.precision, x.r.recall);
       const isAct = primary && x.key === primary.key;
-      const errDiff = x.r.d_start_abs_mean_ms != null && x.r.d_end_abs_mean_ms != null
-        ? `${(x.r.d_start_abs_mean_ms / 1000).toFixed(1)}s / ${(x.r.d_end_abs_mean_ms / 1000).toFixed(1)}s`
-        : "-";
+      const errDiff =
+        x.r.d_start_abs_mean_ms != null && x.r.d_end_abs_mean_ms != null
+          ? `${(x.r.d_start_abs_mean_ms / 1000).toFixed(1)}s / ${(x.r.d_end_abs_mean_ms / 1000).toFixed(1)}s`
+          : "-";
       return `<tr class="${isAct ? "row-primary" : ""}">
         ${showLabelCol ? `<td><span class="pill pill-gray">${esc(x.label ?? "-")}</span></td>` : ""}
         <td>${esc(x.group)}</td>
         <td class="mono-sm"><b>${esc(x.version)}</b></td>
-        <td class="col-w">${w ? w.n_windows : "-"}</td>
         <td class="col-w">${w ? pct(w.accuracy) : "-"}</td>
         <td class="col-w">${w ? pct(w.precision) : "-"}</td>
         <td class="col-w">${w ? pct(w.recall) : "-"}</td>
         <td class="col-w"><b>${w ? pct(w.f1) : "-"}</b></td>
-        <td class="col-w">${w ? `<span class="c-green">${w.tp + w.tn}对</span> / <span class="c-orange">${w.fp}误</span> / <span class="c-red">${w.fn}漏</span>` : "-"}</td>
+        <td class="col-w">${w ? `<span class="c-green">${w.tp + w.tn}</span>/<span class="c-orange">${w.fp}</span>/<span class="c-red">${w.fn}</span>` : "-"}</td>
         <td class="col-e">${pct(x.r.precision)}</td>
         <td class="col-e">${pct(x.r.recall)}</td>
         <td class="col-e"><b>${pct(eF1)}</b></td>
-        <td class="col-e"><span class="c-green">${x.r.tp}对</span> / <span class="c-orange">${x.r.fp}误</span> / <span class="c-red">${x.r.fn}漏</span></td>
+        <td class="col-e"><span class="c-green">${x.r.tp}</span>/<span class="c-orange">${x.r.fp}</span>/<span class="c-red">${x.r.fn}</span></td>
         <td class="col-b">${pct(x.r.mean_iou)}</td>
         <td class="col-b"><b>${pct(x.r.within_2s_ratio)}</b></td>
         <td class="col-b">${errDiff}</td>
-        <td>${x.r.n_samples_with_result}/${x.n}</td>
       </tr>`;
     })
     .join("");
 
-  // 狗分布条形图
+  // 犬只分布
   const dogsArr = [...(coverage?.dogs ?? [])].sort((a, b) => b.share - a.share);
   const maxShare = Math.max(0.2, ...dogsArr.map((d) => d.share));
   const dogsHtml = dogsArr
     .map((d) => {
-      const bw = Math.max(3, Math.round((d.share / maxShare) * 100));
+      const bw = Math.max(4, Math.round((d.share / maxShare) * 100));
       return `<div class="bar-row">
         <span class="bar-name">${esc(d.dog ?? "未知")}</span>
-        <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${d.share > 0.2 ? "#f59e0b" : "#3b82f6"}"></div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${d.share > 0.25 ? "#f59e0b" : "#3b82f6"}"></div></div>
         <span class="bar-val">${(d.share * 100).toFixed(1)}% · ${fmtSec(d.sec)}</span>
       </div>`;
     })
     .join("");
 
-  // 时长 × 有/无分布
+  // 时长正负例分布
   const durEntries = Object.entries(coverage?.by_dur ?? {});
   const maxDur = Math.max(1, ...durEntries.map(([, m]) => (m["有抓挠"] ?? 0) + (m["无抓挠"] ?? 0)));
   const durHtml = durEntries
@@ -207,13 +352,13 @@ export function buildTestReportHtml(input: TestReportInput): string {
       const y = m["有抓挠"] ?? 0;
       const n = m["无抓挠"] ?? 0;
       const tot = y + n;
-      const wPct = Math.max(6, Math.round((tot / maxDur) * 100));
+      const wPct = Math.max(8, Math.round((tot / maxDur) * 100));
       const yPct = tot > 0 ? Math.round((y / tot) * 100) : 0;
       return `<div class="bar-row">
         <span class="bar-name">${esc(dur)}</span>
         <div class="bar-track">
           <div style="width:${wPct}%;height:100%;display:flex;border-radius:4px;overflow:hidden">
-            ${y > 0 ? `<div style="width:${yPct}%;background:#22c55e;color:#fff;font-size:10px;text-align:center;line-height:16px">${y}</div>` : ""}
+            ${y > 0 ? `<div style="width:${yPct}%;background:#10b981;color:#fff;font-size:10px;text-align:center;line-height:16px">${y}</div>` : ""}
             ${n > 0 ? `<div style="width:${100 - yPct}%;background:#64748b;color:#fff;font-size:10px;text-align:center;line-height:16px">${n}</div>` : ""}
           </div>
         </div>
@@ -222,315 +367,437 @@ export function buildTestReportHtml(input: TestReportInput): string {
     })
     .join("");
 
-  // 错例明细行（支持前端一键筛选）
-  const caseRowsHtml = errorCases
-    .map((c) => {
-      const kind = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : c.boundaryBad ? "bd" : "ok";
+  // 错例明细（优先排误报/漏报，再排边界偏差）
+  const sortedCases = [...errorCases].sort((a, b) => {
+    const rank = (x: ReportErrorCase) => (x.verdict === "fn" ? 0 : x.verdict === "fp" ? 1 : 2);
+    return rank(a) - rank(b);
+  });
+  const caseRowsHtml = sortedCases
+    .map((c, idx) => {
+      const kind = c.verdict === "fp" ? "fp" : c.verdict === "fn" ? "fn" : "bd";
       const badge =
         c.verdict === "fp"
           ? `<span class="pill pill-orange">误报</span>`
           : c.verdict === "fn"
             ? `<span class="pill pill-red">漏报</span>`
-            : c.boundaryBad
-              ? `<span class="pill pill-purple">偏差&gt;2s</span>`
-              : `<span class="pill pill-green">命中</span>`;
+            : `<span class="pill pill-purple">偏差&gt;2s</span>`;
       const labelsHtml = c.actualLabels.length
-        ? c.actualLabels.map((lb) => `<span class="pill pill-gray">${esc(lb)}</span>`).join(" ")
+        ? c.actualLabels.slice(0, 3).map((lb) => `<span class="pill pill-gray">${esc(lb)}</span>`).join("")
         : `<span class="muted">无标注</span>`;
-      return `<tr class="case-row" data-kind="${kind}">
+      return `<tr class="case-row" data-kind="${kind}" data-idx="${idx}">
+        <td class="muted">${idx + 1}</td>
         <td>${badge}</td>
-        <td><b>${esc(c.dog)}</b>${c.size ? `（${esc(c.size)}）` : ""}<div class="sub">${esc(c.site)}</div></td>
+        <td><b>${esc(c.dog)}</b>${c.size ? `<span class="muted">(${esc(c.size)})</span>` : ""}<div class="sub">${esc(c.site)}</div></td>
         <td class="mono-sm">${esc(c.winText)}<div class="sub">${esc(c.durText)}</div></td>
         <td>
           ${renderMiniTimelineSvg(c)}
           <div class="sub">标 ${c.truthN} / 预 ${c.predN}${c.maxConf != null ? ` · 置信 ${c.maxConf}` : ""}${c.minIou != null ? ` · IoU ${(c.minIou * 100).toFixed(0)}%` : ""}</div>
         </td>
         <td>
-          <div><span class="pill ${c.verdict === "fn" ? "pill-red" : "pill-orange"}">${esc(c.tag)}</span></div>
-          <div class="reason">${esc(c.reason)}</div>
-          ${c.advice ? `<div class="advice">→ ${esc(c.advice)}</div>` : ""}
+          <span class="pill ${c.verdict === "fn" ? "pill-red" : c.verdict === "fp" ? "pill-orange" : "pill-purple"}">${esc(c.tag)}</span>
+          ${c.reason ? `<div class="sub" style="margin-top:2px;color:#334155">${esc(c.reason)}</div>` : ""}
         </td>
         <td>${labelsHtml}</td>
       </tr>`;
     })
     .join("");
 
+  const sc = summaryCounts;
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>模型测试报告 · ${esc(testSet.name)} · ${esc(labelTitle)}</title>
+<title>算法测试报告 · ${esc(testSet.name)} · ${esc(labelTitle)}</title>
 <style>
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 24px 16px 48px;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
-    background: #f5f7fb; color: #1f2937; font-size: 13px; line-height: 1.55;
+    background: #f1f5f9; color: #0f172a; font-size: 13px; line-height: 1.55;
   }
-  .page { max-width: 1180px; margin: 0 auto; }
-  .header {
-    background: linear-gradient(135deg, #1e293b 0%, #312e81 100%);
-    color: #fff; border-radius: 12px; padding: 22px 26px; margin-bottom: 18px;
-    display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;
+  .page { max-width: 1120px; margin: 0 auto; }
+
+  /* 顶部标准报告头 */
+  .banner {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #312e81 100%);
+    color: #fff; border-radius: 12px; padding: 22px 26px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;
   }
-  .header h1 { margin: 0 0 6px; font-size: 21px; font-weight: 700; letter-spacing: 0.3px; }
-  .header .meta { font-size: 12px; color: rgba(255,255,255,0.82); display: flex; flex-wrap: wrap; gap: 12px; }
-  .header .note { margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.75); }
-  .header .actions { display: flex; gap: 8px; }
+  .banner-tag { font-size: 11px; letter-spacing: 1px; color: #a5b4fc; text-transform: uppercase; margin-bottom: 4px; }
+  .banner h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; }
+  .banner-sub { font-size: 12px; color: rgba(255,255,255,0.78); }
+  .banner-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .verdict-badge { padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  .badge-pass { background: rgba(16,185,129,0.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.45); }
+  .badge-warn { background: rgba(245,158,11,0.2); color: #fcd34d; border: 1px solid rgba(245,158,11,0.45); }
+  .badge-fail { background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.45); }
   .btn-print {
-    background: rgba(255,255,255,0.16); color: #fff; border: 1px solid rgba(255,255,255,0.3);
-    border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+    background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.28);
+    border-radius: 7px; padding: 6px 12px; font-size: 12px; cursor: pointer;
   }
-  .btn-print:hover { background: rgba(255,255,255,0.26); }
+  .btn-print:hover { background: rgba(255,255,255,0.24); }
 
-  .section {
-    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-    padding: 16px 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  /* 章节卡片 */
+  .card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(15,23,42,0.03);
   }
-  .section-title {
-    font-size: 15px; font-weight: 700; color: #111827; margin: 0 0 12px;
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  .sec-hd {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; margin: 0 0 14px;
   }
-  .section-title .sub { font-size: 12px; font-weight: 400; color: #6b7280; }
+  .sec-hd h2 { margin: 0; font-size: 15px; font-weight: 700; color: #0f172a; }
+  .sec-hd .sub { font-size: 12px; color: #64748b; }
 
-  .summary-box {
-    background: #f8fafc; border-left: 4px solid #4f46e5; border-radius: 6px;
-    padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
-  }
-  .summary-box div { margin: 3px 0; }
+  /* 一、测试概况 4 列信息网格 */
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; }
+  .meta-item { display: flex; flex-direction: column; gap: 2px; }
+  .meta-k { font-size: 11.5px; color: #64748b; }
+  .meta-v { font-size: 13px; font-weight: 600; color: #1e293b; }
 
-  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 14px; }
-  .kpi {
-    border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; background: #fafafa;
+  /* 二、核心可视化（4 仪表盘 + 环形图 + 混淆矩阵） */
+  .gauges-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .gauge-card {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 10px;
+    background: #f8fafc; text-align: center;
   }
-  .kpi .k-label { font-size: 12px; color: #6b7280; margin-bottom: 4px; }
-  .kpi .k-val { font-size: 24px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
-  .kpi .k-sub { font-size: 11px; color: #6b7280; margin-top: 4px; }
-  .kpi.blue { border-top: 3px solid #2563eb; }
-  .kpi.purple { border-top: 3px solid #7c3aed; }
-  .kpi.teal { border-top: 3px solid #0d9488; }
-  .kpi.slate { border-top: 3px solid #475569; }
+  .gauge-svg { display: block; margin: 0 auto 4px; }
+  .gauge-label { font-size: 13px; font-weight: 700; color: #1e293b; }
+  .gauge-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
 
-  .stack-bar { height: 12px; border-radius: 6px; overflow: hidden; display: flex; background: #e5e7eb; margin: 8px 0; }
-  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #4b5563; }
+  .vis-two { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; align-items: center; }
+  .donut-wrap { display: flex; align-items: center; gap: 20px; padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }
+  .donut-legend { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; flex: 1; }
+  .donut-leg-row { display: flex; align-items: center; gap: 6px; }
+  .donut-leg-name { flex: 1; color: #334155; }
+
+  /* 2x2 混淆矩阵 */
+  .cm-box { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; background: #f8fafc; }
+  .cm-title { font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 8px; }
+  .cm-grid { display: grid; grid-template-columns: 64px 1fr 1fr; gap: 6px; text-align: center; font-size: 12px; }
+  .cm-hd { font-size: 11px; color: #64748b; display: flex; align-items: center; justify-content: center; font-weight: 600; }
+  .cm-cell { border-radius: 7px; padding: 8px 6px; }
+  .cm-cell b { display: block; font-size: 18px; line-height: 1.2; }
+  .cm-cell span { font-size: 11px; opacity: 0.85; }
+  .cm-tp { background: #dcfce7; color: #166534; }
+  .cm-fn { background: #fee2e2; color: #991b1b; }
+  .cm-fp { background: #fef3c7; color: #92400e; }
+  .cm-tn { background: #dbeafe; color: #1e40af; }
+
+  /* 结论摘要框 */
+  .takeaways {
+    margin-top: 14px; padding: 12px 16px; border-radius: 8px;
+    background: #eef2ff; border-left: 4px solid #4f46e5; font-size: 13px;
+  }
+  .takeaways div { margin: 4px 0; color: #1e293b; }
+
+  /* SVG 分组柱状图 */
+  .chart-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .chart-title { font-size: 12.5px; font-weight: 700; color: #334155; }
+  .chart-legend { display: flex; gap: 14px; font-size: 11.5px; color: #475569; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 
+  /* 表格 */
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { padding: 7px 8px; border: 1px solid #e5e7eb; text-align: left; vertical-align: middle; }
-  th { background: #f8fafc; font-weight: 600; color: #374151; white-space: nowrap; }
+  th, td { padding: 7px 8px; border: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
+  th { background: #f8fafc; font-weight: 600; color: #334155; white-space: nowrap; }
   .th-w { background: #eff6ff; color: #1d4ed8; text-align: center; }
   .th-e { background: #f5f3ff; color: #6d28d9; text-align: center; }
   .th-b { background: #f0fdfa; color: #0f766e; text-align: center; }
   .col-w { background: #fafcff; font-variant-numeric: tabular-nums; }
   .col-e { background: #fcfaff; font-variant-numeric: tabular-nums; }
   .col-b { background: #f8fffe; font-variant-numeric: tabular-nums; }
-  .row-primary td { font-weight: 500; }
+  .row-primary td { background-color: rgba(79,70,229,0.04); }
 
   .c-green { color: #16a34a; font-weight: 600; }
   .c-orange { color: #d97706; font-weight: 600; }
   .c-red { color: #dc2626; font-weight: 600; }
-  .muted, .sub { color: #6b7280; font-size: 11px; }
+  .muted, .sub { color: #64748b; font-size: 11px; }
   .mono-sm { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
 
   .pill {
-    display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 500;
+    display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600;
     margin: 1px 2px 1px 0; white-space: nowrap;
   }
   .pill-green { background: #dcfce7; color: #15803d; }
   .pill-orange { background: #fef3c7; color: #b45309; }
   .pill-red { background: #fee2e2; color: #b91c1c; }
   .pill-purple { background: #ede9fe; color: #6d28d9; }
-  .pill-gray { background: #f3f4f6; color: #374151; }
+  .pill-gray { background: #f1f5f9; color: #334155; }
 
-  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+  /* 水平条形图 */
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
   .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
-  .bar-name { width: 72px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #374151; }
+  .bar-name { width: 68px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; font-weight: 500; }
+  .bar-name-wide { width: 132px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1e293b; font-weight: 500; }
   .bar-track { flex: 1; height: 16px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 4px; }
-  .bar-val { width: 96px; flex: none; text-align: right; color: #4b5563; font-variant-numeric: tabular-nums; font-size: 11px; }
+  .bar-val { width: 98px; flex: none; text-align: right; color: #475569; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+  .bar-val-sm { width: 52px; flex: none; text-align: right; color: #334155; font-variant-numeric: tabular-nums; }
+  .empty-tip { padding: 16px; text-align: center; color: #64748b; background: #f8fafc; border-radius: 8px; }
 
-  .filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  /* 错例筛选工具条 */
+  .filter-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .filter-btns { display: flex; flex-wrap: wrap; gap: 6px; }
   .f-btn {
-    border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 6px;
+    border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 6px;
     padding: 4px 10px; font-size: 12px; cursor: pointer;
   }
   .f-btn.active { background: #1e293b; color: #fff; border-color: #1e293b; }
-  .reason { margin-top: 3px; color: #374151; }
-  .advice { margin-top: 2px; color: #2563eb; font-size: 11px; }
+  .search-in { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; width: 200px; }
+  .btn-more {
+    display: block; margin: 10px auto 0; padding: 5px 16px; font-size: 12px;
+    border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 6px; cursor: pointer;
+  }
+  .btn-more:hover { background: #e2e8f0; }
 
-  .footer { text-align: center; color: #9ca3af; font-size: 11px; margin-top: 20px; }
-  .table-wrap { overflow-x: auto; }
+  /* 签核页脚 */
+  .signoff {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+    margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 12px; color: #475569;
+  }
+  .footer { text-align: center; font-size: 11.5px; color: #94a3b8; margin-top: 18px; }
 
+  @media (max-width: 780px) {
+    .gauges-grid { grid-template-columns: repeat(2, 1fr); }
+    .vis-two { grid-template-columns: 1fr; }
+    .signoff { grid-template-columns: 1fr; }
+  }
   @media print {
     body { background: #fff; padding: 0; }
-    .btn-print, .filter-bar { display: none !important; }
-    .section { box-shadow: none; break-inside: avoid; }
-    .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .btn-print, .filter-bar, .btn-more { display: none !important; }
+    .card { break-inside: avoid; box-shadow: none; }
+    .case-row.hidden-extra { display: table-row !important; }
   }
 </style>
 </head>
 <body>
 <div class="page">
-  <div class="header">
+
+  <!-- 报告头部 -->
+  <div class="banner">
     <div>
-      <h1>犬行为算法模型测试报告 · ${esc(testSet.name)}</h1>
-      <div class="meta">
-        <span>评测类别：<b>${esc(labelTitle)}</b></span>
-        <span>事件命中阈值：<b>IoU ≥ ${iouPct}%</b></span>
-        <span>测试规模：<b>${nTotal} 段</b>（${testSet.n_samples} 样本 · ${fmtSec(totalSec)} · ${nDogs} 只狗）</span>
-        <span>核对完成：<b>${nChecked}/${nTotal}</b></span>
-        ${testSet.n_unseen != null ? `<span>数据隔离：<b>没见过 ${testSet.n_unseen} / 见过 ${testSet.n_seen ?? 0}</b></span>` : ""}
-      </div>
-      ${testSet.note ? `<div class="note">测试集说明：${esc(testSet.note)}</div>` : ""}
-      <div class="note">生成时间：${esc(genTime)}${reporter ? ` · 报告人：${esc(reporter)}` : ""}${testSet.creator_name ? ` · 测试集创建人：${esc(testSet.creator_name)}` : ""}</div>
+      <div class="banner-tag">QA EVALUATION REPORT · ${esc(reportCode)}</div>
+      <h1>模型行为识别测试报告</h1>
+      <div class="banner-sub">测试集：${esc(testSet.name)} · 评估类别：${esc(labelTitle)} · 报告生成：${esc(genTime)}</div>
     </div>
-    <div class="actions">
-      <button class="btn-print" onclick="window.print()">打印 / 另存 PDF</button>
+    <div class="banner-right">
+      <span class="verdict-badge ${verdictBadge.cls}">${verdictBadge.text}</span>
+      <button class="btn-print" onclick="window.print()">打印 / 另存为 PDF</button>
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">
-      <span>一、核心结论与指标总览</span>
-      <span class="sub">${primary ? `主展示模型：${esc(primary.version)}（${esc(primary.group)}）` : ""}</span>
+  <!-- 一、测试概况 -->
+  <div class="card">
+    <div class="sec-hd">
+      <h2>一、测试概况与范围</h2>
+      <span class="sub">${testSet.frozen ? "已冻结测试集" : "动态测试集"}</span>
     </div>
-    ${conclusionLines.length ? `<div class="summary-box">${conclusionLines.map((l) => `<div>• ${l}</div>`).join("")}</div>` : ""}
-    <div class="kpi-grid">
-      <div class="kpi blue">
-        <div class="k-label">窗口级 F1（整段有无）</div>
-        <div class="k-val" style="color:#2563eb">${pw ? pct(pw.f1) : "-"}</div>
-        <div class="k-sub">准确率 ${pw ? pct(pw.accuracy) : "-"} · 精确 ${pw ? pct(pw.precision) : "-"} · 召回 ${pw ? pct(pw.recall) : "-"}</div>
-      </div>
-      <div class="kpi purple">
-        <div class="k-label">事件（片段）级 F1（IoU ≥ ${iouPct}%）</div>
-        <div class="k-val" style="color:#7c3aed">${pct(evF1)}</div>
-        <div class="k-sub">精确 ${pct(pr?.precision)} · 召回 ${pct(pr?.recall)} · 命中 ${pr?.tp ?? 0} / 误 ${pr?.fp ?? 0} / 漏 ${pr?.fn ?? 0}</div>
-      </div>
-      <div class="kpi teal">
-        <div class="k-label">起止时间对齐（命中事件）</div>
-        <div class="k-val" style="color:#0d9488">${pct(pr?.mean_iou)}</div>
-        <div class="k-sub">平均 IoU · ±2s 对齐率 ${pct(pr?.within_2s_ratio)}</div>
-      </div>
-      <div class="kpi slate">
-        <div class="k-label">测试窗口通过情况</div>
-        <div class="k-val">${sc.total - sc.err} <span style="font-size:14px;font-weight:400;color:#6b7280">/ ${sc.total}</span></div>
-        <div class="k-sub">正常通过 ${sc.tn} · 命中 ${sc.tp} · 误报 ${sc.fp} · 漏报 ${sc.fn}</div>
-      </div>
+    <div class="meta-grid">
+      <div class="meta-item"><span class="meta-k">测试集名称</span><span class="meta-v">${esc(testSet.name)}</span></div>
+      <div class="meta-item"><span class="meta-k">主测模型版本</span><span class="meta-v mono-sm">${esc(primary?.version ?? "-")}</span></div>
+      <div class="meta-item"><span class="meta-k">评估类别 / 事件阈值</span><span class="meta-v">${esc(labelTitle)}（IoU ≥ ${iouPct}%）</span></div>
+      <div class="meta-item"><span class="meta-k">数据规模与覆盖</span><span class="meta-v">${nTotal} 段 · ${nDogs} 只犬 · ${fmtSec(totalSec)}</span></div>
+      <div class="meta-item"><span class="meta-k">人工核对进度</span><span class="meta-v">${nChecked} / ${nTotal}（${nTotal ? Math.round((nChecked / nTotal) * 100) : 0}%）</span></div>
+      <div class="meta-item"><span class="meta-k">训练数据隔离</span><span class="meta-v">${testSet.seen_ref ? `没见过 ${testSet.n_unseen ?? 0} 段 / 见过 ${testSet.n_seen ?? 0} 段` : "全部样本"}</span></div>
+      <div class="meta-item"><span class="meta-k">数据场地</span><span class="meta-v">${esc(sitesTxt)}</span></div>
+      <div class="meta-item"><span class="meta-k">测试人 / 创建人</span><span class="meta-v">${esc(reporter || testSet.creator_name || "-")} / ${esc(testSet.creator_name || "-")}</span></div>
     </div>
-    <div class="stack-bar">
-      <div style="width:${segTn.toFixed(2)}%;background:#22c55e" title="正常通过（无动作没乱报）${sc.tn}"></div>
-      <div style="width:${segTpClean.toFixed(2)}%;background:#3b82f6" title="准确命中 ${Math.max(0, sc.tp - sc.boundaryBad)}"></div>
-      <div style="width:${segBd.toFixed(2)}%;background:#8b5cf6" title="命中但起止偏差>2s ${sc.boundaryBad}"></div>
-      <div style="width:${segFp.toFixed(2)}%;background:#f59e0b" title="误报窗口 ${sc.fp}"></div>
-      <div style="width:${segFn.toFixed(2)}%;background:#ef4444" title="漏报窗口 ${sc.fn}"></div>
+    ${testSet.note ? `<div class="muted" style="margin-top:10px;padding-top:8px;border-top:1px solid #f1f5f9">测试说明：${esc(testSet.note)}</div>` : ""}
+  </div>
+
+  <!-- 二、核心指标可视化总览 -->
+  <div class="card">
+    <div class="sec-hd">
+      <h2>二、核心指标总览</h2>
+      <span class="sub">主测模型：${esc(primary?.version ?? "-")} · ${esc(primary?.group ?? "")}</span>
     </div>
-    <div class="legend">
-      <span><i class="dot" style="background:#22c55e"></i>正常通过 ${sc.tn}</span>
-      <span><i class="dot" style="background:#3b82f6"></i>精准命中 ${Math.max(0, sc.tp - sc.boundaryBad)}</span>
-      <span><i class="dot" style="background:#8b5cf6"></i>起止偏差&gt;2s ${sc.boundaryBad}</span>
-      <span><i class="dot" style="background:#f59e0b"></i>误报窗口 ${sc.fp}</span>
-      <span><i class="dot" style="background:#ef4444"></i>漏报窗口 ${sc.fn}</span>
+
+    <div class="gauges-grid">
+      ${renderGaugeSvg(pw?.accuracy, "#2563eb", "窗口级准确率", pw ? `共 ${pw.n_windows} 窗口 · 正确 ${pw.tp + pw.tn}` : "-")}
+      ${renderGaugeSvg(pw?.f1, "#3b82f6", "窗口级 F1", pw ? `精确 ${pct(pw.precision)} / 召回 ${pct(pw.recall)}` : "-")}
+      ${renderGaugeSvg(evF1, "#7c3aed", `事件级 F1 (IoU≥${iouPct}%)`, pr ? `命中 ${pr.tp} / 误 ${pr.fp} / 漏 ${pr.fn}` : "-")}
+      ${renderGaugeSvg(pr?.within_2s_ratio, "#0d9488", "边界 ±2s 对齐率", pr ? `命中平均 IoU ${pct(pr.mean_iou)}` : "-")}
+    </div>
+
+    ${sc.total > 0 ? `
+    <div class="vis-two">
+      ${renderVerdictDonutSvg(sc.tp, sc.tn, sc.fp, sc.fn)}
+      <div class="cm-box">
+        <div class="cm-title">窗口级判定混淆矩阵（共 ${sc.total} 段）</div>
+        <div class="cm-grid">
+          <div></div><div class="cm-hd">模型预测：有</div><div class="cm-hd">模型预测：无</div>
+          <div class="cm-hd">实际：有</div>
+          <div class="cm-cell cm-tp"><b>${sc.tp}</b><span>命中 (TP)</span></div>
+          <div class="cm-cell cm-fn"><b>${sc.fn}</b><span>漏报 (FN)</span></div>
+          <div class="cm-hd">实际：无</div>
+          <div class="cm-cell cm-fp"><b>${sc.fp}</b><span>误报 (FP)</span></div>
+          <div class="cm-cell cm-tn"><b>${sc.tn}</b><span>正常通过 (TN)</span></div>
+        </div>
+      </div>
+    </div>` : ""}
+
+    <div class="takeaways">
+      ${takeaways.map((t) => `<div>• ${t}</div>`).join("")}
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">
-      <span>二、模型指标明细表</span>
-      <span class="sub">共 ${rows.length} 条评测记录</span>
+  <!-- 三、模型指标对比 -->
+  <div class="card">
+    <div class="sec-hd">
+      <h2>三、模型评测指标对比</h2>
+      <span class="sub">共 ${rows.length} 条记录 · 事件判定阈值 IoU ≥ ${iouPct}%</span>
     </div>
-    <div class="table-wrap">
+    ${renderModelCompareChartSvg(rows, showLabelCol)}
+    <div style="overflow-x:auto">
       <table>
         <thead>
           <tr>
             ${showLabelCol ? `<th rowspan="2">类别</th>` : ""}
             <th rowspan="2">范围</th>
             <th rowspan="2">模型版本</th>
-            <th colspan="6" class="th-w">● 窗口级（整段有无）</th>
-            <th colspan="4" class="th-e">● 事件（片段）级（IoU ≥ ${iouPct}%）</th>
-            <th colspan="3" class="th-b">● 起止对齐（命中事件）</th>
-            <th rowspan="2">样本</th>
+            <th colspan="5" class="th-w">窗口级（整段有无）</th>
+            <th colspan="4" class="th-e">事件级（IoU ≥ ${iouPct}%）</th>
+            <th colspan="3" class="th-b">起止对齐（命中事件）</th>
           </tr>
           <tr>
-            <th class="th-w">窗口</th><th class="th-w">准确率</th><th class="th-w">精确率</th><th class="th-w">召回率</th><th class="th-w">F1</th><th class="th-w">明细</th>
-            <th class="th-e">精确率</th><th class="th-e">召回率</th><th class="th-e">F1</th><th class="th-e">明细</th>
+            <th class="th-w">准确率</th><th class="th-w">精确率</th><th class="th-w">召回率</th><th class="th-w">F1</th><th class="th-w">对/误/漏</th>
+            <th class="th-e">精确率</th><th class="th-e">召回率</th><th class="th-e">F1</th><th class="th-e">对/误/漏</th>
             <th class="th-b">平均 IoU</th><th class="th-b">±2s 对齐</th><th class="th-b">起/止均差</th>
           </tr>
         </thead>
-        <tbody>${rowsHtml || `<tr><td colspan="17" style="text-align:center;color:#999">暂无打分数据</td></tr>`}</tbody>
+        <tbody>${rowsHtml}</tbody>
       </table>
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">
-      <span>三、测试集构成与覆盖度</span>
-      <span class="sub">场地：${esc(sitesTxt)}</span>
+  <!-- 四、测试集数据分布 -->
+  <div class="card">
+    <div class="sec-hd">
+      <h2>四、测试集数据覆盖分布</h2>
+      <span class="sub">${nDogs} 只犬 · 总时长 ${fmtSec(totalSec)}</span>
     </div>
     <div class="two-col">
       <div>
-        <div style="font-weight:600;margin-bottom:8px;font-size:13px">各狗时长占比（共 ${nDogs} 只）</div>
-        ${dogsHtml || `<div class="muted">暂无分布数据</div>`}
+        <div class="chart-title" style="margin-bottom:8px">各犬只时长占比</div>
+        ${dogsHtml || `<div class="muted">暂无数据</div>`}
       </div>
       <div>
-        <div style="font-weight:600;margin-bottom:8px;font-size:13px">窗口时长 × 有/无目标动作（绿=有，灰=无）</div>
-        ${durHtml || `<div class="muted">暂无时长分布数据</div>`}
+        <div class="chart-title" style="margin-bottom:8px">窗口时长 × 正负例分布（<span style="color:#10b981">■ 有动作</span> / <span style="color:#64748b">■ 无动作</span>）</div>
+        ${durHtml || `<div class="muted">暂无数据</div>`}
       </div>
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">
-      <span>四、错例归因与明细（${errorCases.length} 条异常/偏差窗口）</span>
-      <span class="sub">绿轨 = 人工标注 · 橙/蓝轨 = 模型预测</span>
+  <!-- 五、错例归因与缺陷明细 -->
+  <div class="card">
+    <div class="sec-hd">
+      <h2>五、错例归因与缺陷明细</h2>
+      <span class="sub">错误窗口 ${sc.err} 段（误报 ${sc.fp} / 漏报 ${sc.fn}），边界偏差 &gt;2s 共 ${sc.boundaryBad} 段</span>
     </div>
-    <div style="margin-bottom:10px">
-      ${[...fnReasons.entries()].map(([k, v]) => `<span class="pill pill-red">漏报 · ${esc(k)} × ${v}</span>`).join("")}
-      ${[...fpReasons.entries()].map(([k, v]) => `<span class="pill pill-orange">误报 · ${esc(k)} × ${v}</span>`).join("")}
+
+    <div style="margin-bottom:14px">
+      <div class="chart-title" style="margin-bottom:8px">失误原因分布（按频次降序）</div>
+      ${reasonBarsHtml}
     </div>
+
+    ${sortedCases.length > 0 ? `
     <div class="filter-bar">
-      <button class="f-btn active" onclick="filterCases('err', this)">全部错误（${sc.err}）</button>
-      <button class="f-btn" onclick="filterCases('fp', this)">仅误报（${sc.fp}）</button>
-      <button class="f-btn" onclick="filterCases('fn', this)">仅漏报（${sc.fn}）</button>
-      <button class="f-btn" onclick="filterCases('bd', this)">起止偏差 &gt;2s（${sc.boundaryBad}）</button>
-      <button class="f-btn" onclick="filterCases('all', this)">显示全部列表（${errorCases.length}）</button>
+      <div class="filter-btns">
+        <button class="f-btn active" data-f="err">仅看错误 (${sc.err})</button>
+        <button class="f-btn" data-f="fp">误报 (${sc.fp})</button>
+        <button class="f-btn" data-f="fn">漏报 (${sc.fn})</button>
+        <button class="f-btn" data-f="bd">偏差 &gt;2s (${sc.boundaryBad})</button>
+        <button class="f-btn" data-f="all">全部 (${sortedCases.length})</button>
+      </div>
+      <input class="search-in" id="caseSearch" placeholder="按狗名 / 场地 / 原因搜索..." />
     </div>
-    <div class="table-wrap">
+    <div style="overflow-x:auto">
       <table>
         <thead>
           <tr>
-            <th style="width:74px">结果</th>
-            <th style="width:120px">狗 / 场地</th>
-            <th style="width:110px">窗口</th>
-            <th style="width:170px">标注 vs 预测</th>
-            <th>自动归因与调优方向</th>
-            <th style="width:180px">窗口内实际动作</th>
+            <th style="width:36px">#</th>
+            <th style="width:68px">类型</th>
+            <th style="width:128px">犬只 / 场地</th>
+            <th style="width:110px">窗口时间</th>
+            <th style="width:185px">标注(绿) vs 预测(蓝/橙)</th>
+            <th style="width:205px">自动归因</th>
+            <th>窗口内实际动作</th>
           </tr>
         </thead>
-        <tbody id="case-tbody">
-          ${caseRowsHtml || `<tr><td colspan="6" style="text-align:center;color:#999">本次测试无误报/漏报记录 🎉</td></tr>`}
-        </tbody>
+        <tbody id="caseTbody">${caseRowsHtml}</tbody>
       </table>
+    </div>
+    <button class="btn-more" id="btnShowAll" style="display:none">展开全部</button>
+    ` : ""}
+
+    <div class="signoff">
+      <div><b>测试执行：</b>${esc(reporter || testSet.creator_name || "_____________")}</div>
+      <div><b>算法确认：</b>_____________</div>
+      <div><b>报告日期：</b>${esc(genTime.slice(0, 10))}</div>
     </div>
   </div>
 
-  <div class="footer">
-    由 smart-label 模型评测系统自动生成 · ${esc(genTime)}
-  </div>
+  <div class="footer">Smart-Label 算法评测系统自动生成 · 报告编号 ${esc(reportCode)} · 支持离线查看与浏览器打印 PDF</div>
 </div>
+
 <script>
-function filterCases(mode, btn) {
-  document.querySelectorAll('.f-btn').forEach(function(b){ b.classList.remove('active'); });
-  if (btn) btn.classList.add('active');
-  document.querySelectorAll('#case-tbody tr.case-row').forEach(function(tr){
-    var k = tr.getAttribute('data-kind');
-    var show = mode === 'all'
-      || (mode === 'err' && (k === 'fp' || k === 'fn'))
-      || (mode === k);
-    tr.style.display = show ? '' : 'none';
+(function(){
+  var curFilter = "err";
+  var expanded = false;
+  var LIMIT = 20;
+  var btns = document.querySelectorAll(".f-btn");
+  var search = document.getElementById("caseSearch");
+  var btnMore = document.getElementById("btnShowAll");
+  var rows = Array.prototype.slice.call(document.querySelectorAll(".case-row"));
+
+  function apply() {
+    var kw = (search ? search.value : "").trim().toLowerCase();
+    var matched = [];
+    rows.forEach(function(tr) {
+      var k = tr.getAttribute("data-kind");
+      var okKind = curFilter === "all"
+        || (curFilter === "err" && (k === "fp" || k === "fn"))
+        || k === curFilter;
+      var okKw = !kw || tr.textContent.toLowerCase().indexOf(kw) >= 0;
+      if (okKind && okKw) matched.push(tr);
+      else { tr.style.display = "none"; tr.classList.remove("hidden-extra"); }
+    });
+    matched.forEach(function(tr, i) {
+      if (!expanded && i >= LIMIT) {
+        tr.style.display = "none";
+        tr.classList.add("hidden-extra");
+      } else {
+        tr.style.display = "";
+        tr.classList.remove("hidden-extra");
+      }
+    });
+    if (btnMore) {
+      if (!expanded && matched.length > LIMIT) {
+        btnMore.style.display = "block";
+        btnMore.textContent = "展开其余 " + (matched.length - LIMIT) + " 条（共 " + matched.length + " 条）";
+      } else {
+        btnMore.style.display = "none";
+      }
+    }
+  }
+
+  btns.forEach(function(b) {
+    b.addEventListener("click", function() {
+      btns.forEach(function(x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      curFilter = b.getAttribute("data-f");
+      expanded = false;
+      apply();
+    });
   });
-}
-filterCases('err', document.querySelector('.f-btn.active'));
+  if (search) search.addEventListener("input", function() { expanded = false; apply(); });
+  if (btnMore) btnMore.addEventListener("click", function() { expanded = true; apply(); });
+  apply();
+})();
 </script>
 </body>
 </html>`;
