@@ -75,6 +75,8 @@ class DatasetSpecIn(BaseModel):
     drop_gravity_level: bool = False
     # v2：静止/休息 和 活动 按动作强度分（4 秒内加速度模长标准差低于这个值 g 算静止）；None = 按人标的
     still_motion_g: float | None = None
+    # 可选 GPU 自动寻优配置（默认关闭；开启时自动两阶段扫采样率与窗口×步长并记录结果）
+    auto_tune: dict | None = None
 
 
 class TrainSubmitIn(BaseModel):

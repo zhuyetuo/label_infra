@@ -333,6 +333,11 @@ export default function Training() {
   const [dropGravityLevel, setDropGravityLevel] = useState(false);
   // 静止 / 活动按动作强度分（imu_train train_v2 的 still_motion_g）：null = 按人标的
   const [stillMotionG, setStillMotionG] = useState<number | null>(null);
+  // 可选：GPU 自动寻优（默认关闭；开启时自动两阶段扫采样率 × 窗口步长并记录排行）
+  const [autoTuneEnabled, setAutoTuneEnabled] = useState(false);
+  const [autoTuneHz, setAutoTuneHz] = useState<number[]>([20, 25, 26, 28, 30]);
+  const [autoTuneWS, setAutoTuneWS] = useState<string[]>(["3:0.5", "4:0.5", "6:0.5"]);
+  const [autoTuneMetric, setAutoTuneMetric] = useState<"focus_f1" | "macro_f1">("focus_f1");
   /** 打开新版流程时把相关参数摆到实验定下来的那套 */
   const useV2Defaults = () => {
     setModelType("rf");
@@ -831,7 +836,18 @@ export default function Training() {
           clean: true,
           ...(pipelineV2
             ? { pipeline: "v2", fine_labels: fineEffective, class_scale: classScale, drop_gravity_level: dropGravityLevel,
-                still_motion_g: stillMotionG, axes, channel_mode: "inv", rot_aug: 0 }
+                still_motion_g: stillMotionG, axes, channel_mode: "inv", rot_aug: 0,
+                ...(autoTuneEnabled ? {
+                  auto_tune: {
+                    enabled: true,
+                    hz_list: autoTuneHz.length ? autoTuneHz : [hz],
+                    win_stride_list: (autoTuneWS.length ? autoTuneWS : [`${windowS ?? 4}:${strideS ?? 0.5}`])
+                      .map((s) => s.split(":").map(Number) as [number, number]),
+                    metric: autoTuneMetric,
+                    folds: 3,
+                    epochs: 20,
+                  },
+                } : {}) }
             : {}),
         },
         model_type: modelType,
@@ -1210,6 +1226,25 @@ export default function Training() {
   const [bundling, setBundling] = useState<number | null>(null);
   const edgeZipName = (v: ModelVersion, kind: EdgeBundleKind = "src") =>
     `edge_${v.model_type || "rf"}_train${v.algo_job_id}_v${v.id}${kind === "lib" ? "_lib" : ""}.zip`;
+  /** 从模型测试页 localStorage 中读取该模型最近一次调优好的后处理参数，打包时自动带入固件 */
+  const savedPostParamsFor = (v: ModelVersion) => {
+    try {
+      const raw = localStorage.getItem("smart-label:eval-thresh:last");
+      if (!raw) return undefined;
+      const map = (JSON.parse(raw)?.modelPostMap ?? {}) as Record<string, { confMin?: number; minDurSec?: number; mergeGapSec?: number }>;
+      const tag = `train${v.algo_job_id}`;
+      const hit = map[`${tag}::board`] ?? map[`${tag}::raw`] ?? map[`${tag}::viterbi`]
+        ?? Object.entries(map).find(([k]) => k.startsWith(`${tag}::`))?.[1];
+      if (!hit) return undefined;
+      const out: { min_dur_s?: number; min_conf?: number; merge_gap_s?: number } = {};
+      if (hit.minDurSec != null && hit.minDurSec > 0) out.min_dur_s = hit.minDurSec;
+      if (hit.confMin != null && hit.confMin > 0) out.min_conf = hit.confMin;
+      if (hit.mergeGapSec != null && hit.mergeGapSec > 0) out.merge_gap_s = hit.mergeGapSec;
+      return Object.keys(out).length ? out : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   /** 一键下载端侧包：还没导过端侧就先导（算端侧 F1、挂端侧服务），再打包下载 */
   const oneClickEdgeBundle = async (v: ModelVersion, kind: EdgeBundleKind) => {
     setDownloadingEdge(v.id);
@@ -1220,7 +1255,16 @@ export default function Training() {
         qc.invalidateQueries({ queryKey: ["model-versions"] });
         qc.invalidateQueries({ queryKey: ["edge-models"] });
       }
-      await downloadEdgeBundle(v.id, edgeZipName(v, kind), kind);
+      const pp = savedPostParamsFor(v);
+      if (pp) {
+        const desc = [
+          pp.min_dur_s != null ? `时长≥${pp.min_dur_s}s` : null,
+          pp.min_conf != null ? `置信≥${Math.round(pp.min_conf * 100)}%` : null,
+          pp.merge_gap_s != null ? `合并≤${pp.merge_gap_s}s` : null,
+        ].filter(Boolean).join(" / ");
+        message.info(`已自动带入模型测试页调优参数（${desc}）编入固件包`, 5);
+      }
+      await downloadEdgeBundle(v.id, edgeZipName(v, kind), kind, pp);
     } finally {
       setDownloadingEdge(null);
     }
@@ -2843,14 +2887,69 @@ export default function Training() {
                 popupMatchSelectWidth={false}
                 options={[
                   { value: 16, label: "16Hz" },
-                  { value: 20, label: "20Hz（新版推荐）" },
-                  { value: 25, label: "25Hz" },
+                  { value: 20, label: "20Hz（新版默认）" },
+                  { value: 25, label: "25Hz（标准 ODR）" },
+                  { value: 26, label: "26Hz（LSM6DSO 原生）" },
+                  { value: 28, label: "28Hz（3 轴实测最优）" },
+                  { value: 30, label: "30Hz" },
                   { value: 15.625, label: "15.625Hz（31.25 二分频）" },
                   { value: 31.25, label: "31.25Hz（QMI8658 原生）" },
                   { value: 50, label: "50Hz" },
                 ]}
               />
             </Space>
+            {pipelineV2 && (
+              <div style={{ padding: "8px 12px", borderRadius: 6, background: autoTuneEnabled ? "rgba(22,119,255,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${autoTuneEnabled ? "rgba(22,119,255,0.35)" : "rgba(255,255,255,0.08)"}` }}>
+                <Checkbox checked={autoTuneEnabled} onChange={(e) => setAutoTuneEnabled(e.target.checked)}>
+                  <Tooltip title="开启后会在正式训练前用 RTX 5090 GPU 做两阶段快速寻优（先扫采样率，再扫窗口×步长），自动记录排行表并用最优组合直接完成正式训练。日常同硬件训练默认关闭即可。">
+                    <span style={{ fontWeight: 500 }}>⚡ GPU 自动寻优（自动找最优采样率与窗口×步长，默认关闭）</span>
+                  </Tooltip>
+                </Checkbox>
+                {autoTuneEnabled && (
+                  <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 8 }}>
+                    <Space wrap size={8}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>候选采样率</Typography.Text>
+                      <Select
+                        mode="multiple"
+                        size="small"
+                        style={{ minWidth: 260 }}
+                        value={autoTuneHz}
+                        onChange={setAutoTuneHz}
+                        options={[16, 18, 20, 22, 25, 26, 28, 30].map((v) => ({ value: v, label: `${v}Hz` }))}
+                      />
+                    </Space>
+                    <Space wrap size={8}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>候选窗口×步长</Typography.Text>
+                      <Select
+                        mode="multiple"
+                        size="small"
+                        style={{ minWidth: 260 }}
+                        value={autoTuneWS}
+                        onChange={setAutoTuneWS}
+                        options={[
+                          { value: "2:0.5", label: "2s / 步0.5s" },
+                          { value: "3:0.5", label: "3s / 步0.5s" },
+                          { value: "4:0.5", label: "4s / 步0.5s" },
+                          { value: "6:0.5", label: "6s / 步0.5s" },
+                          { value: "6:1", label: "6s / 步1s" },
+                          { value: "8:1", label: "8s / 步1s" },
+                        ]}
+                      />
+                      <Radio.Group
+                        size="small"
+                        value={autoTuneMetric}
+                        onChange={(e) => setAutoTuneMetric(e.target.value)}
+                        options={[
+                          { value: "focus_f1", label: "优化抓挠 F1" },
+                          { value: "macro_f1", label: "优化 Macro F1" },
+                        ]}
+                        optionType="button"
+                      />
+                    </Space>
+                  </Space>
+                )}
+              </div>
+            )}
             {!pipelineV2 && (<>
             <Space>
               <Tooltip title="项圈上有陀螺仪就用 6 轴，只有加速度计就用 3 轴。选错的后果是单向的：端侧只有加速度计、却用 6 轴训，指标再好也代表不了端上的表现——那是拿一块板子上根本没有的信号在学。反过来（端上有陀螺仪却只用 3 轴训）只是浪费了一半信号，不会不准">
@@ -3500,11 +3599,50 @@ export default function Training() {
                 <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", fontSize: 12 }}>{detail.metrics || "-"}</pre>
               </details>
             </Descriptions.Item>
+            {(() => {
+              type AutoTuneTrial = { hz: number; window_s: number; stride_s: number; focus_f1: number; focus_p?: number; focus_r?: number; macro_f1: number; flash_kb?: number; ram_kb?: number; sec?: number };
+              let at: {
+                best?: AutoTuneTrial;
+                trials?: AutoTuneTrial[];
+                elapsed_sec?: number;
+              } | null = null;
+              try {
+                at = detail.metrics ? JSON.parse(detail.metrics)?.auto_tune ?? null : null;
+              } catch { /* ignore */ }
+              if (!at?.trials?.length) return null;
+              return (
+                <Descriptions.Item label="⚡ GPU 自动寻优">
+                  <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                    {at.best && (
+                      <Typography.Text style={{ fontSize: 12 }}>
+                        胜出组合：<Tag color="blue">{at.best.hz}Hz · {at.best.window_s}s / 步{at.best.stride_s}s</Tag>
+                        抓挠 F1 <b>{(at.best.focus_f1 * 100).toFixed(2)}%</b> · Macro F1 <b>{(at.best.macro_f1 * 100).toFixed(2)}%</b>
+                        {at.best.flash_kb ? ` · Flash≈${at.best.flash_kb}KB` : ""}
+                        {at.elapsed_sec ? `（耗时 ${at.elapsed_sec}s）` : ""}
+                      </Typography.Text>
+                    )}
+                    <Table<AutoTuneTrial>
+                      size="small"
+                      pagination={false}
+                      rowKey={(r) => `${r.hz}-${r.window_s}-${r.stride_s}`}
+                      dataSource={at.trials}
+                      columns={[
+                        { title: "采样率", dataIndex: "hz", render: (v: number) => `${v}Hz`, width: 70 },
+                        { title: "窗口/步长", render: (_: unknown, r) => `${r.window_s}s / ${r.stride_s}s`, width: 100 },
+                        { title: "抓挠 F1", dataIndex: "focus_f1", render: (v: number) => <b>{(v * 100).toFixed(2)}%</b>, width: 85 },
+                        { title: "Macro F1", dataIndex: "macro_f1", render: (v: number) => `${(v * 100).toFixed(2)}%`, width: 85 },
+                        { title: "Flash/RAM", render: (_: unknown, r) => r.flash_kb ? `${r.flash_kb}KB / ${r.ram_kb ?? "-"}KB` : "-", width: 115 },
+                      ]}
+                    />
+                  </Space>
+                </Descriptions.Item>
+              );
+            })()}
             {edgeOf(detail)?.footprint && (
               <Descriptions.Item label="端侧资源占用">
                 <EdgeFootprint
                   fp={edgeOf(detail)!.footprint!}
-                  onDownload={(kind) => downloadEdgeBundle(detail.id, edgeZipName(detail, kind), kind)}
+                  onDownload={(kind) => downloadEdgeBundle(detail.id, edgeZipName(detail, kind), kind, savedPostParamsFor(detail))}
                 />
               </Descriptions.Item>
             )}

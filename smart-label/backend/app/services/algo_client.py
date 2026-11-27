@@ -319,12 +319,25 @@ async def size_curve(algo_job_id: int, trees: list[int] | None = None, depths: l
     return resp.json()
 
 
-async def edge_bundle(algo_job_id: int, kind: str = "src") -> bytes:
+async def edge_bundle(
+    algo_job_id: int,
+    kind: str = "src",
+    min_dur_s: float | None = None,
+    min_conf: float | None = None,
+    merge_gap_s: float | None = None,
+) -> bytes:
     """端侧包 zip。kind=src 源码包（core/ 运行时 + 模型导出 + README）；kind=lib 编译库（保密，不含源码）。"""
-    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/edge_bundle?kind={kind}"
+    params: dict[str, str] = {"kind": kind}
+    if min_dur_s is not None and min_dur_s >= 0:
+        params["min_dur_s"] = str(min_dur_s)
+    if min_conf is not None and min_conf >= 0:
+        params["min_conf"] = str(min_conf)
+    if merge_gap_s is not None and merge_gap_s > 0:
+        params["merge_gap_s"] = str(merge_gap_s)
+    url = f"{_base_url()}/api/v1/label/train/{algo_job_id}/edge_bundle"
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, params=params)
     except httpx.RequestError as e:
         raise AlgoServiceError(f"连不上算法服务（imu_train 的 label_service）({url}): {e}") from e
     if resp.status_code != 200:

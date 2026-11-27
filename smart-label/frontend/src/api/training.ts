@@ -295,6 +295,15 @@ export const submitTrain = (body: {
     drop_gravity_level?: boolean;
     /** v2：静止 / 活动按动作强度分的阈值（g）；不填 = 按人标的 */
     still_motion_g?: number | null;
+    /** 可选 GPU 自动寻优（默认关闭） */
+    auto_tune?: {
+      enabled: boolean;
+      hz_list: number[];
+      win_stride_list: [number, number][];
+      metric: "focus_f1" | "macro_f1";
+      folds?: number;
+      epochs?: number;
+    } | null;
     /** 端侧尺寸：限深限棵数，塞得进板子的 flash（端侧主力是 xgb） */
     edge_size?: boolean;
     /** 端侧尺寸里具体的规格：树模型的棵数/深度，cnn 的三层 filters。不填用默认 */
@@ -431,10 +440,20 @@ export const trainReviewStatus = (id: number) => request.get<never, ReviewProgre
 /** 下载端侧包（zip）：要带登录 token，所以不能直接 window.open 那个地址（会 401），
  *  先用 axios 拿成 Blob 再存盘。打包在算法机上现编，要十几秒 */
 export type EdgeBundleKind = "src" | "lib";
+export type EdgePostParams = { min_dur_s?: number; min_conf?: number; merge_gap_s?: number };
 /** kind：src 源码包；lib 编译库（保密：只有 .a + 头文件 + PC 验证工具，给外部嵌入式） */
-export async function downloadEdgeBundle(id: number, filename = `edge_v${id}.zip`, kind: EdgeBundleKind = "src") {
+export async function downloadEdgeBundle(
+  id: number,
+  filename = `edge_v${id}.zip`,
+  kind: EdgeBundleKind = "src",
+  postParams?: EdgePostParams,
+) {
+  const params: Record<string, string | number> = { kind };
+  if (postParams?.min_dur_s != null && postParams.min_dur_s >= 0) params.min_dur_s = postParams.min_dur_s;
+  if (postParams?.min_conf != null && postParams.min_conf >= 0) params.min_conf = postParams.min_conf;
+  if (postParams?.merge_gap_s != null && postParams.merge_gap_s > 0) params.merge_gap_s = postParams.merge_gap_s;
   const blob = await request.get<never, Blob>(`/model-versions/${id}/edge-bundle`, {
-    params: { kind },
+    params,
     responseType: "blob",
     timeout: 300000,
   });

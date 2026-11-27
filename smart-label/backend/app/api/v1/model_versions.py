@@ -423,9 +423,17 @@ async def data_bundle(version_id: int, token: str, db: AsyncSession = Depends(ge
 
 
 @router.get("/{version_id}/edge-bundle")
-async def edge_bundle(version_id: int, kind: str = "src", db: AsyncSession = Depends(get_db)):
+async def edge_bundle(
+    version_id: int,
+    kind: str = "src",
+    min_dur_s: float | None = None,
+    min_conf: float | None = None,
+    merge_gap_s: float | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """下载这一版的端侧包（zip）。kind=src 源码包：core/ 运行时 + 模型导出的 C + README；
-    kind=lib 编译库（保密）：只有 .a + 头文件 + PC 验证工具，给外部嵌入式。"""
+    kind=lib 编译库（保密）：只有 .a + 头文件 + PC 验证工具，给外部嵌入式。
+    可选携带后处理参数（min_dur_s / min_conf / merge_gap_s）直接编入固件。"""
     from fastapi.responses import Response
 
     row = await db.get(ModelVersion, version_id)
@@ -434,7 +442,9 @@ async def edge_bundle(version_id: int, kind: str = "src", db: AsyncSession = Dep
     try:
         if kind not in ("src", "lib"):
             raise HTTPException(status_code=400, detail="kind 只能是 src 或 lib")
-        data = await algo_client.edge_bundle(row.algo_job_id, kind)
+        data = await algo_client.edge_bundle(
+            row.algo_job_id, kind, min_dur_s=min_dur_s, min_conf=min_conf, merge_gap_s=merge_gap_s
+        )
     except algo_client.AlgoServiceError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     suffix = "_lib" if kind == "lib" else ""
