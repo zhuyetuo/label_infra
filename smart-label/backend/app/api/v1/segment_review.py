@@ -1296,9 +1296,9 @@ async def smart_clean_project(
     for t in tasks:
         z = await _trim_zero_signal_task(db, t, user)
         c1 = await _carve_motion_task(db, t, user)
-        d1 = await _dedupe_task(db, t, user)
+        d1 = await _dedupe_task(db, t, user, approve=False, preserve_status=True)
         m1 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
-        d2 = await _dedupe_task(db, t, user)
+        d2 = await _dedupe_task(db, t, user, approve=False, preserve_status=True)
         m2 = await _merge_adjacent_task(db, t, user, max_gap_ms=body.max_gap_ms)
         c2 = await _carve_motion_task(db, t, user)
         await db.commit()
@@ -1453,7 +1453,13 @@ async def _carve_motion_task(db: AsyncSession, task: Task, user: User) -> dict:
     return {"carved": carved, "created": created, "removed": removed}
 
 
-async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool = True) -> dict:
+async def _dedupe_task(
+    db: AsyncSession,
+    task: Task,
+    user: User,
+    approve: bool = True,
+    preserve_status: bool = False,
+) -> dict:
     """一键去重（当前这一轮）：
       · 同一类别互相重叠（≥0.2s）的：并成一条，起止取并集。留「最靠谱」的那条——审核通过的 >
         人确认 / 改过 / 人加的 > 时长长的，其余删掉
@@ -1501,6 +1507,10 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
         if x.source_type == LabelItemSource.ai_generated:
             x.is_modified = True
         x.touched_at, x.touched_by = now, user.id
+        if preserve_status:
+            # 批量智能处理专用：严格保留原审核状态——原本已人工审核通过的保持通过（可进数据池），
+            # 原本未审核通过的绝不自动标通过（不进数据池）
+            return
         if x.pool_state == "in":
             x.pool_state = None
         # 起止变了，之前的人工复审结论作废——要重新看一眼
@@ -1579,10 +1589,11 @@ async def _dedupe_task(db: AsyncSession, task: Task, user: User, approve: bool =
             keeper.start_time_ms = min(x.start_time_ms for x in group_all)
             keeper.end_time_ms = max(x.end_time_ms for x in group_all)
             keeper.uncertain = all(x.uncertain for x in group_all)
-            # 若粗段原本已审核通过，合并后的细段在 approve=True 时继续保持通过
-            if coarse.seg_status == "approved" and keeper.seg_status != "approved" and approve:
+            # 若粗段原本已审核通过，合并后的细段继续保持通过（保留原审核信息）
+            if coarse.seg_status == "approved" and keeper.seg_status != "approved" and (approve or preserve_status):
                 keeper.seg_status = "approved"
-                keeper.seg_reviewed_by, keeper.seg_reviewed_at = user.id, now
+                keeper.seg_reviewed_by = coarse.seg_reviewed_by or user.id
+                keeper.seg_reviewed_at = coarse.seg_reviewed_at or now
             drop(coarse, keeper)
             n_parent += 1
             for f in fines:

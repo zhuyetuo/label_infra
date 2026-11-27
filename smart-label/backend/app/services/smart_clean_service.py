@@ -758,11 +758,11 @@ async def _run_smart_clean(
                         "zero_runs": 0, "items_carved": 0, "items_deleted": 0, "pieces_created": 0, "no_signal_added": 0,
                     }
                     c1 = await _carve_motion_task(db, t, user)
-                    d1 = await _dedupe_task(db, t, user)
+                    d1 = await _dedupe_task(db, t, user, approve=False, preserve_status=True)
                     m1 = await _merge_adjacent_task(db, t, user, max_gap_ms=max_gap_ms)
                     # 收敛剪枝：第一轮合并没改动时，第二轮去重/合并与终轮挖洞必然为空，直接跳过
                     if m1["groups_merged"] > 0:
-                        d2 = await _dedupe_task(db, t, user)
+                        d2 = await _dedupe_task(db, t, user, approve=False, preserve_status=True)
                         if d2["merged"] or d2["removed_parent"] or d2.get("carved_motion", 0):
                             m2 = await _merge_adjacent_task(db, t, user, max_gap_ms=max_gap_ms)
                         else:
