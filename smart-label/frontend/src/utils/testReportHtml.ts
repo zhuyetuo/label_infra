@@ -1053,7 +1053,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
             <button class="edu-pbtn" data-ds="3.6" data-de="2.8">偏大 (±3.6s)</button>
           </div>
         </div>
-        <div class="edu-desc">在已抓对的动作里，开始和结束误差都在 <b>±${edgeTolSec}s</b> 内算对齐。决定 <b>App 统计的“总抓挠时长”准不准</b>。</div>
+        <div class="edu-desc">在已抓对的动作里，开始和结束时刻误差都在 <b>±${edgeTolSec}s</b> 内算对齐。主要决定 <b>App 时间轴上的发生/结束时刻及视频回放定位准不准</b>（若起止偏差不对称，也会影响单次时长）。</div>
       </div>
     </div>
 

@@ -982,7 +982,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title={`在已经抓对的动作里，看模型报的开始/结束时刻跟人工标注差几秒，衡量「时长统计准不准」。可在上方切换 ±1s/±2s/±3s/±5s`}>
+      <Tooltip title={`在已经抓对的动作里，看模型报的开始/结束时刻跟人工标注差几秒，主要衡量「时间轴发生/结束时刻及回放定位准不准」。可在上方切换 ±1s/±2s/±3s/±5s`}>
         <span style={{ color: EVAL_GROUP_THEME.boundary.accent, fontWeight: 700 }}>● 起止对齐（开始/结束准不准）</span>
       </Tooltip>
     ),
