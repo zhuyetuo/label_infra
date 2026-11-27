@@ -11,7 +11,7 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, dedupeTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, mergeAdjacentTestSet, promoteTestItemToPool, publishTestReport, updateTestSet,
+  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, dedupeTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getEvalCache, getLabelTree, mergeAdjacentTestSet, promoteTestItemToPool, publishTestReport, saveEvalCache, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
@@ -1494,6 +1494,45 @@ function buildReportPayload(
   };
 }
 
+interface CachedEvalPayload {
+  rows: EvalRow[];
+  notes: string[];
+  cachedAt: string;
+}
+const EVAL_MEM_CACHE = new Map<string, CachedEvalPayload>();
+
+/** 生成稳定的打分缓存键（包含测试集、所选模型、类别、范围、IoU、核对模式、体型拆分及窗口签名） */
+function buildEvalCacheKey(
+  setId: number,
+  picked: string[],
+  labels: string[],
+  scope: SeenScope,
+  iou: number,
+  checkedOnly: boolean,
+  bySize: boolean,
+  items: TestItem[],
+): string {
+  const sig = JSON.stringify([
+    setId,
+    [...picked].sort(),
+    [...labels].sort(),
+    scope,
+    Math.round(iou * 1000),
+    checkedOnly ? 1 : 0,
+    bySize ? 1 : 0,
+    items.length,
+    items.map((i) => `${i.id}:${i.start_ms ?? 0}:${i.end_ms ?? 0}:${i.checked ? 1 : 0}`).join(","),
+  ]);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < sig.length; i++) {
+    const c = sig.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ (c + i), 0x85ebca6b);
+  }
+  return `v1_${(h1 >>> 0).toString(16).padStart(8, "0")}${(h2 >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
   setId: number; testSet: TestSet; coverage?: Coverage | null; planTarget?: string | null; items: TestItem[]; colors: Record<string, string>;
   opening: number | null; promoting: number | null; frozen?: boolean;
@@ -1511,9 +1550,11 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [allRows, setAllRows] = useState<EvalRow[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [shareModal, setShareModal] = useState<{ url: string; title: string } | null>(null);
   const evalSeqRef = useRef(0);
+  const forceNextRef = useRef(false);
   const prevStatus = useRef<string | undefined>(undefined);
   const { data: prog, refetch: refetchProg } = useQuery({
     queryKey: ["eval-run-progress"], queryFn: getEvalRunProgress,
@@ -1596,19 +1637,47 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     message.success("已从当前测试集移除该模型的跑批记录");
   };
 
-  const scoreWith = async (usePicked: string[], labelsToEval: string[]) => {
+  const scoreWith = async (usePicked: string[], labelsToEval: string[], force = false) => {
     const seq = ++evalSeqRef.current;
     const vers = usePicked.map((x) => { const [model_tag, mode] = x.split("::"); return { model_tag, mode }; });
-    if (!vers.length) { setAllRows([]); setSelectedKey(null); setNotes([]); setBusy(false); return; }
+    if (!vers.length) { setAllRows([]); setSelectedKey(null); setNotes([]); setCachedAt(null); setBusy(false); return; }
     if (!items.length) {
       setAllRows([]);
       setSelectedKey(null);
+      setCachedAt(null);
       setNotes([p.checkedOnly ? "还没有核对过的片段：可到「片段」页点「一键全部通过」，或在右上角「设置」里取消勾选「只用核对过的」" : "当前测试集没有片段"]);
       setBusy(false);
       return;
     }
+    const ck = buildEvalCacheKey(setId, usePicked, labelsToEval, p.scope, p.iou, p.checkedOnly, bySize, items);
+    const memKey = `${setId}:${ck}`;
+    if (!force) {
+      const mem = EVAL_MEM_CACHE.get(memKey);
+      if (mem) {
+        setAllRows(mem.rows);
+        setNotes(mem.notes);
+        setCachedAt(mem.cachedAt);
+        setBusy(false);
+        return;
+      }
+    }
     setBusy(true);
     try {
+      if (!force) {
+        try {
+          const hit = await getEvalCache<CachedEvalPayload>(setId, ck);
+          if (seq !== evalSeqRef.current) return;
+          if (hit.hit && hit.data && Array.isArray(hit.data.rows)) {
+            EVAL_MEM_CACHE.set(memKey, hit.data);
+            setAllRows(hit.data.rows);
+            setNotes(hit.data.notes ?? []);
+            setCachedAt(hit.data.cachedAt ?? null);
+            return;
+          }
+        } catch {
+          // 缓存读取失败不阻塞正常打分
+        }
+      }
       const ns: string[] = [];
       const parts = await scopeParts(setId, items, usePicked, p.scope, ns);
       if (seq !== evalSeqRef.current) return;
@@ -1658,8 +1727,13 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
           r: v,
         }));
       }
+      const uniqNotes = Array.from(new Set(ns));
+      const payload: CachedEvalPayload = { rows: out, notes: uniqNotes, cachedAt: new Date().toISOString() };
+      EVAL_MEM_CACHE.set(memKey, payload);
+      saveEvalCache(setId, ck, payload).catch(() => {});
       setAllRows(out);
-      setNotes(Array.from(new Set(ns)));
+      setNotes(uniqNotes);
+      setCachedAt(payload.cachedAt);
     } finally {
       if (seq === evalSeqRef.current) setBusy(false);
     }
@@ -1670,21 +1744,24 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     [allRows, p.label],
   );
 
-  // 只要已选模型 / 设置 / 模型输出类别变了，自动算出分数；切换类别直接本地过滤，不重复发请求
+  // 只要已选模型 / 设置 / 模型输出类别变了，优先读已存快照（秒切免重算），未命中再算；切换类别直接本地过滤
   const pickedKey = p.picked.join(",");
   const labelsKey = evalLabels.join(",");
   useEffect(() => {
-    if (p.picked.length) scoreWith(p.picked, evalLabels);
+    const force = forceNextRef.current;
+    forceNextRef.current = false;
+    if (p.picked.length) scoreWith(p.picked, evalLabels, force);
     else {
       evalSeqRef.current += 1;
       setBusy(false);
       setAllRows([]);
       setSelectedKey(null);
       setNotes([]);
+      setCachedAt(null);
     }
   }, [setId, pickedKey, labelsKey, p.scope, p.iou, p.checkedOnly, bySize, items.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 推理刚从 running 变成 done：优先选中刚跑完的 produced 模型，自动出分
+  // 推理刚从 running 变成 done：优先选中刚跑完的 produced 模型，自动强制重算并更新缓存
   useEffect(() => {
     const wasRunning = prevStatus.current === "running";
     prevStatus.current = prog?.status;
@@ -1695,7 +1772,12 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
         const fallback = (res.data?.runs ?? []).filter((r) => !ns || r.n_samples >= ns * 0.8).map((r) => `${r.model_tag}::${r.mode}`);
         const next = produced.length ? produced : fallback.slice(0, 1);
         if (next.length) {
-          p.setPicked(next);
+          forceNextRef.current = true;
+          if (next.join(",") === p.picked.join(",")) {
+            scoreWith(next, evalLabels, true);
+          } else {
+            p.setPicked(next);
+          }
           message.success("推理完成，已自动比对出分");
         }
       });
@@ -1794,7 +1876,16 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
               style={{ width: 340, maxWidth: "100%" }} popupMatchSelectWidth={false}
               placeholder="勾选在本测试集跑过的模型看分"
               value={p.picked} onChange={p.setPicked} options={p.options} maxTagCount={1} />
-            <Button size="small" loading={busy} onClick={() => scoreWith(p.picked, evalLabels)} disabled={!p.picked.length}>刷新打分</Button>
+            <Tooltip title="强制按最新标注重新比对并刷新缓存（平时切换模型直接复用已存结果）">
+              <Button size="small" loading={busy} onClick={() => scoreWith(p.picked, evalLabels, true)} disabled={!p.picked.length}>刷新打分</Button>
+            </Tooltip>
+            {!busy && cachedAt && rows.length > 0 && (
+              <Tooltip title={`已存结果（${new Date(cachedAt).toLocaleString()}），切换模型或刷新页面直接秒开；若刚改过标注可点「刷新打分」重算`}>
+                <Typography.Text type="secondary" style={{ fontSize: 11, cursor: "help" }}>
+                  已缓存 {new Date(cachedAt).toTimeString().slice(0, 5)}
+                </Typography.Text>
+              </Tooltip>
+            )}
             <Tooltip title="导出独立的离线 HTML 标准测试报告（含指标对比、数据覆盖图、可筛选错例时间轴，支持打印/转 PDF）">
               <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
                 const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];

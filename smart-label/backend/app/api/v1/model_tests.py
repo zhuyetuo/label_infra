@@ -1020,3 +1020,58 @@ async def get_published_report(report_id: str):
         media_type="text/html; charset=utf-8",
         headers={"Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex"},
     )
+
+
+_CACHE_KEY_RE = re.compile(r"^[a-z0-9_-]{8,64}$")
+
+
+class EvalCachePutIn(BaseModel):
+    key: str = Field(min_length=8, max_length=64)
+    data: dict
+
+
+def _eval_cache_dir(set_id: int) -> Path:
+    d = Path(settings.nas_root) / "_smart_label_eval_cache" / f"set_{set_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@router.get("/sets/{set_id}/eval-cache")
+async def get_eval_cache(set_id: int, key: str, db: AsyncSession = Depends(get_db)):
+    """读取该测试集已存好的打分快照，切换模型/刷新页面直接复用，免重复计算。"""
+    if not _CACHE_KEY_RE.fullmatch(key):
+        return ok({"hit": False, "data": None})
+    await _set_or_404(db, set_id)
+    path = Path(settings.nas_root) / "_smart_label_eval_cache" / f"set_{set_id}" / f"{key}.json"
+    if not path.is_file():
+        return ok({"hit": False, "data": None})
+    try:
+        raw = await asyncio.to_thread(path.read_text, "utf-8")
+        return ok({"hit": True, "data": json.loads(raw)})
+    except Exception:
+        return ok({"hit": False, "data": None})
+
+
+@router.put("/sets/{set_id}/eval-cache")
+async def put_eval_cache(set_id: int, body: EvalCachePutIn, db: AsyncSession = Depends(get_db)):
+    """持久化打分快照（每个测试集最多保留最近 60 份，自动清理最旧的）。"""
+    if not _CACHE_KEY_RE.fullmatch(body.key):
+        raise HTTPException(422, "invalid cache key")
+    await _set_or_404(db, set_id)
+    payload = json.dumps(body.data, ensure_ascii=False, separators=(",", ":"))
+    if len(payload) > 20_000_000:
+        return ok({"saved": False})
+
+    def _write() -> None:
+        d = _eval_cache_dir(set_id)
+        target = d / f"{body.key}.json"
+        tmp = d / f".{body.key}.tmp"
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(target)
+        # 按修改时间保留最近 60 份，避免长期堆积
+        files = sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[60:]:
+            old.unlink(missing_ok=True)
+
+    await asyncio.to_thread(_write)
+    return ok({"saved": True})

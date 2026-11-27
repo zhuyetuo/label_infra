@@ -243,3 +243,9 @@ export const publishTestReport = (setId: number, html: string, title?: string) =
     { html, title },
     { timeout: 60_000 },
   );
+
+/** 读取 / 持久化测试集打分快照（切换模型或刷新页面直接复用，免重复计算） */
+export const getEvalCache = <T = unknown>(setId: number, key: string) =>
+  request.get<never, { hit: boolean; data: T | null }>(`/model-tests/sets/${setId}/eval-cache`, { params: { key } });
+export const saveEvalCache = (setId: number, key: string, data: unknown) =>
+  request.put<never, { saved: boolean }>(`/model-tests/sets/${setId}/eval-cache`, { key, data });
