@@ -1696,6 +1696,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     var mn = Infinity, mx = -Infinity;
     for (var i = 0; i < ax.length; i++) {
       var v = ax[i];
+      if (v == null || !isFinite(v)) continue;
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
@@ -1705,10 +1706,13 @@ export function buildTestReportHtml(input: TestReportInput): string {
     ctx.strokeStyle = "#38bdf8";
     ctx.lineWidth = 1.4;
     ctx.beginPath();
+    var penDown = false;
     for (var j = 0; j < tMs.length; j++) {
+      var val = ax[j];
+      if (val == null || !isFinite(val)) { penDown = false; continue; }
       var x = ((tMs[j] - wsMs) / dur) * W;
-      var y = H - pad - ((ax[j] - mn) / span) * (H - pad * 2);
-      if (j === 0) ctx.moveTo(x, y);
+      var y = H - pad - ((val - mn) / span) * (H - pad * 2);
+      if (!penDown) { ctx.moveTo(x, y); penDown = true; }
       else ctx.lineTo(x, y);
     }
     ctx.stroke();

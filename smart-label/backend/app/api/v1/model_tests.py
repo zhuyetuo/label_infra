@@ -1116,7 +1116,7 @@ async def get_report_imu_acc_x(
         series = await asyncio.to_thread(get_series, real_path, max(0, start_ms), end_ms, 900)
     except ImuReadError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return ok({"t_ms": series.get("t_ms") or [], "ax": series.get("ax") or []})
+    return ok({"t_ms": series.get("t") or [], "ax": series.get("acc_x") or []})
 
 
 _CACHE_KEY_RE = re.compile(r"^[a-z0-9_-]{8,64}$")
