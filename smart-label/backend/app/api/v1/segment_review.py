@@ -1130,8 +1130,8 @@ async def _merge_adjacent_task(
             if (
                 o_tr == "device"
                 or (my_tr is not None and o_tr == my_tr)
-                or (my_tr == "motion" and o_tr == "behavior")
-                or (my_tr == "behavior" and o_tr == "motion")
+                or (my_tr == "motion" and o_tr in ("behavior", ""))
+                or (my_tr in ("behavior", "") and o_tr == "motion")
             ):
                 return True
         return False

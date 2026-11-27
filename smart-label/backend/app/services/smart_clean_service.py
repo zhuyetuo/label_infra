@@ -378,7 +378,7 @@ async def scan_all_projects(db: AsyncSession, max_gap_ms: int = 1500) -> dict:
                     if any(min(e, be) - max(s, bs) >= OVERLAP_MIN_MS for bs, be in cutters):
                         t_carve += 1
 
-            # 2) 去重 & 冲突检查
+            # 2) 去重 & 冲突检查（与 _dedupe_task 规则严格对齐：多细类覆盖粗类 <80% 不算可自动去重）
             t_dedupe = 0
             t_conf = 0
             n = len(segs)
@@ -391,10 +391,33 @@ async def scan_all_projects(db: AsyncSession, max_gap_ms: int = 1500) -> dict:
                         break
                     if min(e1, e2) - s2 < OVERLAP_MIN_MS:
                         continue
-                    if lid1 == lid2 or lid1 in anc_cache.get(lid2, ()) or lid2 in anc_cache.get(lid1, ()):
+                    if lid1 == lid2:
                         t_dedupe += 1
-                    elif tr1 == ltrack.get(lid2) and conflicts_fn(lid1, lid2):
+                    elif tr1 == ltrack.get(lid2) and conflicts_fn(lid1, lid2) and lid1 not in anc_cache.get(lid2, ()) and lid2 not in anc_cache.get(lid1, ()):
                         t_conf += 1
+            for i in range(n):
+                _, lid1, s1, e1, _ = segs[i]
+                fines = [
+                    (lid2, s2, e2)
+                    for j, (_, lid2, s2, e2, _) in enumerate(segs)
+                    if j != i and lid1 in anc_cache.get(lid2, ()) and min(e1, e2) - max(s1, s2) >= OVERLAP_MIN_MS
+                ]
+                if not fines:
+                    continue
+                if len({f[0] for f in fines}) == 1:
+                    t_dedupe += 1
+                else:
+                    spans = sorted((max(s1, fs), min(e1, fe)) for _, fs, fe in fines)
+                    cov, cur_end = 0, -1
+                    for a0, b0 in spans:
+                        if a0 > cur_end:
+                            cov += b0 - a0
+                            cur_end = b0
+                        elif b0 > cur_end:
+                            cov += b0 - cur_end
+                            cur_end = b0
+                    if cov >= 0.8 * max(1, e1 - s1):
+                        t_dedupe += 1
 
             # 3) 相邻合并检查
             by_lid: dict[int, list[tuple[int, int]]] = defaultdict(list)
@@ -420,8 +443,8 @@ async def scan_all_projects(db: AsyncSession, max_gap_ms: int = 1500) -> dict:
                                 if (
                                     otr == "device"
                                     or (my_tr is not None and otr == my_tr)
-                                    or (my_tr == "motion" and otr == "behavior")
-                                    or (my_tr == "behavior" and otr == "motion")
+                                    or (my_tr == "motion" and otr in ("behavior", ""))
+                                    or (my_tr in ("behavior", "") and otr == "motion")
                                 ):
                                     blocked = True
                                     break
