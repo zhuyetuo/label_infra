@@ -10,6 +10,7 @@ import { listTestSets } from "@/api/modelTests";
 import { listLabels } from "@/api/labels";
 import { getTask } from "@/api/tasks";
 import AnnotationWorkspace from "@/components/AnnotationWorkspace";
+import SmartCleanButton, { SmartCleanProgressBanner, useSmartCleanRunner } from "@/components/SmartCleanButton";
 import { useAuthStore } from "@/stores/authStore";
 import type { LabelDefinition, Task } from "@/types";
 
@@ -62,6 +63,7 @@ export default function TestPoolPanel() {
     qc.invalidateQueries({ queryKey: ["data-pool"] });
     qc.invalidateQueries({ queryKey: ["model-test"] });
   };
+  const smartClean = useSmartCleanRunner(invalidateAll);
 
   const openVerify = async (row: TestPoolWindowItem) => {
     try {
@@ -160,6 +162,24 @@ export default function TestPoolPanel() {
           onChange={(e) => { setKeyword(e.target.value); setPage(1); }}
         />
         <span style={{ flex: 1 }} />
+        {curator && (
+          <SmartCleanButton
+            size="small"
+            label={picked.length > 0 ? `⚡ 一键智能处理（已选 ${picked.length} 段）` : "⚡ 一键批量智能处理（测试池）"}
+            confirmTitle={
+              picked.length > 0
+                ? `对勾选的 ${picked.length} 个测试窗口所在任务执行一键批量智能处理？`
+                : `对测试数据池全部在池窗口（${summary?.active ?? 0} 段）所在任务执行一键批量智能处理？`
+            }
+            prog={smartClean.prog}
+            onStart={() => {
+              const tids = picked.length > 0
+                ? Array.from(new Set(rows.filter((r) => picked.includes(r.id)).map((r) => r.task_id)))
+                : null;
+              void smartClean.start(tids && tids.length ? { taskIds: tids } : { scope: "test_pool" });
+            }}
+          />
+        )}
         {curator && picked.length > 0 && status !== "moved_to_train" && (
           <>
             <Button size="small" onClick={() => setAddModalOpen(true)}>
@@ -178,6 +198,8 @@ export default function TestPoolPanel() {
           </>
         )}
       </div>
+
+      {curator && <SmartCleanProgressBanner prog={smartClean.prog} onClose={() => smartClean.setProg(null)} />}
 
       <Table<TestPoolWindowItem>
         rowKey="id"

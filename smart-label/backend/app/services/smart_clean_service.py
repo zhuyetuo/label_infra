@@ -503,8 +503,11 @@ async def start_smart_clean(
     project_ids: list[int] | None,
     user_id: int,
     max_gap_ms: int = 1500,
+    task_ids: list[int] | None = None,
+    scope: str | None = None,
 ) -> bool:
-    """后台启动批量智能处理；若已在运行则返回 False。"""
+    """后台启动批量智能处理；若已在运行则返回 False。
+    支持按 project_ids、task_ids 或 scope='test_pool' 指定处理范围。"""
     global _running, _cancel_req
     if _running:
         return False
@@ -518,7 +521,7 @@ async def start_smart_clean(
         "scan_done": 0,
         "projects_total": len(project_ids) if project_ids else 0,
         "projects_done": 0,
-        "tasks_total": 0,
+        "tasks_total": len(task_ids) if task_ids else 0,
         "tasks_done": 0,
         "current_project": "准备中...",
         "started_at": time.time(),
@@ -528,7 +531,7 @@ async def start_smart_clean(
         "eta_sec": None,
         "error": None,
     })
-    asyncio.create_task(_run_smart_clean(project_ids, user_id, max_gap_ms))
+    asyncio.create_task(_run_smart_clean(project_ids, user_id, max_gap_ms, task_ids=task_ids, scope=scope))
     return True
 
 
@@ -536,6 +539,8 @@ async def _run_smart_clean(
     project_ids: list[int] | None,
     user_id: int,
     max_gap_ms: int = 1500,
+    task_ids: list[int] | None = None,
+    scope: str | None = None,
 ) -> None:
     global _running, _cancel_req
     from app.api.v1.segment_review import (
@@ -581,15 +586,35 @@ async def _run_smart_clean(
             user = await db.get(User, user_id)
             if user is None:
                 raise RuntimeError("找不到操作用户")
-            pq = select(Project).where(Project.is_active.is_(True)).order_by(Project.id)
-            if project_ids:
-                pq = pq.where(Project.id.in_(project_ids))
-            projects = (await db.execute(pq)).scalars().all()
-            pids = [p.id for p in projects]
-            pname = {p.id: p.name for p in projects}
-            tasks = (await db.execute(
-                select(Task).where(Task.project_id.in_(pids)).order_by(Task.project_id, Task.id)
-            )).scalars().all() if pids else []
+
+            eff_task_ids = list(dict.fromkeys(int(x) for x in (task_ids or []) if x))
+            if not eff_task_ids and scope == "test_pool":
+                from app.models.model_test import TestPoolWindow
+                eff_task_ids = list(dict.fromkeys(
+                    (await db.execute(
+                        select(TestPoolWindow.task_id).where(TestPoolWindow.status == "active").distinct()
+                    )).scalars().all()
+                ))
+
+            if eff_task_ids:
+                tasks = (await db.execute(
+                    select(Task).where(Task.id.in_(eff_task_ids)).order_by(Task.project_id, Task.id)
+                )).scalars().all()
+                pids = sorted({t.project_id for t in tasks})
+                projects = (await db.execute(
+                    select(Project).where(Project.id.in_(pids)).order_by(Project.id)
+                )).scalars().all() if pids else []
+                pname = {p.id: p.name for p in projects}
+            else:
+                pq = select(Project).where(Project.is_active.is_(True)).order_by(Project.id)
+                if project_ids:
+                    pq = pq.where(Project.id.in_(project_ids))
+                projects = (await db.execute(pq)).scalars().all()
+                pids = [p.id for p in projects]
+                pname = {p.id: p.name for p in projects}
+                tasks = (await db.execute(
+                    select(Task).where(Task.project_id.in_(pids)).order_by(Task.project_id, Task.id)
+                )).scalars().all() if pids else []
 
             by_proj: dict[int, list[Task]] = defaultdict(list)
             for t in tasks:

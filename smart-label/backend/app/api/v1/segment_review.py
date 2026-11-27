@@ -1206,6 +1206,8 @@ class SmartCleanProjectIn(BaseModel):
 
 class SmartCleanStartIn(BaseModel):
     project_ids: list[int] | None = None
+    task_ids: list[int] | None = None
+    scope: str | None = None
     max_gap_ms: int = Field(1500, ge=0, le=10000)
 
 
@@ -1239,7 +1241,10 @@ async def smart_clean_start(body: SmartCleanStartIn, user: User = Depends(get_cu
 
     if not _is_reviewer(user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有审核员 / 管理员能执行批量智能处理")
-    started = await scs.start_smart_clean(body.project_ids, user.id, max_gap_ms=body.max_gap_ms)
+    started = await scs.start_smart_clean(
+        body.project_ids, user.id, max_gap_ms=body.max_gap_ms,
+        task_ids=body.task_ids, scope=body.scope,
+    )
     return ok({"started": started, "progress": scs.get_progress()})
 
 

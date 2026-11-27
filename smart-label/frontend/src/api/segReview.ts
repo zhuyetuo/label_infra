@@ -195,10 +195,19 @@ export const segSmartCleanScanGet = () =>
 export const segSmartCleanScanNow = () =>
   request.post<never, SmartCleanScan>("/segments/smart-clean/scan");
 
-export const segSmartCleanStart = (projectIds?: number[] | null, maxGapMs = 1500) =>
+export const segSmartCleanStart = (
+  projectIds?: number[] | null,
+  maxGapMs = 1500,
+  opts?: { task_ids?: number[] | null; scope?: "test_pool" | null },
+) =>
   request.post<never, { started: boolean; progress: SmartCleanProgress }>(
     "/segments/smart-clean/start",
-    { project_ids: projectIds && projectIds.length ? projectIds : null, max_gap_ms: maxGapMs },
+    {
+      project_ids: projectIds && projectIds.length ? projectIds : null,
+      task_ids: opts?.task_ids && opts.task_ids.length ? opts.task_ids : null,
+      scope: opts?.scope ?? null,
+      max_gap_ms: maxGapMs,
+    },
   );
 
 export const segSmartCleanProgress = () =>

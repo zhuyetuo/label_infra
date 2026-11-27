@@ -20,6 +20,7 @@ import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircl
 import { buildTestReportHtml, type ModelArchMeta, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import { analyzeIouAndEdge, findBestPostParams, matchWindowSegs, recomputeVersionAt, type ModelPostParams } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
+import SmartCleanButton, { SmartCleanProgressBanner, useSmartCleanRunner } from "@/components/SmartCleanButton";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
 import { listLabels } from "@/api/labels";
@@ -2768,6 +2769,10 @@ function SetDetail({ setId, setMeta }: { setId: number; setMeta?: TestSet | null
   const [itemCleanFilter, setItemCleanFilter] = useState<"all" | "dedupe" | "merge">("all");
   const [itemSort, setItemSort] = useState<"default" | "dedupe" | "merge">("default");
   const [cleaning, setCleaning] = useState<"" | "dedupe" | "merge">("");
+  const smartClean = useSmartCleanRunner(() => {
+    qc.invalidateQueries({ queryKey: ["model-test-items", setId] });
+    qc.invalidateQueries({ queryKey: ["test-pool"] });
+  });
   const runDedupe = async (ids?: number[]) => {
     setCleaning("dedupe");
     try {
@@ -3009,6 +3014,25 @@ function SetDetail({ setId, setMeta }: { setId: number; setMeta?: TestSet | null
                         </Button>
                       </Popconfirm>
                     )}
+                    {!frozen && (
+                      <SmartCleanButton
+                        size="small"
+                        label={pickedTestIds.length > 0 ? `⚡ 一键智能处理（已选 ${pickedTestIds.length}）` : "⚡ 一键批量智能处理"}
+                        confirmTitle={
+                          pickedTestIds.length > 0
+                            ? `对勾选的 ${pickedTestIds.length} 段所在任务执行一键批量智能处理？`
+                            : `对本测试集全部 ${data.items.length} 段所在任务执行一键批量智能处理？`
+                        }
+                        prog={smartClean.prog}
+                        onStart={() => {
+                          const src = pickedTestIds.length > 0
+                            ? data.items.filter((i) => pickedTestIds.includes(i.id))
+                            : data.items;
+                          const tids = Array.from(new Set(src.map((i) => i.task_id)));
+                          if (tids.length) void smartClean.start({ taskIds: tids });
+                        }}
+                      />
+                    )}
                     {siteCounts.size > 1 && (
                       <Select
                         size="small"
@@ -3056,6 +3080,7 @@ function SetDetail({ setId, setMeta }: { setId: number; setMeta?: TestSet | null
                 )}
                 {frozen && <Typography.Text type="secondary">这一版已冻结；要补数据先「复制成新版本」</Typography.Text>}
               </Space>
+              <SmartCleanProgressBanner prog={smartClean.prog} onClose={() => smartClean.setProg(null)} />
               <Table<TestItem>
                 size="small" rowKey="id" dataSource={filteredItems} pagination={{ pageSize: 50 }}
                 rowSelection={!frozen ? {

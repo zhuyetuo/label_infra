@@ -1,5 +1,6 @@
 import PoolCharts from "@/components/PoolCharts";
 import DataInventory from "@/components/DataInventory";
+import SmartCleanButton, { SmartCleanProgressBanner, useSmartCleanRunner } from "@/components/SmartCleanButton";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Button, Checkbox, Col, Collapse, DatePicker, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic,
@@ -40,6 +41,9 @@ export default function DataPoolPanel({
   onOpen: (taskId: number, seekMs: number, item?: { id: number; labelId: number }) => void;
 }) {
   const qc = useQueryClient();
+  const smartClean = useSmartCleanRunner(() => {
+    qc.invalidateQueries({ queryKey: ["data-pool"] });
+  });
   const role = useAuthStore((s) => s.userInfo?.role);
   const curator = role === "admin" || role === "super_admin" || role === "reviewer";
 
@@ -415,11 +419,18 @@ export default function DataPoolPanel({
                     <Button type="dashed" disabled={!reviewerIds.length} loading={busy}>按筛选全部撤销通过</Button>
                   </Tooltip>
                 </Popconfirm>
+                <SmartCleanButton
+                  label={projectIds.length ? `⚡ 一键批量智能处理（已选 ${projectIds.length} 项目）` : "⚡ 一键批量智能处理（数据池）"}
+                  confirmTitle={projectIds.length ? `对当前筛选的 ${projectIds.length} 个项目执行一键批量智能处理？` : "对训练数据池涉及的全部启用项目执行一键批量智能处理？"}
+                  prog={smartClean.prog}
+                  onStart={() => void smartClean.start({ projectIds: projectIds.length ? projectIds : null })}
+                />
               </>
             )}
           </>
         )}
       </Space>
+      {isAdmin && <SmartCleanProgressBanner prog={smartClean.prog} onClose={() => smartClean.setProg(null)} />}
       <Table<PoolItem>
         size="small"
         rowKey="id"
