@@ -62,36 +62,125 @@ def _save_zero_cache(cache: dict[str, dict]) -> None:
 
 
 def _scan_zero_worker(args: tuple[str, str, int]) -> tuple[str, float, int, list[list[int]]]:
-    """多进程 worker：极速扫描单个 CSV 的三轴全 0 / NaN 断流区间。
-    先用 C 引擎只读 acc_x/acc_y/acc_z 三列（不解析时间戳、不排序，快 50~100 倍）；
-    仅当确实存在 |acc|<0.05g 或 NaN 时才走完整时间戳解析拿精确起止毫秒。"""
+    """多进程 worker：单遍读取 CSV 扫描三轴全 0 / NaN 断流区间（绝不读两遍、不解析 18 万行时间戳）。"""
     import numpy as np
     import pandas as pd
-    from app.services import imu_service
 
     nas_root, rel_path, min_zero_ms = args
     full_path = os.path.join(nas_root, rel_path.lstrip("/"))
     try:
         st = os.stat(full_path)
-        # 快速通道：先读表头识别 acc 列名，再 C 引擎只读 3 列 float32
         head = pd.read_csv(full_path, nrows=1, engine="c")
         norm = {str(c).strip().lstrip("\ufeff").lower(): c for c in head.columns}
+        ts_c = norm.get("timestamp") or norm.get("ts") or norm.get("time") or norm.get("datetime")
         ax_c = norm.get("acc_x") or norm.get("ax") or norm.get("accx")
         ay_c = norm.get("acc_y") or norm.get("ay") or norm.get("accy")
         az_c = norm.get("acc_z") or norm.get("az") or norm.get("accz")
-        if ax_c and ay_c and az_c:
-            df3 = pd.read_csv(full_path, usecols=[ax_c, ay_c, az_c], engine="c")
-            ax = pd.to_numeric(df3[ax_c], errors="coerce").to_numpy(dtype=np.float32)
-            ay = pd.to_numeric(df3[ay_c], errors="coerce").to_numpy(dtype=np.float32)
-            az = pd.to_numeric(df3[az_c], errors="coerce").to_numpy(dtype=np.float32)
-            mag2 = ax * ax + ay * ay + az * az
-            if not np.any((~np.isfinite(mag2)) | (mag2 < 0.0025)):
-                return rel_path, st.st_mtime, st.st_size, []
-        # 确实存在零信号/NaN（或非标准列名）→ 走完整解析取精确毫秒区间
-        spans = imu_service.find_zero_signal_spans(full_path, None, None, min_zero_ms)
-        return rel_path, st.st_mtime, st.st_size, [[int(s), int(e)] for s, e in spans]
+        if not (ts_c and ax_c and ay_c and az_c):
+            return rel_path, st.st_mtime, st.st_size, []
+
+        # 单遍 C 引擎只读 4 列（timestamp 保留字符串，只解析断流边界那几行）
+        df = pd.read_csv(full_path, usecols=[ts_c, ax_c, ay_c, az_c], engine="c", dtype={ts_c: str})
+        if df.empty:
+            return rel_path, st.st_mtime, st.st_size, []
+        ax = pd.to_numeric(df[ax_c], errors="coerce").to_numpy(dtype=np.float32)
+        ay = pd.to_numeric(df[ay_c], errors="coerce").to_numpy(dtype=np.float32)
+        az = pd.to_numeric(df[az_c], errors="coerce").to_numpy(dtype=np.float32)
+        mag2 = ax * ax + ay * ay + az * az
+        is_zero = (~np.isfinite(mag2)) | (mag2 < 0.0025)
+        if not np.any(is_zero):
+            return rel_path, st.st_mtime, st.st_size, []
+
+        # 仅解析前 200 行（拿起点时间）+ 断流起止边界行的 timestamp
+        ts_col = df[ts_c]
+        n = len(ts_col)
+        head_ts = pd.to_datetime(ts_col.iloc[: min(200, n)], errors="coerce").dropna()
+        if head_ts.empty:
+            return rel_path, st.st_mtime, st.st_size, []
+        t0 = head_ts.min()
+
+        padded = np.concatenate(([False], is_zero, [False]))
+        diff = np.diff(padded.astype(np.int8))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0] - 1
+
+        # 批量只解析这几个边界下标的时间戳
+        idx_need = sorted({int(i) for si, ei in zip(starts, ends) for i in (si, min(ei + 1, n - 1))})
+        parsed = pd.to_datetime(ts_col.iloc[idx_need], errors="coerce")
+        t_map: dict[int, int] = {}
+        for idx, tv in zip(idx_need, parsed):
+            if pd.notna(tv):
+                t_map[idx] = int((tv - t0).total_seconds() * 1000)
+
+        raw: list[tuple[int, int]] = []
+        for si, ei in zip(starts, ends):
+            s_ms = t_map.get(int(si))
+            e_ms = t_map.get(min(int(ei) + 1, n - 1))
+            if s_ms is not None and e_ms is not None and e_ms - s_ms >= min_zero_ms:
+                raw.append((s_ms, e_ms))
+        if not raw:
+            return rel_path, st.st_mtime, st.st_size, []
+        raw.sort()
+        merged: list[list[int]] = [[raw[0][0], raw[0][1]]]
+        for s_ms, e_ms in raw[1:]:
+            if s_ms - merged[-1][1] <= 100:
+                merged[-1][1] = max(merged[-1][1], e_ms)
+            else:
+                merged.append([s_ms, e_ms])
+        return rel_path, st.st_mtime, st.st_size, merged
     except Exception:  # noqa: BLE001
         return rel_path, 0.0, 0, []
+
+
+async def warm_zero_signal_cache(max_workers: int = 8) -> dict:
+    """后台静默补全所有启用项目样本的无信号 CSV 缓存（按 mtime+size 增量，扫过一次永久复用）。"""
+    t0 = time.time()
+    async with SessionLocal() as db:
+        pids = (await db.execute(select(Project.id).where(Project.is_active.is_(True)))).scalars().all()
+        if not pids:
+            return {"total": 0, "cached": 0, "scanned": 0, "sec": 0.0}
+        paths = (await db.execute(
+            select(Sample.imu_csv_path)
+            .join(Task, Task.sample_id == Sample.id)
+            .where(Task.project_id.in_(pids), Sample.imu_csv_path.is_not(None))
+            .distinct()
+        )).scalars().all()
+
+    zero_cache = _load_zero_cache()
+    unique_csvs = sorted({p for p in paths if p})
+    to_scan: list[str] = []
+    for rel in unique_csvs:
+        full_p = os.path.join(settings.nas_root, rel.lstrip("/"))
+        ent = zero_cache.get(rel)
+        try:
+            st = os.stat(full_p)
+            if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size:
+                continue
+        except OSError:
+            continue
+        to_scan.append(rel)
+
+    if not to_scan:
+        return {"total": len(unique_csvs), "cached": len(unique_csvs), "scanned": 0, "sec": round(time.time() - t0, 1)}
+
+    loop = asyncio.get_running_loop()
+    scanned = 0
+    batch_sz = 120
+    with ProcessPoolExecutor(max_workers=max(2, max_workers)) as pool:
+        for b0 in range(0, len(to_scan), batch_sz):
+            part = to_scan[b0 : b0 + batch_sz]
+            futs = [loop.run_in_executor(pool, _scan_zero_worker, (settings.nas_root, rel, 300)) for rel in part]
+            res_list = await asyncio.gather(*futs)
+            for rel, mt, sz, spans in res_list:
+                if mt > 0:
+                    zero_cache[rel] = {"mtime": mt, "size": sz, "spans": spans}
+            scanned += len(part)
+            if scanned % 600 == 0 or scanned == len(to_scan):
+                _save_zero_cache(zero_cache)
+                logger.info("后台无信号 CSV 缓存进度: %d/%d (%.1fs)", scanned, len(to_scan), time.time() - t0)
+            await asyncio.sleep(0.05)
+
+    return {"total": len(unique_csvs), "cached": len(unique_csvs), "scanned": scanned, "sec": round(time.time() - t0, 1)}
 
 _running = False
 _cancel_req = False
@@ -590,35 +679,23 @@ async def _run_smart_clean(
                     continue
                 to_scan.append(rel)
 
-            if to_scan and not _cancel_req:
-                n_workers = min(20, max(4, (os.cpu_count() or 8)))
+            # 少量未缓存 CSV（≤30 个，如单项目现跑）顺手现扫几秒搞定；大批量历史 CSV 由后台定时任务静默补全缓存，不阻塞前台 30 秒清洗
+            if to_scan and len(to_scan) <= 30 and not _cancel_req:
+                n_workers = min(8, len(to_scan))
                 _progress["phase"] = "csv_scan"
                 _progress["phase_started_at"] = time.time()
                 _progress["scan_total"] = len(to_scan)
                 _progress["scan_done"] = 0
-                _progress["current_project"] = f"极速并行检测无信号 CSV (0/{len(to_scan)}，{n_workers}核)..."
+                _progress["current_project"] = f"快速检测 {len(to_scan)} 个新增 CSV 无信号..."
                 loop = asyncio.get_running_loop()
-                batch_sz = 120
-                scanned_cnt = 0
-                since_save = 0
                 with ProcessPoolExecutor(max_workers=n_workers) as pool:
-                    for b0 in range(0, len(to_scan), batch_sz):
-                        if _cancel_req:
-                            break
-                        part = to_scan[b0 : b0 + batch_sz]
-                        futs = [loop.run_in_executor(pool, _scan_zero_worker, (settings.nas_root, rel, 300)) for rel in part]
-                        res_list = await asyncio.gather(*futs)
-                        for rel, mt, sz, spans in res_list:
-                            csv_spans[rel] = [(a, b) for a, b in spans]
-                            if mt > 0:
-                                zero_cache[rel] = {"mtime": mt, "size": sz, "spans": spans}
-                        scanned_cnt += len(part)
-                        since_save += len(part)
-                        _progress["scan_done"] = scanned_cnt
-                        _progress["current_project"] = f"极速并行检测无信号 CSV ({scanned_cnt}/{len(to_scan)}，{n_workers}核)..."
-                        if since_save >= 1200:
-                            _save_zero_cache(zero_cache)
-                            since_save = 0
+                    futs = [loop.run_in_executor(pool, _scan_zero_worker, (settings.nas_root, rel, 300)) for rel in to_scan]
+                    res_list = await asyncio.gather(*futs)
+                for rel, mt, sz, spans in res_list:
+                    csv_spans[rel] = [(a, b) for a, b in spans]
+                    if mt > 0:
+                        zero_cache[rel] = {"mtime": mt, "size": sz, "spans": spans}
+                _progress["scan_done"] = len(to_scan)
                 _save_zero_cache(zero_cache)
 
             # ── 加速步骤 3：只对真正有问题的任务执行清洗 + 收敛即停 + 每 20 任务批量提交 ──

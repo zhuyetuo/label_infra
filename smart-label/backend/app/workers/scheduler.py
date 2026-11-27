@@ -89,6 +89,20 @@ async def _daily_smart_clean_scan() -> None:
         logger.exception("每日智能检测失败")
 
 
+async def _warm_zero_signal_cache() -> None:
+    """后台静默补全无信号 CSV 磁盘缓存（单遍 C 引擎读取，扫过一次永久复用，每天只补新增）。"""
+    from app.services import smart_clean_service as scs
+
+    try:
+        r = await scs.warm_zero_signal_cache(max_workers=8)
+        logger.info(
+            "无信号 CSV 缓存完成: 共 %d 份，本次新扫 %d 份，耗时 %.1fs",
+            r["total"], r["scanned"], r["sec"],
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("无信号 CSV 缓存补全失败")
+
+
 async def main() -> None:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(_collect_local_model_stats, "interval", minutes=5, id="local_model_stats", next_run_time=datetime.now())
@@ -97,8 +111,10 @@ async def main() -> None:
     scheduler.add_job(_auto_scan_samples, "interval", minutes=10, id="auto_scan_samples", next_run_time=datetime.now())
     # 每天凌晨 03:00 自动检测一次全量项目，启动时也顺手检测一次保证立即可见
     scheduler.add_job(_daily_smart_clean_scan, "cron", hour=3, minute=0, id="daily_smart_clean_scan", next_run_time=datetime.now())
+    # 每天凌晨 03:10（及启动后后台静默）补全无信号 CSV 缓存，不卡前台一键智能处理
+    scheduler.add_job(_warm_zero_signal_cache, "cron", hour=3, minute=10, id="warm_zero_signal_cache", next_run_time=datetime.now())
     scheduler.start()
-    logger.info("定时任务已启动：超时回收(每2分钟) + NAS样本自动扫描(每10分钟) + 本地模型计数采集(每5分钟) + 每日智能清理检测(03:00)")
+    logger.info("定时任务已启动：超时回收(每2分钟) + NAS样本自动扫描(每10分钟) + 本地模型计数采集(每5分钟) + 每日智能清理检测(03:00) + 无信号CSV缓存(03:10)")
     await asyncio.Event().wait()  # 常驻进程
 
 
