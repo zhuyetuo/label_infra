@@ -426,6 +426,8 @@ async def export_dataset(
     # 「未佩戴」要按 code 认，不按显示名——名字是会改的，改完这里悄无声息地
     # 退回旧行为（又被当成设备轨丢进 aux），而那正是它一段都进不了训练的原因
     not_worn_ids = {i for i, _n, _p, _t, c in label_rows if c == NOT_WORN_CODE}
+    # 「无信号」是设备断流补零标记，永远不进训练，且按挖洞处理避免任何训练窗口踩到断流区
+    no_signal_ids = {i for i, n, _p, _t, c in label_rows if c == "NO_SIGNAL" or n == "无信号"}
     # 层级：一段标了「舔-前左爪」也算「舔-前爪」「舔」，导出时带整条链，训练用哪层自己挑
     parent_of = {i: p for i, _n, p, _t, _c in label_rows}
     own_track = {i: t for i, _n, _p, t, _c in label_rows}
@@ -475,8 +477,8 @@ async def export_dataset(
     n_skipped_not_pool = 0
     n_skipped_short = 0
     for task_id, label_id, s_ms, e_ms, uncertain, confirmed, modified, source, seg_st, pool_st in item_rows.all():
-        if uncertain:
-            # 「待定」永远挖洞，跟怎么取无关：那段时间既不能当正例也不能当负例
+        if uncertain or label_id in no_signal_ids:
+            # 「待定」和「无信号」永远挖洞，既不进训练也不当负例
             holes_by_task.setdefault(task_id, []).append((int(s_ms), int(e_ms)))
             continue
         if only_pool and not _in_pool(seg_st, pool_st):

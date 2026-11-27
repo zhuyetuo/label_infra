@@ -152,11 +152,14 @@ _HZ_NOMINAL = case((_HZ <= 0, 0), *[(_HZ < edge, v) for edge, v in _NOMINAL_EDGE
 async def _query(db: AsyncSession, f: PoolFilter):
     """当前这一轮的片段 + 任务 + 样本。不选项目也不选任务时只看启用的项目（拆分后的原项目停用了，不重复算）"""
     it = AnnotationLabelItem
+    no_sig_subq = select(LabelDefinition.id).where(
+        or_(LabelDefinition.code == "NO_SIGNAL", LabelDefinition.display_name == "无信号")
+    )
     q = (select(it, Task, Sample)
          .join(AnnotationRecord, AnnotationRecord.id == it.annotation_record_id)
          .join(Task, and_(Task.id == AnnotationRecord.task_id, AnnotationRecord.round_no == Task.round_no))
          .join(Sample, Sample.id == Task.sample_id)
-         .where(it.uncertain.is_(False)))
+         .where(it.uncertain.is_(False), it.label_id.notin_(no_sig_subq)))
     if f.task_ids:
         q = q.where(Task.id.in_(f.task_ids))
     if f.project_ids:
