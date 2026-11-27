@@ -1432,7 +1432,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
     var base = VIDEO_BASE;
     if (!base || base.indexOf("__REPORT_" + "VIDEO_BASE__") >= 0) {
       if (window.location && window.location.pathname && window.location.pathname.indexOf("/model-tests/reports/") >= 0) {
-        base = window.location.pathname.replace(/\/$/, "") + "/video";
+        var pn = window.location.pathname;
+        base = (pn.charAt(pn.length - 1) === "/" ? pn.slice(0, -1) : pn) + "/video";
       } else {
         alert("当前离线报告未绑定服务端视频链接，请在内网通过「分享链接」打开。");
         return;
