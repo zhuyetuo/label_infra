@@ -73,11 +73,19 @@ export function useInferModes() {
     staleTime: 30_000,
     retry: false,
   });
-  const versionIdOf = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const v of versions ?? []) m.set(v.algo_job_id, v.id);
+  const versionByJob = useMemo(() => {
+    const m = new Map<number, { id: number; model_type: string }>();
+    for (const v of versions ?? []) m.set(v.algo_job_id, { id: v.id, model_type: v.model_type });
     return m;
   }, [versions]);
+  const archTagOf = (mt?: string) => {
+    const k = (mt ?? "").trim().toLowerCase();
+    if (!k) return "";
+    if (k === "cnn") return " [1D-CNN]";
+    if (k === "xgb") return " [XGB]";
+    if (k === "rf") return " [RF]";
+    return ` [${k.toUpperCase()}]`;
+  };
   // 训练记录里「启用」了的才上架。训一次多一版，全列出来的话训几十版下拉就没法用了
   const listedJobs = useMemo(
     () => new Set((versions ?? []).filter((v) => v.listed).map((v) => v.algo_job_id)),
@@ -113,9 +121,11 @@ export function useInferModes() {
             // 训练记录里训出来的那几版：显示成「训练记录 #N · 3轴 · F1 0.53」，
             // 而不是算法服务内部的 train1——人是从训练记录那一页过来的，认的是那个号
             const t = m.train;
-            const vid = t ? versionIdOf.get(t.job_id) : undefined;
+            const mv = t ? versionByJob.get(t.job_id) : undefined;
+            const vid = mv?.id;
+            const arch = archTagOf(mv?.model_type);
             const name = t
-              ? `训练记录 #${vid ?? `?(算法#${t.job_id})`} · ${t.axes === 3 ? "3轴" : "6轴"}` +
+              ? `训练记录 #${vid ?? `?(算法#${t.job_id})`}${arch} · ${t.axes === 3 ? "3轴" : "6轴"}` +
                 // 负例挖掘模型：批量预标注勾「只补负例候选」时选这种
                 (negClassesOf(t.classes ?? []).length ? " · 负例挖掘" : "") +
                 (typeof t.macro_f1 === "number" ? ` · F1 ${t.macro_f1.toFixed(2)}` : "")
@@ -176,9 +186,11 @@ export function useInferModes() {
           const geom = `${m.window} 点 @${m.hz}Hz${m.n_channels ? `，${m.n_channels === 5 ? "3 轴" : "6 轴"}` : ""}`;
           // 训练记录导出来的：显示成「训练记录 #N · 端侧 · 3轴 · F1 0.53」，F1 是端侧的
           const t = m.train;
-          const vid = t?.job_id != null ? versionIdOf.get(t.job_id) : undefined;
+          const mv = t?.job_id != null ? versionByJob.get(t.job_id) : undefined;
+          const vid = mv?.id;
+          const arch = archTagOf(mv?.model_type);
           const name = t
-            ? `训练记录 #${vid ?? `?(算法#${t.job_id})`} · 端侧` +
+            ? `训练记录 #${vid ?? `?(算法#${t.job_id})`}${arch} · 端侧` +
               (m.n_channels ? ` · ${m.n_channels === 5 ? "3轴" : "6轴"}` : "") +
               (typeof m.edge?.macro_f1 === "number" ? ` · F1 ${m.edge.macro_f1.toFixed(2)}` : "")
             : m.tag;
@@ -202,7 +214,7 @@ export function useInferModes() {
         }),
       },
     ];
-  }, [edgeModels, serverModels, versionIdOf]);
+  }, [edgeModels, serverModels, versionByJob]);
   // eslint 会抱怨 listedJobs 没进依赖：它已经通过 edgeModels/serverModels 体现了
 
   // 「其它模型」这一组单独给出去：模型对比那页自己拼下拉（它要的是"跑哪几个

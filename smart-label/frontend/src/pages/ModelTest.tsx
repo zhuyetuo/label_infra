@@ -87,7 +87,9 @@ const formatEvalVersion = (modelTag: string, mode: string, mvByJob?: Map<number,
     const post = isSrvMode(mode)
       ? (INFER_MODE_LABEL[srvPostOf(mode)] ?? srvPostOf(mode))
       : modeLabelOf(mode);
-    return `训练记录 #${mv.id}（train${mv.algo_job_id}）· ${post}`;
+    const mt = (mv.model_type ?? "").trim().toLowerCase();
+    const arch = mt === "cnn" ? " [1D-CNN]" : mt === "xgb" ? " [XGB]" : mt === "rf" ? " [RF]" : mt ? ` [${mt.toUpperCase()}]` : "";
+    return `训练记录 #${mv.id}${arch}（train${mv.algo_job_id}）· ${post}`;
   }
   return `${modelTag} · ${modeLabelOf(mode)}`;
 };
