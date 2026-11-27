@@ -277,8 +277,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
   // 客观 5 档评级标准（透明展示区间，不搞笼统自夸；窗口级与事件级分别定级）
   const gradeOf = (v: number | null | undefined) => {
     if (v == null || !Number.isFinite(v)) return { code: "-", name: "无数据", cls: "badge-warn", color: "#64748b" };
-    if (v >= 0.95) return { code: "S", name: "卓越", cls: "badge-pass", color: "#059669" };
-    if (v >= 0.85) return { code: "A", name: "优秀", cls: "badge-pass", color: "#16a34a" };
+    if (v >= 0.95) return { code: "S", name: "卓越", cls: "badge-epic", color: "#7c3aed" };
+    if (v >= 0.85) return { code: "A", name: "优秀", cls: "badge-pass", color: "#10b981" };
     if (v >= 0.75) return { code: "B", name: "良好", cls: "badge-info", color: "#2563eb" };
     if (v >= 0.6) return { code: "C", name: "一般", cls: "badge-warn", color: "#d97706" };
     return { code: "D", name: "不达标", cls: "badge-fail", color: "#dc2626" };
@@ -290,7 +290,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     { code: "C", name: "一般", range: "60% ~ 75%", bar: "#f59e0b", grad: "linear-gradient(135deg,#d97706,#f59e0b)", desc: "偏弱，需针对性优化" },
     { code: "B", name: "良好", range: "75% ~ 85%", bar: "#3b82f6", grad: "linear-gradient(135deg,#2563eb,#3b82f6)", desc: "基本可用，仍有提升空间" },
     { code: "A", name: "优秀", range: "85% ~ 95%", bar: "#10b981", grad: "linear-gradient(135deg,#059669,#10b981)", desc: "达到上线交付标准" },
-    { code: "S", name: "卓越", range: "≥ 95%", bar: "#047857", grad: "linear-gradient(135deg,#065f46,#10b981)", desc: "标杆级表现" },
+    { code: "S", name: "卓越", range: "≥ 95%", bar: "#8b5cf6", grad: "linear-gradient(135deg,#6d28d9,#a855f7)", desc: "标杆级表现" },
   ];
   // 将 0~100% 映射到 5 段等宽刻度尺（每段占 20% 视觉宽度，避免 60~100% 挤在最右边）
   const scoreToBarPct = (v: number | null | undefined): number | null => {
@@ -312,11 +312,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="rubric-track-wrap">
       ${winPos != null ? `<div class="rubric-pin pin-top" style="left:${Math.max(5, Math.min(95, winPos)).toFixed(1)}%;background:#2563eb">窗口 ${pct(pw?.f1)}</div>` : ""}
       <div class="rubric-spectrum">
-        <div style="width:20%;background:linear-gradient(90deg,#dc2626,#ef4444)"></div>
-        <div style="width:20%;background:linear-gradient(90deg,#ef4444,#f59e0b)"></div>
-        <div style="width:20%;background:linear-gradient(90deg,#f59e0b,#3b82f6)"></div>
-        <div style="width:20%;background:linear-gradient(90deg,#3b82f6,#10b981)"></div>
-        <div style="width:20%;background:linear-gradient(90deg,#10b981,#047857)"></div>
+        ${rubricTiers.map((t) => `<div style="flex:1;background:${t.grad}"></div>`).join("")}
       </div>
       ${evPos != null ? `<div class="rubric-pin pin-bot" style="left:${Math.max(5, Math.min(95, evPos)).toFixed(1)}%;background:#7c3aed">事件 ${pct(evF1)}</div>` : ""}
     </div>
@@ -685,6 +681,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   .banner-sub { font-size: 12px; color: rgba(255,255,255,0.78); }
   .banner-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .verdict-badge { padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  .badge-epic { background: rgba(168,85,247,0.24); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.55); }
   .badge-pass { background: rgba(16,185,129,0.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.45); }
   .badge-info { background: rgba(59,130,246,0.22); color: #93c5fd; border: 1px solid rgba(59,130,246,0.45); }
   .badge-warn { background: rgba(245,158,11,0.2); color: #fcd34d; border: 1px solid rgba(245,158,11,0.45); }
@@ -730,7 +727,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   .rubric-hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; margin-bottom: 6px; color: #0f172a; }
   .rubric-track-wrap { position: relative; padding: 26px 0 26px; margin: 2px 0 10px; }
   .rubric-spectrum {
-    height: 12px; border-radius: 999px; overflow: hidden; display: flex;
+    height: 12px; border-radius: 999px; overflow: hidden; display: flex; gap: 3px;
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.12);
   }
   .rubric-pin {
