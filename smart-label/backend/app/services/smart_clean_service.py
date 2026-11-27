@@ -662,22 +662,17 @@ async def _run_smart_clean(
                 )).all()
                 sample_csv = {sid: p for sid, p in srows if p}
 
-            zero_cache = _load_zero_cache()
+            zero_cache = await asyncio.to_thread(_load_zero_cache)
             unique_csvs = sorted(set(sample_csv.values()))
             to_scan: list[str] = []
             csv_spans: dict[str, list[tuple[int, int]]] = {}
             for rel in unique_csvs:
-                full_p = os.path.join(settings.nas_root, rel.lstrip("/"))
                 ent = zero_cache.get(rel)
-                try:
-                    st = os.stat(full_p)
-                    if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size:
-                        csv_spans[rel] = [(int(a), int(b)) for a, b in (ent.get("spans") or [])]
-                        continue
-                except OSError:
-                    csv_spans[rel] = []
-                    continue
-                to_scan.append(rel)
+                if ent is not None:
+                    # 直接信任后台缓存（不在这里逐个 os.stat NAS，避免阻塞 FastAPI 事件循环）
+                    csv_spans[rel] = [(int(a), int(b)) for a, b in (ent.get("spans") or [])]
+                else:
+                    to_scan.append(rel)
 
             # 少量未缓存 CSV（≤30 个，如单项目现跑）顺手现扫几秒搞定；大批量历史 CSV 由后台定时任务静默补全缓存，不阻塞前台 30 秒清洗
             if to_scan and len(to_scan) <= 30 and not _cancel_req:
