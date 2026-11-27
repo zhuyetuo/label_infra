@@ -643,24 +643,24 @@ export function buildTestReportHtml(input: TestReportInput): string {
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
     background: #f1f5f9; color: #0f172a; font-size: 13px; line-height: 1.55;
   }
-  .layout { max-width: 1360px; margin: 0 auto; display: flex; gap: 20px; align-items: flex-start; }
+  .layout { max-width: 1400px; margin: 0 auto; display: flex; gap: 22px; align-items: flex-start; }
   .toc-aside {
-    width: 216px; flex: none; position: sticky; top: 20px;
+    width: 248px; flex: none; position: sticky; top: 20px;
     background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
-    padding: 14px 12px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    padding: 16px 14px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
   }
-  .toc-title { font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 2px; padding: 0 6px; }
-  .toc-code { font-size: 11px; color: #94a3b8; margin-bottom: 10px; padding: 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .toc-nav { display: flex; flex-direction: column; gap: 3px; }
+  .toc-title { font-size: 13.5px; font-weight: 700; color: #0f172a; margin-bottom: 2px; padding: 0 6px; }
+  .toc-code { font-size: 11px; color: #94a3b8; margin-bottom: 12px; padding: 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .toc-nav { display: flex; flex-direction: column; gap: 5px; }
   .toc-link {
-    display: flex; align-items: center; justify-content: space-between; gap: 6px;
-    padding: 7px 9px; border-radius: 7px; text-decoration: none;
-    color: #475569; font-size: 12.5px; border-left: 3px solid transparent; transition: all .15s;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: 8px 10px; border-radius: 7px; text-decoration: none;
+    color: #334155; font-size: 13px; line-height: 1.35; border-left: 3px solid transparent; transition: all .15s;
   }
   .toc-link:hover { background: #f8fafc; color: #0f172a; }
   .toc-link.active { background: #eef2ff; color: #4338ca; font-weight: 600; border-left-color: #4f46e5; }
-  .toc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .toc-sub { font-size: 10.5px; color: #94a3b8; flex: none; }
+  .toc-text { white-space: normal; word-break: keep-all; }
+  .toc-sub { font-size: 11px; color: #64748b; padding-left: 16px; }
   .toc-link.active .toc-sub { color: #6366f1; }
   .toc-foot {
     margin-top: 12px; padding-top: 10px; border-top: 1px solid #f1f5f9;
