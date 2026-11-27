@@ -1049,23 +1049,24 @@ export function buildTestReportHtml(input: TestReportInput): string {
           <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">点击切换</span>
         </div>
         <div class="edu-vis">
-          <svg viewBox="0 0 260 66" width="100%" style="display:block">
-            <text x="4" y="13" font-size="9.5" fill="#64748b">例：整段视频 11:11:00 ~ 11:12:00（只判“有没有”）</text>
-            <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
+          <svg viewBox="0 0 260 68" width="100%" style="display:block">
+            <text x="4" y="12" font-size="9.5" fill="#64748b">虚线框 = 当前 1 分钟窗口（只要蓝条沾到框就算对）</text>
+            <!-- 窗口虚线框（x=48..204） -->
+            <rect x="48" y="16" width="156" height="35" rx="4" fill="rgba(37,99,235,0.06)" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="3,2" />
+            <rect x="4" y="21" width="232" height="10" rx="3" fill="#e2e8f0" />
             <g id="eduWinTruth">
-              <rect x="64" y="20" width="52" height="10" rx="3" fill="#10b981" />
+              <rect x="86" y="21" width="48" height="10" rx="3" fill="#10b981" />
             </g>
-            <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">真</text>
+            <text x="240" y="29" font-size="9" fill="#15803d" font-weight="600">真</text>
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect id="eduWinPred" x="72" y="36" width="52" height="10" rx="3" fill="#3b82f6" />
+            <rect id="eduWinPred" x="96" y="36" width="44" height="10" rx="3" fill="#3b82f6" />
             <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
-            <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
-            <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)</text>
+            <text id="eduWinTxt" x="4" y="63" font-size="10" font-weight="700" fill="#15803d">✓ 预测落在这 1 分钟窗口内 → 命中 (TP)</text>
           </svg>
           <div class="edu-ctrl" id="eduWinSlideRow">
-            <span>拖动预测位置：</span>
-            <input type="range" id="eduWinRange" class="edu-slider" style="accent-color:#2563eb" min="4" max="184" step="2" value="72" />
-            <b id="eduWinPos" style="color:#15803d">都算对 ✓</b>
+            <span>拖看窗口内外：</span>
+            <input type="range" id="eduWinRange" class="edu-slider" style="accent-color:#2563eb" min="4" max="208" step="2" value="96" />
+            <b id="eduWinPos" style="color:#15803d">在窗口内 ✓</b>
           </div>
           <div class="edu-ctrl">
             <button class="edu-wbtn active" data-w="tp">命中 TP</button>
@@ -1377,14 +1378,37 @@ export function buildTestReportHtml(input: TestReportInput): string {
   };
   function updateWinSlide() {
     if (!winRange || !winPred) return;
-    var x = parseFloat(winRange.value) || 72;
+    var x = parseFloat(winRange.value) || 96;
     winPred.setAttribute("x", x.toFixed(1));
+    var inWin = (x + 44) > 48 && x < 204; // 蓝条与虚线窗口框 [48, 204] 有重叠
     if (curWinState === "tp" && winTxt && winPosTxt) {
-      var ov = Math.max(0, Math.min(116, x + 52) - Math.max(64, x));
-      winPosTxt.textContent = ov > 0 ? "有重叠 ✓" : "不重叠也算对 ✓";
-      winTxt.textContent = ov > 0
-        ? "✓ 只要这 1 分钟内报了（有重叠）→ 窗口级命中 (TP)"
-        : "✓ 哪怕位置完全没重叠，这 1 分钟有报就算命中 (TP)";
+      if (inWin) {
+        winPred.setAttribute("fill", "#3b82f6");
+        winPosTxt.style.color = "#15803d";
+        winPosTxt.textContent = "在窗口内 ✓";
+        winTxt.setAttribute("fill", "#15803d");
+        winTxt.textContent = "✓ 预测落在这 1 分钟窗口内 → 命中 (TP)";
+      } else {
+        winPred.setAttribute("fill", "#ef4444");
+        winPosTxt.style.color = "#dc2626";
+        winPosTxt.textContent = "跑出窗口 ✗";
+        winTxt.setAttribute("fill", "#dc2626");
+        winTxt.textContent = "✗ 预测跑到 1 分钟窗口外了 → 本段判漏报 (FN)";
+      }
+    } else if (curWinState === "fp" && winTxt && winPosTxt) {
+      if (inWin) {
+        winPred.setAttribute("fill", "#f59e0b");
+        winPosTxt.style.color = "#b45309";
+        winPosTxt.textContent = "框内乱报 ✗";
+        winTxt.setAttribute("fill", "#b45309");
+        winTxt.textContent = "✗ 窗口内实际无动作却乱报了 → 误报 (FP)";
+      } else {
+        winPred.setAttribute("fill", "#94a3b8");
+        winPosTxt.style.color = "#1d4ed8";
+        winPosTxt.textContent = "不在框内 ✓";
+        winTxt.setAttribute("fill", "#1d4ed8");
+        winTxt.textContent = "✓ 框内没报，本段正常通过 (TN)";
+      }
     }
   }
   function applyEduWin(k) {
