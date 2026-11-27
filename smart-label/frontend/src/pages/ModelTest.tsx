@@ -16,7 +16,7 @@ import {
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs, type Dog } from "@/api/dogs";
-import { CopyOutlined, DownloadOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { CopyOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
@@ -1987,31 +1987,6 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 </Typography.Text>
               </Tooltip>
             )}
-            <Tooltip title="导出独立的 HTML 标准测试报告（含指标对比、数据覆盖图、可筛选错例与内网一键看视频验证，支持打印/转 PDF）">
-              <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={async () => {
-                const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
-                let html = buildTestReportHtml(buildReportPayload(
-                  testSet, coverage, dogs, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
-                ));
-                const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
-                try {
-                  const res = await publishTestReport(setId, html, `${testSet.name} · ${lbName} 测试报告`);
-                  html = html.replace(/__REPORT_VIDEO_BASE__/g, `${window.location.origin}/api/v1/model-tests/reports/${res.report_id}/video`);
-                } catch { /* 离线兜底 */ }
-                const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
-                const dStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-                const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `测试报告_${safeName}_${lbName}_${dStr}.html`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-                message.success("已导出标准 HTML 测试报告（内网打开可直接点「▶ 看视频」验证）");
-              }}>导出 HTML</Button>
-            </Tooltip>
             <Tooltip title="生成只读测试报告分享链接，发给团队成员即可免登录直接打开查看">
               <Button size="small" icon={<ShareAltOutlined />} loading={sharing} disabled={!rows.length} onClick={async () => {
                 setSharing(true);
