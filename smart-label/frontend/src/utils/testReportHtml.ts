@@ -485,10 +485,30 @@ export function buildTestReportHtml(input: TestReportInput): string {
         })
         .join("")
     : "";
+  const secNumAllCat = showAllCatSection ? "四" : "";
+  const secNumCov = showAllCatSection ? "五" : "四";
+  const secNumCases = showAllCatSection ? "六" : "五";
+  const tocItems: { id: string; label: string; sub?: string }[] = [
+    { id: "sec-overview", label: "一、测试概况与范围" },
+    { id: "sec-kpi", label: "二、核心指标总览", sub: pw ? `准确率 ${pct(pw.accuracy)}` : undefined },
+    { id: "sec-compare", label: "三、模型评测指标对比", sub: `IoU ≥ ${iouPct}%` },
+    ...(showAllCatSection ? [{ id: "sec-allcat", label: `${secNumAllCat}、全类别综合表现`, sub: `${distinctCats.size} 类` }] : []),
+    { id: "sec-coverage", label: `${secNumCov}、测试集数据分布`, sub: `${nDogs} 只犬` },
+    { id: "sec-cases", label: `${secNumCases}、错例归因与明细`, sub: `${summaryCounts.err} 错例` },
+  ];
+  const tocHtml = tocItems
+    .map(
+      (it, i) => `<a class="toc-link${i === 0 ? " active" : ""}" href="#${it.id}" data-target="${it.id}">
+        <span class="toc-text">${esc(it.label)}</span>
+        ${it.sub ? `<span class="toc-sub">${esc(it.sub)}</span>` : ""}
+      </a>`,
+    )
+    .join("");
+
   const allCatSectionHtml = showAllCatSection
-    ? `<div class="card">
+    ? `<div class="card" id="sec-allcat">
         <div class="sec-hd">
-          <h2>全类别综合表现总览（${[...distinctCats].join(" / ")}）</h2>
+          <h2>${secNumAllCat}、全类别综合表现总览（${[...distinctCats].join(" / ")}）</h2>
           <span class="sub">同一测试集下各行为与状态类别的横向表现 · IoU ≥ ${iouPct}% · 容差 ±${edgeTolSec}s</span>
         </div>
         ${renderModelCompareChartSvg(allCategoryRows ?? [], true)}
@@ -523,12 +543,42 @@ export function buildTestReportHtml(input: TestReportInput): string {
 <title>算法测试报告 · ${esc(testSet.name)} · ${esc(labelTitle)}</title>
 <style>
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   body {
     margin: 0; padding: 24px 16px 48px;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
     background: #f1f5f9; color: #0f172a; font-size: 13px; line-height: 1.55;
   }
-  .page { max-width: 1120px; margin: 0 auto; }
+  .layout { max-width: 1360px; margin: 0 auto; display: flex; gap: 20px; align-items: flex-start; }
+  .toc-aside {
+    width: 216px; flex: none; position: sticky; top: 20px;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 14px 12px; box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+  }
+  .toc-title { font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 2px; padding: 0 6px; }
+  .toc-code { font-size: 11px; color: #94a3b8; margin-bottom: 10px; padding: 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .toc-nav { display: flex; flex-direction: column; gap: 3px; }
+  .toc-link {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 7px 9px; border-radius: 7px; text-decoration: none;
+    color: #475569; font-size: 12.5px; border-left: 3px solid transparent; transition: all .15s;
+  }
+  .toc-link:hover { background: #f8fafc; color: #0f172a; }
+  .toc-link.active { background: #eef2ff; color: #4338ca; font-weight: 600; border-left-color: #4f46e5; }
+  .toc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toc-sub { font-size: 10.5px; color: #94a3b8; flex: none; }
+  .toc-link.active .toc-sub { color: #6366f1; }
+  .toc-foot {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid #f1f5f9;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .toc-btn {
+    width: 100%; padding: 6px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    border: 1px solid #e2e8f0; background: #f8fafc; color: #334155; text-align: center; text-decoration: none;
+  }
+  .toc-btn:hover { background: #e2e8f0; }
+  .page { flex: 1; min-width: 0; max-width: 1120px; }
+  .card { scroll-margin-top: 18px; }
 
   /* 顶部标准报告头 */
   .banner {
@@ -672,6 +722,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
   }
   .footer { text-align: center; font-size: 11.5px; color: #94a3b8; margin-top: 18px; }
 
+  @media (max-width: 1020px) {
+    .toc-aside { display: none; }
+    .page { max-width: 100%; }
+  }
   @media (max-width: 780px) {
     .gauges-grid { grid-template-columns: repeat(2, 1fr); }
     .vis-two { grid-template-columns: 1fr; }
@@ -679,14 +733,26 @@ export function buildTestReportHtml(input: TestReportInput): string {
   }
   @media print {
     body { background: #fff; padding: 0; }
-    .btn-print, .filter-bar, .btn-more { display: none !important; }
+    .toc-aside, .btn-print, .filter-bar, .btn-more { display: none !important; }
+    .layout { display: block; }
+    .page { max-width: 100%; }
     .card { break-inside: avoid; box-shadow: none; }
     .case-row.hidden-extra { display: table-row !important; }
   }
 </style>
 </head>
 <body>
-<div class="page">
+<div class="layout">
+  <aside class="toc-aside">
+    <div class="toc-title">报告目录</div>
+    <div class="toc-code">${esc(reportCode)}</div>
+    <nav class="toc-nav">${tocHtml}</nav>
+    <div class="toc-foot">
+      <a class="toc-btn" href="#top">↑ 回到顶部</a>
+      <button class="toc-btn" onclick="window.print()">打印 / 另存 PDF</button>
+    </div>
+  </aside>
+<div class="page" id="top">
 
   <!-- 报告头部 -->
   <div class="banner">
@@ -702,7 +768,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   </div>
 
   <!-- 一、测试概况 -->
-  <div class="card">
+  <div class="card" id="sec-overview">
     <div class="sec-hd">
       <h2>一、测试概况与范围</h2>
       <span class="sub">${testSet.frozen ? "已冻结测试集" : "动态测试集"}</span>
@@ -721,7 +787,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   </div>
 
   <!-- 二、核心指标可视化总览 -->
-  <div class="card">
+  <div class="card" id="sec-kpi">
     <div class="sec-hd">
       <h2>二、核心指标总览</h2>
       <span class="sub">主测模型：${esc(primary?.version ?? "-")} · ${esc(primary?.group ?? "")}</span>
@@ -763,7 +829,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   </div>
 
   <!-- 三、模型指标对比 -->
-  <div class="card">
+  <div class="card" id="sec-compare">
     <div class="sec-hd">
       <h2>三、模型评测指标对比</h2>
       <span class="sub">共 ${rows.length} 条记录 · 事件判定阈值 IoU ≥ ${iouPct}%</span>
@@ -795,9 +861,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
   ${allCatSectionHtml}
 
   <!-- 四、测试集数据分布 -->
-  <div class="card">
+  <div class="card" id="sec-coverage">
     <div class="sec-hd">
-      <h2>四、测试集数据覆盖分布</h2>
+      <h2>${secNumCov}、测试集数据覆盖分布</h2>
       <span class="sub">${nDogs} 只犬 · 总时长 ${fmtSec(totalSec)}</span>
     </div>
     <div class="two-col">
@@ -813,9 +879,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
   </div>
 
   <!-- 五、错例归因与缺陷明细 -->
-  <div class="card">
+  <div class="card" id="sec-cases">
     <div class="sec-hd">
-      <h2>五、错例归因与缺陷明细</h2>
+      <h2>${secNumCases}、错例归因与缺陷明细</h2>
       <span class="sub">错误窗口 ${sc.err} 段（误报 ${sc.fp} / 漏报 ${sc.fn}），边界偏差 &gt;2s 共 ${sc.boundaryBad} 段</span>
     </div>
 
@@ -863,9 +929,29 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
   <div class="footer">Smart-Label 算法评测系统自动生成 · 报告编号 ${esc(reportCode)} · 支持离线查看与浏览器打印 PDF</div>
 </div>
+</div>
 
 <script>
 (function(){
+  // 左侧目录大纲滚动高亮联动
+  var tocLinks = Array.prototype.slice.call(document.querySelectorAll(".toc-link"));
+  var sections = tocLinks.map(function(a) { return document.getElementById(a.getAttribute("data-target")); }).filter(Boolean);
+  function syncToc() {
+    var y = window.scrollY + 90;
+    var activeId = sections.length ? sections[0].id : "";
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].offsetTop <= y) activeId = sections[i].id;
+    }
+    tocLinks.forEach(function(a) {
+      if (a.getAttribute("data-target") === activeId) a.classList.add("active");
+      else a.classList.remove("active");
+    });
+  }
+  if (sections.length) {
+    window.addEventListener("scroll", syncToc, { passive: true });
+    syncToc();
+  }
+
   var curFilter = "err";
   var expanded = false;
   var LIMIT = 20;
