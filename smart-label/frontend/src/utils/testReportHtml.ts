@@ -944,8 +944,12 @@ export function buildTestReportHtml(input: TestReportInput): string {
     font-size: 11.5px; color: #cbd5e1; margin-bottom: 6px;
   }
   .v-tl-box {
-    position: relative; height: 34px; cursor: pointer; border-radius: 6px;
+    position: relative; cursor: pointer; border-radius: 6px;
     background: rgba(255,255,255,0.04); padding: 4px 0;
+  }
+  .v-imu-canvas {
+    display: block; width: 100%; height: 62px; margin-bottom: 4px; border-radius: 4px;
+    background: rgba(15,23,42,0.85);
   }
   .v-tl-row {
     position: relative; height: 10px; margin: 2px 0; border-radius: 3px;
@@ -1347,13 +1351,15 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="v-tl-wrap">
       <div class="v-tl-head">
         <span>
-          <i class="dot" style="background:#10b981"></i>人工标注
+          <i class="dot" style="background:#38bdf8"></i>IMU Acc-X
+          <i class="dot" style="background:#10b981;margin-left:10px"></i>人工标注
           <i class="dot" id="vPredDot" style="background:#3b82f6;margin-left:10px"></i><span id="vPredLbl">模型预测</span>
-          <span style="color:#64748b;margin-left:8px">（点击进度条任意位置可跳转）</span>
+          <span style="color:#64748b;margin-left:8px">（点波形或进度条可跳转）</span>
         </span>
         <span id="vCurPos" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#f8fafc">0:00</span>
       </div>
       <div class="v-tl-box" id="vTlBox">
+        <canvas class="v-imu-canvas" id="vImuCanvas" width="780" height="62"></canvas>
         <div class="v-tl-row" id="vTlTruth"></div>
         <div class="v-tl-row" id="vTlPred"></div>
         <div class="v-tl-head-line" id="vTlPlayhead"></div>
@@ -1645,6 +1651,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var vReplay = document.getElementById("vReplay");
   var vClose = document.getElementById("vClose");
   var vTlBox = document.getElementById("vTlBox");
+  var vImuCanvas = document.getElementById("vImuCanvas");
   var vTlTruth = document.getElementById("vTlTruth");
   var vTlPred = document.getElementById("vTlPred");
   var vTlPlayhead = document.getElementById("vTlPlayhead");
@@ -1652,7 +1659,78 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var vPredDot = document.getElementById("vPredDot");
   var vPredLbl = document.getElementById("vPredLbl");
   var spdBtns = Array.prototype.slice.call(document.querySelectorAll(".v-spd"));
-  var curSeek = 0, curWs = 0, curWe = 0, curSrc = "";
+  var curSeek = 0, curWs = 0, curWe = 0, curSrc = "", rafId = 0, imuReqSeq = 0;
+
+  function drawImuWave(tMs, ax, wsMs, weMs, tSegs, pSegs, pColor, statusMsg) {
+    if (!vImuCanvas) return;
+    var ctx = vImuCanvas.getContext("2d");
+    if (!ctx) return;
+    var W = vImuCanvas.width, H = vImuCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(15,23,42,0.9)";
+    ctx.fillRect(0, 0, W, H);
+    var dur = Math.max(1, weMs - wsMs);
+    // 背景标注/预测高亮带
+    (tSegs || []).forEach(function(seg) {
+      var x0 = Math.max(0, Math.min(W, (seg[0] / dur) * W));
+      var x1 = Math.max(x0 + 2, Math.min(W, (seg[1] / dur) * W));
+      ctx.fillStyle = "rgba(16,185,129,0.16)";
+      ctx.fillRect(x0, 0, x1 - x0, H);
+    });
+    (pSegs || []).forEach(function(seg) {
+      var x0 = Math.max(0, Math.min(W, (seg[0] / dur) * W));
+      var x1 = Math.max(x0 + 2, Math.min(W, (seg[1] / dur) * W));
+      ctx.fillStyle = pColor === "#f59e0b" ? "rgba(245,158,11,0.16)" : "rgba(59,130,246,0.16)";
+      ctx.fillRect(x0, 0, x1 - x0, H);
+    });
+    // 中线
+    ctx.strokeStyle = "rgba(148,163,184,0.22)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    if (!tMs || !tMs.length || !ax || !ax.length) {
+      ctx.fillStyle = "#64748b";
+      ctx.font = "11px sans-serif";
+      ctx.fillText(statusMsg || "加载 IMU Acc-X 波形...", 10, H / 2 + 4);
+      return;
+    }
+    var mn = Infinity, mx = -Infinity;
+    for (var i = 0; i < ax.length; i++) {
+      var v = ax[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    if (!isFinite(mn) || !isFinite(mx)) return;
+    var span = Math.max(0.2, mx - mn);
+    var pad = 6;
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (var j = 0; j < tMs.length; j++) {
+      var x = ((tMs[j] - wsMs) / dur) * W;
+      var y = H - pad - ((ax[j] - mn) / span) * (H - pad * 2);
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = "rgba(148,163,184,0.8)";
+    ctx.font = "10px monospace";
+    ctx.fillText("Acc-X " + mn.toFixed(1) + "~" + mx.toFixed(1) + "g", 6, 12);
+  }
+  function stopRaf() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+  }
+  function startRaf() {
+    stopRaf();
+    function tick() {
+      syncPlayhead();
+      if (vPlayer && !vPlayer.paused && vModal && vModal.classList.contains("open")) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        rafId = 0;
+      }
+    }
+    rafId = requestAnimationFrame(tick);
+  }
 
   function renderVideoTrack(container, segs, durMs, color) {
     if (!container) return;
@@ -1688,6 +1766,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     return m + ":" + (x < 10 ? "0" : "") + x;
   }
   function closeVideo() {
+    stopRaf();
     if (!vModal || !vPlayer) return;
     vPlayer.pause();
     vModal.classList.remove("open");
@@ -1721,6 +1800,21 @@ export function buildTestReportHtml(input: TestReportInput): string {
     var durMs = Math.max(1000, (curWe - curWs) * 1000);
     renderVideoTrack(vTlTruth, tSegs, durMs, "#10b981");
     renderVideoTrack(vTlPred, pSegs, durMs, pColor);
+    var wsMs = Math.round(curWs * 1000), weMs = Math.round(curWe * 1000);
+    drawImuWave([], [], wsMs, weMs, tSegs, pSegs, pColor, "加载真实 IMU Acc-X 波形...");
+    var imuBase = base.slice(0, base.lastIndexOf("/video")) + "/imu/" + sid + "?start_ms=" + wsMs + "&end_ms=" + weMs;
+    var reqId = ++imuReqSeq;
+    fetch(imuBase).then(function(r) { return r.json(); }).then(function(j) {
+      if (reqId !== imuReqSeq) return;
+      var d = j && j.data ? j.data : j;
+      if (d && d.t_ms && d.t_ms.length) {
+        drawImuWave(d.t_ms, d.ax, wsMs, weMs, tSegs, pSegs, pColor);
+      } else {
+        drawImuWave([], [], wsMs, weMs, tSegs, pSegs, pColor, "该窗口暂无 IMU 数据");
+      }
+    }).catch(function() {
+      if (reqId === imuReqSeq) drawImuWave([], [], wsMs, weMs, tSegs, pSegs, pColor, "IMU 波形加载失败");
+    });
     var src = base + "/" + sid;
     vModal.classList.add("open");
     if (curSrc !== src) {
@@ -1740,6 +1834,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
     if (t && t.classList && t.classList.contains("btn-play")) openVideo(t);
   });
   if (vPlayer) {
+    vPlayer.addEventListener("play", startRaf);
+    vPlayer.addEventListener("pause", stopRaf);
     vPlayer.addEventListener("timeupdate", function() {
       syncPlayhead();
       if (vLoop && vLoop.checked && curWe > curWs && vPlayer.currentTime >= curWe) {

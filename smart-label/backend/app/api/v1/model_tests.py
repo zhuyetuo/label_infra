@@ -1078,6 +1078,47 @@ async def stream_report_video(
     return await stream_file(request, real_path, "video/mp4")
 
 
+@public_router.get("/reports/{report_id}/imu/{sample_id}")
+async def get_report_imu_acc_x(
+    report_id: str,
+    sample_id: int,
+    start_ms: int = 0,
+    end_ms: int = 60_000,
+    db: AsyncSession = Depends(get_db),
+):
+    """免登录只读获取测试报告样本窗口内的真实 IMU Acc-X 单轴曲线（严格限制在 report_id 样本白名单内）。"""
+    if not _REPORT_ID_RE.fullmatch(report_id):
+        raise HTTPException(404, "报告不存在")
+    if end_ms < start_ms:
+        raise HTTPException(400, "end_ms 不能小于 start_ms")
+    meta_path = Path(settings.nas_root) / "_smart_label_reports" / f"{report_id}.json"
+    if not meta_path.is_file():
+        raise HTTPException(404, "报告权限不存在")
+    try:
+        meta = json.loads(await asyncio.to_thread(meta_path.read_text, "utf-8"))
+    except Exception:
+        raise HTTPException(404, "报告元数据损坏") from None
+    if sample_id not in set(meta.get("sample_ids") or []):
+        raise HTTPException(403, "该样本不属于当前测试报告")
+
+    from app.models.sample import Sample
+    from app.services.imu_service import ImuReadError, get_series
+    from app.services.media_resolver import PathTraversalError, resolve_nas_path
+
+    sample = await db.get(Sample, sample_id)
+    if sample is None or not sample.imu_csv_path:
+        raise HTTPException(404, "IMU 文件不存在")
+    try:
+        real_path = resolve_nas_path(sample.imu_csv_path)
+    except PathTraversalError:
+        raise HTTPException(400, "非法路径") from None
+    try:
+        series = await asyncio.to_thread(get_series, real_path, max(0, start_ms), end_ms, 900)
+    except ImuReadError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return ok({"t_ms": series.get("t_ms") or [], "ax": series.get("ax") or []})
+
+
 _CACHE_KEY_RE = re.compile(r"^[a-z0-9_-]{8,64}$")
 
 
