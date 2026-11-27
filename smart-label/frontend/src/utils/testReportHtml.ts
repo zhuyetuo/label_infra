@@ -1004,12 +1004,11 @@ export function buildTestReportHtml(input: TestReportInput): string {
             <text x="4" y="13" font-size="9.5" fill="#64748b">例：整段视频 11:11:00 ~ 11:12:00（只判“有没有”）</text>
             <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
             <g id="eduWinTruth">
-              <rect x="52" y="20" width="40" height="10" rx="3" fill="#10b981" />
-              <rect x="148" y="20" width="32" height="10" rx="3" fill="#10b981" />
+              <rect x="64" y="20" width="52" height="10" rx="3" fill="#10b981" />
             </g>
             <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">真</text>
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect id="eduWinPred" x="64" y="36" width="46" height="10" rx="3" fill="#3b82f6" style="transition:all .25s" />
+            <rect id="eduWinPred" x="72" y="36" width="52" height="10" rx="3" fill="#3b82f6" style="transition:all .25s" />
             <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
             <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
             <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)</text>
