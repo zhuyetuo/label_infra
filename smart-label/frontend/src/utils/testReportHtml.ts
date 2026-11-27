@@ -1430,9 +1430,14 @@ export function buildTestReportHtml(input: TestReportInput): string {
   }
   function openVideo(btn) {
     if (!vModal || !vPlayer) return;
-    if (!VIDEO_BASE || VIDEO_BASE.indexOf("__REPORT_VIDEO_BASE__") >= 0) {
-      alert("当前离线报告未绑定服务端视频链接，请在内网通过「分享链接」或重新「导出 HTML」打开。");
-      return;
+    var base = VIDEO_BASE;
+    if (!base || base.indexOf("__REPORT_" + "VIDEO_BASE__") >= 0) {
+      if (window.location && window.location.pathname && window.location.pathname.indexOf("/model-tests/reports/") >= 0) {
+        base = window.location.pathname.replace(/\/$/, "") + "/video";
+      } else {
+        alert("当前离线报告未绑定服务端视频链接，请在内网通过「分享链接」打开。");
+        return;
+      }
     }
     var sid = btn.getAttribute("data-sid");
     curSeek = parseFloat(btn.getAttribute("data-seek") || "0") || 0;
@@ -1441,7 +1446,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     if (vTitle) vTitle.textContent = btn.getAttribute("data-title") || "视频验证";
     if (vReason) vReason.textContent = btn.getAttribute("data-reason") || "";
     if (vRange) vRange.textContent = "窗口 " + fmtT(curWs) + " ~ " + fmtT(curWe);
-    var src = VIDEO_BASE + "/" + sid;
+    var src = base + "/" + sid;
     vModal.classList.add("open");
     if (curSrc !== src) {
       curSrc = src;
