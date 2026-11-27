@@ -690,6 +690,36 @@ export function buildTestReportHtml(input: TestReportInput): string {
   .badge-warn { background: rgba(245,158,11,0.2); color: #fcd34d; border: 1px solid rgba(245,158,11,0.45); }
   .badge-fail { background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.45); }
 
+  /* 三指标图解（静态/动画/交互一体） */
+  .edu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+  .edu-card {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 13px; background: #fff;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .edu-card.c-win { border-top: 3px solid #2563eb; }
+  .edu-card.c-evt { border-top: 3px solid #7c3aed; }
+  .edu-card.c-edg { border-top: 3px solid #0d9488; }
+  .edu-hd { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 13px; font-weight: 700; }
+  .edu-tag { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px; }
+  .edu-vis { background: #f8fafc; border: 1px solid #eef2f7; border-radius: 8px; padding: 8px 10px; }
+  .edu-desc { font-size: 11.5px; color: #475569; line-height: 1.5; }
+  .edu-ctrl { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; font-size: 11px; color: #475569; margin-top: 6px; }
+  .edu-slider { flex: 1; min-width: 90px; accent-color: #7c3aed; cursor: pointer; }
+  .edu-pbtn {
+    border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 5px;
+    padding: 2px 7px; font-size: 10.5px; cursor: pointer;
+  }
+  .edu-pbtn.active { background: #0d9488; border-color: #0d9488; color: #fff; font-weight: 600; }
+  .edu-status { font-size: 11.5px; font-weight: 700; margin-top: 5px; display: flex; align-items: center; justify-content: space-between; }
+  @keyframes scanMove {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(232px); }
+  }
+  .scan-line { animation: scanMove 3.6s linear infinite; }
+  @media (max-width: 960px) {
+    .edu-grid { grid-template-columns: 1fr; }
+  }
+
   /* 客观 5 档评级刻度尺 */
   .rubric-box { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
   .rubric-hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; margin-bottom: 8px; color: #334155; }
@@ -950,10 +980,81 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
     ${rubricHtml}
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-bottom:14px;font-size:12px;color:#475569">
-      <div style="background:#eff6ff;padding:8px 10px;border-radius:6px"><b style="color:#1d4ed8">① 窗口级（这段有没有）</b>：把每段视频当成“有没有动作”的是非题，衡量<b>有无报警/记录准不准</b>。</div>
-      <div style="background:#f5f3ff;padding:8px 10px;border-radius:6px"><b style="color:#6d28d9">② 事件级（每次抓对没）</b>：逐次比对每次动作，重叠度 ≥ ${iouPct}% 算命中，衡量<b>动作计次准不准</b>。</div>
-      <div style="background:#f0fdfa;padding:8px 10px;border-radius:6px"><b style="color:#0f766e">③ 起止对齐（时间准不准）</b>：抓对的动作里，开始和结束时刻误差 ≤ ±${edgeTolSec}s 的比例，衡量<b>时长统计准不准</b>。</div>
+    <!-- 三大核心指标：生动图解 + 动画 + 可交互演示 -->
+    <div class="edu-grid">
+      <!-- ① 窗口级（动态扫描演示） -->
+      <div class="edu-card c-win">
+        <div class="edu-hd">
+          <span style="color:#1d4ed8">① 窗口级（整段有没有）</span>
+          <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">动图演示</span>
+        </div>
+        <div class="edu-vis">
+          <svg viewBox="0 0 260 66" width="100%" style="display:block">
+            <text x="4" y="13" font-size="9.5" fill="#64748b">1 分钟测试视频（整段当一道是非题）</text>
+            <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
+            <rect x="52" y="20" width="40" height="10" rx="3" fill="#10b981" />
+            <rect x="148" y="20" width="32" height="10" rx="3" fill="#10b981" />
+            <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">标</text>
+            <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
+            <rect x="64" y="36" width="46" height="10" rx="3" fill="#3b82f6" />
+            <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">预</text>
+            <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
+            <text x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 实际有动作，模型也报了 → 整段判对</text>
+          </svg>
+        </div>
+        <div class="edu-desc">只看这段视频里<b>有没有发生抓挠</b>，不管抓了几次、也不管起止歪了几秒。直接决定 <b>App 有没有报警 / 有没有记录</b>。</div>
+      </div>
+
+      <!-- ② 事件级（可拖动 IoU 交互演示） -->
+      <div class="edu-card c-evt">
+        <div class="edu-hd">
+          <span style="color:#6d28d9">② 事件级（每次抓对没）</span>
+          <span class="edu-tag" style="background:#f5f3ff;color:#6d28d9">拖动交互</span>
+        </div>
+        <div class="edu-vis">
+          <svg viewBox="0 0 260 66" width="100%" style="display:block">
+            <text x="4" y="12" font-size="9.5" fill="#64748b">绿=人工标注(6s) · 紫=模型预测(6s) · 金=重叠</text>
+            <rect x="4" y="19" width="232" height="11" rx="3" fill="#e2e8f0" />
+            <rect x="76" y="19" width="72" height="11" rx="3" fill="#10b981" />
+            <rect x="4" y="35" width="232" height="11" rx="3" fill="#e2e8f0" />
+            <rect id="eduIouPred" x="94" y="35" width="72" height="11" rx="3" fill="#7c3aed" />
+            <rect id="eduIouInter" x="94" y="19" width="54" height="27" rx="2" fill="rgba(245,158,11,0.28)" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="3,2" />
+            <text id="eduIouTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">重叠 IoU = 60% ≥ ${iouPct}% → 算命中 ✓</text>
+          </svg>
+          <div class="edu-ctrl">
+            <span>拖看偏移：</span>
+            <input type="range" id="eduIouRange" class="edu-slider" min="-6" max="7" step="0.5" value="1.5" />
+            <b id="eduIouShift">+1.5s</b>
+          </div>
+        </div>
+        <div class="edu-desc">逐次核对每次动作：重叠比例（<b>交并比 IoU</b>）达到 <b>${iouPct}%</b> 才算抓对，没达标会被判成「1 误 + 1 漏」。决定 <b>App 计次准不准</b>。</div>
+      </div>
+
+      <!-- ③ 起止对齐（可切换容差交互演示） -->
+      <div class="edu-card c-edg">
+        <div class="edu-hd">
+          <span style="color:#0f766e">③ 起止对齐（时间准不准）</span>
+          <span class="edu-tag" style="background:#f0fdfa;color:#0f766e">点击切换</span>
+        </div>
+        <div class="edu-vis">
+          <svg viewBox="0 0 260 66" width="100%" style="display:block">
+            <text x="4" y="12" font-size="9.5" fill="#64748b">对比抓对动作的开始/结束时刻误差</text>
+            <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
+            <rect x="64" y="20" width="96" height="10" rx="3" fill="#10b981" />
+            <line x1="64" y1="16" x2="64" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
+            <line x1="160" y1="16" x2="160" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
+            <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
+            <rect id="eduEdgPred" x="78" y="36" width="94" height="10" rx="3" fill="#0d9488" style="transition:all .3s" />
+            <text id="eduEdgTxt" x="4" y="61" font-size="10" font-weight="700" fill="#0f766e">起 +1.2s / 止 +1.0s（≤ ±${edgeTolSec}s 对齐 ✓）</text>
+          </svg>
+          <div class="edu-ctrl">
+            <button class="edu-pbtn active" data-ds="0.8" data-de="0.6">很准 (±0.8s)</button>
+            <button class="edu-pbtn" data-ds="1.8" data-de="-1.5">微偏 (±1.8s)</button>
+            <button class="edu-pbtn" data-ds="3.6" data-de="2.8">偏大 (±3.6s)</button>
+          </div>
+        </div>
+        <div class="edu-desc">在已抓对的动作里，开始和结束误差都在 <b>±${edgeTolSec}s</b> 内算对齐。决定 <b>App 统计的“总抓挠时长”准不准</b>。</div>
+      </div>
     </div>
 
     ${sc.total > 0 ? `
@@ -1186,6 +1287,75 @@ export function buildTestReportHtml(input: TestReportInput): string {
   if (search) search.addEventListener("input", function() { expanded = false; apply(); });
   if (btnMore) btnMore.addEventListener("click", function() { expanded = true; apply(); });
   apply();
+
+  // 三指标交互演示（IoU 滑块 + 起止对齐档位）
+  var REPORT_IOU_PCT = ${iouPct};
+  var REPORT_EDGE_TOL = ${edgeTolSec};
+  var iouRange = document.getElementById("eduIouRange");
+  var iouPred = document.getElementById("eduIouPred");
+  var iouInter = document.getElementById("eduIouInter");
+  var iouTxt = document.getElementById("eduIouTxt");
+  var iouShift = document.getElementById("eduIouShift");
+  function updateEduIou() {
+    if (!iouRange || !iouPred || !iouInter || !iouTxt) return;
+    var sh = parseFloat(iouRange.value) || 0;
+    var pxPerSec = 12; // 6s = 72px
+    var t0 = 76, t1 = 148;
+    var p0 = Math.max(4, Math.min(164, t0 + sh * pxPerSec));
+    var p1 = p0 + 72;
+    iouPred.setAttribute("x", p0.toFixed(1));
+    var i0 = Math.max(t0, p0), i1 = Math.min(t1, p1);
+    var inter = Math.max(0, i1 - i0);
+    var union = (t1 - t0) + (p1 - p0) - inter;
+    var iouP = union > 0 ? Math.round((inter / union) * 100) : 0;
+    if (inter > 0) {
+      iouInter.setAttribute("x", i0.toFixed(1));
+      iouInter.setAttribute("width", inter.toFixed(1));
+      iouInter.style.display = "";
+    } else {
+      iouInter.style.display = "none";
+    }
+    if (iouShift) iouShift.textContent = (sh >= 0 ? "+" : "") + sh.toFixed(1) + "s";
+    var ok = iouP >= REPORT_IOU_PCT;
+    iouPred.setAttribute("fill", ok ? "#7c3aed" : "#ef4444");
+    iouTxt.setAttribute("fill", ok ? "#15803d" : "#dc2626");
+    iouTxt.textContent = ok
+      ? "重叠 IoU = " + iouP + "% ≥ " + REPORT_IOU_PCT + "% → 算命中 ✓"
+      : "重叠 IoU = " + iouP + "% < " + REPORT_IOU_PCT + "% → 判 1 误 + 1 漏 ✗";
+  }
+  if (iouRange) {
+    iouRange.addEventListener("input", updateEduIou);
+    updateEduIou();
+  }
+
+  var edgBtns = Array.prototype.slice.call(document.querySelectorAll(".edu-pbtn"));
+  var edgPred = document.getElementById("eduEdgPred");
+  var edgTxt = document.getElementById("eduEdgTxt");
+  function applyEduEdge(btn) {
+    if (!edgPred || !edgTxt) return;
+    var ds = parseFloat(btn.getAttribute("data-ds") || "0") || 0;
+    var de = parseFloat(btn.getAttribute("data-de") || "0") || 0;
+    var pxPerSec = 10;
+    var p0 = 64 + ds * pxPerSec;
+    var p1 = 160 + de * pxPerSec;
+    edgPred.setAttribute("x", p0.toFixed(1));
+    edgPred.setAttribute("width", Math.max(20, p1 - p0).toFixed(1));
+    var maxE = Math.max(Math.abs(ds), Math.abs(de));
+    var ok = maxE <= REPORT_EDGE_TOL;
+    edgPred.setAttribute("fill", ok ? "#0d9488" : "#ef4444");
+    edgTxt.setAttribute("fill", ok ? "#0f766e" : "#dc2626");
+    var sStr = (ds >= 0 ? "+" : "") + ds.toFixed(1) + "s";
+    var eStr = (de >= 0 ? "+" : "") + de.toFixed(1) + "s";
+    edgTxt.textContent = "起 " + sStr + " / 止 " + eStr + (ok ? "（≤ ±" + REPORT_EDGE_TOL + "s 对齐 ✓）" : "（> ±" + REPORT_EDGE_TOL + "s 未对齐 ✗）");
+  }
+  edgBtns.forEach(function(b) {
+    b.addEventListener("click", function() {
+      edgBtns.forEach(function(x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      applyEduEdge(b);
+    });
+  });
+  if (edgBtns.length) applyEduEdge(edgBtns[0]);
 
   // 内置视频验证播放器
   var vModal = document.getElementById("videoModal");
