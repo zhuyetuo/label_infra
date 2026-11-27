@@ -1163,8 +1163,11 @@ const DIAG_COLOR: Record<string, string> = {
   model_fp: "red",
 };
 
-function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, iouBucketFilter, onClearIouBucket, focusEdgeSeq, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
-  row: EvalRow; iouMin: number; edgeTolSec?: number;
+function EvalVisualPanel({ row, siblingRows, onSelectRow, iouMin, edgeTolSec = 2, iouBucketFilter, onClearIouBucket, focusEdgeSeq, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
+  row: EvalRow;
+  siblingRows?: EvalRow[];
+  onSelectRow?: (r: EvalRow) => void;
+  iouMin: number; edgeTolSec?: number;
   iouBucketFilter?: { label: string; min: number; max: number } | null;
   onClearIouBucket?: () => void;
   focusEdgeSeq?: number;
@@ -1295,9 +1298,39 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, iouBucketFilter, onClear
   return (
     <div style={{ padding: "12px 14px", borderRadius: 8, border: "1px solid rgba(128,128,128,0.22)", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <Typography.Text strong>
-          片段级可视化与错例分析 · {row.label ? `【${row.label}】 · ` : ""}{row.group} · {row.version}
-        </Typography.Text>
+        <Space size={8} wrap align="center">
+          <Typography.Text strong>
+            片段级可视化与错例分析 · {row.label ? `【${row.label}】 · ` : ""}{row.group} · {row.version}
+          </Typography.Text>
+          {siblingRows && siblingRows.length > 1 && onSelectRow && (
+            <Space size={4} wrap>
+              {siblingRows.map((sr) => {
+                const isCur = sr.key === row.key;
+                const srErr = (sr.r.window?.fp ?? 0) + (sr.r.window?.fn ?? 0);
+                return (
+                  <Button
+                    key={sr.key}
+                    size="small"
+                    type={isCur ? "primary" : "default"}
+                    onClick={() => onSelectRow(sr)}
+                    style={{ fontSize: 12, paddingInline: 8, height: 24 }}
+                  >
+                    {sr.label ?? "-"}
+                    <span style={{
+                      marginLeft: 4,
+                      fontSize: 11,
+                      opacity: isCur ? 0.92 : 0.78,
+                      color: isCur ? "#fff" : srErr > 0 ? "#ff7875" : "#52c41a",
+                      fontWeight: 600,
+                    }}>
+                      {srErr}错
+                    </span>
+                  </Button>
+                );
+              })}
+            </Space>
+          )}
+        </Space>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           点下方色块筛选错误 / 起止偏差 / 正确片段，点「看视频」可直接跳到该窗口排查原因
         </Typography.Text>
@@ -2331,7 +2364,18 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
       />
       {rows.length > 0 && <EvalNotes notes={notes} hasRows />}
       {activeRowForPanel ? (
-        <EvalVisualPanel row={activeRowForPanel} iouMin={p.iou} edgeTolSec={edgeTolSec}
+        <EvalVisualPanel
+          row={activeRowForPanel}
+          siblingRows={allRecomputedRows.filter(
+            (x) => x.group === activeRowForPanel.group && x.version === activeRowForPanel.version && x.r.window_details?.length,
+          )}
+          onSelectRow={(sr) => {
+            setSelectedKey(sr.key);
+            if (p.label !== "ALL" && sr.label && sr.label !== p.label) {
+              p.setLabel(sr.label);
+            }
+          }}
+          iouMin={p.iou} edgeTolSec={edgeTolSec}
           iouBucketFilter={iouBucketFilter} onClearIouBucket={() => setIouBucketFilter(null)}
           focusEdgeSeq={focusEdgeSeq}
           items={items} colors={colors} opening={opening}
