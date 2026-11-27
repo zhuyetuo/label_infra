@@ -52,11 +52,12 @@ export function matchWindowSegs(
   return { pairs, fp: preds.length - usedP.size, fn: truths.length - usedT.size };
 }
 
-/** 基于已拉回的 window_details，0ms 本地重算任意 IoU 阈值 & 边界容差（秒）下的事件级与对齐指标 */
+/** 基于已拉回的 window_details，0ms 本地重算任意置信度过滤、IoU 阈值 & 边界容差（秒）下的窗口级、事件级与对齐指标 */
 export function recomputeVersionAt(
   r: VersionResult,
   iouMin: number,
   edgeTolSec: number,
+  confMin = 0,
 ): VersionResult {
   const details = r.window_details;
   if (!details || !details.length) return r;
@@ -68,9 +69,25 @@ export function recomputeVersionAt(
   let dStartSum = 0;
   let dEndSum = 0;
   let withinCnt = 0;
+  let wTp = 0;
+  let wTn = 0;
+  let wFp = 0;
+  let wFn = 0;
 
   const nextDetails: WindowDetail[] = details.map((d) => {
-    const m = matchWindowSegs(d.pred_segs, d.truth_segs, iouMin);
+    const keptPreds = confMin > 0
+      ? d.pred_segs.filter((s) => s[2] == null || s[2] >= confMin)
+      : d.pred_segs;
+    const hasTruth = d.truth_segs.length > 0;
+    const hasPred = keptPreds.length > 0;
+    const verdict: WindowDetail["verdict"] =
+      hasTruth && hasPred ? "tp" : !hasTruth && !hasPred ? "tn" : !hasTruth && hasPred ? "fp" : "fn";
+    if (verdict === "tp") wTp += 1;
+    else if (verdict === "tn") wTn += 1;
+    else if (verdict === "fp") wFp += 1;
+    else wFn += 1;
+
+    const m = matchWindowSegs(keptPreds, d.truth_segs, iouMin);
     tp += m.pairs.length;
     fp += m.fp;
     fn += m.fn;
@@ -84,8 +101,13 @@ export function recomputeVersionAt(
       if (pair.maxEdgeErrMs <= tolMs) withinCnt += 1;
       if (wMaxEdge == null || pair.maxEdgeErrMs > wMaxEdge) wMaxEdge = pair.maxEdgeErrMs;
     }
+    const maxConf = keptPreds.reduce<number | null>((mx, s) => (s[2] != null && (mx == null || s[2] > mx) ? s[2] : mx), null);
     return {
       ...d,
+      verdict,
+      pred_n: keptPreds.length,
+      pred_segs: keptPreds,
+      max_conf: maxConf,
       event_tp: m.pairs.length,
       event_fp: m.fp,
       event_fn: m.fn,
@@ -99,6 +121,25 @@ export function recomputeVersionAt(
   const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
   const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
 
+  const wTotal = wTp + wTn + wFp + wFn;
+  const wPrec = wTp + wFp > 0 ? wTp / (wTp + wFp) : 0;
+  const wRec = wTp + wFn > 0 ? wTp / (wTp + wFn) : 0;
+  const wF1 = wPrec + wRec > 0 ? (2 * wPrec * wRec) / (wPrec + wRec) : 0;
+  const nextWindow = r.window
+    ? {
+        ...r.window,
+        n_windows: wTotal,
+        tp: wTp,
+        tn: wTn,
+        fp: wFp,
+        fn: wFn,
+        accuracy: wTotal > 0 ? (wTp + wTn) / wTotal : 0,
+        precision: wPrec,
+        recall: wRec,
+        f1: wF1,
+      }
+    : r.window;
+
   return {
     ...r,
     tp,
@@ -107,6 +148,7 @@ export function recomputeVersionAt(
     precision,
     recall,
     f1,
+    window: nextWindow,
     mean_iou: tp > 0 ? iouSum / tp : null,
     d_start_abs_mean_ms: tp > 0 ? dStartSum / tp : null,
     d_end_abs_mean_ms: tp > 0 ? dEndSum / tp : null,

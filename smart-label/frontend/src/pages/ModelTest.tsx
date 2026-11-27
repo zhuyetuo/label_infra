@@ -18,7 +18,7 @@ import {
 import { listDogs } from "@/api/dogs";
 import { CopyOutlined, DownloadOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
-import { analyzeIouAndEdge, recomputeVersionAt } from "@/utils/evalMetrics";
+import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
@@ -1064,8 +1064,12 @@ const DIAG_COLOR: Record<string, string> = {
   model_fp: "red",
 };
 
-function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
-  row: EvalRow; iouMin: number; edgeTolSec?: number; items: TestItem[]; colors: Record<string, string>;
+function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, iouBucketFilter, onClearIouBucket, focusEdgeSeq, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
+  row: EvalRow; iouMin: number; edgeTolSec?: number;
+  iouBucketFilter?: { label: string; min: number; max: number } | null;
+  onClearIouBucket?: () => void;
+  focusEdgeSeq?: number;
+  items: TestItem[]; colors: Record<string, string>;
   opening: number | null; promoting: number | null; frozen?: boolean;
   onOpenTask: (taskId: number, seekMs: number, opts?: OpenTaskOpts) => void;
   onPromoteItem: (itemId: number) => void;
@@ -1076,6 +1080,12 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
   useEffect(() => {
     setDiagFilter(null);
   }, [row.key]);
+  useEffect(() => {
+    if (focusEdgeSeq) {
+      setFilter("edge");
+      setDiagFilter(null);
+    }
+  }, [focusEdgeSeq]);
   const itemByWin = useMemo(() => {
     const m = new Map<string, TestItem>();
     items.forEach((it) => m.set(`${it.sample_id}:${it.start_ms}:${it.end_ms}`, it));
@@ -1141,6 +1151,12 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
     return { fn: sortDesc(fnMap), fp: sortDesc(fpMap) };
   }, [details]);
   const shown = useMemo(() => {
+    if (iouBucketFilter) {
+      return details.filter((d) => {
+        const m = matchWindowSegs(d.pred_segs, d.truth_segs, 0.01);
+        return m.pairs.some((pair) => pair.iou >= iouBucketFilter.min && pair.iou < iouBucketFilter.max);
+      });
+    }
     let base: WindowDetail[];
     if (filter === "all") base = details;
     else if (filter === "err") base = details.filter((d) => d.verdict === "fp" || d.verdict === "fn");
@@ -1148,7 +1164,7 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
     else base = details.filter((d) => d.verdict === filter);
     if (diagFilter) return base.filter((d) => d.diag?.code === diagFilter);
     return base;
-  }, [details, filter, diagFilter]);
+  }, [details, filter, diagFilter, iouBucketFilter]);
 
   if (!total) return null;
   const colorOf = (k: string): string | undefined => colors[k] ?? (k === "其他" ? "#8c8c8c" : undefined);
@@ -1163,10 +1179,12 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
   ];
 
   const selectVerdict = (k: typeof filter) => {
+    onClearIouBucket?.();
     setFilter(k);
     setDiagFilter(null);
   };
   const toggleDiag = (code: string, verdict: "fn" | "fp") => {
+    onClearIouBucket?.();
     if (diagFilter === code) {
       setDiagFilter(null);
     } else {
@@ -1198,7 +1216,7 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
       {/* 可点击筛选卡片 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
         {cards.map((c) => {
-          const active = filter === c.k && !diagFilter;
+          const active = !iouBucketFilter && filter === c.k && !diagFilter;
           return (
             <div key={c.k} onClick={() => selectVerdict(c.k)} style={{
               cursor: "pointer", padding: "8px 10px", borderRadius: 8,
@@ -1275,6 +1293,18 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
         </div>
       )}
 
+      {iouBucketFilter && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8,
+          padding: "6px 10px", borderRadius: 6, background: "rgba(179,127,235,0.14)", border: "1px solid rgba(179,127,235,0.45)", fontSize: 12,
+        }}>
+          <span>
+            当前按上方 <b>IoU 区间 {iouBucketFilter.label}</b> 筛选（共 <b>{shown.length}</b> 个窗口，点右侧「看视频 / 纠偏」可逐条排查）
+          </span>
+          <Button size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={onClearIouBucket}>清除 IoU 筛选</Button>
+        </div>
+      )}
+
       {/* 片段明细表 */}
       <Table
         size="small"
@@ -1310,9 +1340,11 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
             ),
           },
           {
-            title: <Tooltip title="上轨绿色 = 人工标注；下轨蓝色/橙色 = 模型预测（点下方具体时间胶囊可直接跳到该秒数）">标注 vs 预测</Tooltip>, width: 265,
+            title: <Tooltip title="上轨绿色 = 人工标注；下轨蓝色/橙色 = 模型预测（点下方具体时间胶囊可直接跳到该秒数）">标注 vs 预测</Tooltip>, width: 280,
             render: (_: unknown, d: WindowDetail) => {
               const it = itemByWin.get(`${d.sample_id}:${d.start_ms}:${d.end_ms}`);
+              const pairs = matchWindowSegs(d.pred_segs, d.truth_segs, 0.01).pairs;
+              const fmtSigned = (ms: number) => `${ms >= 0 ? "+" : ""}${(ms / 1000).toFixed(1)}s`;
               return (
                 <div>
                   <MiniTimeline d={d} />
@@ -1321,10 +1353,36 @@ function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, 
                     {d.mean_iou != null && ` · IoU ${Math.round(d.mean_iou * 100)}%`}
                     {d.max_edge_err_ms != null && (
                       <span style={{ color: d.edge_aligned === false ? "#b37feb" : undefined }}>
-                        {` · 偏 ${(d.max_edge_err_ms / 1000).toFixed(1)}s`}
+                        {` · 最大偏 ${(d.max_edge_err_ms / 1000).toFixed(1)}s`}
                       </span>
                     )}
                   </div>
+                  {pairs.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 3 }}>
+                      {pairs.slice(0, 3).map((pr, idx) => {
+                        const ps = d.pred_segs[pr.pi];
+                        const ts = d.truth_segs[pr.ti];
+                        const ds = ps[0] - ts[0];
+                        const de = ps[1] - ts[1];
+                        const badEdge = pr.maxEdgeErrMs > edgeTolSec * 1000;
+                        const passIou = pr.iou >= iouMin;
+                        return (
+                          <div key={idx}
+                            onClick={() => it && openDetailAt(d, it, [d.start_ms + Math.min(ps[0], ts[0]), d.start_ms + Math.max(ps[1], ts[1])])}
+                            style={{ fontSize: 11, cursor: it ? "pointer" : "default", color: "#bbb", lineHeight: 1.35 }}>
+                            <span style={{ color: passIou ? "#52c41a" : "#faad14", fontWeight: 600 }}>
+                              IoU {Math.round(pr.iou * 100)}%
+                            </span>
+                            {" · "}
+                            <span style={{ color: badEdge ? "#b37feb" : "#8c8c8c" }}>
+                              起 {fmtSigned(ds)} / 止 {fmtSigned(de)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {pairs.length > 3 && <div style={{ fontSize: 10.5, color: "#888" }}>+{pairs.length - 3} 对配对</div>}
+                    </div>
+                  )}
                   {(d.pred_segs.length > 0 || d.truth_segs.length > 0) && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
                       {d.pred_segs.slice(0, 2).map(([s, e, conf], idx) => (
@@ -1555,7 +1613,10 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [notes, setNotes] = useState<string[]>([]);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [edgeTolSec, setEdgeTolSec] = useState<number>(2);
+  const [confMin, setConfMin] = useState<number>(0);
   const [showIouDetail, setShowIouDetail] = useState(false);
+  const [iouBucketFilter, setIouBucketFilter] = useState<{ label: string; min: number; max: number } | null>(null);
+  const [focusEdgeSeq, setFocusEdgeSeq] = useState(0);
   const [sharing, setSharing] = useState(false);
   const [shareModal, setShareModal] = useState<{ url: string; title: string } | null>(null);
   const evalSeqRef = useRef(0);
@@ -1746,8 +1807,8 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
 
   const rows = useMemo(() => {
     const filtered = p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label);
-    return filtered.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec) }));
-  }, [allRows, p.label, p.iou, edgeTolSec]);
+    return filtered.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin) }));
+  }, [allRows, p.label, p.iou, edgeTolSec, confMin]);
 
   const activeRowForPanel = useMemo(
     () => rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0] ?? null,
@@ -1964,6 +2025,22 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <Space wrap size={10} align="center">
+              <Tooltip title="提高输出置信度门槛，过滤低置信度误报（0ms 实时联动窗口级 + 事件级指标；若要放宽到比模型原输出更低，需选更宽松的后处理版本重跑）">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#69b1ff", cursor: "help" }}>
+                  置信度过滤 ({confMin > 0 ? `≥ ${Math.round(confMin * 100)}%` : "不限"})
+                </span>
+              </Tooltip>
+              <Slider
+                min={0} max={0.95} step={0.05} value={confMin}
+                onChange={(v) => setConfMin(v)}
+                tooltip={{ formatter: (v) => (v ? `置信度 ≥ ${Math.round(v * 100)}%` : "不限（使用模型原输出）") }}
+                style={{ width: 110, margin: "0 4px" }}
+              />
+              {confMin > 0 && (
+                <Button size="small" type="link" style={{ padding: 0, fontSize: 11, height: 20 }} onClick={() => setConfMin(0)}>重置</Button>
+              )}
+            </Space>
+            <Space wrap size={10} align="center">
               <Tooltip title="预测动作时段与人工标注的重叠比例门槛（交并比）。拖动滑块可 0ms 实时看事件级 F1 变化">
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#b37feb", cursor: "help" }}>
                   事件重叠门槛 (IoU ≥ {Math.round(p.iou * 100)}%)
@@ -2007,22 +2084,34 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
             }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-                  所有重叠配对的 IoU 分布（共 {iouAnalysis.totalOverlapped} 对有重叠 / 人工 {iouAnalysis.totalTruth} 次 / 预测 {iouAnalysis.totalPred} 次）
+                  所有重叠配对的 IoU 分布（点击任意柱条，下方直接筛出具体明细）
                 </div>
                 {(() => {
                   const maxC = Math.max(1, ...iouAnalysis.buckets.map((b) => b.count));
                   return iouAnalysis.buckets.map((b) => {
                     const passed = b.min >= p.iou - 1e-6;
+                    const active = iouBucketFilter?.label === b.label;
                     return (
-                      <div key={b.label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontSize: 12 }}>
-                        <span style={{ width: 58, color: passed ? "#ddd" : "#888" }}>{b.label}</span>
+                      <div key={b.label}
+                        onClick={() => {
+                          if (!b.count) return;
+                          setIouBucketFilter(active ? null : { label: b.label, min: b.min, max: b.max });
+                        }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontSize: 12,
+                          padding: "2px 6px", borderRadius: 4,
+                          cursor: b.count ? "pointer" : "default",
+                          background: active ? "rgba(179,127,235,0.22)" : "transparent",
+                          border: active ? "1px solid rgba(179,127,235,0.65)" : "1px solid transparent",
+                        }}>
+                        <span style={{ width: 58, color: active ? "#fff" : passed ? "#ddd" : "#888", fontWeight: active ? 700 : 400 }}>{b.label}</span>
                         <div style={{ flex: 1, height: 14, background: "rgba(128,128,128,0.16)", borderRadius: 3, overflow: "hidden" }}>
                           <div style={{
                             width: `${b.count ? Math.max(4, Math.round((b.count / maxC) * 100)) : 0}%`,
-                            height: "100%", background: b.color, opacity: passed ? 1 : 0.4,
+                            height: "100%", background: b.color, opacity: active || passed ? 1 : 0.45,
                           }} />
                         </div>
-                        <span style={{ width: 62, textAlign: "right", fontSize: 11, color: passed ? "#52c41a" : "#888" }}>
+                        <span style={{ width: 62, textAlign: "right", fontSize: 11, color: active ? "#fff" : passed ? "#52c41a" : "#888" }}>
                           {b.count} 对 {passed ? "✓" : ""}
                         </span>
                       </div>
@@ -2062,11 +2151,15 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                   </tbody>
                 </table>
                 <div style={{ fontSize: 11, color: "#999", marginTop: 6 }}>
-                  当前 IoU 下起止对齐率：
+                  当前 IoU 下起止对齐率（点档位直接看下方超差明细）：
                   {iouAnalysis.edgeSweep.map((e) => (
                     <Tag key={e.tolSec} color={e.tolSec === edgeTolSec ? "cyan" : "default"}
                       style={{ cursor: "pointer", marginInlineEnd: 4, fontSize: 11 }}
-                      onClick={() => setEdgeTolSec(e.tolSec)}>
+                      onClick={() => {
+                        setEdgeTolSec(e.tolSec);
+                        setIouBucketFilter(null);
+                        setFocusEdgeSeq((n) => n + 1);
+                      }}>
                       ±{e.tolSec}s: {e.ratio != null ? pct(e.ratio) : "-"}
                     </Tag>
                   ))}
@@ -2091,7 +2184,10 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
       />
       {rows.length > 0 && <EvalNotes notes={notes} hasRows />}
       {activeRowForPanel ? (
-        <EvalVisualPanel row={activeRowForPanel} iouMin={p.iou} edgeTolSec={edgeTolSec} items={items} colors={colors} opening={opening}
+        <EvalVisualPanel row={activeRowForPanel} iouMin={p.iou} edgeTolSec={edgeTolSec}
+          iouBucketFilter={iouBucketFilter} onClearIouBucket={() => setIouBucketFilter(null)}
+          focusEdgeSeq={focusEdgeSeq}
+          items={items} colors={colors} opening={opening}
           promoting={promoting} frozen={frozen} onOpenTask={onOpenTask} onPromoteItem={onPromoteItem} />
       ) : null}
       <Modal
