@@ -1057,11 +1057,16 @@ export function buildTestReportHtml(input: TestReportInput): string {
             </g>
             <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">真</text>
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect id="eduWinPred" x="72" y="36" width="52" height="10" rx="3" fill="#3b82f6" style="transition:all .25s" />
+            <rect id="eduWinPred" x="72" y="36" width="52" height="10" rx="3" fill="#3b82f6" />
             <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
             <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
             <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)</text>
           </svg>
+          <div class="edu-ctrl" id="eduWinSlideRow">
+            <span>拖动预测位置：</span>
+            <input type="range" id="eduWinRange" class="edu-slider" style="accent-color:#2563eb" min="4" max="184" step="2" value="72" />
+            <b id="eduWinPos" style="color:#15803d">都算对 ✓</b>
+          </div>
           <div class="edu-ctrl">
             <button class="edu-wbtn active" data-w="tp">命中 TP</button>
             <button class="edu-wbtn" data-w="tn">正常 TN</button>
@@ -1360,24 +1365,45 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var winTruth = document.getElementById("eduWinTruth");
   var winPred = document.getElementById("eduWinPred");
   var winTxt = document.getElementById("eduWinTxt");
+  var winRange = document.getElementById("eduWinRange");
+  var winSlideRow = document.getElementById("eduWinSlideRow");
+  var winPosTxt = document.getElementById("eduWinPos");
+  var curWinState = "tp";
   var WIN_STATES = {
-    tp: { t: true, p: true, fill: "#3b82f6", color: "#15803d", txt: "✓ 实际有动作，模型也报了 → 命中 (TP)" },
+    tp: { t: true, p: true, fill: "#3b82f6", color: "#15803d", txt: "✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)" },
     tn: { t: false, p: false, fill: "#3b82f6", color: "#1d4ed8", txt: "✓ 实际无动作，模型也没报 → 正常通过 (TN)" },
     fp: { t: false, p: true, fill: "#f59e0b", color: "#b45309", txt: "✗ 实际无动作，模型乱报了 → 误报 (FP)" },
     fn: { t: true, p: false, fill: "#ef4444", color: "#dc2626", txt: "✗ 实际有动作，模型漏报了 → 漏报 (FN)" },
   };
+  function updateWinSlide() {
+    if (!winRange || !winPred) return;
+    var x = parseFloat(winRange.value) || 72;
+    winPred.setAttribute("x", x.toFixed(1));
+    if (curWinState === "tp" && winTxt && winPosTxt) {
+      var ov = Math.max(0, Math.min(116, x + 52) - Math.max(64, x));
+      winPosTxt.textContent = ov > 0 ? "有重叠 ✓" : "不重叠也算对 ✓";
+      winTxt.textContent = ov > 0
+        ? "✓ 只要这 1 分钟内报了（有重叠）→ 窗口级命中 (TP)"
+        : "✓ 哪怕位置完全没重叠，这 1 分钟有报就算命中 (TP)";
+    }
+  }
   function applyEduWin(k) {
-    var st = WIN_STATES[k] || WIN_STATES.tp;
+    curWinState = k || "tp";
+    var st = WIN_STATES[curWinState] || WIN_STATES.tp;
     if (winTruth) winTruth.style.display = st.t ? "" : "none";
     if (winPred) {
       winPred.style.display = st.p ? "" : "none";
       winPred.setAttribute("fill", st.fill);
     }
+    if (winSlideRow) winSlideRow.style.opacity = st.p ? "1" : "0.35";
+    if (winRange) winRange.disabled = !st.p;
+    if (winPosTxt) winPosTxt.textContent = curWinState === "tp" ? "都算对 ✓" : curWinState === "fp" ? "在哪都算误报" : "无预测条";
     if (winTxt) {
       winTxt.setAttribute("fill", st.color);
       winTxt.textContent = st.txt;
     }
   }
+  if (winRange) winRange.addEventListener("input", updateWinSlide);
   winBtns.forEach(function(b) {
     b.addEventListener("click", function() {
       winBtns.forEach(function(x) { x.classList.remove("active"); });
