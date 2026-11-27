@@ -1073,7 +1073,7 @@ async def stream_report_video(
         real_path = resolve_nas_path(rel)
     except PathTraversalError:
         raise HTTPException(400, "非法路径") from None
-    if not real_path.is_file():
+    if not Path(real_path).is_file():
         raise HTTPException(404, "NAS 上找不到该视频文件")
     return await stream_file(request, real_path, "video/mp4")
 
