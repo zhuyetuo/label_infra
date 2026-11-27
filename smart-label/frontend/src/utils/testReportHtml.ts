@@ -516,8 +516,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
         ? c.actualLabels.slice(0, 3).map((lb) => `<span class="pill pill-gray">${esc(lb)}</span>`).join("")
         : `<span class="muted">无标注</span>`;
       const videoTitle = `${c.breed || c.dog}${c.size ? `(${c.size}型)` : ""} · ${c.winText} · ${c.tag}`;
+      const tSegJson = JSON.stringify(c.truthSegs);
+      const pSegJson = JSON.stringify(c.predSegs.map(([s, e]) => [s, e]));
       const videoBtn = c.sampleId
-        ? `<button class="btn-play" data-sid="${c.sampleId}" data-seek="${(c.seekSec ?? c.winStartSec ?? 0).toFixed(2)}" data-ws="${(c.winStartSec ?? 0).toFixed(2)}" data-we="${(c.winEndSec ?? 0).toFixed(2)}" data-title="${esc(videoTitle)}" data-reason="${esc(c.reason || "")}">▶ 看视频</button>`
+        ? `<button class="btn-play" data-sid="${c.sampleId}" data-seek="${(c.seekSec ?? c.winStartSec ?? 0).toFixed(2)}" data-ws="${(c.winStartSec ?? 0).toFixed(2)}" data-we="${(c.winEndSec ?? 0).toFixed(2)}" data-verdict="${c.verdict}" data-tseg="${esc(tSegJson)}" data-pseg="${esc(pSegJson)}" data-title="${esc(videoTitle)}" data-reason="${esc(c.reason || "")}">▶ 看视频</button>`
         : `<span class="muted">-</span>`;
       return `<tr class="case-row" data-kind="${kind}" data-idx="${idx}">
         <td class="muted">${idx + 1}</td>
@@ -919,6 +921,28 @@ export function buildTestReportHtml(input: TestReportInput): string {
     border-radius: 5px; padding: 3px 9px; font-size: 11.5px; cursor: pointer;
   }
   .v-btn.active, .v-btn:hover { background: #4f46e5; border-color: #6366f1; color: #fff; }
+  /* 弹窗内双轨窗口进度条（标注 vs 预测 + 实时播放线） */
+  .v-tl-wrap {
+    padding: 10px 16px 8px; background: #0f172a; border-top: 1px solid rgba(255,255,255,0.08);
+    user-select: none;
+  }
+  .v-tl-head {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    font-size: 11.5px; color: #cbd5e1; margin-bottom: 6px;
+  }
+  .v-tl-box {
+    position: relative; height: 34px; cursor: pointer; border-radius: 6px;
+    background: rgba(255,255,255,0.04); padding: 4px 0;
+  }
+  .v-tl-row {
+    position: relative; height: 10px; margin: 2px 0; border-radius: 3px;
+    background: rgba(148,163,184,0.2); overflow: hidden;
+  }
+  .v-tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+  .v-tl-head-line {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: #f43f5e;
+    box-shadow: 0 0 6px #f43f5e; pointer-events: none; left: 0%;
+  }
 
   /* 签核页脚 */
   .signoff {
@@ -1304,6 +1328,22 @@ export function buildTestReportHtml(input: TestReportInput): string {
       <button class="v-close" id="vClose" title="关闭 (ESC)">×</button>
     </div>
     <video class="v-player" id="vPlayer" controls playsinline preload="metadata"></video>
+    <!-- 窗口内双轨可视化进度条：上轨人工标注(绿) / 下轨模型预测(蓝或橙) / 红色实时播放线，点击任意位置可跳转 -->
+    <div class="v-tl-wrap">
+      <div class="v-tl-head">
+        <span>
+          <i class="dot" style="background:#10b981"></i>人工标注
+          <i class="dot" id="vPredDot" style="background:#3b82f6;margin-left:10px"></i><span id="vPredLbl">模型预测</span>
+          <span style="color:#64748b;margin-left:8px">（点击进度条任意位置可跳转）</span>
+        </span>
+        <span id="vCurPos" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#f8fafc">0:00</span>
+      </div>
+      <div class="v-tl-box" id="vTlBox">
+        <div class="v-tl-row" id="vTlTruth"></div>
+        <div class="v-tl-row" id="vTlPred"></div>
+        <div class="v-tl-head-line" id="vTlPlayhead"></div>
+      </div>
+    </div>
     <div class="v-bar">
       <div class="v-ctrl">
         <button class="v-btn" id="vReplay">↺ 重播该动作</button>
@@ -1587,8 +1627,43 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var vLoop = document.getElementById("vLoop");
   var vReplay = document.getElementById("vReplay");
   var vClose = document.getElementById("vClose");
+  var vTlBox = document.getElementById("vTlBox");
+  var vTlTruth = document.getElementById("vTlTruth");
+  var vTlPred = document.getElementById("vTlPred");
+  var vTlPlayhead = document.getElementById("vTlPlayhead");
+  var vCurPos = document.getElementById("vCurPos");
+  var vPredDot = document.getElementById("vPredDot");
+  var vPredLbl = document.getElementById("vPredLbl");
   var spdBtns = Array.prototype.slice.call(document.querySelectorAll(".v-spd"));
   var curSeek = 0, curWs = 0, curWe = 0, curSrc = "";
+
+  function renderVideoTrack(container, segs, durMs, color) {
+    if (!container) return;
+    container.innerHTML = "";
+    if (!segs || !segs.length || durMs <= 0) return;
+    segs.forEach(function(seg) {
+      var s = seg[0], e = seg[1];
+      var left = Math.max(0, Math.min(100, (s / durMs) * 100));
+      var width = Math.max(1.2, Math.min(100 - left, ((e - s) / durMs) * 100));
+      var div = document.createElement("div");
+      div.className = "v-tl-seg";
+      div.style.left = left.toFixed(2) + "%";
+      div.style.width = width.toFixed(2) + "%";
+      div.style.background = color;
+      container.appendChild(div);
+    });
+  }
+  function syncPlayhead() {
+    if (!vPlayer || !vTlPlayhead) return;
+    var dur = Math.max(0.1, curWe - curWs);
+    var rel = vPlayer.currentTime - curWs;
+    var pctX = Math.max(0, Math.min(100, (rel / dur) * 100));
+    vTlPlayhead.style.left = pctX.toFixed(2) + "%";
+    if (vCurPos) {
+      var rStr = rel >= 0 && rel <= dur ? ("（窗口内 " + rel.toFixed(1) + "s / " + Math.round(dur) + "s）") : "";
+      vCurPos.textContent = fmtT(vPlayer.currentTime) + rStr;
+    }
+  }
 
   function fmtT(s) {
     s = Math.max(0, Math.round(s));
@@ -1619,6 +1694,16 @@ export function buildTestReportHtml(input: TestReportInput): string {
     if (vTitle) vTitle.textContent = btn.getAttribute("data-title") || "视频验证";
     if (vReason) vReason.textContent = btn.getAttribute("data-reason") || "";
     if (vRange) vRange.textContent = "窗口 " + fmtT(curWs) + " ~ " + fmtT(curWe);
+    var verdict = btn.getAttribute("data-verdict") || "";
+    var pColor = verdict === "fp" ? "#f59e0b" : "#3b82f6";
+    if (vPredDot) vPredDot.style.background = pColor;
+    if (vPredLbl) vPredLbl.textContent = verdict === "fp" ? "模型误报(橙)" : verdict === "fn" ? "模型漏报(无预测)" : "模型预测(蓝)";
+    var tSegs = [], pSegs = [];
+    try { tSegs = JSON.parse(btn.getAttribute("data-tseg") || "[]"); } catch (e) {}
+    try { pSegs = JSON.parse(btn.getAttribute("data-pseg") || "[]"); } catch (e) {}
+    var durMs = Math.max(1000, (curWe - curWs) * 1000);
+    renderVideoTrack(vTlTruth, tSegs, durMs, "#10b981");
+    renderVideoTrack(vTlPred, pSegs, durMs, pColor);
     var src = base + "/" + sid;
     vModal.classList.add("open");
     if (curSrc !== src) {
@@ -1639,9 +1724,20 @@ export function buildTestReportHtml(input: TestReportInput): string {
   });
   if (vPlayer) {
     vPlayer.addEventListener("timeupdate", function() {
+      syncPlayhead();
       if (vLoop && vLoop.checked && curWe > curWs && vPlayer.currentTime >= curWe) {
         vPlayer.currentTime = curSeek;
       }
+    });
+  }
+  if (vTlBox) {
+    vTlBox.addEventListener("click", function(e) {
+      if (!vPlayer || curWe <= curWs) return;
+      var rect = vTlBox.getBoundingClientRect();
+      var ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+      vPlayer.currentTime = curWs + ratio * (curWe - curWs);
+      syncPlayhead();
+      vPlayer.play().catch(function(){});
     });
   }
   if (vReplay) vReplay.addEventListener("click", function() {
