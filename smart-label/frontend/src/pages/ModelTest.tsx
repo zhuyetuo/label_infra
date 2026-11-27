@@ -2066,12 +2066,27 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 ))}
               </Space>
             </Space>
-            <Space wrap size={10} align="center">
-              <Tooltip title="抓对的动作里，开始/结束时间偏差在多少秒内算「对齐」（动作本身较长或有滑窗延迟时可放宽到 ±3s 或 ±5s）">
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#36cfc9", cursor: "help" }}>起止容差：</span>
+            <Space wrap size={8} align="center">
+              <Tooltip title="抓对的动作里，开始/结束时间偏差在多少秒内算「对齐」（拖动滑块 0ms 实时重算，动作较长或有滑窗延迟时可放宽）">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#36cfc9", cursor: "help" }}>
+                  起止容差 (±{edgeTolSec}s)
+                </span>
               </Tooltip>
-              <Segmented size="small" value={edgeTolSec} onChange={(v) => setEdgeTolSec(Number(v))}
-                options={[1, 2, 3, 5].map((s) => ({ value: s, label: `±${s}s` }))} />
+              <Slider
+                min={0.5} max={10} step={0.5} value={edgeTolSec}
+                onChange={(v) => setEdgeTolSec(v)}
+                tooltip={{ formatter: (v) => `±${v ?? 2}s` }}
+                style={{ width: 110, margin: "0 4px" }}
+              />
+              <Space size={4}>
+                {[1, 2, 3, 5].map((s) => (
+                  <Button key={s} size="small" type={Math.abs(edgeTolSec - s) < 0.01 ? "primary" : "default"}
+                    style={{ padding: "0 6px", fontSize: 11, height: 22 }}
+                    onClick={() => setEdgeTolSec(s)}>
+                    ±{s}s
+                  </Button>
+                ))}
+              </Space>
               {iouAnalysis && (
                 <Button size="small" type={showIouDetail ? "primary" : "default"} ghost={showIouDetail}
                   onClick={() => setShowIouDetail((v) => !v)}>
