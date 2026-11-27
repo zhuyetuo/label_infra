@@ -314,13 +314,15 @@ export default function SegmentPanel({
     }
     return n;
   }, [items, labelMap]);
-  // 相邻同类别合并推荐：默认间隔 ≤ 1.5s（含首尾紧挨着 / 轻微重叠），且中间不能夹着其他同轨异类片段
-  // （运动轨也不能跨过具体行为片段合并，避免把刚挖开的「活动」重新合回去）
+  // 相邻同类别合并推荐：默认间隔 ≤ 1.5s（含首尾紧挨着 / 轻微重叠），与后端 _merge_adjacent_task 规则一致：
+  // 1) 跳过存疑片段（uncertain）；
+  // 2) 中间不能夹着「未佩戴 / 无信号」（device 轨）、同轨异类片段，或运动轨与具体行为轨互相隔断。
   const [mergeGapMs, setMergeGapMs] = useState(1500);
   const [mergePopOpen, setMergePopOpen] = useState(false);
   const adjacentGroups = useMemo(() => {
     const byLabel = new Map<number, LabelItem[]>();
     for (const it of items) {
+      if (it.uncertain) continue;
       const arr = byLabel.get(it.label_id) ?? [];
       arr.push(it);
       byLabel.set(it.label_id, arr);
@@ -338,6 +340,7 @@ export default function SegmentPanel({
       if (list.length < 2) continue;
       const sorted = [...list].sort((a, b) => a.start_time_ms - b.start_time_ms || a.end_time_ms - b.end_time_ms);
       const tr = trackOf(labelMap, lid);
+      const myIsBeh = isBehaviorTrack(labelMap, lid);
       let cluster: LabelItem[] = [sorted[0]];
       let clusterEnd = sorted[0].end_time_ms;
       let clusterMaxGap = 0;
@@ -363,10 +366,17 @@ export default function SegmentPanel({
         } else if (gap > 0) {
           blocked = items.some((o) => {
             if (o.label_id === lid) return false;
+            if (Math.min(o.end_time_ms, cur.start_time_ms) <= Math.max(o.start_time_ms, clusterEnd)) {
+              return false;
+            }
             const oTr = trackOf(labelMap, o.label_id);
-            const sameScope = oTr === tr || (tr === "motion" && isBehaviorTrack(labelMap, o.label_id));
-            if (!sameScope) return false;
-            return Math.min(o.end_time_ms, cur.start_time_ms) - Math.max(o.start_time_ms, clusterEnd) >= 200;
+            const oIsBeh = isBehaviorTrack(labelMap, o.label_id);
+            return (
+              oTr === "device" ||
+              oTr === tr ||
+              (tr === "motion" && oIsBeh) ||
+              (myIsBeh && oTr === "motion")
+            );
           });
         }
         if (!blocked) {
