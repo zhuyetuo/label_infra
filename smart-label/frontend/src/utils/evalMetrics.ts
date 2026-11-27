@@ -80,12 +80,34 @@ export function recomputeVersionAt(
       : d.pred_segs;
     const hasTruth = d.truth_segs.length > 0;
     const hasPred = keptPreds.length > 0;
+    // 片段级判定：必须真实有重叠（>0ms）才算命中，完全不重叠绝不算 tp
+    const hasOverlap =
+      hasTruth &&
+      hasPred &&
+      keptPreds.some(([ps, pe]) => d.truth_segs.some(([ts, te]) => Math.min(pe, te) > Math.max(ps, ts)));
     const verdict: WindowDetail["verdict"] =
-      hasTruth && hasPred ? "tp" : !hasTruth && !hasPred ? "tn" : !hasTruth && hasPred ? "fp" : "fn";
-    if (verdict === "tp") wTp += 1;
-    else if (verdict === "tn") wTn += 1;
-    else if (verdict === "fp") wFp += 1;
-    else wFn += 1;
+      hasTruth && hasPred
+        ? hasOverlap ? "tp" : "fn"
+        : !hasTruth && !hasPred
+          ? "tn"
+          : !hasTruth && hasPred
+            ? "fp"
+            : "fn";
+
+    // 真实滑动时间窗级（1s 步长逐窗比对，彻底对齐真实连续流推理，无 1 分钟框凑数）
+    const durMs = Math.max(1000, d.end_ms - d.start_ms);
+    const stepMs = 1000;
+    const nSteps = Math.max(1, Math.round(durMs / stepMs));
+    for (let k = 0; k < nSteps; k++) {
+      const t0 = k * stepMs;
+      const t1 = t0 + stepMs;
+      const inT = d.truth_segs.some(([s, e]) => s < t1 && e > t0);
+      const inP = keptPreds.some(([s, e]) => s < t1 && e > t0);
+      if (inT && inP) wTp += 1;
+      else if (!inT && !inP) wTn += 1;
+      else if (!inT && inP) wFp += 1;
+      else wFn += 1;
+    }
 
     const m = matchWindowSegs(keptPreds, d.truth_segs, iouMin);
     tp += m.pairs.length;

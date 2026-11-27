@@ -1016,8 +1016,8 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title="把每个测试片段（如 1 分钟）当成一道「有没有抓挠」的是非题，衡量有没有报警/记录准不准">
-        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 窗口级（这段有没有）</span>
+      <Tooltip title="按 1 秒滑动时间窗逐窗比对：这一秒人工标了 vs 模型报了是否一致（对齐真实连续流推理，不按 1 分钟片段凑数）">
+        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 滑动时间窗级（1s 步长）</span>
       </Tooltip>
     ),
     onHeaderCell: () => ({
@@ -1028,7 +1028,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
       },
     }),
     children: styleGroupCols(EVAL_GROUP_THEME.window, [
-      { title: "段数", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
+      { title: "窗数", key: "w_n", width: 64, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows.toLocaleString() : "-" },
       { title: "准确率", key: "w_acc", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.accuracy) : "-" },
       { title: "精确率", key: "w_p", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.precision) : "-" },
       { title: "召回率", key: "w_r", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.recall) : "-" },
@@ -1325,7 +1325,7 @@ function EvalVisualPanel({ row, siblingRows, onSelectRow, iouMin, edgeTolSec = 2
             <Space size={4} wrap>
               {siblingRows.map((sr) => {
                 const isCur = sr.key === row.key;
-                const srErr = (sr.r.window?.fp ?? 0) + (sr.r.window?.fn ?? 0);
+                const srErr = (sr.r.window_details ?? []).filter((d) => d.verdict === "fp" || d.verdict === "fn").length;
                 return (
                   <Button
                     key={sr.key}

@@ -1117,8 +1117,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
 
     <div class="gauges-grid">
-      ${renderGaugeSvg(pw?.accuracy, "#2563eb", "窗口级准确率", pw ? `共 ${pw.n_windows} 段 · 判对 ${pw.tp + pw.tn} 段` : "-")}
-      ${renderGaugeSvg(pw?.f1, "#3b82f6", "窗口级 F1（有无动作）", pw ? `精确 ${pct(pw.precision)} / 召回 ${pct(pw.recall)}` : "-")}
+      ${renderGaugeSvg(pw?.accuracy, "#2563eb", "滑动时间窗准确率", pw ? `共 ${pw.n_windows.toLocaleString()} 个 1s 窗 · 判对 ${(pw.tp + pw.tn).toLocaleString()} 窗` : "-")}
+      ${renderGaugeSvg(pw?.f1, "#3b82f6", "滑动时间窗 F1（1s 步长）", pw ? `精确 ${pct(pw.precision)} / 召回 ${pct(pw.recall)}` : "-")}
       ${renderGaugeSvg(evF1, "#7c3aed", `事件级 F1（每次计次）`, pr ? `IoU≥${iouPct}% · 命中 ${pr.tp}/误 ${pr.fp}/漏 ${pr.fn}` : "-")}
       ${renderGaugeSvg(pr?.within_2s_ratio, "#0d9488", `起止 ±${edgeTolSec}s 对齐率`, pr ? `命中平均重叠 ${pct(pr.mean_iou)}` : "-")}
     </div>
@@ -1127,46 +1127,58 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
     <!-- 三大核心指标：一层比一层严的三关，用具体时间例子讲清楚 -->
     <div class="edu-banner-bar" style="margin-bottom:8px;padding:7px 12px;border-radius:7px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;color:#334155">
-      <b>三个指标其实是「一层比一层严」的三道关：</b>
-      <span style="color:#1d4ed8;font-weight:600">第 1 关看这 1 分钟有没有</span> →
-      <span style="color:#6d28d9;font-weight:600">第 2 关看具体那一次有没有重叠上</span> →
+      <b>三个指标从「逐秒时间窗 → 逐次事件 → 精确起止」层层把关：</b>
+      <span style="color:#1d4ed8;font-weight:600">第 1 关看每个 1s 滑动时间窗对不对</span> →
+      <span style="color:#6d28d9;font-weight:600">第 2 关看合并后的每次动作抓对没</span> →
       <span style="color:#0f766e;font-weight:600">第 3 关看开始/结束时间差几秒</span>
     </div>
     <div class="edu-grid">
-      <!-- ① 窗口级（动态扫描 + TP/TN/FP/FN 四态交互演示） -->
+      <!-- ① 滑动时间窗级（10 个 1s 滑动窗逐窗比对交互演示） -->
       <div class="edu-card c-win">
         <div class="edu-hd">
-          <span style="color:#1d4ed8">第 1 关 · 窗口级（这 1 分钟有没有）</span>
-          <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">点击切换</span>
+          <span style="color:#1d4ed8">第 1 关 · 滑动时间窗级（1s 逐窗比对）</span>
+          <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">拖动交互</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 68" width="100%" style="display:block">
-            <text x="4" y="12" font-size="9.5" fill="#64748b">虚线框 = 当前 1 分钟窗口（只要蓝条沾到框就算对）</text>
-            <!-- 窗口虚线框（x=48..204） -->
-            <rect x="48" y="16" width="156" height="35" rx="4" fill="rgba(37,99,235,0.06)" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="3,2" />
-            <rect x="4" y="21" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <g id="eduWinTruth">
-              <rect x="86" y="21" width="48" height="10" rx="3" fill="#10b981" />
+            <text x="4" y="12" font-size="9.5" fill="#64748b">例：10 个 1s 滑动窗，逐窗比对（不重叠就是误报+漏报）</text>
+            <!-- 10 个 1s 时间窗格子（每格宽 22px，从 x=10 到 x=230） -->
+            <g stroke="#cbd5e1" stroke-width="0.8" stroke-dasharray="2,2">
+              <line x1="10" y1="18" x2="10" y2="48" />
+              <line x1="32" y1="18" x2="32" y2="48" />
+              <line x1="54" y1="18" x2="54" y2="48" />
+              <line x1="76" y1="18" x2="76" y2="48" />
+              <line x1="98" y1="18" x2="98" y2="48" />
+              <line x1="120" y1="18" x2="120" y2="48" />
+              <line x1="142" y1="18" x2="142" y2="48" />
+              <line x1="164" y1="18" x2="164" y2="48" />
+              <line x1="186" y1="18" x2="186" y2="48" />
+              <line x1="208" y1="18" x2="208" y2="48" />
+              <line x1="230" y1="18" x2="230" y2="48" />
             </g>
-            <text x="240" y="29" font-size="9" fill="#15803d" font-weight="600">真</text>
-            <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect id="eduWinPred" x="96" y="36" width="44" height="10" rx="3" fill="#3b82f6" />
-            <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
-            <text id="eduWinTxt" x="4" y="63" font-size="10" font-weight="700" fill="#15803d">✓ 预测落在这 1 分钟窗口内 → 命中 (TP)</text>
+            <rect x="10" y="21" width="220" height="10" rx="2" fill="#e2e8f0" />
+            <g id="eduWinTruth">
+              <rect x="54" y="21" width="88" height="10" rx="2" fill="#10b981" />
+            </g>
+            <text x="236" y="29" font-size="9" fill="#15803d" font-weight="600">真</text>
+            <rect x="10" y="35" width="220" height="10" rx="2" fill="#e2e8f0" />
+            <rect id="eduWinPred" x="54" y="35" width="88" height="10" rx="2" fill="#3b82f6" />
+            <text x="236" y="43" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
+            <text id="eduWinTxt" x="4" y="63" font-size="10" font-weight="700" fill="#15803d">命中 4 窗 · 误报 0 · 漏报 0 → 时间窗 F1 = 100%</text>
           </svg>
           <div class="edu-ctrl" id="eduWinSlideRow">
-            <span>拖看窗口内外：</span>
-            <input type="range" id="eduWinRange" class="edu-slider" style="accent-color:#2563eb" min="4" max="208" step="2" value="96" />
-            <b id="eduWinPos" style="color:#15803d">在窗口内 ✓</b>
+            <span>拖看预测偏移：</span>
+            <input type="range" id="eduWinRange" class="edu-slider" style="accent-color:#2563eb" min="0" max="6" step="1" value="2" />
+            <b id="eduWinPos" style="color:#15803d">偏 0s</b>
           </div>
           <div class="edu-ctrl">
-            <button class="edu-wbtn active" data-w="tp">命中 TP</button>
-            <button class="edu-wbtn" data-w="tn">正常 TN</button>
-            <button class="edu-wbtn" data-w="fp">误报 FP</button>
-            <button class="edu-wbtn" data-w="fn">漏报 FN</button>
+            <button class="edu-wbtn active" data-w="2">完全对齐</button>
+            <button class="edu-wbtn" data-w="4">偏 2 秒</button>
+            <button class="edu-wbtn" data-w="6">完全错开</button>
+            <button class="edu-wbtn" data-w="fn">全漏报</button>
           </div>
         </div>
-        <div class="edu-desc"><b>最宽松：</b>只要这 1 分钟里真的有抓挠、模型在这 1 分钟内任意位置也报了抓挠，就算对（不管报了几次、也不管有没有重叠）。</div>
+        <div class="edu-desc"><b>贴合实际落地：</b>把连续时间流按 <b>1 秒滑动时间窗</b> 逐窗比对（如 4 小时 = 14,400 窗）；每一秒真有且报对才算命中，<b>完全不重叠算 0 命中（误报 + 漏报）</b>。</div>
       </div>
 
       <!-- ② 事件级（可拖动 IoU 交互演示） -->
@@ -1231,7 +1243,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="vis-two">
       ${renderVerdictDonutSvg(sc.tp, sc.tn, sc.fp, sc.fn)}
       <div class="cm-box">
-        <div class="cm-title">窗口级判定混淆矩阵（共 ${sc.total} 段）</div>
+        <div class="cm-title">测试片段级混淆矩阵（共 ${sc.total} 段 · 须真实重叠）</div>
         <div class="cm-grid">
           <div></div><div class="cm-hd">模型预测：有</div><div class="cm-hd">模型预测：无</div>
           <div class="cm-hd">实际：有</div>
@@ -1263,7 +1275,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
             ${showLabelCol ? `<th rowspan="2">类别</th>` : ""}
             <th rowspan="2">范围</th>
             <th rowspan="2">模型版本</th>
-            <th colspan="5" class="th-w">窗口级（整段有无）</th>
+            <th colspan="5" class="th-w">滑动时间窗级（1s 步长）</th>
             <th colspan="4" class="th-e">事件级（IoU ≥ ${iouPct}%）</th>
             <th colspan="3" class="th-b">起止对齐（命中事件）</th>
           </tr>
@@ -1506,7 +1518,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   if (btnMore) btnMore.addEventListener("click", function() { expanded = true; apply(); });
   apply();
 
-  // 三指标交互演示（窗口级四态 + IoU 滑块 + 起止对齐档位）
+  // 三指标交互演示（1s 滑动时间窗逐窗比对 + IoU 滑块 + 起止对齐档位）
   var winBtns = Array.prototype.slice.call(document.querySelectorAll(".edu-wbtn"));
   var winTruth = document.getElementById("eduWinTruth");
   var winPred = document.getElementById("eduWinPred");
@@ -1514,72 +1526,66 @@ export function buildTestReportHtml(input: TestReportInput): string {
   var winRange = document.getElementById("eduWinRange");
   var winSlideRow = document.getElementById("eduWinSlideRow");
   var winPosTxt = document.getElementById("eduWinPos");
-  var curWinState = "tp";
-  var WIN_STATES = {
-    tp: { t: true, p: true, fill: "#3b82f6", color: "#15803d", txt: "✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)" },
-    tn: { t: false, p: false, fill: "#3b82f6", color: "#1d4ed8", txt: "✓ 实际无动作，模型也没报 → 正常通过 (TN)" },
-    fp: { t: false, p: true, fill: "#f59e0b", color: "#b45309", txt: "✗ 实际无动作，模型乱报了 → 误报 (FP)" },
-    fn: { t: true, p: false, fill: "#ef4444", color: "#dc2626", txt: "✗ 实际有动作，模型漏报了 → 漏报 (FN)" },
-  };
+  var winMissMode = false;
   function updateWinSlide() {
     if (!winRange || !winPred) return;
-    var x = parseFloat(winRange.value) || 96;
-    winPred.setAttribute("x", x.toFixed(1));
-    var inWin = (x + 44) > 48 && x < 204; // 蓝条与虚线窗口框 [48, 204] 有重叠
-    if (curWinState === "tp" && winTxt && winPosTxt) {
-      if (inWin) {
-        winPred.setAttribute("fill", "#3b82f6");
-        winPosTxt.style.color = "#15803d";
-        winPosTxt.textContent = "在窗口内 ✓";
-        winTxt.setAttribute("fill", "#15803d");
-        winTxt.textContent = "✓ 预测落在这 1 分钟窗口内 → 命中 (TP)";
-      } else {
-        winPred.setAttribute("fill", "#ef4444");
-        winPosTxt.style.color = "#dc2626";
-        winPosTxt.textContent = "跑出窗口 ✗";
+    if (winTruth) winTruth.style.display = "";
+    if (winMissMode) {
+      winPred.style.display = "none";
+      if (winSlideRow) winSlideRow.style.opacity = "0.35";
+      winRange.disabled = true;
+      if (winPosTxt) { winPosTxt.style.color = "#dc2626"; winPosTxt.textContent = "无预测"; }
+      if (winTxt) {
         winTxt.setAttribute("fill", "#dc2626");
-        winTxt.textContent = "✗ 预测跑到 1 分钟窗口外了 → 本段判漏报 (FN)";
+        winTxt.textContent = "命中 0 窗 · 误报 0 · 漏报 4 窗 → 时间窗 F1 = 0%";
       }
-    } else if (curWinState === "fp" && winTxt && winPosTxt) {
-      if (inWin) {
-        winPred.setAttribute("fill", "#f59e0b");
-        winPosTxt.style.color = "#b45309";
-        winPosTxt.textContent = "框内乱报 ✗";
-        winTxt.setAttribute("fill", "#b45309");
-        winTxt.textContent = "✗ 窗口内实际无动作却乱报了 → 误报 (FP)";
-      } else {
-        winPred.setAttribute("fill", "#94a3b8");
-        winPosTxt.style.color = "#1d4ed8";
-        winPosTxt.textContent = "不在框内 ✓";
-        winTxt.setAttribute("fill", "#1d4ed8");
-        winTxt.textContent = "✓ 框内没报，本段正常通过 (TN)";
-      }
+      return;
     }
-  }
-  function applyEduWin(k) {
-    curWinState = k || "tp";
-    var st = WIN_STATES[curWinState] || WIN_STATES.tp;
-    if (winTruth) winTruth.style.display = st.t ? "" : "none";
-    if (winPred) {
-      winPred.style.display = st.p ? "" : "none";
-      winPred.setAttribute("fill", st.fill);
+    winPred.style.display = "";
+    if (winSlideRow) winSlideRow.style.opacity = "1";
+    winRange.disabled = false;
+    var p0 = parseInt(winRange.value, 10) || 0; // 预测占据 [p0, p0+4)，真实占据 [2, 6)
+    var p1 = p0 + 4;
+    var t0 = 2, t1 = 6;
+    winPred.setAttribute("x", String(10 + p0 * 22));
+    var tp = Math.max(0, Math.min(t1, p1) - Math.max(t0, p0));
+    var fp = 4 - tp;
+    var fn = 4 - tp;
+    var f1 = (tp * 2) > 0 ? Math.round((2 * tp / (2 * tp + fp + fn)) * 100) : 0;
+    var shift = p0 - t0;
+    var col = tp === 4 ? "#15803d" : tp > 0 ? "#b45309" : "#dc2626";
+    winPred.setAttribute("fill", tp === 4 ? "#3b82f6" : tp > 0 ? "#f59e0b" : "#ef4444");
+    if (winPosTxt) {
+      winPosTxt.style.color = col;
+      winPosTxt.textContent = shift === 0 ? "偏 0s" : (shift > 0 ? "+" : "") + shift + "s";
     }
-    if (winSlideRow) winSlideRow.style.opacity = st.p ? "1" : "0.35";
-    if (winRange) winRange.disabled = !st.p;
-    if (winPosTxt) winPosTxt.textContent = curWinState === "tp" ? "都算对 ✓" : curWinState === "fp" ? "在哪都算误报" : "无预测条";
     if (winTxt) {
-      winTxt.setAttribute("fill", st.color);
-      winTxt.textContent = st.txt;
+      winTxt.setAttribute("fill", col);
+      winTxt.textContent = "命中 " + tp + " 窗 · 误报 " + fp + " · 漏报 " + fn + " → 时间窗 F1 = " + f1 + "%";
     }
   }
-  if (winRange) winRange.addEventListener("input", updateWinSlide);
+  if (winRange) {
+    winRange.addEventListener("input", function() {
+      winMissMode = false;
+      winBtns.forEach(function(x) { x.classList.remove("active"); });
+      updateWinSlide();
+    });
+  }
   winBtns.forEach(function(b) {
     b.addEventListener("click", function() {
       winBtns.forEach(function(x) { x.classList.remove("active"); });
       b.classList.add("active");
-      applyEduWin(b.getAttribute("data-w"));
+      var v = b.getAttribute("data-w");
+      if (v === "fn") {
+        winMissMode = true;
+      } else {
+        winMissMode = false;
+        if (winRange) winRange.value = v || "2";
+      }
+      updateWinSlide();
     });
   });
+  updateWinSlide();
 
   var REPORT_IOU_PCT = ${iouPct};
   var REPORT_EDGE_TOL = ${edgeTolSec};
