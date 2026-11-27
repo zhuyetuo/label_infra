@@ -18,7 +18,7 @@ import {
 import { listDogs, type Dog } from "@/api/dogs";
 import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ModelArchMeta, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
-import { analyzeIouAndEdge, findBestConfMin, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
+import { analyzeIouAndEdge, findBestPostParams, matchWindowSegs, recomputeVersionAt, type ModelPostParams } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
@@ -827,7 +827,7 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
 }
 
 // ───────────────────────── 打分 ─────────────────────────
-type EvalRow = { key: string; label?: string; group: string; n: number; version: string; modelMeta?: ModelArchMeta; confMin?: number; r: VersionResult };
+type EvalRow = { key: string; label?: string; group: string; n: number; version: string; modelMeta?: ModelArchMeta; confMin?: number; minDurSec?: number; mergeGapSec?: number; r: VersionResult };
 const confKeyOf = (x: { label?: string; r: { model_tag: string; mode: string } }) =>
   `${x.r.model_tag}::${x.r.mode}::${x.label ?? "ALL"}`;
 
@@ -1003,7 +1003,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
     render: (v: string, row: EvalRow) => (
       <div style={{ lineHeight: 1.35 }}>
         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</div>
-        {(row.modelMeta || (row.confMin != null && row.confMin > 0)) && (
+        {(row.modelMeta || (row.confMin != null && row.confMin > 0) || (row.minDurSec != null && row.minDurSec > 0) || (row.mergeGapSec != null && row.mergeGapSec > 0)) && (
           <div style={{ marginTop: 2, display: "flex", gap: 4, flexWrap: "wrap" }}>
             {row.modelMeta && (
               <Tag color={row.modelMeta.isDL ? "purple" : "green"} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
@@ -1018,6 +1018,16 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
             {row.confMin != null && row.confMin > 0 && (
               <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
                 置信≥{Math.round(row.confMin * 100)}%
+              </Tag>
+            )}
+            {row.minDurSec != null && row.minDurSec > 0 && (
+              <Tag color="cyan" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+                时长≥{row.minDurSec}s
+              </Tag>
+            )}
+            {row.mergeGapSec != null && row.mergeGapSec > 0 && (
+              <Tag color="geekblue" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+                合并≤{row.mergeGapSec}s
               </Tag>
             )}
           </div>
@@ -1787,6 +1797,7 @@ function loadEvalThresh(setId: number): {
   edgeTolSec?: number;
   confMin?: number;
   modelConfMap?: Record<string, number>;
+  modelPostMap?: Record<string, ModelPostParams>;
   locked?: boolean;
 } {
   try {
@@ -1818,7 +1829,16 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [edgeTolSec, setEdgeTolSec] = useState<number>(() => loadEvalThresh(setId).edgeTolSec ?? 2);
   const [confMin, setConfMin] = useState<number>(() => loadEvalThresh(setId).confMin ?? 0);
-  const [modelConfMap, setModelConfMap] = useState<Record<string, number>>(() => loadEvalThresh(setId).modelConfMap ?? {});
+  const [modelPostMap, setModelPostMap] = useState<Record<string, ModelPostParams>>(() => {
+    const saved = loadEvalThresh(setId);
+    if (saved.modelPostMap && typeof saved.modelPostMap === "object") return saved.modelPostMap;
+    // 兼容旧版只存了 modelConfMap
+    const out: Record<string, ModelPostParams> = {};
+    for (const [k, c] of Object.entries(saved.modelConfMap ?? {})) {
+      if (typeof c === "number") out[k] = { confMin: c, minDurSec: 0, mergeGapSec: 0 };
+    }
+    return out;
+  });
   const [threshLocked, setThreshLocked] = useState<boolean>(() => Boolean(loadEvalThresh(setId).locked));
   const [showIouDetail, setShowIouDetail] = useState(false);
   const [iouBucketFilter, setIouBucketFilter] = useState<{ label: string; min: number; max: number } | null>(null);
@@ -1828,24 +1848,32 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const evalSeqRef = useRef(0);
   const forceNextRef = useRef(false);
 
-  // 切换测试集或首次进入时，恢复该测试集（或上次）保存的置信度 / IoU / 起止容差与锁定状态
+  // 切换测试集或首次进入时，恢复该测试集（或上次）保存的后处理 / IoU / 起止容差与锁定状态
   useEffect(() => {
     const saved = loadEvalThresh(setId);
     if (typeof saved.iou === "number" && Number.isFinite(saved.iou)) p.setIou(saved.iou);
     if (typeof saved.edgeTolSec === "number" && Number.isFinite(saved.edgeTolSec)) setEdgeTolSec(saved.edgeTolSec);
     if (typeof saved.confMin === "number" && Number.isFinite(saved.confMin)) setConfMin(saved.confMin);
-    setModelConfMap(saved.modelConfMap && typeof saved.modelConfMap === "object" ? saved.modelConfMap : {});
+    if (saved.modelPostMap && typeof saved.modelPostMap === "object") {
+      setModelPostMap(saved.modelPostMap);
+    } else {
+      const out: Record<string, ModelPostParams> = {};
+      for (const [k, c] of Object.entries(saved.modelConfMap ?? {})) {
+        if (typeof c === "number") out[k] = { confMin: c, minDurSec: 0, mergeGapSec: 0 };
+      }
+      setModelPostMap(out);
+    }
     setThreshLocked(Boolean(saved.locked));
   }, [setId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 自动记住当前配置（含每个模型独立的最佳置信度，刷新/重进直接保留）
+  // 自动记住当前配置（含每个模型独立的后处理三参数，刷新/重进直接保留）
   useEffect(() => {
     try {
-      const payload = JSON.stringify({ iou: p.iou, edgeTolSec, confMin, modelConfMap, locked: threshLocked });
+      const payload = JSON.stringify({ iou: p.iou, edgeTolSec, confMin, modelPostMap, locked: threshLocked });
       localStorage.setItem(EVAL_THRESH_KEY(setId), payload);
       localStorage.setItem("smart-label:eval-thresh:last", payload);
     } catch { /* ignore */ }
-  }, [setId, p.iou, edgeTolSec, confMin, modelConfMap, threshLocked]);
+  }, [setId, p.iou, edgeTolSec, confMin, modelPostMap, threshLocked]);
   const prevStatus = useRef<string | undefined>(undefined);
   const { data: prog, refetch: refetchProg } = useQuery({
     queryKey: ["eval-run-progress"], queryFn: getEvalRunProgress,
@@ -2033,15 +2061,20 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const allRecomputedRows = useMemo(
     () => allRows.map((x) => {
       const ck = confKeyOf(x);
-      const effConf = typeof modelConfMap[ck] === "number" ? modelConfMap[ck] : confMin;
+      const mp = modelPostMap[ck];
+      const effConf = mp ? mp.confMin : confMin;
+      const effDur = mp ? mp.minDurSec : 0;
+      const effGap = mp ? mp.mergeGapSec : 0;
       return {
         ...x,
         confMin: effConf,
+        minDurSec: effDur,
+        mergeGapSec: effGap,
         modelMeta: x.modelMeta ?? describeModelArch(x.r.model_tag, x.r.mode, p.mvByJob),
-        r: recomputeVersionAt(x.r, p.iou, edgeTolSec, effConf),
+        r: recomputeVersionAt(x.r, p.iou, edgeTolSec, effConf, effDur, effGap),
       };
     }),
-    [allRows, p.iou, edgeTolSec, confMin, modelConfMap, p.mvByJob],
+    [allRows, p.iou, edgeTolSec, confMin, modelPostMap, p.mvByJob],
   );
   const rows = useMemo(
     () => (p.label === "ALL" ? allRecomputedRows : allRecomputedRows.filter((r) => r.label === p.label)),
@@ -2053,31 +2086,41 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     [rows, selectedKey],
   );
   const activeConfKey = activeRowForPanel ? confKeyOf(activeRowForPanel) : null;
-  const activeConfMin = activeConfKey && typeof modelConfMap[activeConfKey] === "number" ? modelConfMap[activeConfKey] : confMin;
-  const setActiveConfMin = (v: number) => {
+  const activePost: ModelPostParams = activeConfKey && modelPostMap[activeConfKey]
+    ? modelPostMap[activeConfKey]
+    : { confMin, minDurSec: 0, mergeGapSec: 0 };
+  const updateActivePost = (patch: Partial<ModelPostParams>) => {
     if (activeConfKey) {
-      setModelConfMap((prev) => ({ ...prev, [activeConfKey]: v }));
-    } else {
-      setConfMin(v);
+      setModelPostMap((prev) => ({
+        ...prev,
+        [activeConfKey]: { ...(prev[activeConfKey] ?? { confMin, minDurSec: 0, mergeGapSec: 0 }), ...patch },
+      }));
+    } else if (patch.confMin != null) {
+      setConfMin(patch.confMin);
     }
   };
   const autoTuneAllModels = () => {
     const targetRows = p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label);
     if (!targetRows.length) return;
-    const nextMap: Record<string, number> = { ...modelConfMap };
+    const nextMap: Record<string, ModelPostParams> = { ...modelPostMap };
     const summary: string[] = [];
     const seenKeys = new Set<string>();
     for (const raw of targetRows) {
       const ck = confKeyOf(raw);
       if (seenKeys.has(ck) || !raw.r.window_details?.length) continue;
       seenKeys.add(ck);
-      const { bestConf, bestEvF1 } = findBestConfMin(raw.r, p.iou, edgeTolSec);
-      nextMap[ck] = bestConf;
-      summary.push(`${raw.version.slice(0, 22)}${p.label === "ALL" && raw.label ? `[${raw.label}]` : ""} → ${bestConf > 0 ? `≥${Math.round(bestConf * 100)}%` : "不限"} (事件F1 ${(bestEvF1 * 100).toFixed(1)}%)`);
+      const { best, bestEvF1 } = findBestPostParams(raw.r, p.iou, edgeTolSec);
+      nextMap[ck] = best;
+      const parts = [
+        best.confMin > 0 ? `置信≥${Math.round(best.confMin * 100)}%` : "置信不限",
+        best.minDurSec > 0 ? `时长≥${best.minDurSec}s` : null,
+        best.mergeGapSec > 0 ? `合并≤${best.mergeGapSec}s` : null,
+      ].filter(Boolean).join(" / ");
+      summary.push(`${raw.version.slice(0, 22)}${p.label === "ALL" && raw.label ? `[${raw.label}]` : ""} → ${parts} (事件F1 ${(bestEvF1 * 100).toFixed(1)}%)`);
     }
-    setModelConfMap(nextMap);
+    setModelPostMap(nextMap);
     if (summary.length) {
-      message.success(`已为 ${summary.length} 组模型独立寻优：${summary.slice(0, 3).join("；")}${summary.length > 3 ? " …" : ""}`, 6);
+      message.success(`已为 ${summary.length} 组模型独立寻优端侧后处理：${summary.slice(0, 2).join("；")}${summary.length > 2 ? " …" : ""}`, 8);
     }
   };
 
@@ -2272,20 +2315,42 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
             <Space wrap size={8} align="center">
               <Tooltip title={
                 activeRowForPanel
-                  ? `当前调节模型：${activeRowForPanel.version}（每个模型各自独立保存最佳置信度，互不干扰；点击表格不同行可切换要调的模型）`
-                  : "提高输出置信度门槛，过滤低置信度误报（0ms 实时联动）"
+                  ? `当前调节模型：${activeRowForPanel.version}（置信度 / 最短时长 / 合并间隔均按模型独立保存，对应固件后处理参数；点表格不同行可切换模型）`
+                  : "端侧后处理参数试算（0ms 实时联动，可直接回写固件）"
               }>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#69b1ff", cursor: "help" }}>
-                  {rows.length > 1 ? "当前模型置信度" : "置信度过滤"} ({activeConfMin > 0 ? `≥ ${Math.round(activeConfMin * 100)}%` : "不限"})
+                  置信 ({activePost.confMin > 0 ? `≥${Math.round(activePost.confMin * 100)}%` : "不限"})
                 </span>
               </Tooltip>
               <Slider
-                min={0} max={0.94} step={0.02} value={activeConfMin} disabled={threshLocked}
-                onChange={(v) => setActiveConfMin(v)}
-                tooltip={{ formatter: (v) => (v ? `置信度 ≥ ${Math.round(v * 100)}%` : "不限（使用模型原输出）") }}
-                style={{ width: 110, margin: "0 4px" }}
+                min={0} max={0.94} step={0.02} value={activePost.confMin} disabled={threshLocked}
+                onChange={(v) => updateActivePost({ confMin: v })}
+                tooltip={{ formatter: (v) => (v ? `置信度 ≥ ${Math.round(v * 100)}%` : "不限") }}
+                style={{ width: 92, margin: "0 2px" }}
               />
-              <Tooltip title="0ms 本地遍历 0%~94%，为当前列表里每个模型各自独立找出事件级 F1 最高的最佳置信度门槛">
+              <Tooltip title="滤掉短于该秒数的零碎误报（对应固件 min_dur_s）">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#5cdbd3", cursor: "help" }}>
+                  时长 ({activePost.minDurSec > 0 ? `≥${activePost.minDurSec}s` : "不限"})
+                </span>
+              </Tooltip>
+              <Slider
+                min={0} max={5} step={0.5} value={activePost.minDurSec} disabled={threshLocked}
+                onChange={(v) => updateActivePost({ minDurSec: v })}
+                tooltip={{ formatter: (v) => (v ? `最短持续 ≥ ${v}s` : "不限") }}
+                style={{ width: 72, margin: "0 2px" }}
+              />
+              <Tooltip title="相邻两段预测间隔 ≤ 该秒数时合并成一段（对应固件 merge_gap_s）">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#85a5ff", cursor: "help" }}>
+                  合并 ({activePost.mergeGapSec > 0 ? `≤${activePost.mergeGapSec}s` : "关"})
+                </span>
+              </Tooltip>
+              <Slider
+                min={0} max={5} step={0.5} value={activePost.mergeGapSec} disabled={threshLocked}
+                onChange={(v) => updateActivePost({ mergeGapSec: v })}
+                tooltip={{ formatter: (v) => (v ? `间隔 ≤ ${v}s 合并` : "不合并") }}
+                style={{ width: 72, margin: "0 2px" }}
+              />
+              <Tooltip title="0ms 网格搜索「置信度 × 最短时长 × 合并间隔」最佳组合，为每个模型各自独立找出事件级 F1 最高的固件后处理参数">
                 <Button
                   size="small"
                   type="dashed"
@@ -2294,13 +2359,13 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                   onClick={autoTuneAllModels}
                   style={{ fontSize: 11, height: 22, paddingInline: 8, color: "#69b1ff", borderColor: "rgba(105,177,255,0.45)" }}
                 >
-                  自动寻优
+                  自动调参
                 </Button>
               </Tooltip>
-              {(activeConfMin > 0 || Object.values(modelConfMap).some((v) => v > 0)) && !threshLocked && (
+              {(activePost.confMin > 0 || activePost.minDurSec > 0 || activePost.mergeGapSec > 0 || Object.keys(modelPostMap).length > 0) && !threshLocked && (
                 <Button size="small" type="link" style={{ padding: 0, fontSize: 11, height: 20 }} onClick={() => {
                   setConfMin(0);
-                  setModelConfMap({});
+                  setModelPostMap({});
                 }}>重置</Button>
               )}
             </Space>

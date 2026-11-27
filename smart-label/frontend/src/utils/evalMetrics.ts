@@ -52,12 +52,55 @@ export function matchWindowSegs(
   return { pairs, fp: preds.length - usedP.size, fn: truths.length - usedT.size };
 }
 
-/** 基于已拉回的 window_details，0ms 本地重算任意置信度过滤、IoU 阈值 & 边界容差（秒）下的窗口级、事件级与对齐指标 */
+export interface ModelPostParams {
+  /** 置信度过滤门槛 (0 ~ 0.94) */
+  confMin: number;
+  /** 最短持续时长过滤 (秒, 0 ~ 5s) */
+  minDurSec: number;
+  /** 相邻预测段合并间隔 (秒, 0 ~ 5s) */
+  mergeGapSec: number;
+}
+
+/** 对单个测试窗口内的模型预测段执行端侧可移植后处理：置信度过滤 → 相邻段合并 → 最短时长过滤 */
+function applyPredPost(
+  segs: [number, number, number | null][],
+  confMin: number,
+  minDurSec: number,
+  mergeGapSec: number,
+): [number, number, number | null][] {
+  let kept = confMin > 0
+    ? segs.filter((s) => s[2] == null || s[2] >= confMin)
+    : segs;
+  if (mergeGapSec > 0 && kept.length > 1) {
+    const gapMs = mergeGapSec * 1000;
+    const sorted = [...kept].sort((a, b) => a[0] - b[0]);
+    const merged: [number, number, number | null][] = [];
+    for (const [s, e, c] of sorted) {
+      const prev = merged[merged.length - 1];
+      if (prev && s - prev[1] <= gapMs) {
+        prev[1] = Math.max(prev[1], e);
+        if (c != null) prev[2] = prev[2] != null ? Math.max(prev[2], c) : c;
+      } else {
+        merged.push([s, e, c]);
+      }
+    }
+    kept = merged;
+  }
+  if (minDurSec > 0 && kept.length > 0) {
+    const minMs = minDurSec * 1000;
+    kept = kept.filter(([s, e]) => e - s >= minMs);
+  }
+  return kept;
+}
+
+/** 基于已拉回的 window_details，0ms 本地重算任意后处理参数（置信度/最短时长/合并间隔）、IoU 阈值 & 边界容差下的全套指标 */
 export function recomputeVersionAt(
   r: VersionResult,
   iouMin: number,
   edgeTolSec: number,
   confMin = 0,
+  minDurSec = 0,
+  mergeGapSec = 0,
 ): VersionResult {
   const details = r.window_details;
   if (!details || !details.length) return r;
@@ -75,9 +118,7 @@ export function recomputeVersionAt(
   let wFn = 0;
 
   const nextDetails: WindowDetail[] = details.map((d) => {
-    const keptPreds = confMin > 0
-      ? d.pred_segs.filter((s) => s[2] == null || s[2] >= confMin)
-      : d.pred_segs;
+    const keptPreds = applyPredPost(d.pred_segs, confMin, minDurSec, mergeGapSec);
     const hasTruth = d.truth_segs.length > 0;
     const hasPred = keptPreds.length > 0;
     // 片段级检出（须真实重叠 >0ms）：完全不重叠绝不算命中，去掉「1 分钟框凑数」
@@ -168,30 +209,58 @@ export function recomputeVersionAt(
   };
 }
 
-/** 0ms 本地网格搜索单个模型的最佳置信度门槛（以事件级 F1 最大为主、片段级 F1 为辅） */
+/** 本地网格搜索单个模型的最佳端侧后处理三元组（置信度 + 最短时长 + 合并间隔），以事件级 F1 最大为主、片段级 F1 为辅 */
+export function findBestPostParams(
+  r: VersionResult,
+  iouMin: number,
+  edgeTolSec = 2,
+): { best: ModelPostParams; bestEvF1: number; bestWinF1: number } {
+  const zero: ModelPostParams = { confMin: 0, minDurSec: 0, mergeGapSec: 0 };
+  if (!r.window_details?.length) {
+    return { best: zero, bestEvF1: r.f1 ?? 0, bestWinF1: r.window?.f1 ?? 0 };
+  }
+  const gaps = [0, 0.5, 1, 1.5, 2, 3];
+  const durs = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+  const confs = [0, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9];
+  let best: ModelPostParams = zero;
+  let bestEvF1 = -1;
+  let bestWinF1 = -1;
+
+  const tryOne = (confMin: number, minDurSec: number, mergeGapSec: number) => {
+    const res = recomputeVersionAt(r, iouMin, edgeTolSec, confMin, minDurSec, mergeGapSec);
+    const ev = res.f1 ?? 0;
+    const win = res.window?.f1 ?? 0;
+    if (ev > bestEvF1 + 1e-6 || (Math.abs(ev - bestEvF1) <= 1e-6 && win > bestWinF1 + 1e-6)) {
+      best = { confMin, minDurSec, mergeGapSec };
+      bestEvF1 = ev;
+      bestWinF1 = win;
+    }
+  };
+
+  for (const g of gaps) {
+    for (const d of durs) {
+      for (const c of confs) {
+        tryOne(c, d, g);
+      }
+    }
+  }
+  // 在最优置信度附近按 2% 精扫一遍
+  const loC = Math.max(0, Math.round((best.confMin - 0.06) * 100));
+  const hiC = Math.min(94, Math.round((best.confMin + 0.06) * 100));
+  for (let pct = loC; pct <= hiC; pct += 2) {
+    tryOne(pct / 100, best.minDurSec, best.mergeGapSec);
+  }
+  return { best, bestEvF1, bestWinF1 };
+}
+
+/** 兼容旧调用：仅寻优置信度 */
 export function findBestConfMin(
   r: VersionResult,
   iouMin: number,
   edgeTolSec = 2,
 ): { bestConf: number; bestEvF1: number; bestWinF1: number } {
-  if (!r.window_details?.length) {
-    return { bestConf: 0, bestEvF1: r.f1 ?? 0, bestWinF1: r.window?.f1 ?? 0 };
-  }
-  let bestConf = 0;
-  let bestEvF1 = -1;
-  let bestWinF1 = -1;
-  for (let i = 0; i <= 47; i++) {
-    const c = Math.round(i * 2) / 100; // 0.00, 0.02, ..., 0.94
-    const res = recomputeVersionAt(r, iouMin, edgeTolSec, c);
-    const ev = res.f1 ?? 0;
-    const win = res.window?.f1 ?? 0;
-    if (ev > bestEvF1 + 1e-6 || (Math.abs(ev - bestEvF1) <= 1e-6 && win > bestWinF1 + 1e-6)) {
-      bestConf = c;
-      bestEvF1 = ev;
-      bestWinF1 = win;
-    }
-  }
-  return { bestConf, bestEvF1, bestWinF1 };
+  const { best, bestEvF1, bestWinF1 } = findBestPostParams(r, iouMin, edgeTolSec);
+  return { bestConf: best.confMin, bestEvF1, bestWinF1 };
 }
 
 export interface IouBucket {
