@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -986,16 +986,28 @@ async def publish_report(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """保存一份静态 HTML 测试报告到共享存储，返回可免登录只读打开的分享链接。"""
+    """保存一份静态 HTML 测试报告到共享存储，返回可免登录只读打开的分享链接（并绑定该测试集样本的视频只读白名单）。"""
     await _set_or_404(db, set_id)
     report_id = secrets.token_urlsafe(16)
+    sample_ids = sorted({
+        sid for sid in (
+            await db.execute(select(ModelTestItem.sample_id).where(ModelTestItem.set_id == set_id))
+        ).scalars().all()
+    })
+    video_base = f"/api/v1/model-tests/reports/{report_id}/video"
+    rendered_html = body.html.replace("__REPORT_VIDEO_BASE__", video_base)
+    meta_json = json.dumps({"set_id": set_id, "sample_ids": sample_ids}, separators=(",", ":"))
 
     def _write() -> None:
         d = _reports_dir()
         target = d / f"{report_id}.html"
         tmp = d / f".{report_id}.tmp"
-        tmp.write_text(body.html, encoding="utf-8")
+        tmp.write_text(rendered_html, encoding="utf-8")
         tmp.replace(target)
+        meta_path = d / f"{report_id}.json"
+        meta_tmp = d / f".{report_id}.meta.tmp"
+        meta_tmp.write_text(meta_json, encoding="utf-8")
+        meta_tmp.replace(meta_path)
 
     await asyncio.to_thread(_write)
     db.add(AuditLog(
@@ -1003,7 +1015,7 @@ async def publish_report(
         action="model_test.publish_report",
         target_type="model_test_set",
         target_id=set_id,
-        detail=json.dumps({"report_id": report_id, "title": body.title, "size": len(body.html)}, ensure_ascii=False),
+        detail=json.dumps({"report_id": report_id, "title": body.title, "size": len(rendered_html)}, ensure_ascii=False),
     ))
     await db.commit()
     return ok({
@@ -1026,6 +1038,44 @@ async def get_published_report(report_id: str):
         media_type="text/html; charset=utf-8",
         headers={"Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex"},
     )
+
+
+@public_router.get("/reports/{report_id}/video/{sample_id}")
+async def stream_report_video(
+    report_id: str,
+    sample_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """免登录只读播放测试报告里关联的样本视频（严格限制在 report_id 对应的测试集样本白名单内）。"""
+    if not _REPORT_ID_RE.fullmatch(report_id):
+        raise HTTPException(404, "报告不存在")
+    meta_path = Path(settings.nas_root) / "_smart_label_reports" / f"{report_id}.json"
+    if not meta_path.is_file():
+        raise HTTPException(404, "报告视频权限不存在")
+    try:
+        meta = json.loads(await asyncio.to_thread(meta_path.read_text, "utf-8"))
+    except Exception:
+        raise HTTPException(404, "报告元数据损坏") from None
+    if sample_id not in set(meta.get("sample_ids") or []):
+        raise HTTPException(403, "该视频不属于当前测试报告")
+
+    from app.models.sample import Sample
+    from app.services import privacy_mask
+    from app.services.media_resolver import PathTraversalError, resolve_nas_path
+    from app.services.range_stream import stream_file
+
+    sample = await db.get(Sample, sample_id)
+    if sample is None or not sample.video_cam1_path:
+        raise HTTPException(404, "视频文件不存在")
+    rel = await privacy_mask.pick_video(db, None, sample.video_cam1_path)
+    try:
+        real_path = resolve_nas_path(rel)
+    except PathTraversalError:
+        raise HTTPException(400, "非法路径") from None
+    if not real_path.is_file():
+        raise HTTPException(404, "NAS 上找不到该视频文件")
+    return await stream_file(request, real_path, "video/mp4")
 
 
 _CACHE_KEY_RE = re.compile(r"^[a-z0-9_-]{8,64}$")

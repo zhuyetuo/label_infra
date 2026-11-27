@@ -15,6 +15,10 @@ export interface ReportEvalRow {
 export interface ReportErrorCase {
   verdict: "fp" | "fn" | "tp" | "tn";
   boundaryBad: boolean;
+  sampleId?: number;
+  seekSec?: number;
+  winStartSec?: number;
+  winEndSec?: number;
   dog: string;
   breed?: string;
   skinLevel?: string;
@@ -435,6 +439,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
       const labelsHtml = c.actualLabels.length
         ? c.actualLabels.slice(0, 3).map((lb) => `<span class="pill pill-gray">${esc(lb)}</span>`).join("")
         : `<span class="muted">无标注</span>`;
+      const videoTitle = `${c.breed || c.dog}${c.size ? `(${c.size}型)` : ""} · ${c.winText} · ${c.tag}`;
+      const videoBtn = c.sampleId
+        ? `<button class="btn-play" data-sid="${c.sampleId}" data-seek="${(c.seekSec ?? c.winStartSec ?? 0).toFixed(2)}" data-ws="${(c.winStartSec ?? 0).toFixed(2)}" data-we="${(c.winEndSec ?? 0).toFixed(2)}" data-title="${esc(videoTitle)}" data-reason="${esc(c.reason || "")}">▶ 看视频</button>`
+        : `<span class="muted">-</span>`;
       return `<tr class="case-row" data-kind="${kind}" data-idx="${idx}">
         <td class="muted">${idx + 1}</td>
         <td>${badge}</td>
@@ -453,6 +461,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
           ${c.reason ? `<div class="sub" style="margin-top:2px;color:#334155">${esc(c.reason)}</div>` : ""}
         </td>
         <td>${labelsHtml}</td>
+        <td style="text-align:center">${videoBtn}</td>
       </tr>`;
     })
     .join("");
@@ -769,6 +778,44 @@ export function buildTestReportHtml(input: TestReportInput): string {
     border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 6px; cursor: pointer;
   }
   .btn-more:hover { background: #e2e8f0; }
+  .btn-play {
+    border: 1px solid #4f46e5; background: #eef2ff; color: #4338ca; border-radius: 6px;
+    padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .btn-play:hover { background: #4f46e5; color: #fff; }
+
+  /* 内置视频验证弹窗 */
+  .v-mask {
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    background: rgba(15,23,42,0.72); align-items: center; justify-content: center; padding: 16px;
+  }
+  .v-mask.open { display: flex; }
+  .v-box {
+    background: #0f172a; color: #f8fafc; border-radius: 12px; width: 100%; max-width: 820px;
+    overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.12);
+  }
+  .v-hd {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .v-title { font-size: 14px; font-weight: 700; }
+  .v-reason { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+  .v-close {
+    border: none; background: rgba(255,255,255,0.12); color: #fff; border-radius: 6px;
+    width: 28px; height: 28px; font-size: 16px; cursor: pointer; flex: none;
+  }
+  .v-close:hover { background: rgba(255,255,255,0.24); }
+  .v-player { width: 100%; max-height: 62vh; background: #000; display: block; }
+  .v-bar {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    padding: 10px 16px; background: #1e293b; font-size: 12px;
+  }
+  .v-ctrl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .v-btn {
+    border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: #e2e8f0;
+    border-radius: 5px; padding: 3px 9px; font-size: 11.5px; cursor: pointer;
+  }
+  .v-btn.active, .v-btn:hover { background: #4f46e5; border-color: #6366f1; color: #fff; }
 
   /* 签核页脚 */
   .signoff {
@@ -968,6 +1015,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
             <th style="width:185px">标注(绿) vs 预测(蓝/橙)</th>
             <th style="width:205px">自动归因</th>
             <th>窗口内实际动作</th>
+            <th style="width:82px;text-align:center">视频验证</th>
           </tr>
         </thead>
         <tbody id="caseTbody">${caseRowsHtml}</tbody>
@@ -987,8 +1035,39 @@ export function buildTestReportHtml(input: TestReportInput): string {
 </div>
 </div>
 
+<!-- 内置视频验证弹窗（点击明细行「▶ 看视频」免登录直接回放对应时刻） -->
+<div class="v-mask" id="videoModal">
+  <div class="v-box">
+    <div class="v-hd">
+      <div>
+        <div class="v-title" id="vTitle">视频验证</div>
+        <div class="v-reason" id="vReason"></div>
+      </div>
+      <button class="v-close" id="vClose" title="关闭 (ESC)">×</button>
+    </div>
+    <video class="v-player" id="vPlayer" controls playsinline preload="metadata"></video>
+    <div class="v-bar">
+      <div class="v-ctrl">
+        <button class="v-btn" id="vReplay">↺ 重播该动作</button>
+        <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#cbd5e1">
+          <input type="checkbox" id="vLoop" checked /> 循环该窗口
+        </label>
+        <span style="color:#94a3b8;margin-left:6px" id="vTimeRange"></span>
+      </div>
+      <div class="v-ctrl">
+        <span style="color:#94a3b8">倍速：</span>
+        <button class="v-btn v-spd" data-spd="0.5">0.5x</button>
+        <button class="v-btn v-spd active" data-spd="1">1x</button>
+        <button class="v-btn v-spd" data-spd="1.5">1.5x</button>
+        <button class="v-btn v-spd" data-spd="2">2x</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
+  var VIDEO_BASE = "__REPORT_VIDEO_BASE__";
   // 左侧目录大纲滚动高亮联动
   var tocLinks = Array.prototype.slice.call(document.querySelectorAll(".toc-link"));
   var sections = tocLinks.map(function(a) { return document.getElementById(a.getAttribute("data-target")); }).filter(Boolean);
@@ -1059,6 +1138,80 @@ export function buildTestReportHtml(input: TestReportInput): string {
   if (search) search.addEventListener("input", function() { expanded = false; apply(); });
   if (btnMore) btnMore.addEventListener("click", function() { expanded = true; apply(); });
   apply();
+
+  // 内置视频验证播放器
+  var vModal = document.getElementById("videoModal");
+  var vPlayer = document.getElementById("vPlayer");
+  var vTitle = document.getElementById("vTitle");
+  var vReason = document.getElementById("vReason");
+  var vRange = document.getElementById("vTimeRange");
+  var vLoop = document.getElementById("vLoop");
+  var vReplay = document.getElementById("vReplay");
+  var vClose = document.getElementById("vClose");
+  var spdBtns = Array.prototype.slice.call(document.querySelectorAll(".v-spd"));
+  var curSeek = 0, curWs = 0, curWe = 0, curSrc = "";
+
+  function fmtT(s) {
+    s = Math.max(0, Math.round(s));
+    var m = Math.floor(s / 60), x = s % 60;
+    return m + ":" + (x < 10 ? "0" : "") + x;
+  }
+  function closeVideo() {
+    if (!vModal || !vPlayer) return;
+    vPlayer.pause();
+    vModal.classList.remove("open");
+  }
+  function openVideo(btn) {
+    if (!vModal || !vPlayer) return;
+    if (!VIDEO_BASE || VIDEO_BASE.indexOf("__REPORT_VIDEO_BASE__") >= 0) {
+      alert("当前离线报告未绑定服务端视频链接，请在内网通过「分享链接」或重新「导出 HTML」打开。");
+      return;
+    }
+    var sid = btn.getAttribute("data-sid");
+    curSeek = parseFloat(btn.getAttribute("data-seek") || "0") || 0;
+    curWs = parseFloat(btn.getAttribute("data-ws") || "0") || 0;
+    curWe = parseFloat(btn.getAttribute("data-we") || "0") || 0;
+    if (vTitle) vTitle.textContent = btn.getAttribute("data-title") || "视频验证";
+    if (vReason) vReason.textContent = btn.getAttribute("data-reason") || "";
+    if (vRange) vRange.textContent = "窗口 " + fmtT(curWs) + " ~ " + fmtT(curWe);
+    var src = VIDEO_BASE + "/" + sid;
+    vModal.classList.add("open");
+    if (curSrc !== src) {
+      curSrc = src;
+      vPlayer.src = src;
+      vPlayer.onloadedmetadata = function() {
+        vPlayer.currentTime = curSeek;
+        vPlayer.play().catch(function(){});
+      };
+    } else {
+      vPlayer.currentTime = curSeek;
+      vPlayer.play().catch(function(){});
+    }
+  }
+  document.addEventListener("click", function(e) {
+    var t = e.target;
+    if (t && t.classList && t.classList.contains("btn-play")) openVideo(t);
+  });
+  if (vPlayer) {
+    vPlayer.addEventListener("timeupdate", function() {
+      if (vLoop && vLoop.checked && curWe > curWs && vPlayer.currentTime >= curWe) {
+        vPlayer.currentTime = curSeek;
+      }
+    });
+  }
+  if (vReplay) vReplay.addEventListener("click", function() {
+    if (vPlayer) { vPlayer.currentTime = curSeek; vPlayer.play().catch(function(){}); }
+  });
+  if (vClose) vClose.addEventListener("click", closeVideo);
+  if (vModal) vModal.addEventListener("click", function(e) { if (e.target === vModal) closeVideo(); });
+  document.addEventListener("keydown", function(e) { if (e.key === "Escape") closeVideo(); });
+  spdBtns.forEach(function(b) {
+    b.addEventListener("click", function() {
+      spdBtns.forEach(function(x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      if (vPlayer) vPlayer.playbackRate = parseFloat(b.getAttribute("data-spd") || "1") || 1;
+    });
+  });
 })();
 </script>
 </body>

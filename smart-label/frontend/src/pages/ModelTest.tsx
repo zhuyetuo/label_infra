@@ -1528,9 +1528,15 @@ function buildReportPayload(
       const actualLabels = Object.entries(it?.labels ?? {}).map(([k, v]) => `${k} ${v.n}次·${fmtSec(v.sec)}`);
       const dgInfo = (it?.dog_id != null ? dogById.get(it.dog_id) : undefined)
         ?? (it?.dog_name ? dogByName.get(it.dog_name) : undefined);
+      const firstSeg = d.verdict === "fn" ? d.truth_segs[0] : d.verdict === "fp" ? d.pred_segs[0] : (d.truth_segs[0] ?? d.pred_segs[0]);
+      const seekMs = firstSeg ? Math.max(d.start_ms, d.start_ms + firstSeg[0] - 2000) : d.start_ms;
       errorCases.push({
         verdict: d.verdict,
         boundaryBad: isEdgeBad,
+        sampleId: d.sample_id,
+        seekSec: seekMs / 1000,
+        winStartSec: d.start_ms / 1000,
+        winEndSec: d.end_ms / 1000,
         dog: it?.dog_name ?? `样本 #${d.sample_id}`,
         breed: dgInfo?.breed ?? undefined,
         skinLevel: dgInfo?.skin_level ?? dgInfo?.intake_skin_level ?? undefined,
@@ -1981,14 +1987,18 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 </Typography.Text>
               </Tooltip>
             )}
-            <Tooltip title="导出独立的离线 HTML 标准测试报告（含指标对比、数据覆盖图、可筛选错例时间轴，支持打印/转 PDF）">
-              <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
+            <Tooltip title="导出独立的 HTML 标准测试报告（含指标对比、数据覆盖图、可筛选错例与内网一键看视频验证，支持打印/转 PDF）">
+              <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={async () => {
                 const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
-                const html = buildTestReportHtml(buildReportPayload(
+                let html = buildTestReportHtml(buildReportPayload(
                   testSet, coverage, dogs, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
                 ));
-                const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
                 const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
+                try {
+                  const res = await publishTestReport(setId, html, `${testSet.name} · ${lbName} 测试报告`);
+                  html = html.replace(/__REPORT_VIDEO_BASE__/g, `${window.location.origin}/api/v1/model-tests/reports/${res.report_id}/video`);
+                } catch { /* 离线兜底 */ }
+                const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
                 const dStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
                 const blob = new Blob([html], { type: "text/html;charset=utf-8" });
                 const url = URL.createObjectURL(blob);
@@ -1999,7 +2009,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                 a.click();
                 a.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 1000);
-                message.success("已导出标准 HTML 测试报告");
+                message.success("已导出标准 HTML 测试报告（内网打开可直接点「▶ 看视频」验证）");
               }}>导出 HTML</Button>
             </Tooltip>
             <Tooltip title="生成只读测试报告分享链接，发给团队成员即可免登录直接打开查看">
