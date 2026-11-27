@@ -148,6 +148,184 @@ export interface EvalWindowHint {
   predSegs: [number, number, number | null][];
 }
 
+/** 识别错误对照表里的「人工标注 vs 模型预测」实时动态对比条：播放时红线 60fps 同步滑动，点击任意位置直接跳转 */
+function EvalRowTimeline({
+  kind, ts, te, ps, pe, winStart, winEnd, bus, initialSec,
+}: {
+  kind: "fp" | "fn" | "edge" | "tp";
+  ts?: number | null;
+  te?: number | null;
+  ps?: number | null;
+  pe?: number | null;
+  winStart?: number | null;
+  winEnd?: number | null;
+  bus: TimeBus;
+  initialSec?: number;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const needleRef = useRef<HTMLDivElement | null>(null);
+  const statusRef = useRef<HTMLSpanElement | null>(null);
+
+  const minMs = Math.min(ts ?? ps ?? 0, ps ?? ts ?? 0);
+  const maxMs = Math.max(te ?? pe ?? minMs + 1000, pe ?? te ?? minMs + 1000);
+  const pad = Math.max(2000, Math.round((maxMs - minMs) * 0.28));
+  const lo = winStart != null ? Math.max(winStart, minMs - pad) : Math.max(0, minMs - pad);
+  const hi = Math.max(lo + 500, winEnd != null ? Math.min(winEnd, maxMs + pad) : maxMs + pad);
+  const span = hi - lo;
+
+  const pctOf = (ms: number) => Math.max(0, Math.min(100, ((ms - lo) / span) * 100));
+  const predColor = kind === "fp" ? "#f59e0b" : kind === "edge" ? "#a855f7" : "#3b82f6";
+
+  useEffect(() => {
+    const sync = (sec: number) => {
+      const ms = sec * 1000;
+      const needle = needleRef.current;
+      const st = statusRef.current;
+      const inside = ms >= lo && ms <= hi;
+      if (needle) {
+        if (inside) {
+          needle.style.opacity = "1";
+          needle.style.left = `${((ms - lo) / span) * 100}%`;
+        } else {
+          needle.style.opacity = "0";
+        }
+      }
+      if (st) {
+        if (inside) {
+          const inT = ts != null && te != null && ms >= ts && ms <= te;
+          const inP = ps != null && pe != null && ms >= ps && ms <= pe;
+          const tag = inT && inP ? "标+预 重叠中" : inT ? "仅人工标注中" : inP ? "仅模型预测中" : "上下文";
+          st.textContent = `● ${formatMs(ms)} · ${tag}`;
+          st.style.color = inT && inP ? "#34d399" : inP ? "#fbbf24" : inT ? "#f87171" : "#94a3b8";
+        } else {
+          st.textContent = "点击任意位置跳转";
+          st.style.color = "#64748b";
+        }
+      }
+    };
+    if (initialSec != null) sync(initialSec);
+    return bus.onTime(sync);
+  }, [bus, lo, hi, span, ts, te, ps, pe, initialSec]);
+
+  let deltaText = "";
+  let deltaColor = "#94a3b8";
+  if (ts != null && te != null && ps != null && pe != null) {
+    const ds = (ps - ts) / 1000;
+    const de = (pe - te) / 1000;
+    const fmtD = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}s`;
+    deltaText = `起 ${fmtD(ds)} / 止 ${fmtD(de)}`;
+    deltaColor = kind === "edge" ? "#c084fc" : "#34d399";
+  } else if (kind === "fp" && ps != null && pe != null) {
+    deltaText = `多报 ${((pe - ps) / 1000).toFixed(1)}s`;
+    deltaColor = "#fbbf24";
+  } else if (kind === "fn" && ts != null && te != null) {
+    deltaText = `漏报 ${((te - ts) / 1000).toFixed(1)}s`;
+    deltaColor = "#f87171";
+  }
+
+  const onSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    bus.seek((lo + ratio * span) / 1000);
+  };
+
+  return (
+    <div style={{ minWidth: 260, width: "100%", userSelect: "none" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, marginBottom: 3, gap: 8 }}>
+        <span style={{ color: deltaColor, fontWeight: 600, whiteSpace: "nowrap" }}>{deltaText}</span>
+        <span ref={statusRef} style={{ color: "#64748b", fontFamily: "ui-monospace, monospace", fontSize: 10.5, whiteSpace: "nowrap" }}>
+          点击任意位置跳转
+        </span>
+      </div>
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.09)",
+          borderRadius: 6,
+          padding: "5px 8px 5px 6px",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, lineHeight: "10px", fontWeight: 700, flex: "none" }}>
+          <span style={{ color: "#34d399" }}>标</span>
+          <span style={{ color: predColor }}>预</span>
+        </div>
+        <div
+          ref={trackRef}
+          onClick={onSeekClick}
+          title="绿色=人工标注，橙/紫/蓝=模型预测，红线=当前播放位置（点击跳转）"
+          style={{ position: "relative", flex: 1, cursor: "pointer", padding: "1px 0" }}
+        >
+          {/* 人工标注轨 */}
+          <div style={{ position: "relative", height: 8, borderRadius: 4, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
+            {ts != null && te != null && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: `${pctOf(ts)}%`,
+                  width: `${Math.max(1.2, pctOf(te) - pctOf(ts))}%`,
+                  background: "#10b981",
+                  borderRadius: 4,
+                }}
+              />
+            )}
+          </div>
+          {/* 模型预测轨 */}
+          <div style={{ position: "relative", height: 8, borderRadius: 4, background: "rgba(255,255,255,0.07)", overflow: "hidden", marginTop: 4 }}>
+            {ps != null && pe != null && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: `${pctOf(ps)}%`,
+                  width: `${Math.max(1.2, pctOf(pe) - pctOf(ps))}%`,
+                  background: predColor,
+                  borderRadius: 4,
+                }}
+              />
+            )}
+          </div>
+          {/* 起止对齐参考虚线（同时有标和预时，标出人工起止位置方便对比偏移） */}
+          {ts != null && te != null && ps != null && pe != null && (
+            <>
+              <div style={{ position: "absolute", top: -1, bottom: -1, left: `${pctOf(ts)}%`, borderLeft: "1px dashed rgba(52,211,153,0.55)", pointerEvents: "none" }} />
+              <div style={{ position: "absolute", top: -1, bottom: -1, left: `${pctOf(te)}%`, borderLeft: "1px dashed rgba(52,211,153,0.55)", pointerEvents: "none" }} />
+            </>
+          )}
+          {/* 实时红色播放指针 */}
+          <div
+            ref={needleRef}
+            style={{
+              position: "absolute",
+              top: -2,
+              bottom: -2,
+              left: "0%",
+              width: 2,
+              marginLeft: -1,
+              background: "#ef4444",
+              boxShadow: "0 0 6px rgba(239,68,68,0.85)",
+              opacity: 0,
+              pointerEvents: "none",
+              zIndex: 3,
+            }}
+          >
+            <div style={{ position: "absolute", top: -2, left: -2, width: 6, height: 6, borderRadius: "50%", background: "#ef4444" }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface SegReviewCtx {
   itemId: number;
   /** 改这一条的起止（片段审核接口） */
@@ -3161,6 +3339,7 @@ export default function AnnotationWorkspace({
             },
             {
               title: "该时段当前标注（排查原因）",
+              width: 200,
               render: (_: unknown, r: EvalCmpRow) => {
                 const lo = r.ps ?? r.ts ?? 0;
                 const hi = r.pe ?? r.te ?? 0;
@@ -3175,6 +3354,22 @@ export default function AnnotationWorkspace({
                   </Space>
                 ) : <span style={{ color: "#ff4d4f", fontSize: 12 }}>未标任何动作</span>;
               },
+            },
+            {
+              title: "标 vs 预 动态对比（播放同步 · 点击跳转）",
+              render: (_: unknown, r: EvalCmpRow) => (
+                <EvalRowTimeline
+                  kind={r.kind}
+                  ts={r.ts}
+                  te={r.te}
+                  ps={r.ps}
+                  pe={r.pe}
+                  winStart={win?.s}
+                  winEnd={win?.e}
+                  bus={bus}
+                  initialSec={curSecRef.current}
+                />
+              ),
             },
             {
               title: "操作",
