@@ -235,3 +235,11 @@ export const getTestSeen = (id: number, modelIds?: number[]) =>
     params: modelIds?.length ? { model_ids: modelIds.join(",") } : undefined,
     timeout: 300_000,
   });
+
+/** 发布静态 HTML 测试报告到服务端，返回无需登录即可打开的分享链接 */
+export const publishTestReport = (setId: number, html: string, title?: string) =>
+  request.post<never, { report_id: string; url: string }>(
+    `/model-tests/sets/${setId}/reports`,
+    { html, title },
+    { timeout: 60_000 },
+  );

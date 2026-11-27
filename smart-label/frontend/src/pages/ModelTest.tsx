@@ -11,12 +11,13 @@ import {
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, dedupeTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, mergeAdjacentTestSet, promoteTestItemToPool, updateTestSet,
+  addTestItems, batchPromoteTestItems, batchRemoveTestItems, checkAllTestItems, checkTestItem, composeApply, composePreview, copyTestSet, createTestSet, dedupeTestSet, deleteTestItem, deleteTestSet, freezeTestSet, getLabelTree, mergeAdjacentTestSet, promoteTestItemToPool, publishTestReport, updateTestSet,
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
 import { listDogs } from "@/api/dogs";
-import { PlusOutlined, QuestionCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { CopyOutlined, DownloadOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
@@ -1428,12 +1429,78 @@ function EvalNotes({ notes, hasRows }: { notes: string[]; hasRows: boolean }) {
   );
 }
 
-function EvalTab({ setId, planTarget, items: allItems, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
-  setId: number; planTarget?: string | null; items: TestItem[]; colors: Record<string, string>;
+function buildReportPayload(
+  testSet: TestSet,
+  coverage: Coverage | null | undefined,
+  items: TestItem[],
+  evalLabel: string,
+  iouMin: number,
+  rows: EvalRow[],
+  active: EvalRow | null | undefined,
+  reporter?: string,
+): TestReportInput {
+  const itemByWin = new Map<string, TestItem>();
+  items.forEach((it) => itemByWin.set(`${it.sample_id}:${it.start_ms ?? 0}:${it.end_ms ?? 0}`, it));
+  const details = active?.r.window_details ?? [];
+  let fp = 0, fn = 0, tp = 0, tn = 0, boundaryBad = 0;
+  const errorCases: ReportErrorCase[] = [];
+  for (const d of details) {
+    if (d.verdict === "fp") fp += 1;
+    else if (d.verdict === "fn") fn += 1;
+    else if (d.verdict === "tp") tp += 1;
+    else tn += 1;
+    const isEdgeBad = d.edge_aligned === false;
+    if (isEdgeBad) boundaryBad += 1;
+    if (d.verdict === "fp" || d.verdict === "fn" || isEdgeBad) {
+      const it = itemByWin.get(`${d.sample_id}:${d.start_ms}:${d.end_ms}`);
+      const maxConf = d.pred_segs.reduce<number | null>((mx, seg) => {
+        const c = seg[2];
+        return c != null && (mx == null || c > mx) ? c : mx;
+      }, null);
+      const actualLabels = Object.entries(it?.labels ?? {}).map(([k, v]) => `${k} ${v.n}次·${fmtSec(v.sec)}`);
+      errorCases.push({
+        verdict: d.verdict,
+        boundaryBad: isEdgeBad,
+        dog: it?.dog_name ?? `样本 #${d.sample_id}`,
+        site: it?.site ?? "",
+        size: it?.size ?? "",
+        winText: `${fmtMs(d.start_ms)}–${fmtMs(d.end_ms)}`,
+        durText: fmtSec((d.end_ms - d.start_ms) / 1000),
+        truthN: d.truth_n,
+        predN: d.pred_n,
+        maxConf,
+        minIou: d.mean_iou ?? null,
+        truthSegs: d.truth_segs,
+        predSegs: d.pred_segs,
+        winDurMs: Math.max(1, d.end_ms - d.start_ms),
+        actualLabels,
+        tag: d.diag?.title ?? (isEdgeBad ? "起止边界偏差 >2s" : d.verdict === "fp" ? "误报" : "漏报"),
+        reason: d.diag?.detail ?? (isEdgeBad && d.max_edge_err_ms != null ? `边界最大偏差 ${(d.max_edge_err_ms / 1000).toFixed(1)}s` : ""),
+        advice: d.diag?.tip ?? "",
+      });
+    }
+  }
+  return {
+    testSet,
+    coverage,
+    items,
+    evalLabel,
+    iouMin,
+    rows,
+    activeRow: active ?? rows[0] ?? null,
+    errorCases,
+    summaryCounts: { total: details.length, err: fp + fn, fp, fn, boundaryBad, tp, tn },
+    reporter,
+  };
+}
+
+function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
+  setId: number; testSet: TestSet; coverage?: Coverage | null; planTarget?: string | null; items: TestItem[]; colors: Record<string, string>;
   opening: number | null; promoting: number | null; frozen?: boolean;
   onOpenTask: (taskId: number, seekMs: number, opts?: OpenTaskOpts) => void;
   onPromoteItem: (itemId: number) => void;
 }) {
+  const user = useAuthStore((s) => s.userInfo);
   const targetLb = planTarget || "抓挠";
   const p = useEvalPicker(setId, targetLb);
   const items = useMemo(() => (p.checkedOnly ? allItems.filter((i) => i.checked) : allItems), [allItems, p.checkedOnly]);
@@ -1444,6 +1511,8 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
   const [allRows, setAllRows] = useState<EvalRow[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
+  const [sharing, setSharing] = useState(false);
+  const [shareModal, setShareModal] = useState<{ url: string; title: string } | null>(null);
   const evalSeqRef = useRef(0);
   const prevStatus = useRef<string | undefined>(undefined);
   const { data: prog, refetch: refetchProg } = useQuery({
@@ -1726,6 +1795,46 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
               placeholder="勾选在本测试集跑过的模型看分"
               value={p.picked} onChange={p.setPicked} options={p.options} maxTagCount={1} />
             <Button size="small" loading={busy} onClick={() => scoreWith(p.picked, evalLabels)} disabled={!p.picked.length}>刷新打分</Button>
+            <Tooltip title="导出独立的离线 HTML 标准测试报告（含指标对比、数据覆盖图、可筛选错例时间轴，支持打印/转 PDF）">
+              <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
+                const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
+                const html = buildTestReportHtml(buildReportPayload(
+                  testSet, coverage, items, p.label, p.iou, rows, activeRow, user?.display_name || user?.username,
+                ));
+                const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
+                const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
+                const dStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+                const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `测试报告_${safeName}_${lbName}_${dStr}.html`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                message.success("已导出标准 HTML 测试报告");
+              }}>导出 HTML</Button>
+            </Tooltip>
+            <Tooltip title="生成只读测试报告分享链接，发给团队成员即可免登录直接打开查看">
+              <Button size="small" icon={<ShareAltOutlined />} loading={sharing} disabled={!rows.length} onClick={async () => {
+                setSharing(true);
+                try {
+                  const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
+                  const lbName = p.label === "ALL" ? "全部类别" : p.label;
+                  const title = `${testSet.name} · ${lbName} 测试报告`;
+                  const html = buildTestReportHtml(buildReportPayload(
+                    testSet, coverage, items, p.label, p.iou, rows, activeRow, user?.display_name || user?.username,
+                  ));
+                  const res = await publishTestReport(setId, html, title);
+                  const fullUrl = `${window.location.origin}${res.url}`;
+                  try { await navigator.clipboard?.writeText(fullUrl); } catch { /* ignore */ }
+                  setShareModal({ url: fullUrl, title });
+                } finally {
+                  setSharing(false);
+                }
+              }}>分享链接</Button>
+            </Tooltip>
             {p.picked.length > 0 && (
               <Popconfirm
                 title="从本测试集移除当前选中的模型跑批记录？"
@@ -1761,6 +1870,32 @@ function EvalTab({ setId, planTarget, items: allItems, colors, opening, promotin
             promoting={promoting} frozen={frozen} onOpenTask={onOpenTask} onPromoteItem={onPromoteItem} />
         ) : null;
       })()}
+      <Modal
+        open={!!shareModal}
+        title="测试报告分享链接已生成"
+        onCancel={() => setShareModal(null)}
+        footer={[
+          <Button key="open" icon={<ExportOutlined />} onClick={() => shareModal && window.open(shareModal.url, "_blank", "noopener")}>
+            新标签页预览
+          </Button>,
+          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={async () => {
+            if (!shareModal) return;
+            try {
+              await navigator.clipboard.writeText(shareModal.url);
+              message.success("链接已复制到剪贴板");
+            } catch {
+              message.info("请手动复制输入框中的链接");
+            }
+          }}>复制链接</Button>,
+        ]}
+      >
+        <Space direction="vertical" style={{ width: "100%" }} size={10}>
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            该链接为独立静态 HTML 测试报告，团队成员在内网无需登录即可只读查看或打印为 PDF：
+          </Typography.Text>
+          <Input readOnly value={shareModal?.url ?? ""} onFocus={(e) => e.target.select()} />
+        </Space>
+      </Modal>
     </Space>
   );
 }
@@ -2424,7 +2559,7 @@ function SetDetail({ setId }: { setId: number }) {
         },
         { key: "seen", label: "模型见没见过", children: <SeenTab setId={setId} /> },
         { key: "eval", label: "打分", children: (
-          <EvalTab setId={setId} planTarget={data.set.plan?.target} items={data.items} colors={colors} opening={opening}
+          <EvalTab setId={setId} testSet={data.set} coverage={data.coverage} planTarget={data.set.plan?.target} items={data.items} colors={colors} opening={opening}
             promoting={promoting} frozen={frozen} onOpenTask={openTask} onPromoteItem={(itemId) => promoteItem(itemId, false)} />
         ) },
       ]} />

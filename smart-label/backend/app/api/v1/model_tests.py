@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import secrets
 from datetime import date, datetime
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.deps import get_current_user, require_role
 from app.db.session import get_db
 from app.models.annotation import AnnotationLabelItem, AnnotationRecord, LabelItemSource
@@ -28,6 +33,8 @@ router = APIRouter(
     tags=["model-tests"],
     dependencies=[Depends(require_role(UserRole.admin, UserRole.super_admin))],
 )
+# 静态测试报告分享链接：由高熵随机 token 保护，免登录只读打开
+public_router = APIRouter(prefix="/model-tests", tags=["model-tests"])
 
 
 class SetIn(BaseModel):
@@ -949,3 +956,67 @@ async def seen(set_id: int, model_ids: str | None = None, db: AsyncSession = Dep
                     "datasets": names, "missing_datasets": missing,
                     "n_seen": len(seen_ids), "n_unseen": len(items) - len(seen_ids), "seen_item_ids": seen_ids})
     return ok({"models": out, "n_items": len(items)})
+
+
+_REPORT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{12,64}$")
+_REPORT_MAX_CHARS = 12_000_000
+
+
+class ReportPublishIn(BaseModel):
+    html: str = Field(min_length=64, max_length=_REPORT_MAX_CHARS)
+    title: str | None = Field(default=None, max_length=200)
+
+
+def _reports_dir() -> Path:
+    d = Path(settings.nas_root) / "_smart_label_reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@router.post("/sets/{set_id}/reports")
+async def publish_report(
+    set_id: int,
+    body: ReportPublishIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保存一份静态 HTML 测试报告到共享存储，返回可免登录只读打开的分享链接。"""
+    await _set_or_404(db, set_id)
+    report_id = secrets.token_urlsafe(16)
+
+    def _write() -> None:
+        d = _reports_dir()
+        target = d / f"{report_id}.html"
+        tmp = d / f".{report_id}.tmp"
+        tmp.write_text(body.html, encoding="utf-8")
+        tmp.replace(target)
+
+    await asyncio.to_thread(_write)
+    db.add(AuditLog(
+        user_id=user.id,
+        action="model_test.publish_report",
+        resource_type="model_test_set",
+        resource_id=set_id,
+        detail={"report_id": report_id, "title": body.title, "size": len(body.html)},
+    ))
+    await db.commit()
+    return ok({
+        "report_id": report_id,
+        "url": f"/api/v1/model-tests/reports/{report_id}",
+    })
+
+
+@public_router.get("/reports/{report_id}", response_class=HTMLResponse)
+async def get_published_report(report_id: str):
+    """免登录只读打开已分享的 HTML 测试报告（高熵随机 ID 保护）。"""
+    if not _REPORT_ID_RE.fullmatch(report_id):
+        raise HTTPException(404, "报告不存在")
+    path = Path(settings.nas_root) / "_smart_label_reports" / f"{report_id}.html"
+    if not path.is_file():
+        raise HTTPException(404, "报告不存在或已清理")
+    html = await asyncio.to_thread(path.read_text, "utf-8")
+    return HTMLResponse(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex"},
+    )
