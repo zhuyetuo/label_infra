@@ -1,5 +1,6 @@
 import type { VersionResult } from "@/api/modelEval";
 import type { Coverage, TestItem, TestSet } from "@/api/modelTests";
+import type { Dog } from "@/api/dogs";
 import { analyzeIouAndEdge } from "@/utils/evalMetrics";
 
 export interface ReportEvalRow {
@@ -15,6 +16,8 @@ export interface ReportErrorCase {
   verdict: "fp" | "fn" | "tp" | "tn";
   boundaryBad: boolean;
   dog: string;
+  breed?: string;
+  skinLevel?: string;
   site: string;
   size: string;
   winText: string;
@@ -35,6 +38,7 @@ export interface ReportErrorCase {
 export interface TestReportInput {
   testSet: TestSet;
   coverage?: Coverage | null;
+  dogs?: Dog[];
   items: TestItem[];
   evalLabel: string;
   iouMin: number;
@@ -226,7 +230,7 @@ function renderMiniTimelineSvg(c: ReportErrorCase): string {
 /** 生成独立可离线打开、可打印 PDF、也可分享链接的标准 QA 测试报告 HTML */
 export function buildTestReportHtml(input: TestReportInput): string {
   const {
-    testSet, coverage, items, evalLabel, iouMin, edgeTolSec = 2, rows, allCategoryRows, activeRow, errorCases, summaryCounts, reporter,
+    testSet, coverage, dogs, items, evalLabel, iouMin, edgeTolSec = 2, rows, allCategoryRows, activeRow, errorCases, summaryCounts, reporter,
   } = input;
 
   const now = new Date();
@@ -333,19 +337,63 @@ export function buildTestReportHtml(input: TestReportInput): string {
     })
     .join("");
 
-  // 犬只分布
+  // 受试犬只画像映射（品种 / 体型 / 当前皮肤状态）
+  const dogById = new Map<number, Dog>();
+  const dogByName = new Map<string, Dog>();
+  (dogs ?? []).forEach((d) => {
+    dogById.set(d.id, d);
+    if (d.name) dogByName.set(d.name, d);
+  });
+  const skinPill = (lv: string | null | undefined): string => {
+    const s = (lv || "").trim();
+    if (!s) return `<span class="pill pill-gray">皮肤未登记</span>`;
+    if (s === "正常") return `<span class="pill pill-green">皮肤正常</span>`;
+    if (s === "轻度") return `<span class="pill pill-orange">轻度瘙痒</span>`;
+    if (s === "中度") return `<span class="pill pill-orange">中度瘙痒</span>`;
+    if (s === "重度") return `<span class="pill pill-red">重度瘙痒</span>`;
+    return `<span class="pill pill-gray">${esc(s)}</span>`;
+  };
+  const sizeLabel = (sz: string | null | undefined): string =>
+    sz === "大" ? "大型犬" : sz === "中" ? "中型犬" : sz === "小" ? "小型犬" : sz ? `${sz}型` : "体型未知";
+
+  // 犬只分布（突出品种、体型、皮肤状态，而非只写代号名字）
   const dogsArr = [...(coverage?.dogs ?? [])].sort((a, b) => b.share - a.share);
   const maxShare = Math.max(0.2, ...dogsArr.map((d) => d.share));
+  const sizeCount = new Map<string, number>();
+  const skinCount = new Map<string, number>();
   const dogsHtml = dogsArr
     .map((d) => {
+      const info = (d.dog ? dogByName.get(d.dog) : undefined)
+        ?? (() => {
+          const matchedItem = items.find((it) => it.dog_name === d.dog && it.dog_id != null);
+          return matchedItem?.dog_id != null ? dogById.get(matchedItem.dog_id) : undefined;
+        })();
+      const breed = info?.breed?.trim() || "品种未登记";
+      const sz = sizeLabel(info?.size);
+      const skin = info?.skin_level || info?.intake_skin_level || "";
+      sizeCount.set(sz, (sizeCount.get(sz) ?? 0) + 1);
+      skinCount.set(skin || "未登记", (skinCount.get(skin || "未登记") ?? 0) + 1);
       const bw = Math.max(4, Math.round((d.share / maxShare) * 100));
-      return `<div class="bar-row">
-        <span class="bar-name">${esc(d.dog ?? "未知")}</span>
-        <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${d.share > 0.25 ? "#f59e0b" : "#3b82f6"}"></div></div>
-        <span class="bar-val">${(d.share * 100).toFixed(1)}% · ${fmtSec(d.sec)}</span>
+      return `<div class="dog-row">
+        <div class="dog-meta">
+          <b>${esc(breed)}</b>
+          <span class="pill pill-gray">${esc(sz)}</span>
+          ${skinPill(skin)}
+          ${d.dog ? `<span class="muted">(${esc(d.dog)})</span>` : ""}
+        </div>
+        <div class="dog-bar-line">
+          <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${d.share > 0.25 ? "#f59e0b" : "#3b82f6"}"></div></div>
+          <span class="bar-val">${(d.share * 100).toFixed(1)}% · ${fmtSec(d.sec)}</span>
+        </div>
       </div>`;
     })
     .join("");
+  const dogSummaryHtml = dogsArr.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:10px;padding:7px 10px;background:#f8fafc;border-radius:6px;font-size:11.5px;color:#475569">
+        <span><b>体型覆盖：</b>${[...sizeCount.entries()].map(([k, n]) => `${k} ${n}只`).join(" · ")}</span>
+        <span><b>皮肤状态：</b>${[...skinCount.entries()].map(([k, n]) => `${k} ${n}只`).join(" · ")}</span>
+      </div>`
+    : "";
 
   // 时长正负例分布
   const durEntries = Object.entries(coverage?.by_dur ?? {});
@@ -390,7 +438,11 @@ export function buildTestReportHtml(input: TestReportInput): string {
       return `<tr class="case-row" data-kind="${kind}" data-idx="${idx}">
         <td class="muted">${idx + 1}</td>
         <td>${badge}</td>
-        <td><b>${esc(c.dog)}</b>${c.size ? `<span class="muted">(${esc(c.size)})</span>` : ""}<div class="sub">${esc(c.site)}</div></td>
+        <td>
+          <b>${esc(c.breed || c.dog)}</b>${c.size ? `<span class="muted">(${esc(c.size)}型)</span>` : ""}
+          ${c.skinLevel ? `<div>${skinPill(c.skinLevel)}</div>` : ""}
+          <div class="sub">${c.breed && c.dog ? `${esc(c.dog)} · ` : ""}${esc(c.site)}</div>
+        </td>
         <td class="mono-sm">${esc(c.winText)}<div class="sub">${esc(c.durText)}</div></td>
         <td>
           ${renderMiniTimelineSvg(c)}
@@ -698,6 +750,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
   .bar-fill { height: 100%; border-radius: 4px; }
   .bar-val { width: 98px; flex: none; text-align: right; color: #475569; font-variant-numeric: tabular-nums; font-size: 11.5px; }
   .bar-val-sm { width: 52px; flex: none; text-align: right; color: #334155; font-variant-numeric: tabular-nums; }
+  .dog-row { margin-bottom: 9px; }
+  .dog-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 3px; font-size: 12px; color: #1e293b; }
+  .dog-bar-line { display: flex; align-items: center; gap: 8px; }
   .empty-tip { padding: 16px; text-align: center; color: #64748b; background: #f8fafc; border-radius: 8px; }
 
   /* 错例筛选工具条 */
@@ -868,7 +923,8 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
     <div class="two-col">
       <div>
-        <div class="chart-title" style="margin-bottom:8px">各犬只时长占比</div>
+        <div class="chart-title" style="margin-bottom:8px">受试犬只特征与时长占比（品种 / 体型 / 皮肤状态）</div>
+        ${dogSummaryHtml}
         ${dogsHtml || `<div class="muted">暂无数据</div>`}
       </div>
       <div>

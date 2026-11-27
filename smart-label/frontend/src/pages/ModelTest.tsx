@@ -15,7 +15,7 @@ import {
   getTaskSegments, getTestItems, getTestSeen, listTestSets,
   type ComposeBody, type ComposeStats, type Coverage, type TaskSeg, type TestItem, type TestSet,
 } from "@/api/modelTests";
-import { listDogs } from "@/api/dogs";
+import { listDogs, type Dog } from "@/api/dogs";
 import { CopyOutlined, DownloadOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
@@ -1491,6 +1491,7 @@ function EvalNotes({ notes, hasRows }: { notes: string[]; hasRows: boolean }) {
 function buildReportPayload(
   testSet: TestSet,
   coverage: Coverage | null | undefined,
+  dogs: Dog[] | undefined,
   items: TestItem[],
   evalLabel: string,
   iouMin: number,
@@ -1502,6 +1503,12 @@ function buildReportPayload(
 ): TestReportInput {
   const itemByWin = new Map<string, TestItem>();
   items.forEach((it) => itemByWin.set(`${it.sample_id}:${it.start_ms ?? 0}:${it.end_ms ?? 0}`, it));
+  const dogById = new Map<number, Dog>();
+  const dogByName = new Map<string, Dog>();
+  (dogs ?? []).forEach((dg) => {
+    dogById.set(dg.id, dg);
+    if (dg.name) dogByName.set(dg.name, dg);
+  });
   const details = active?.r.window_details ?? [];
   let fp = 0, fn = 0, tp = 0, tn = 0, boundaryBad = 0;
   const errorCases: ReportErrorCase[] = [];
@@ -1519,12 +1526,16 @@ function buildReportPayload(
         return c != null && (mx == null || c > mx) ? c : mx;
       }, null);
       const actualLabels = Object.entries(it?.labels ?? {}).map(([k, v]) => `${k} ${v.n}次·${fmtSec(v.sec)}`);
+      const dgInfo = (it?.dog_id != null ? dogById.get(it.dog_id) : undefined)
+        ?? (it?.dog_name ? dogByName.get(it.dog_name) : undefined);
       errorCases.push({
         verdict: d.verdict,
         boundaryBad: isEdgeBad,
         dog: it?.dog_name ?? `样本 #${d.sample_id}`,
+        breed: dgInfo?.breed ?? undefined,
+        skinLevel: dgInfo?.skin_level ?? dgInfo?.intake_skin_level ?? undefined,
         site: it?.site ?? "",
-        size: it?.size ?? "",
+        size: it?.size ?? dgInfo?.size ?? "",
         winText: `${fmtMs(d.start_ms)}–${fmtMs(d.end_ms)}`,
         durText: fmtSec((d.end_ms - d.start_ms) / 1000),
         truthN: d.truth_n,
@@ -1544,6 +1555,7 @@ function buildReportPayload(
   return {
     testSet,
     coverage,
+    dogs,
     items,
     evalLabel,
     iouMin,
@@ -1603,6 +1615,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   onPromoteItem: (itemId: number) => void;
 }) {
   const user = useAuthStore((s) => s.userInfo);
+  const { data: dogs } = useQuery({ queryKey: ["dogs"], queryFn: listDogs });
   const targetLb = planTarget || "抓挠";
   const p = useEvalPicker(setId, targetLb);
   const items = useMemo(() => (p.checkedOnly ? allItems.filter((i) => i.checked) : allItems), [allItems, p.checkedOnly]);
@@ -1972,7 +1985,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
               <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
                 const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
                 const html = buildTestReportHtml(buildReportPayload(
-                  testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
+                  testSet, coverage, dogs, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
                 ));
                 const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
                 const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
@@ -1997,7 +2010,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                   const lbName = p.label === "ALL" ? "全部类别" : p.label;
                   const title = `${testSet.name} · ${lbName} 测试报告`;
                   const html = buildTestReportHtml(buildReportPayload(
-                    testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
+                    testSet, coverage, dogs, items, p.label, p.iou, edgeTolSec, rows, allRecomputedRows, activeRow, user?.display_name || user?.username,
                   ));
                   const res = await publishTestReport(setId, html, title);
                   const fullUrl = `${window.location.origin}${res.url}`;
