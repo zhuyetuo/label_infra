@@ -710,6 +710,11 @@ export function buildTestReportHtml(input: TestReportInput): string {
     padding: 2px 7px; font-size: 10.5px; cursor: pointer;
   }
   .edu-pbtn.active { background: #0d9488; border-color: #0d9488; color: #fff; font-weight: 600; }
+  .edu-wbtn {
+    border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 5px;
+    padding: 2px 6px; font-size: 10.5px; cursor: pointer;
+  }
+  .edu-wbtn.active { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 600; }
   .edu-status { font-size: 11.5px; font-weight: 700; margin-top: 5px; display: flex; align-items: center; justify-content: space-between; }
   @keyframes scanMove {
     0% { transform: translateX(0); }
@@ -982,25 +987,33 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
     <!-- 三大核心指标：生动图解 + 动画 + 可交互演示 -->
     <div class="edu-grid">
-      <!-- ① 窗口级（动态扫描演示） -->
+      <!-- ① 窗口级（动态扫描 + TP/TN/FP/FN 四态交互演示） -->
       <div class="edu-card c-win">
         <div class="edu-hd">
           <span style="color:#1d4ed8">① 窗口级（整段有没有）</span>
-          <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">动图演示</span>
+          <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">点击切换</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 66" width="100%" style="display:block">
             <text x="4" y="13" font-size="9.5" fill="#64748b">1 分钟测试视频（整段当一道是非题）</text>
             <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect x="52" y="20" width="40" height="10" rx="3" fill="#10b981" />
-            <rect x="148" y="20" width="32" height="10" rx="3" fill="#10b981" />
+            <g id="eduWinTruth">
+              <rect x="52" y="20" width="40" height="10" rx="3" fill="#10b981" />
+              <rect x="148" y="20" width="32" height="10" rx="3" fill="#10b981" />
+            </g>
             <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">标</text>
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
-            <rect x="64" y="36" width="46" height="10" rx="3" fill="#3b82f6" />
+            <rect id="eduWinPred" x="64" y="36" width="46" height="10" rx="3" fill="#3b82f6" style="transition:all .25s" />
             <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">预</text>
             <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
-            <text x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 实际有动作，模型也报了 → 整段判对</text>
+            <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 实际有动作，模型也报了 → 命中 (TP)</text>
           </svg>
+          <div class="edu-ctrl">
+            <button class="edu-wbtn active" data-w="tp">命中 TP</button>
+            <button class="edu-wbtn" data-w="tn">正常 TN</button>
+            <button class="edu-wbtn" data-w="fp">误报 FP</button>
+            <button class="edu-wbtn" data-w="fn">漏报 FN</button>
+          </div>
         </div>
         <div class="edu-desc">只看这段视频里<b>有没有发生抓挠</b>，不管抓了几次、也不管起止歪了几秒。直接决定 <b>App 有没有报警 / 有没有记录</b>。</div>
       </div>
@@ -1288,7 +1301,37 @@ export function buildTestReportHtml(input: TestReportInput): string {
   if (btnMore) btnMore.addEventListener("click", function() { expanded = true; apply(); });
   apply();
 
-  // 三指标交互演示（IoU 滑块 + 起止对齐档位）
+  // 三指标交互演示（窗口级四态 + IoU 滑块 + 起止对齐档位）
+  var winBtns = Array.prototype.slice.call(document.querySelectorAll(".edu-wbtn"));
+  var winTruth = document.getElementById("eduWinTruth");
+  var winPred = document.getElementById("eduWinPred");
+  var winTxt = document.getElementById("eduWinTxt");
+  var WIN_STATES = {
+    tp: { t: true, p: true, fill: "#3b82f6", color: "#15803d", txt: "✓ 实际有动作，模型也报了 → 命中 (TP)" },
+    tn: { t: false, p: false, fill: "#3b82f6", color: "#1d4ed8", txt: "✓ 实际无动作，模型也没报 → 正常通过 (TN)" },
+    fp: { t: false, p: true, fill: "#f59e0b", color: "#b45309", txt: "✗ 实际无动作，模型乱报了 → 误报 (FP)" },
+    fn: { t: true, p: false, fill: "#ef4444", color: "#dc2626", txt: "✗ 实际有动作，模型漏报了 → 漏报 (FN)" },
+  };
+  function applyEduWin(k) {
+    var st = WIN_STATES[k] || WIN_STATES.tp;
+    if (winTruth) winTruth.style.display = st.t ? "" : "none";
+    if (winPred) {
+      winPred.style.display = st.p ? "" : "none";
+      winPred.setAttribute("fill", st.fill);
+    }
+    if (winTxt) {
+      winTxt.setAttribute("fill", st.color);
+      winTxt.textContent = st.txt;
+    }
+  }
+  winBtns.forEach(function(b) {
+    b.addEventListener("click", function() {
+      winBtns.forEach(function(x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      applyEduWin(b.getAttribute("data-w"));
+    });
+  });
+
   var REPORT_IOU_PCT = ${iouPct};
   var REPORT_EDGE_TOL = ${edgeTolSec};
   var iouRange = document.getElementById("eduIouRange");
