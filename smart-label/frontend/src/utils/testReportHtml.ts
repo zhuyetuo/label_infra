@@ -985,28 +985,34 @@ export function buildTestReportHtml(input: TestReportInput): string {
 
     ${rubricHtml}
 
-    <!-- 三大核心指标：生动图解 + 动画 + 可交互演示 -->
+    <!-- 三大核心指标：一层比一层严的三关，用具体时间例子讲清楚 -->
+    <div style="margin-bottom:8px;padding:7px 12px;border-radius:7px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;color:#334155">
+      <b>三个指标其实是「一层比一层严」的三道关：</b>
+      <span style="color:#1d4ed8;font-weight:600">第 1 关看这 1 分钟有没有</span> →
+      <span style="color:#6d28d9;font-weight:600">第 2 关看具体那一次有没有重叠上</span> →
+      <span style="color:#0f766e;font-weight:600">第 3 关看开始/结束时间差几秒</span>
+    </div>
     <div class="edu-grid">
       <!-- ① 窗口级（动态扫描 + TP/TN/FP/FN 四态交互演示） -->
       <div class="edu-card c-win">
         <div class="edu-hd">
-          <span style="color:#1d4ed8">① 窗口级（整段有没有）</span>
+          <span style="color:#1d4ed8">第 1 关 · 窗口级（这 1 分钟有没有）</span>
           <span class="edu-tag" style="background:#eff6ff;color:#1d4ed8">点击切换</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 66" width="100%" style="display:block">
-            <text x="4" y="13" font-size="9.5" fill="#64748b">1 分钟测试视频（整段当一道是非题）</text>
+            <text x="4" y="13" font-size="9.5" fill="#64748b">例：整段视频 11:11:00 ~ 11:12:00（只判“有没有”）</text>
             <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
             <g id="eduWinTruth">
               <rect x="52" y="20" width="40" height="10" rx="3" fill="#10b981" />
               <rect x="148" y="20" width="32" height="10" rx="3" fill="#10b981" />
             </g>
-            <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">标</text>
+            <text x="240" y="28" font-size="9" fill="#15803d" font-weight="600">真</text>
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
             <rect id="eduWinPred" x="64" y="36" width="46" height="10" rx="3" fill="#3b82f6" style="transition:all .25s" />
-            <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">预</text>
+            <text x="240" y="44" font-size="9" fill="#1d4ed8" font-weight="600">测</text>
             <line x1="4" y1="16" x2="4" y2="50" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="2,2" class="scan-line" />
-            <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 实际有动作，模型也报了 → 命中 (TP)</text>
+            <text id="eduWinTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">✓ 这 1 分钟真有抓挠，模型也报了 → 命中 (TP)</text>
           </svg>
           <div class="edu-ctrl">
             <button class="edu-wbtn active" data-w="tp">命中 TP</button>
@@ -1015,50 +1021,50 @@ export function buildTestReportHtml(input: TestReportInput): string {
             <button class="edu-wbtn" data-w="fn">漏报 FN</button>
           </div>
         </div>
-        <div class="edu-desc">只看这段视频里<b>有没有发生抓挠</b>，不管抓了几次、也不管起止歪了几秒。直接决定 <b>App 有没有报警 / 有没有记录</b>。</div>
+        <div class="edu-desc"><b>最宽松：</b>只要这 1 分钟里真的有抓挠、模型在这 1 分钟内任意位置也报了抓挠，就算对（不管报了几次、也不管有没有重叠）。</div>
       </div>
 
       <!-- ② 事件级（可拖动 IoU 交互演示） -->
       <div class="edu-card c-evt">
         <div class="edu-hd">
-          <span style="color:#6d28d9">② 事件级（每次抓对没）</span>
+          <span style="color:#6d28d9">第 2 关 · 事件级（重叠够不够 ${iouPct}%）</span>
           <span class="edu-tag" style="background:#f5f3ff;color:#6d28d9">拖动交互</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 66" width="100%" style="display:block">
-            <text x="4" y="12" font-size="9.5" fill="#64748b">绿=人工标注(6s) · 紫=模型预测(6s) · 金=重叠</text>
+            <text x="4" y="12" font-size="9.5" fill="#64748b">例：真实 11:11:10~16s(绿) · 预测(紫) · 重叠(金)</text>
             <rect x="4" y="19" width="232" height="11" rx="3" fill="#e2e8f0" />
             <rect x="76" y="19" width="72" height="11" rx="3" fill="#10b981" />
             <rect x="4" y="35" width="232" height="11" rx="3" fill="#e2e8f0" />
             <rect id="eduIouPred" x="94" y="35" width="72" height="11" rx="3" fill="#7c3aed" />
             <rect id="eduIouInter" x="94" y="19" width="54" height="27" rx="2" fill="rgba(245,158,11,0.28)" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="3,2" />
-            <text id="eduIouTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">重叠 IoU = 60% ≥ ${iouPct}% → 算命中 ✓</text>
+            <text id="eduIouTxt" x="4" y="61" font-size="10" font-weight="700" fill="#15803d">重叠占比 = 60% ≥ ${iouPct}% → 这次算抓对 ✓</text>
           </svg>
           <div class="edu-ctrl">
-            <span>拖看偏移：</span>
+            <span>拖看报歪几秒：</span>
             <input type="range" id="eduIouRange" class="edu-slider" min="-6" max="7" step="0.5" value="1.5" />
             <b id="eduIouShift">+1.5s</b>
           </div>
         </div>
-        <div class="edu-desc">逐次核对每次动作：重叠比例（<b>交并比 IoU</b>）达到 <b>${iouPct}%</b> 才算抓对，没达标会被判成「1 误 + 1 漏」。决定 <b>App 计次准不准</b>。</div>
+        <div class="edu-desc"><b>加严一步：</b>真正在 11:11:10~16s 抓挠，模型预测的那段必须跟它<b>重叠占比 ≥ ${iouPct}%</b>（交集÷并集）才算抓对；没重叠上或漏掉某一次都要扣分。</div>
       </div>
 
       <!-- ③ 起止对齐（可切换容差交互演示） -->
       <div class="edu-card c-edg">
         <div class="edu-hd">
-          <span style="color:#0f766e">③ 起止对齐（时间准不准）</span>
+          <span style="color:#0f766e">第 3 关 · 起止对齐（两头差≤${edgeTolSec}s）</span>
           <span class="edu-tag" style="background:#f0fdfa;color:#0f766e">点击切换</span>
         </div>
         <div class="edu-vis">
           <svg viewBox="0 0 260 66" width="100%" style="display:block">
-            <text x="4" y="12" font-size="9.5" fill="#64748b">对比抓对动作的开始/结束时刻误差</text>
+            <text x="4" y="12" font-size="9.5" fill="#64748b">例：在已抓对的基础上，看开头和结尾各差几秒</text>
             <rect x="4" y="20" width="232" height="10" rx="3" fill="#e2e8f0" />
             <rect x="64" y="20" width="96" height="10" rx="3" fill="#10b981" />
             <line x1="64" y1="16" x2="64" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
             <line x1="160" y1="16" x2="160" y2="48" stroke="#10b981" stroke-width="1.2" stroke-dasharray="2,2" />
             <rect x="4" y="36" width="232" height="10" rx="3" fill="#e2e8f0" />
             <rect id="eduEdgPred" x="78" y="36" width="94" height="10" rx="3" fill="#0d9488" style="transition:all .3s" />
-            <text id="eduEdgTxt" x="4" y="61" font-size="10" font-weight="700" fill="#0f766e">起 +1.2s / 止 +1.0s（≤ ±${edgeTolSec}s 对齐 ✓）</text>
+            <text id="eduEdgTxt" x="4" y="61" font-size="10" font-weight="700" fill="#0f766e">开头差 +0.8s / 结尾差 +0.6s（都 ≤ ${edgeTolSec}s ✓）</text>
           </svg>
           <div class="edu-ctrl">
             <button class="edu-pbtn active" data-ds="0.8" data-de="0.6">很准 (±0.8s)</button>
@@ -1066,7 +1072,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
             <button class="edu-pbtn" data-ds="3.6" data-de="2.8">偏大 (±3.6s)</button>
           </div>
         </div>
-        <div class="edu-desc">在已抓对的动作里，开始和结束时刻误差都在 <b>±${edgeTolSec}s</b> 内算对齐。主要决定 <b>App 时间轴上的发生/结束时刻及视频回放定位准不准</b>（若起止偏差不对称，也会影响单次时长）。</div>
+        <div class="edu-desc"><b>最严格：</b>在上面第 2 关已经重叠抓对的动作里，<b>开始时间差 ≤ ${edgeTolSec}s 且 结束时间差 ≤ ${edgeTolSec}s</b> 才算对齐，用来衡量视频回放定位准不准。</div>
       </div>
     </div>
 
