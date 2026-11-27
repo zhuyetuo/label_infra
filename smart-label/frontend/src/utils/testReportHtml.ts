@@ -150,61 +150,80 @@ function renderVerdictDonutSvg(tp: number, tn: number, fp: number, fn: number): 
   </div>`;
 }
 
-/** 多模型核心指标对比 SVG 分组柱状图 */
-function renderModelCompareChartSvg(rows: ReportEvalRow[], showLabel: boolean): string {
+/** 多模型 / 全类别核心指标对比 SVG 分组柱状图（宽幅无截断，带对/误/漏精简附注） */
+function renderModelCompareChartSvg(
+  rows: ReportEvalRow[],
+  showLabel: boolean,
+  edgeTolSec = 2,
+  labelOnly = false,
+): string {
   if (!rows.length) return "";
-  const items = rows.slice(0, 8);
-  const barH = 12;
-  const rowGap = 14;
-  const groupH = barH * 3 + 8 + rowGap;
+  const items = rows.slice(0, 10);
+  const barH = 14;
+  const rowGap = 16;
+  const groupH = barH * 3 + 10 + rowGap;
   const topPad = 26;
-  const leftPad = 175;
-  const rightPad = 52;
-  const plotW = 460;
+  const leftPad = labelOnly ? 116 : 210;
+  const rightPad = 145;
+  const plotW = labelOnly ? 680 : 590;
   const svgW = leftPad + plotW + rightPad;
-  const svgH = topPad + items.length * groupH + 12;
+  const svgH = topPad + items.length * groupH + 10;
 
   const gridLines = [0, 25, 50, 75, 100]
     .map((p) => {
       const x = leftPad + (p / 100) * plotW;
-      return `<line x1="${x}" y1="${topPad - 4}" x2="${x}" y2="${svgH - 12}" stroke="#e2e8f0" stroke-dasharray="${p === 0 ? "" : "3,3"}" />
-        <text x="${x}" y="14" text-anchor="middle" font-size="10.5" fill="#94a3b8">${p}%</text>`;
+      return `<line x1="${x}" y1="${topPad - 4}" x2="${x}" y2="${svgH - 10}" stroke="#e2e8f0" stroke-dasharray="${p === 0 ? "" : "3,3"}" />
+        <text x="${x}" y="14" text-anchor="middle" font-size="11" fill="#94a3b8">${p}%</text>`;
     })
     .join("");
 
   const bars = items
     .map((row, idx) => {
       const y0 = topPad + idx * groupH;
-      const wf1 = row.r.window?.f1 ?? 0;
+      const wObj = row.r.window;
+      const wf1 = wObj?.f1 ?? 0;
       const ef1 = f1(row.r.precision, row.r.recall) ?? 0;
       const b2s = row.r.within_2s_ratio ?? 0;
-      const rawName = showLabel && row.label ? `[${row.label}] ${row.version}` : row.version;
-      const shortName = rawName.length > 22 ? `${rawName.slice(0, 21)}…` : rawName;
-      const drawBar = (val: number, dy: number, fill: string) => {
-        const w = Math.max(2, Math.min(1, val) * plotW);
-        return `<rect x="${leftPad}" y="${y0 + dy}" width="${w.toFixed(1)}" height="${barH}" rx="3" fill="${fill}" />
-          <text x="${(leftPad + w + 5).toFixed(1)}" y="${y0 + dy + 9.5}" font-size="10.5" font-weight="600" fill="#334155">${(val * 100).toFixed(1)}%</text>`;
+      const rawName = labelOnly
+        ? (row.label ?? row.version)
+        : showLabel && row.label
+          ? `[${row.label}] ${row.version}`
+          : row.version;
+      const maxChars = labelOnly ? 10 : 22;
+      const shortName = rawName.length > maxChars ? `${rawName.slice(0, maxChars - 1)}…` : rawName;
+      const subLine = labelOnly
+        ? `${wObj ? `准 ${pct(wObj.accuracy)}` : `${row.n}样本`}`
+        : `${row.group} · ${row.n}样本`;
+      const drawBar = (val: number, dy: number, fill: string, extra: string) => {
+        const w = Math.max(3, Math.min(1, val) * plotW);
+        return `<rect x="${leftPad}" y="${y0 + dy}" width="${w.toFixed(1)}" height="${barH}" rx="3.5" fill="${fill}" />
+          <text x="${(leftPad + w + 6).toFixed(1)}" y="${y0 + dy + 11}" font-size="11" font-weight="700" fill="#1e293b">${(val * 100).toFixed(1)}%<tspan font-weight="400" fill="#64748b" font-size="10">${esc(extra)}</tspan></text>`;
       };
+      const wExtra = wObj ? ` (${wObj.tp + wObj.tn}对/${wObj.fp}误/${wObj.fn}漏)` : "";
+      const eExtra = ` (${row.r.tp}对/${row.r.fp}误/${row.r.fn}漏)`;
+      const bExtra = row.r.d_start_abs_mean_ms != null && row.r.d_end_abs_mean_ms != null
+        ? ` (均差 ${(row.r.d_start_abs_mean_ms / 1000).toFixed(1)}s/${(row.r.d_end_abs_mean_ms / 1000).toFixed(1)}s)`
+        : "";
       return `<g>
-        <text x="${leftPad - 10}" y="${y0 + 18}" text-anchor="end" font-size="11.5" font-weight="600" fill="#1e293b">${esc(shortName)}</text>
-        <text x="${leftPad - 10}" y="${y0 + 32}" text-anchor="end" font-size="10" fill="#64748b">${esc(row.group)} · ${row.n}样本</text>
-        ${drawBar(wf1, 0, "#2563eb")}
-        ${drawBar(ef1, barH + 3, "#7c3aed")}
-        ${drawBar(b2s, (barH + 3) * 2, "#0d9488")}
+        <text x="${leftPad - 12}" y="${y0 + 21}" text-anchor="end" font-size="13" font-weight="700" fill="#0f172a">${esc(shortName)}</text>
+        <text x="${leftPad - 12}" y="${y0 + 37}" text-anchor="end" font-size="10.5" fill="#64748b">${esc(subLine)}</text>
+        ${drawBar(wf1, 0, "#2563eb", wExtra)}
+        ${drawBar(ef1, barH + 4, "#7c3aed", eExtra)}
+        ${drawBar(b2s, (barH + 4) * 2, "#0d9488", bExtra)}
       </g>`;
     })
     .join("");
 
-  return `<div class="chart-box">
+  return `<div class="chart-box" style="margin-bottom:0">
     <div class="chart-head">
       <span class="chart-title">核心指标横向对比（%）</span>
       <span class="chart-legend">
         <span><i class="dot" style="background:#2563eb"></i>窗口级 F1</span>
         <span><i class="dot" style="background:#7c3aed"></i>事件级 F1</span>
-        <span><i class="dot" style="background:#0d9488"></i>±2s 边界对齐</span>
+        <span><i class="dot" style="background:#0d9488"></i>±${edgeTolSec}s 起止对齐</span>
       </span>
     </div>
-    <svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-width:${svgW}px;display:block">
+    <svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="display:block">
       ${gridLines}
       ${bars}
     </svg>
@@ -572,37 +591,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
       })()
     : "";
 
-  // 全类别总览（无论当前选的是单类还是全部类别，只要有多种类别就自动展示「抓挠 / 甩头 / 活动 / 静止休息 / 未佩戴」全览）
+  // 全类别总览（仅保留清晰宽幅可视化柱状图，去掉重复冗余表格）
   const distinctCats = new Set((allCategoryRows ?? []).map((x) => x.label).filter(Boolean));
+  const distinctModels = new Set((allCategoryRows ?? []).map((x) => x.version));
   const showAllCatSection = evalLabel !== "ALL" && distinctCats.size > 1 && (allCategoryRows?.length ?? 0) > 0;
-  const allCatRowsHtml = showAllCatSection
-    ? (allCategoryRows ?? [])
-        .map((x) => {
-          const w = x.r.window;
-          const eF1 = f1(x.r.precision, x.r.recall);
-          const isCur = x.label === evalLabel;
-          const errDiff =
-            x.r.d_start_abs_mean_ms != null && x.r.d_end_abs_mean_ms != null
-              ? `${(x.r.d_start_abs_mean_ms / 1000).toFixed(1)}s / ${(x.r.d_end_abs_mean_ms / 1000).toFixed(1)}s`
-              : "-";
-          return `<tr class="${isCur ? "row-primary" : ""}">
-            <td><span class="pill ${isCur ? "pill-purple" : "pill-gray"}">${esc(x.label ?? "-")}</span></td>
-            <td>${esc(x.group)}</td>
-            <td class="mono-sm">${esc(x.version)}</td>
-            <td class="col-w">${w ? pct(w.accuracy) : "-"}</td>
-            <td class="col-w"><b>${w ? pct(w.f1) : "-"}</b></td>
-            <td class="col-w">${w ? `<span class="c-green">${w.tp + w.tn}</span>/<span class="c-orange">${w.fp}</span>/<span class="c-red">${w.fn}</span>` : "-"}</td>
-            <td class="col-e">${pct(x.r.precision)}</td>
-            <td class="col-e">${pct(x.r.recall)}</td>
-            <td class="col-e"><b>${pct(eF1)}</b></td>
-            <td class="col-e"><span class="c-green">${x.r.tp}</span>/<span class="c-orange">${x.r.fp}</span>/<span class="c-red">${x.r.fn}</span></td>
-            <td class="col-b">${pct(x.r.mean_iou)}</td>
-            <td class="col-b"><b>${pct(x.r.within_2s_ratio)}</b></td>
-            <td class="col-b">${errDiff}</td>
-          </tr>`;
-        })
-        .join("")
-    : "";
   const secNumAllCat = showAllCatSection ? "四" : "";
   const secNumCov = showAllCatSection ? "五" : "四";
   const secNumCases = showAllCatSection ? "六" : "五";
@@ -627,27 +619,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
     ? `<div class="card" id="sec-allcat">
         <div class="sec-hd">
           <h2>${secNumAllCat}、全类别综合表现总览（${[...distinctCats].join(" / ")}）</h2>
-          <span class="sub">同一测试集下各行为与状态类别的横向表现 · IoU ≥ ${iouPct}% · 容差 ±${edgeTolSec}s</span>
+          <span class="sub">${distinctModels.size === 1 ? `模型：${esc([...distinctModels][0])} · ` : ""}IoU ≥ ${iouPct}% · 容差 ±${edgeTolSec}s</span>
         </div>
-        ${renderModelCompareChartSvg(allCategoryRows ?? [], true)}
-        <div style="overflow-x:auto">
-          <table>
-            <thead>
-              <tr>
-                <th rowspan="2">类别</th><th rowspan="2">范围</th><th rowspan="2">模型版本</th>
-                <th colspan="3" class="th-w">窗口级（有无）</th>
-                <th colspan="4" class="th-e">事件级（IoU ≥ ${iouPct}%）</th>
-                <th colspan="3" class="th-b">起止对齐（±${edgeTolSec}s）</th>
-              </tr>
-              <tr>
-                <th class="th-w">准确率</th><th class="th-w">F1</th><th class="th-w">对/误/漏</th>
-                <th class="th-e">精确率</th><th class="th-e">召回率</th><th class="th-e">F1</th><th class="th-e">对/误/漏</th>
-                <th class="th-b">平均重叠</th><th class="th-b">±${edgeTolSec}s 对齐</th><th class="th-b">起/止均差</th>
-              </tr>
-            </thead>
-            <tbody>${allCatRowsHtml}</tbody>
-          </table>
-        </div>
+        ${renderModelCompareChartSvg(allCategoryRows ?? [], true, edgeTolSec, distinctModels.size === 1)}
       </div>`
     : "";
 
@@ -1162,10 +1136,10 @@ export function buildTestReportHtml(input: TestReportInput): string {
   <div class="card" id="sec-compare">
     <div class="sec-hd">
       <h2>三、模型评测指标对比</h2>
-      <span class="sub">共 ${rows.length} 条记录 · 事件判定阈值 IoU ≥ ${iouPct}%</span>
+      <span class="sub">共 ${rows.length} 条记录 · 事件判定阈值 IoU ≥ ${iouPct}% · 容差 ±${edgeTolSec}s</span>
     </div>
-    ${renderModelCompareChartSvg(rows, showLabelCol)}
-    <div style="overflow-x:auto">
+    ${renderModelCompareChartSvg(rows, showLabelCol, edgeTolSec, false)}
+    ${rows.length > 1 ? `<div style="overflow-x:auto;margin-top:14px">
       <table>
         <thead>
           <tr>
@@ -1184,7 +1158,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
         </thead>
         <tbody>${rowsHtml}</tbody>
       </table>
-    </div>
+    </div>` : ""}
     ${iouPanelHtml}
   </div>
 
