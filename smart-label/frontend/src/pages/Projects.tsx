@@ -1685,7 +1685,10 @@ export default function Projects() {
         ) : null}
       </Space>
       {isAdmin && cleanProg?.status === "running" && (() => {
-        const pct = cleanProg.tasks_total ? Math.min(99, Math.round((cleanProg.tasks_done / cleanProg.tasks_total) * 100)) : 0;
+        const isCsvPhase = cleanProg.phase === "csv_scan" && (cleanProg.scan_total ?? 0) > 0;
+        const pct = isCsvPhase
+          ? Math.min(99, Math.round(((cleanProg.scan_done ?? 0) / (cleanProg.scan_total ?? 1)) * 100))
+          : (cleanProg.tasks_total ? Math.min(99, Math.round((cleanProg.tasks_done / cleanProg.tasks_total) * 100)) : 0);
         const s = cleanProg.summary;
         const fmtSec = (sec: number) => sec >= 60 ? `${Math.floor(sec / 60)}分${sec % 60}秒` : `${sec}秒`;
         return (
@@ -1696,11 +1699,17 @@ export default function Projects() {
             message={
               <Space direction="vertical" size={4} style={{ width: "100%" }}>
                 <Space wrap size={12}>
-                  <b>正在后台智能处理</b>
-                  <span>项目 {cleanProg.projects_done}/{cleanProg.projects_total}</span>
-                  <span>任务 <b>{cleanProg.tasks_done}/{cleanProg.tasks_total}</b></span>
-                  {cleanProg.current_project && <span>当前：{cleanProg.current_project}</span>}
-                  <span>已用 {fmtSec(cleanProg.elapsed_sec)}{cleanProg.eta_sec != null ? ` · 预计剩余 ${fmtSec(cleanProg.eta_sec)}` : ""}</span>
+                  <b>{isCsvPhase ? "阶段 1/2：极速并行检测无信号 CSV" : "阶段 2/2：后台智能清洗"}</b>
+                  {isCsvPhase ? (
+                    <span>CSV <b>{cleanProg.scan_done ?? 0}/{cleanProg.scan_total ?? 0}</b></span>
+                  ) : (
+                    <>
+                      <span>项目 {cleanProg.projects_done}/{cleanProg.projects_total}</span>
+                      <span>任务 <b>{cleanProg.tasks_done}/{cleanProg.tasks_total}</b></span>
+                    </>
+                  )}
+                  {cleanProg.current_project && !isCsvPhase && <span>当前：{cleanProg.current_project}</span>}
+                  <span>已用 {fmtSec(cleanProg.elapsed_sec)}{cleanProg.eta_sec != null ? ` · 本阶段预计剩余 ${fmtSec(cleanProg.eta_sec)}` : ""}</span>
                 </Space>
                 <Progress percent={pct} size="small" status="active" style={{ margin: 0 }} />
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>

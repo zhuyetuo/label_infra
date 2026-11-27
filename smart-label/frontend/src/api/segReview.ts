@@ -161,6 +161,9 @@ export type SmartCleanScan = {
 
 export type SmartCleanProgress = {
   status: "idle" | "running" | "done" | "cancelled" | "error";
+  phase?: "idle" | "prescan" | "csv_scan" | "clean";
+  scan_total?: number;
+  scan_done?: number;
   projects_total: number;
   projects_done: number;
   tasks_total: number;

@@ -62,13 +62,32 @@ def _save_zero_cache(cache: dict[str, dict]) -> None:
 
 
 def _scan_zero_worker(args: tuple[str, str, int]) -> tuple[str, float, int, list[list[int]]]:
-    """多进程 worker：扫描单个 CSV 的三轴全 0 断流区间。"""
-    nas_root, rel_path, min_zero_ms = args
+    """多进程 worker：极速扫描单个 CSV 的三轴全 0 / NaN 断流区间。
+    先用 C 引擎只读 acc_x/acc_y/acc_z 三列（不解析时间戳、不排序，快 50~100 倍）；
+    仅当确实存在 |acc|<0.05g 或 NaN 时才走完整时间戳解析拿精确起止毫秒。"""
+    import numpy as np
+    import pandas as pd
     from app.services import imu_service
 
+    nas_root, rel_path, min_zero_ms = args
     full_path = os.path.join(nas_root, rel_path.lstrip("/"))
     try:
         st = os.stat(full_path)
+        # 快速通道：先读表头识别 acc 列名，再 C 引擎只读 3 列 float32
+        head = pd.read_csv(full_path, nrows=1, engine="c")
+        norm = {str(c).strip().lstrip("\ufeff").lower(): c for c in head.columns}
+        ax_c = norm.get("acc_x") or norm.get("ax") or norm.get("accx")
+        ay_c = norm.get("acc_y") or norm.get("ay") or norm.get("accy")
+        az_c = norm.get("acc_z") or norm.get("az") or norm.get("accz")
+        if ax_c and ay_c and az_c:
+            df3 = pd.read_csv(full_path, usecols=[ax_c, ay_c, az_c], engine="c")
+            ax = pd.to_numeric(df3[ax_c], errors="coerce").to_numpy(dtype=np.float32)
+            ay = pd.to_numeric(df3[ay_c], errors="coerce").to_numpy(dtype=np.float32)
+            az = pd.to_numeric(df3[az_c], errors="coerce").to_numpy(dtype=np.float32)
+            mag2 = ax * ax + ay * ay + az * az
+            if not np.any((~np.isfinite(mag2)) | (mag2 < 0.0025)):
+                return rel_path, st.st_mtime, st.st_size, []
+        # 确实存在零信号/NaN（或非标准列名）→ 走完整解析取精确毫秒区间
         spans = imu_service.find_zero_signal_spans(full_path, None, None, min_zero_ms)
         return rel_path, st.st_mtime, st.st_size, [[int(s), int(e)] for s, e in spans]
     except Exception:  # noqa: BLE001
@@ -78,12 +97,16 @@ _running = False
 _cancel_req = False
 _progress: dict = {
     "status": "idle",
+    "phase": "idle",
+    "scan_total": 0,
+    "scan_done": 0,
     "projects_total": 0,
     "projects_done": 0,
     "tasks_total": 0,
     "tasks_done": 0,
     "current_project": None,
     "started_at": None,
+    "phase_started_at": None,
     "finished_at": None,
     "elapsed_sec": 0,
     "eta_sec": None,
@@ -108,14 +131,17 @@ def get_progress() -> dict:
     p = dict(_progress)
     p["summary"] = dict(_progress["summary"])
     if p["status"] == "running" and p["started_at"]:
-        elapsed = max(1, int(time.time() - p["started_at"]))
+        now = time.time()
+        elapsed = max(1, int(now - p["started_at"]))
         p["elapsed_sec"] = elapsed
-        done = int(p["tasks_done"] or 0)
-        tot = int(p["tasks_total"] or 0)
-        if done > 0 and tot > done:
-            p["eta_sec"] = int(elapsed * (tot - done) / done)
+        phase_elapsed = max(1.0, now - (p.get("phase_started_at") or p["started_at"]))
+        if p.get("phase") == "csv_scan":
+            sd, st = int(p.get("scan_done") or 0), int(p.get("scan_total") or 0)
+            p["eta_sec"] = int(phase_elapsed * (st - sd) / sd) if (sd > 0 and st > sd) else None
         else:
-            p["eta_sec"] = None
+            done = int(p["tasks_done"] or 0)
+            tot = int(p["tasks_total"] or 0)
+            p["eta_sec"] = int(phase_elapsed * (tot - done) / done) if (done > 0 and tot > done) else None
     return p
 
 
@@ -391,12 +417,16 @@ async def _run_smart_clean(
 
     _progress.update({
         "status": "running",
+        "phase": "prescan",
+        "scan_total": 0,
+        "scan_done": 0,
         "projects_total": 0,
         "projects_done": 0,
         "tasks_total": 0,
         "tasks_done": 0,
         "current_project": None,
         "started_at": time.time(),
+        "phase_started_at": time.time(),
         "finished_at": None,
         "elapsed_sec": 0,
         "eta_sec": None,
@@ -561,11 +591,16 @@ async def _run_smart_clean(
                 to_scan.append(rel)
 
             if to_scan and not _cancel_req:
-                n_workers = min(12, max(2, (os.cpu_count() or 4) // 2))
-                _progress["current_project"] = f"并行检测无信号 CSV (0/{len(to_scan)}，{n_workers}核)..."
+                n_workers = min(20, max(4, (os.cpu_count() or 8)))
+                _progress["phase"] = "csv_scan"
+                _progress["phase_started_at"] = time.time()
+                _progress["scan_total"] = len(to_scan)
+                _progress["scan_done"] = 0
+                _progress["current_project"] = f"极速并行检测无信号 CSV (0/{len(to_scan)}，{n_workers}核)..."
                 loop = asyncio.get_running_loop()
-                batch_sz = 48
+                batch_sz = 120
                 scanned_cnt = 0
+                since_save = 0
                 with ProcessPoolExecutor(max_workers=n_workers) as pool:
                     for b0 in range(0, len(to_scan), batch_sz):
                         if _cancel_req:
@@ -578,10 +613,17 @@ async def _run_smart_clean(
                             if mt > 0:
                                 zero_cache[rel] = {"mtime": mt, "size": sz, "spans": spans}
                         scanned_cnt += len(part)
-                        _progress["current_project"] = f"并行检测无信号 CSV ({scanned_cnt}/{len(to_scan)}，{n_workers}核)..."
+                        since_save += len(part)
+                        _progress["scan_done"] = scanned_cnt
+                        _progress["current_project"] = f"极速并行检测无信号 CSV ({scanned_cnt}/{len(to_scan)}，{n_workers}核)..."
+                        if since_save >= 1200:
+                            _save_zero_cache(zero_cache)
+                            since_save = 0
                 _save_zero_cache(zero_cache)
 
             # ── 加速步骤 3：只对真正有问题的任务执行清洗 + 收敛即停 + 每 20 任务批量提交 ──
+            _progress["phase"] = "clean"
+            _progress["phase_started_at"] = time.time()
             dirty_commit_cnt = 0
             for pid in pids:
                 if _cancel_req:
