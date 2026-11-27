@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Alert, Button, Checkbox, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Popover, Progress, Radio, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, TreeSelect, Typography, message,
+  Alert, Button, Checkbox, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Popover, Progress, Radio, Segmented, Select, Slider, Space, Table, Tabs, Tag, Tooltip, TreeSelect, Typography, message,
 } from "antd";
 import type { Dayjs } from "dayjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,7 @@ import {
 import { listDogs } from "@/api/dogs";
 import { CopyOutlined, DownloadOutlined, ExportOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
+import { analyzeIouAndEdge, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
 import { claimTask, editAgain, getTask, listTasks } from "@/api/tasks";
@@ -905,7 +906,7 @@ const styleGroupCols = <T extends Record<string, unknown>>(
   }),
 }));
 
-const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string) => string | undefined, iouMin?: number) => {
+const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string) => string | undefined, iouMin?: number, edgeTolSec = 2) => {
   const iouTxt = iouMin != null ? `IoU ≥ ${Math.round(iouMin * 100)}%` : "IoU 达标";
   return [
   ...(showLabel ? [{
@@ -916,8 +917,8 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   { title: "版本", dataIndex: "version", width: 210, ellipsis: true },
   {
     title: (
-      <Tooltip title="以每个测试窗口（如 1 分钟 / 2 分钟 / 3 分钟段）为单位，判断「有/无」该动作的对错">
-        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 窗口级（整段有无）</span>
+      <Tooltip title="把每个测试片段（如 1 分钟）当成一道「有没有抓挠」的是非题，衡量有没有报警/记录准不准">
+        <span style={{ color: EVAL_GROUP_THEME.window.accent, fontWeight: 700 }}>● 窗口级（这段有没有）</span>
       </Tooltip>
     ),
     onHeaderCell: () => ({
@@ -928,7 +929,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
       },
     }),
     children: styleGroupCols(EVAL_GROUP_THEME.window, [
-      { title: "窗口", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
+      { title: "段数", key: "w_n", width: 56, render: (_: unknown, x: EvalRow) => x.r.window ? x.r.window.n_windows : "-" },
       { title: "准确率", key: "w_acc", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.accuracy) : "-" },
       { title: "精确率", key: "w_p", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.precision) : "-" },
       { title: "召回率", key: "w_r", width: 70, render: (_: unknown, x: EvalRow) => x.r.window ? pct(x.r.window.recall) : "-" },
@@ -954,9 +955,9 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title={`窗口内每次预测动作和每次人工标注逐一配对，交并比 ${iouTxt} 即算命中（可在上方「设置」里修改 IoU 阈值）`}>
+      <Tooltip title={`逐次比对每次动作：预测时段和人工标注的重叠比例（${iouTxt}）达标才算抓对，衡量「计次准不准」。拖动上方 IoU 滑块可实时重算`}>
         <span style={{ color: EVAL_GROUP_THEME.event.accent, fontWeight: 700 }}>
-          ● 事件（片段）级{iouMin != null ? `（${iouTxt}）` : ""}
+          ● 事件级（每次抓对没 · {iouTxt}）
         </span>
       </Tooltip>
     ),
@@ -981,8 +982,8 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
   },
   {
     title: (
-      <Tooltip title="命中事件与人工标注边界是否对齐（IoU 越高、起止偏差秒数越小越准）">
-        <span style={{ color: EVAL_GROUP_THEME.boundary.accent, fontWeight: 700 }}>● 起止对齐（命中事件）</span>
+      <Tooltip title={`在已经抓对的动作里，看模型报的开始/结束时刻跟人工标注差几秒，衡量「时长统计准不准」。可在上方切换 ±1s/±2s/±3s/±5s`}>
+        <span style={{ color: EVAL_GROUP_THEME.boundary.accent, fontWeight: 700 }}>● 起止对齐（开始/结束准不准）</span>
       </Tooltip>
     ),
     onHeaderCell: () => ({
@@ -993,9 +994,9 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
       },
     }),
     children: styleGroupCols(EVAL_GROUP_THEME.boundary, [
-      { title: "平均 IoU", key: "b_iou", width: 78, render: (_: unknown, x: EvalRow) => x.r.mean_iou != null ? pct(x.r.mean_iou) : "-" },
+      { title: "平均重叠", key: "b_iou", width: 78, render: (_: unknown, x: EvalRow) => x.r.mean_iou != null ? pct(x.r.mean_iou) : "-" },
       {
-        title: <Tooltip title="命中的事件里，开始和结束时间都与标注相差 ≤ 2 秒的比例">±2s 对齐</Tooltip>,
+        title: <Tooltip title={`抓对的动作里，开始和结束时间都与人工标注相差 ≤ ${edgeTolSec} 秒的比例`}>±{edgeTolSec}s 对齐</Tooltip>,
         key: "b_2s", width: 82,
         render: (_: unknown, x: EvalRow) => x.r.within_2s_ratio != null ? <b style={{ color: EVAL_GROUP_THEME.boundary.accent }}>{pct(x.r.within_2s_ratio)}</b> : "-",
       },
@@ -1008,7 +1009,7 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
       },
     ]),
   },
-  { title: "样本", key: "ran", width: 68, render: (_: unknown, x: EvalRow) => (
+  { title: <Tooltip title="已跑推理的原始视频样本数 / 测试集涉及的总样本数">样本</Tooltip>, key: "ran", width: 68, render: (_: unknown, x: EvalRow) => (
     <span style={{ color: x.r.n_samples_with_result < x.n ? "#ff4d4f" : undefined }}>{x.r.n_samples_with_result}/{x.n}</span>) },
   ];
 };
@@ -1063,8 +1064,8 @@ const DIAG_COLOR: Record<string, string> = {
   model_fp: "red",
 };
 
-function EvalVisualPanel({ row, iouMin, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
-  row: EvalRow; iouMin: number; items: TestItem[]; colors: Record<string, string>;
+function EvalVisualPanel({ row, iouMin, edgeTolSec = 2, items, colors, opening, promoting, frozen, onOpenTask, onPromoteItem }: {
+  row: EvalRow; iouMin: number; edgeTolSec?: number; items: TestItem[]; colors: Record<string, string>;
   opening: number | null; promoting: number | null; frozen?: boolean;
   onOpenTask: (taskId: number, seekMs: number, opts?: OpenTaskOpts) => void;
   onPromoteItem: (itemId: number) => void;
@@ -1155,7 +1156,7 @@ function EvalVisualPanel({ row, iouMin, items, colors, opening, promoting, froze
     { k: "err", title: "全部错误", n: errCount, hex: "#ff7875", sub: `误报 ${counts.fp} + 漏报 ${counts.fn}` },
     { k: "fp", title: "误报窗口", n: counts.fp, hex: "#faad14", sub: "没动作却乱报" },
     { k: "fn", title: "漏报窗口", n: counts.fn, hex: "#ff4d4f", sub: "有动作没报出" },
-    { k: "edge", title: "起止偏差 >2s", n: counts.edgeBad, hex: "#722ed1", sub: "命中但边界不齐" },
+    { k: "edge", title: `起止偏差 >${edgeTolSec}s`, n: counts.edgeBad, hex: "#722ed1", sub: "命中但边界不齐" },
     { k: "tp", title: "命中窗口", n: counts.tp, hex: "#52c41a", sub: "有动作且报对" },
     { k: "tn", title: "正常通过", n: counts.tn, hex: "#5c7cfa", sub: "无动作没乱报" },
     { k: "all", title: "全部窗口", n: total, hex: "#8c8c8c", sub: `准确率 ${pct((counts.tp + counts.tn) / total)}` },
@@ -1435,6 +1436,7 @@ function buildReportPayload(
   items: TestItem[],
   evalLabel: string,
   iouMin: number,
+  edgeTolSec: number,
   rows: EvalRow[],
   active: EvalRow | null | undefined,
   reporter?: string,
@@ -1474,7 +1476,7 @@ function buildReportPayload(
         predSegs: d.pred_segs,
         winDurMs: Math.max(1, d.end_ms - d.start_ms),
         actualLabels,
-        tag: d.diag?.title ?? (isEdgeBad ? "起止边界偏差 >2s" : d.verdict === "fp" ? "误报" : "漏报"),
+        tag: d.diag?.title ?? (isEdgeBad ? `起止边界偏差 >${edgeTolSec}s` : d.verdict === "fp" ? "误报" : "漏报"),
         reason: d.diag?.detail ?? (isEdgeBad && d.max_edge_err_ms != null ? `边界最大偏差 ${(d.max_edge_err_ms / 1000).toFixed(1)}s` : ""),
         advice: d.diag?.tip ?? "",
       });
@@ -1486,6 +1488,7 @@ function buildReportPayload(
     items,
     evalLabel,
     iouMin,
+    edgeTolSec,
     rows,
     activeRow: active ?? rows[0] ?? null,
     errorCases,
@@ -1551,6 +1554,8 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [edgeTolSec, setEdgeTolSec] = useState<number>(2);
+  const [showIouDetail, setShowIouDetail] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [shareModal, setShareModal] = useState<{ url: string; title: string } | null>(null);
   const evalSeqRef = useRef(0);
@@ -1649,7 +1654,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
       setBusy(false);
       return;
     }
-    const ck = buildEvalCacheKey(setId, usePicked, labelsToEval, p.scope, p.iou, p.checkedOnly, bySize, items);
+    const ck = buildEvalCacheKey(setId, usePicked, labelsToEval, p.scope, 0.3, p.checkedOnly, bySize, items);
     const memKey = `${setId}:${ck}`;
     if (!force) {
       const mem = EVAL_MEM_CACHE.get(memKey);
@@ -1707,7 +1712,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
             sample_ids: ids,
             versions: vers,
             label: lb,
-            iou_min: p.iou,
+            iou_min: 0.3,
             windows: windowsOf(items, ids),
             task_ids: taskIdsOf(items, ids),
             include_curve: false,
@@ -1739,12 +1744,22 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
     }
   };
 
-  const rows = useMemo(
-    () => (p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label)),
-    [allRows, p.label],
+  const rows = useMemo(() => {
+    const filtered = p.label === "ALL" ? allRows : allRows.filter((r) => r.label === p.label);
+    return filtered.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec) }));
+  }, [allRows, p.label, p.iou, edgeTolSec]);
+
+  const activeRowForPanel = useMemo(
+    () => rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0] ?? null,
+    [rows, selectedKey],
   );
 
-  // 只要已选模型 / 设置 / 模型输出类别变了，优先读已存快照（秒切免重算），未命中再算；切换类别直接本地过滤
+  const iouAnalysis = useMemo(
+    () => (activeRowForPanel?.r.window_details?.length ? analyzeIouAndEdge(activeRowForPanel.r.window_details, p.iou) : null),
+    [activeRowForPanel, p.iou],
+  );
+
+  // 只要已选模型 / 设置 / 模型输出类别变了，优先读已存快照（秒切免重算），未命中再算；切换类别与调 IoU/容差全部 0ms 本地重算
   const pickedKey = p.picked.join(",");
   const labelsKey = evalLabels.join(",");
   useEffect(() => {
@@ -1759,7 +1774,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
       setNotes([]);
       setCachedAt(null);
     }
-  }, [setId, pickedKey, labelsKey, p.scope, p.iou, p.checkedOnly, bySize, items.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setId, pickedKey, labelsKey, p.scope, p.checkedOnly, bySize, items.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 推理刚从 running 变成 done：优先选中刚跑完的 produced 模型，自动强制重算并更新缓存
   useEffect(() => {
@@ -1890,7 +1905,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
               <Button size="small" icon={<DownloadOutlined />} disabled={!rows.length} onClick={() => {
                 const activeRow = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length) ?? rows[0];
                 const html = buildTestReportHtml(buildReportPayload(
-                  testSet, coverage, items, p.label, p.iou, rows, activeRow, user?.display_name || user?.username,
+                  testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, activeRow, user?.display_name || user?.username,
                 ));
                 const safeName = (testSet.name || `set_${setId}`).replace(/[\\/:*?"<>|\s]+/g, "_");
                 const lbName = (p.label === "ALL" ? "全部类别" : p.label).replace(/[\\/:*?"<>|\s]+/g, "_");
@@ -1915,7 +1930,7 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
                   const lbName = p.label === "ALL" ? "全部类别" : p.label;
                   const title = `${testSet.name} · ${lbName} 测试报告`;
                   const html = buildTestReportHtml(buildReportPayload(
-                    testSet, coverage, items, p.label, p.iou, rows, activeRow, user?.display_name || user?.username,
+                    testSet, coverage, items, p.label, p.iou, edgeTolSec, rows, activeRow, user?.display_name || user?.username,
                   ));
                   const res = await publishTestReport(setId, html, title);
                   const fullUrl = `${window.location.origin}${res.url}`;
@@ -1941,10 +1956,131 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
         )}
       </div>
 
+      {/* 实时评估门槛试算条（0ms 本地重算，不重新请求后端） */}
+      {rows.length > 0 && (
+        <div style={{
+          padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(128,128,128,0.22)",
+          background: "rgba(128,128,128,0.04)", display: "flex", flexDirection: "column", gap: 8,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <Space wrap size={10} align="center">
+              <Tooltip title="预测动作时段与人工标注的重叠比例门槛（交并比）。拖动滑块可 0ms 实时看事件级 F1 变化">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#b37feb", cursor: "help" }}>
+                  事件重叠门槛 (IoU ≥ {Math.round(p.iou * 100)}%)
+                </span>
+              </Tooltip>
+              <Slider
+                min={0.05} max={0.8} step={0.05} value={p.iou}
+                onChange={(v) => p.setIou(v)}
+                tooltip={{ formatter: (v) => `IoU ≥ ${Math.round((v ?? 0) * 100)}%` }}
+                style={{ width: 150, margin: "0 4px" }}
+              />
+              <Space size={4}>
+                {[0.1, 0.2, 0.3, 0.5].map((v) => (
+                  <Button key={v} size="small" type={Math.abs(p.iou - v) < 0.001 ? "primary" : "default"}
+                    style={{ padding: "0 7px", fontSize: 11, height: 22 }}
+                    onClick={() => p.setIou(v)}>
+                    {Math.round(v * 100)}%
+                  </Button>
+                ))}
+              </Space>
+            </Space>
+            <Space wrap size={10} align="center">
+              <Tooltip title="抓对的动作里，开始/结束时间偏差在多少秒内算「对齐」（动作本身较长或有滑窗延迟时可放宽到 ±3s 或 ±5s）">
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#36cfc9", cursor: "help" }}>起止容差：</span>
+              </Tooltip>
+              <Segmented size="small" value={edgeTolSec} onChange={(v) => setEdgeTolSec(Number(v))}
+                options={[1, 2, 3, 5].map((s) => ({ value: s, label: `±${s}s` }))} />
+              {iouAnalysis && (
+                <Button size="small" type={showIouDetail ? "primary" : "default"} ghost={showIouDetail}
+                  onClick={() => setShowIouDetail((v) => !v)}>
+                  {showIouDetail ? "收起 IoU 分布" : "查看 IoU 分布与各档对比"}
+                </Button>
+              )}
+            </Space>
+          </div>
+
+          {showIouDetail && iouAnalysis && (
+            <div style={{
+              display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14,
+              paddingTop: 8, borderTop: "1px dashed rgba(128,128,128,0.22)",
+            }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+                  所有重叠配对的 IoU 分布（共 {iouAnalysis.totalOverlapped} 对有重叠 / 人工 {iouAnalysis.totalTruth} 次 / 预测 {iouAnalysis.totalPred} 次）
+                </div>
+                {(() => {
+                  const maxC = Math.max(1, ...iouAnalysis.buckets.map((b) => b.count));
+                  return iouAnalysis.buckets.map((b) => {
+                    const passed = b.min >= p.iou - 1e-6;
+                    return (
+                      <div key={b.label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontSize: 12 }}>
+                        <span style={{ width: 58, color: passed ? "#ddd" : "#888" }}>{b.label}</span>
+                        <div style={{ flex: 1, height: 14, background: "rgba(128,128,128,0.16)", borderRadius: 3, overflow: "hidden" }}>
+                          <div style={{
+                            width: `${b.count ? Math.max(4, Math.round((b.count / maxC) * 100)) : 0}%`,
+                            height: "100%", background: b.color, opacity: passed ? 1 : 0.4,
+                          }} />
+                        </div>
+                        <span style={{ width: 62, textAlign: "right", fontSize: 11, color: passed ? "#52c41a" : "#888" }}>
+                          {b.count} 对 {passed ? "✓" : ""}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>各 IoU 门槛下的事件级表现（点击行可直接切换）</div>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ color: "#999", borderBottom: "1px solid rgba(128,128,128,0.22)" }}>
+                      <th style={{ textAlign: "left", padding: "3px 4px" }}>IoU 门槛</th>
+                      <th style={{ textAlign: "right", padding: "3px 4px" }}>精确率</th>
+                      <th style={{ textAlign: "right", padding: "3px 4px" }}>召回率</th>
+                      <th style={{ textAlign: "right", padding: "3px 4px" }}>事件 F1</th>
+                      <th style={{ textAlign: "right", padding: "3px 4px" }}>对/误/漏</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {iouAnalysis.iouSweep.map((s) => {
+                      const cur = Math.abs(s.iou - p.iou) < 0.001;
+                      return (
+                        <tr key={s.iou} onClick={() => p.setIou(s.iou)} style={{
+                          cursor: "pointer",
+                          background: cur ? "rgba(179,127,235,0.14)" : undefined,
+                          borderBottom: "1px solid rgba(128,128,128,0.12)",
+                        }}>
+                          <td style={{ padding: "4px", fontWeight: cur ? 700 : 400 }}>≥ {Math.round(s.iou * 100)}%</td>
+                          <td style={{ textAlign: "right", padding: "4px" }}>{pct(s.precision)}</td>
+                          <td style={{ textAlign: "right", padding: "4px" }}>{pct(s.recall)}</td>
+                          <td style={{ textAlign: "right", padding: "4px", fontWeight: 700, color: "#b37feb" }}>{pct(s.f1)}</td>
+                          <td style={{ textAlign: "right", padding: "4px", fontSize: 11 }}>{s.tp}/{s.fp}/{s.fn}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{ fontSize: 11, color: "#999", marginTop: 6 }}>
+                  当前 IoU 下起止对齐率：
+                  {iouAnalysis.edgeSweep.map((e) => (
+                    <Tag key={e.tolSec} color={e.tolSec === edgeTolSec ? "cyan" : "default"}
+                      style={{ cursor: "pointer", marginInlineEnd: 4, fontSize: 11 }}
+                      onClick={() => setEdgeTolSec(e.tolSec)}>
+                      ±{e.tolSec}s: {e.ratio != null ? pct(e.ratio) : "-"}
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {rows.length === 0 && <EvalNotes notes={notes} hasRows={false} />}
       <Table
         size="small" bordered rowKey="key" pagination={false} loading={busy} scroll={{ x: 1320 }} dataSource={rows}
-        columns={evalColumns("范围", p.label === "ALL", colorOf, p.iou)}
+        columns={evalColumns("范围", p.label === "ALL", colorOf, p.iou, edgeTolSec)}
         onRow={(r) => ({
           onClick: () => setSelectedKey(r.key),
           style: { cursor: "pointer", background: (selectedKey ?? rows[0]?.key) === r.key ? "rgba(22, 119, 255, 0.08)" : undefined },
@@ -1954,13 +2090,10 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
         }}
       />
       {rows.length > 0 && <EvalNotes notes={notes} hasRows />}
-      {(() => {
-        const active = rows.find((r) => r.key === selectedKey) ?? rows.find((r) => r.r.window_details?.length);
-        return active ? (
-          <EvalVisualPanel row={active} iouMin={p.iou} items={items} colors={colors} opening={opening}
-            promoting={promoting} frozen={frozen} onOpenTask={onOpenTask} onPromoteItem={onPromoteItem} />
-        ) : null;
-      })()}
+      {activeRowForPanel ? (
+        <EvalVisualPanel row={activeRowForPanel} iouMin={p.iou} edgeTolSec={edgeTolSec} items={items} colors={colors} opening={opening}
+          promoting={promoting} frozen={frozen} onOpenTask={onOpenTask} onPromoteItem={onPromoteItem} />
+      ) : null}
       <Modal
         open={!!shareModal}
         title="测试报告分享链接已生成"
@@ -2801,7 +2934,7 @@ export default function ModelTest() {
                   {curSet.created_at && <Typography.Text type="secondary">创建于：{curSet.created_at.slice(0, 16).replace("T", " ")}</Typography.Text>}
                   {curSet.n_items > 0 && (
                     <Typography.Text type="secondary">
-                      已核对 {curSet.n_checked ?? 0}/{curSet.n_items}
+                      已核对 {curSet.n_checked ?? 0}/{curSet.n_items} 段
                     </Typography.Text>
                   )}
                   {curSet.seen_ref && curSet.n_items > 0 && (

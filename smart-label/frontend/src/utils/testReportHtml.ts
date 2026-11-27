@@ -1,5 +1,6 @@
 import type { VersionResult } from "@/api/modelEval";
 import type { Coverage, TestItem, TestSet } from "@/api/modelTests";
+import { analyzeIouAndEdge } from "@/utils/evalMetrics";
 
 export interface ReportEvalRow {
   key: string;
@@ -37,6 +38,7 @@ export interface TestReportInput {
   items: TestItem[];
   evalLabel: string;
   iouMin: number;
+  edgeTolSec?: number;
   rows: ReportEvalRow[];
   activeRow?: ReportEvalRow | null;
   errorCases: ReportErrorCase[];
@@ -223,7 +225,7 @@ function renderMiniTimelineSvg(c: ReportErrorCase): string {
 /** 生成独立可离线打开、可打印 PDF、也可分享链接的标准 QA 测试报告 HTML */
 export function buildTestReportHtml(input: TestReportInput): string {
   const {
-    testSet, coverage, items, evalLabel, iouMin, rows, activeRow, errorCases, summaryCounts, reporter,
+    testSet, coverage, items, evalLabel, iouMin, edgeTolSec = 2, rows, activeRow, errorCases, summaryCounts, reporter,
   } = input;
 
   const now = new Date();
@@ -401,6 +403,55 @@ export function buildTestReportHtml(input: TestReportInput): string {
       </tr>`;
     })
     .join("");
+
+  const iouAnalysis = primary?.r.window_details?.length
+    ? analyzeIouAndEdge(primary.r.window_details, iouMin)
+    : null;
+  const iouPanelHtml = iouAnalysis
+    ? (() => {
+        const maxC = Math.max(1, ...iouAnalysis.buckets.map((b) => b.count));
+        const bucketBars = iouAnalysis.buckets
+          .map((b) => {
+            const passed = b.min >= iouMin - 1e-6;
+            const bw = b.count ? Math.max(4, Math.round((b.count / maxC) * 100)) : 0;
+            return `<div class="bar-row">
+              <span class="bar-name">${b.label}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:${bw}%;background:${b.color};opacity:${passed ? 1 : 0.4}"></div></div>
+              <span class="bar-val-sm" style="color:${passed ? "#16a34a" : "#64748b"}"><b>${b.count}</b> 对${passed ? " ✓" : ""}</span>
+            </div>`;
+          })
+          .join("");
+        const sweepRows = iouAnalysis.iouSweep
+          .map((s) => {
+            const cur = Math.abs(s.iou - iouMin) < 0.001;
+            return `<tr style="${cur ? "background:#f5f3ff;font-weight:700" : ""}">
+              <td>IoU ≥ ${Math.round(s.iou * 100)}%${cur ? " (当前)" : ""}</td>
+              <td>${pct(s.precision)}</td>
+              <td>${pct(s.recall)}</td>
+              <td style="color:#6d28d9"><b>${pct(s.f1)}</b></td>
+              <td>${s.tp} / ${s.fp} / ${s.fn}</td>
+            </tr>`;
+          })
+          .join("");
+        const edgeTags = iouAnalysis.edgeSweep
+          .map((e) => `<span class="pill ${e.tolSec === edgeTolSec ? "pill-green" : "pill-gray"}">±${e.tolSec}s：${e.ratio != null ? pct(e.ratio) : "-"}</span>`)
+          .join(" ");
+        return `<div class="two-col" style="margin-top:14px;padding-top:14px;border-top:1px dashed #e2e8f0">
+          <div>
+            <div class="chart-title" style="margin-bottom:8px">重叠度 (IoU) 整体分布（有重叠 ${iouAnalysis.totalOverlapped} 对 / 人工 ${iouAnalysis.totalTruth} 次 / 预测 ${iouAnalysis.totalPred} 次）</div>
+            ${bucketBars}
+          </div>
+          <div>
+            <div class="chart-title" style="margin-bottom:8px">不同 IoU 门槛下的事件级表现对比</div>
+            <table>
+              <thead><tr><th>IoU 门槛</th><th>精确率</th><th>召回率</th><th>事件 F1</th><th>对/误/漏</th></tr></thead>
+              <tbody>${sweepRows}</tbody>
+            </table>
+            <div style="margin-top:8px;font-size:12px;color:#475569">当前 IoU 下不同起止容差对齐率：${edgeTags}</div>
+          </div>
+        </div>`;
+      })()
+    : "";
 
   const sc = summaryCounts;
 
@@ -599,9 +650,9 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div class="meta-grid">
       <div class="meta-item"><span class="meta-k">测试集名称</span><span class="meta-v">${esc(testSet.name)}</span></div>
       <div class="meta-item"><span class="meta-k">主测模型版本</span><span class="meta-v mono-sm">${esc(primary?.version ?? "-")}</span></div>
-      <div class="meta-item"><span class="meta-k">评估类别 / 事件阈值</span><span class="meta-v">${esc(labelTitle)}（IoU ≥ ${iouPct}%）</span></div>
+      <div class="meta-item"><span class="meta-k">评估类别 / 判定标准</span><span class="meta-v">${esc(labelTitle)}（重叠 ≥ ${iouPct}% · 容差 ±${edgeTolSec}s）</span></div>
       <div class="meta-item"><span class="meta-k">数据规模与覆盖</span><span class="meta-v">${nTotal} 段 · ${nDogs} 只犬 · ${fmtSec(totalSec)}</span></div>
-      <div class="meta-item"><span class="meta-k">人工核对进度</span><span class="meta-v">${nChecked} / ${nTotal}（${nTotal ? Math.round((nChecked / nTotal) * 100) : 0}%）</span></div>
+      <div class="meta-item"><span class="meta-k">人工核对进度</span><span class="meta-v">${nChecked} / ${nTotal} 段（${nTotal ? Math.round((nChecked / nTotal) * 100) : 0}%）</span></div>
       <div class="meta-item"><span class="meta-k">训练数据隔离</span><span class="meta-v">${testSet.seen_ref ? `没见过 ${testSet.n_unseen ?? 0} 段 / 见过 ${testSet.n_seen ?? 0} 段` : "全部样本"}</span></div>
       <div class="meta-item"><span class="meta-k">数据场地</span><span class="meta-v">${esc(sitesTxt)}</span></div>
       <div class="meta-item"><span class="meta-k">测试人 / 创建人</span><span class="meta-v">${esc(reporter || testSet.creator_name || "-")} / ${esc(testSet.creator_name || "-")}</span></div>
@@ -617,10 +668,16 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
 
     <div class="gauges-grid">
-      ${renderGaugeSvg(pw?.accuracy, "#2563eb", "窗口级准确率", pw ? `共 ${pw.n_windows} 窗口 · 正确 ${pw.tp + pw.tn}` : "-")}
-      ${renderGaugeSvg(pw?.f1, "#3b82f6", "窗口级 F1", pw ? `精确 ${pct(pw.precision)} / 召回 ${pct(pw.recall)}` : "-")}
-      ${renderGaugeSvg(evF1, "#7c3aed", `事件级 F1 (IoU≥${iouPct}%)`, pr ? `命中 ${pr.tp} / 误 ${pr.fp} / 漏 ${pr.fn}` : "-")}
-      ${renderGaugeSvg(pr?.within_2s_ratio, "#0d9488", "边界 ±2s 对齐率", pr ? `命中平均 IoU ${pct(pr.mean_iou)}` : "-")}
+      ${renderGaugeSvg(pw?.accuracy, "#2563eb", "窗口级准确率", pw ? `共 ${pw.n_windows} 段 · 判对 ${pw.tp + pw.tn} 段` : "-")}
+      ${renderGaugeSvg(pw?.f1, "#3b82f6", "窗口级 F1（有无动作）", pw ? `精确 ${pct(pw.precision)} / 召回 ${pct(pw.recall)}` : "-")}
+      ${renderGaugeSvg(evF1, "#7c3aed", `事件级 F1（每次计次）`, pr ? `IoU≥${iouPct}% · 命中 ${pr.tp}/误 ${pr.fp}/漏 ${pr.fn}` : "-")}
+      ${renderGaugeSvg(pr?.within_2s_ratio, "#0d9488", `起止 ±${edgeTolSec}s 对齐率`, pr ? `命中平均重叠 ${pct(pr.mean_iou)}` : "-")}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-bottom:14px;font-size:12px;color:#475569">
+      <div style="background:#eff6ff;padding:8px 10px;border-radius:6px"><b style="color:#1d4ed8">① 窗口级（这段有没有）</b>：把每段视频当成“有没有动作”的是非题，衡量<b>有无报警/记录准不准</b>。</div>
+      <div style="background:#f5f3ff;padding:8px 10px;border-radius:6px"><b style="color:#6d28d9">② 事件级（每次抓对没）</b>：逐次比对每次动作，重叠度 ≥ ${iouPct}% 算命中，衡量<b>动作计次准不准</b>。</div>
+      <div style="background:#f0fdfa;padding:8px 10px;border-radius:6px"><b style="color:#0f766e">③ 起止对齐（时间准不准）</b>：抓对的动作里，开始和结束时刻误差 ≤ ±${edgeTolSec}s 的比例，衡量<b>时长统计准不准</b>。</div>
     </div>
 
     ${sc.total > 0 ? `
@@ -666,12 +723,13 @@ export function buildTestReportHtml(input: TestReportInput): string {
           <tr>
             <th class="th-w">准确率</th><th class="th-w">精确率</th><th class="th-w">召回率</th><th class="th-w">F1</th><th class="th-w">对/误/漏</th>
             <th class="th-e">精确率</th><th class="th-e">召回率</th><th class="th-e">F1</th><th class="th-e">对/误/漏</th>
-            <th class="th-b">平均 IoU</th><th class="th-b">±2s 对齐</th><th class="th-b">起/止均差</th>
+            <th class="th-b">平均重叠</th><th class="th-b">±${edgeTolSec}s 对齐</th><th class="th-b">起/止均差</th>
           </tr>
         </thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
+    ${iouPanelHtml}
   </div>
 
   <!-- 四、测试集数据分布 -->
