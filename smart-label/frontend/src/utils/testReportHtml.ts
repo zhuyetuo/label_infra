@@ -3,12 +3,25 @@ import type { Coverage, TestItem, TestSet } from "@/api/modelTests";
 import type { Dog } from "@/api/dogs";
 import { analyzeIouAndEdge } from "@/utils/evalMetrics";
 
+export interface ModelArchMeta {
+  /** 深度学习 / 机器学习 */
+  paradigm: "深度学习" | "机器学习" | "未知架构";
+  /** 具体架构名，如 1D-CNN / 随机森林 (RF) / XGBoost */
+  archName: string;
+  /** 组合短标签，如 深度学习 · 1D-CNN */
+  shortTag: string;
+  isDL: boolean;
+  /** 训练输入规格，如 6轴 · 20Hz · 端侧轻量 */
+  extra?: string;
+}
+
 export interface ReportEvalRow {
   key: string;
   label?: string;
   group: string;
   n: number;
   version: string;
+  modelMeta?: ModelArchMeta;
   r: VersionResult;
 }
 
@@ -383,6 +396,13 @@ export function buildTestReportHtml(input: TestReportInput): string {
     takeaways.push(`<strong>主要失误点：</strong>全部 ${summaryCounts.total} 个测试窗口零误报、零漏报。`);
   }
 
+  const renderArchBadge = (m?: ModelArchMeta, withExtra = true): string => {
+    if (!m) return "";
+    const cls = m.isDL ? "pill-purple" : m.paradigm === "机器学习" ? "pill-green" : "pill-gray";
+    const extraHtml = withExtra && m.extra ? ` <span class="pill pill-gray">${esc(m.extra)}</span>` : "";
+    return `<span class="pill ${cls}">${esc(m.shortTag)}</span>${extraHtml}`;
+  };
+
   // 多模型对比表
   const showLabelCol = evalLabel === "ALL";
   const rowsHtml = rows
@@ -397,7 +417,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
       return `<tr class="${isAct ? "row-primary" : ""}">
         ${showLabelCol ? `<td><span class="pill pill-gray">${esc(x.label ?? "-")}</span></td>` : ""}
         <td>${esc(x.group)}</td>
-        <td class="mono-sm"><b>${esc(x.version)}</b></td>
+        <td class="mono-sm"><div><b>${esc(x.version)}</b></div>${x.modelMeta ? `<div style="margin-top:3px">${renderArchBadge(x.modelMeta)}</div>` : ""}</td>
         <td class="col-w">${w ? pct(w.accuracy) : "-"}</td>
         <td class="col-w">${w ? pct(w.precision) : "-"}</td>
         <td class="col-w">${w ? pct(w.recall) : "-"}</td>
@@ -1060,7 +1080,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     <div>
       <div class="banner-tag">QA EVALUATION REPORT · ${esc(reportCode)}</div>
       <h1>模型行为识别测试报告</h1>
-      <div class="banner-sub">测试集：${esc(testSet.name)} · 评估类别：${esc(labelTitle)} · 报告生成：${esc(genTime)}</div>
+      <div class="banner-sub">测试集：${esc(testSet.name)}${primary?.modelMeta ? ` · 模型架构：${esc(primary.modelMeta.shortTag)}` : ""} · 评估类别：${esc(labelTitle)} · 报告生成：${esc(genTime)}</div>
     </div>
     <div class="banner-right">
       <span class="verdict-badge ${winGrade.cls}">窗口 ${winGrade.code}·${winGrade.name} (${pct(pw?.f1)})</span>
@@ -1078,7 +1098,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
     </div>
     <div class="meta-grid">
       <div class="meta-item"><span class="meta-k">测试集名称</span><span class="meta-v">${esc(testSet.name)}</span></div>
-      <div class="meta-item"><span class="meta-k">主测模型版本</span><span class="meta-v mono-sm">${esc(primary?.version ?? "-")}</span></div>
+      <div class="meta-item"><span class="meta-k">主测模型版本</span><span class="meta-v mono-sm">${esc(primary?.version ?? "-")}${primary?.modelMeta ? `<div style="margin-top:4px;font-family:inherit">${renderArchBadge(primary.modelMeta)}</div>` : ""}</span></div>
       <div class="meta-item"><span class="meta-k">评估类别 / 判定标准</span><span class="meta-v">${esc(labelTitle)}（重叠 ≥ ${iouPct}% · 容差 ±${edgeTolSec}s）</span></div>
       <div class="meta-item"><span class="meta-k">数据规模与覆盖</span><span class="meta-v">${nTotal} 段 · ${nDogs} 只犬 · ${fmtSec(totalSec)}</span></div>
       <div class="meta-item"><span class="meta-k">人工核对进度</span><span class="meta-v">${nChecked} / ${nTotal} 段（${nTotal ? Math.round((nChecked / nTotal) * 100) : 0}%）</span></div>
@@ -1093,7 +1113,7 @@ export function buildTestReportHtml(input: TestReportInput): string {
   <div class="card" id="sec-kpi">
     <div class="sec-hd">
       <h2>二、核心指标总览</h2>
-      <span class="sub">主测模型：${esc(primary?.version ?? "-")} · ${esc(primary?.group ?? "")}</span>
+      <span class="sub">主测模型：${esc(primary?.version ?? "-")}${primary?.modelMeta ? `（${esc(primary.modelMeta.shortTag)}）` : ""} · ${esc(primary?.group ?? "")}</span>
     </div>
 
     <div class="gauges-grid">

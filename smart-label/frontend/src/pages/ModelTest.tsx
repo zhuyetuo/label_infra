@@ -17,7 +17,7 @@ import {
 } from "@/api/modelTests";
 import { listDogs, type Dog } from "@/api/dogs";
 import { CopyOutlined, ExportOutlined, LockOutlined, PlusOutlined, QuestionCircleOutlined, SettingOutlined, ShareAltOutlined, UnlockOutlined } from "@ant-design/icons";
-import { buildTestReportHtml, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
+import { buildTestReportHtml, type ModelArchMeta, type ReportErrorCase, type TestReportInput } from "@/utils/testReportHtml";
 import { analyzeIouAndEdge, matchWindowSegs, recomputeVersionAt } from "@/utils/evalMetrics";
 import ModelTestPlan from "@/components/ModelTestPlan";
 import { listProjects } from "@/api/projects";
@@ -90,6 +90,83 @@ const formatEvalVersion = (modelTag: string, mode: string, mvByJob?: Map<number,
     return `训练记录 #${mv.id}（train${mv.algo_job_id}）· ${post}`;
   }
   return `${modelTag} · ${modeLabelOf(mode)}`;
+};
+
+/** 提取模型架构类型（深度学习 1D-CNN vs 机器学习 RF/XGBoost 等）及训练输入规格 */
+const describeModelArch = (
+  modelTag: string,
+  mode: string,
+  mvByJob?: Map<number, ModelVersion>,
+): ModelArchMeta | undefined => {
+  const jobId = jobIdOfTag(`${modelTag}::${mode}`);
+  const mv = jobId != null ? mvByJob?.get(jobId) : undefined;
+  let mt = (mv?.model_type ?? "").trim().toLowerCase();
+  if (!mt) {
+    const raw = `${modelTag} ${mode}`.toLowerCase();
+    if (/(^|[^a-z])(1d[-_]?cnn|cnn)([^a-z]|$)/.test(raw)) mt = "cnn";
+    else if (/(^|[^a-z])(rf|random[-_]?forest)([^a-z]|$)/.test(raw)) mt = "rf";
+    else if (/(^|[^a-z])(xgb|xgboost)([^a-z]|$)/.test(raw)) mt = "xgb";
+    else if (/(^|[^a-z])(lgbm|lightgbm)([^a-z]|$)/.test(raw)) mt = "lgbm";
+    else if (/(^|[^a-z])catboost([^a-z]|$)/.test(raw)) mt = "catboost";
+    else if (/(^|[^a-z])extratrees([^a-z]|$)/.test(raw)) mt = "extratrees";
+    else if (/(^|[^a-z])histgb([^a-z]|$)/.test(raw)) mt = "histgb";
+    else if (/(^|[^a-z])(tcn|bigru|gru|lstm|resnet|transformer)([^a-z]|$)/.test(raw)) {
+      mt = RegExp.$2;
+    }
+  }
+  if (!mt) return undefined;
+
+  let paradigm: ModelArchMeta["paradigm"] = "机器学习";
+  let archName = mt.toUpperCase();
+  let isDL = false;
+  if (mt === "cnn") {
+    paradigm = "深度学习";
+    archName = "1D-CNN";
+    isDL = true;
+  } else if (["tcn", "gru", "bigru", "lstm", "resnet", "transformer", "mlp", "nn", "dl"].includes(mt)) {
+    paradigm = "深度学习";
+    archName = mt.toUpperCase();
+    isDL = true;
+  } else if (mt === "rf") {
+    paradigm = "机器学习";
+    archName = "随机森林 (RF)";
+  } else if (mt === "xgb") {
+    paradigm = "机器学习";
+    archName = "XGBoost";
+  } else if (mt === "lgbm") {
+    paradigm = "机器学习";
+    archName = "LightGBM";
+  } else if (mt === "catboost") {
+    paradigm = "机器学习";
+    archName = "CatBoost";
+  } else if (mt === "extratrees") {
+    paradigm = "机器学习";
+    archName = "ExtraTrees";
+  } else if (mt === "histgb") {
+    paradigm = "机器学习";
+    archName = "HistGB";
+  }
+
+  let extra: string | undefined;
+  if (mv?.dataset_spec) {
+    try {
+      const sp = JSON.parse(mv.dataset_spec) as Record<string, unknown>;
+      const parts: string[] = [];
+      if (Number(sp.axes) === 3) parts.push("3轴");
+      else if (Number(sp.axes) === 6) parts.push("6轴");
+      if (sp.hz != null && sp.hz !== "") parts.push(`${sp.hz}Hz`);
+      if (sp.edge_size) parts.push("端侧轻量");
+      if (parts.length) extra = parts.join(" · ");
+    } catch { /* ignore */ }
+  }
+
+  return {
+    paradigm,
+    archName,
+    shortTag: `${paradigm} · ${archName}`,
+    isDL,
+    extra,
+  };
 };
 
 type OpenTaskOpts = {
@@ -748,7 +825,7 @@ function ComposeModal({ setId, open, onClose }: { setId: number; open: boolean; 
 }
 
 // ───────────────────────── 打分 ─────────────────────────
-type EvalRow = { key: string; label?: string; group: string; n: number; version: string; r: VersionResult };
+type EvalRow = { key: string; label?: string; group: string; n: number; version: string; modelMeta?: ModelArchMeta; r: VersionResult };
 
 /** 选哪些模型版本、哪个类别；测试集严格只列「在本测试集上主动跑过并记录」的模型 */
 function useEvalPicker(testSetId?: number, defaultLabel = "抓挠", testSetIds?: number[]) {
@@ -914,7 +991,29 @@ const evalColumns = (groupTitle: string, showLabel = false, colorOf?: (k: string
     render: (lb: string) => <Tag color={colorOf?.(lb)} style={{ marginInlineEnd: 0 }}>{lb}</Tag>,
   }] : []),
   { title: groupTitle, dataIndex: "group", width: 115 },
-  { title: "版本", dataIndex: "version", width: 210, ellipsis: true },
+  {
+    title: "版本",
+    dataIndex: "version",
+    width: 240,
+    ellipsis: true,
+    render: (v: string, row: EvalRow) => (
+      <div style={{ lineHeight: 1.35 }}>
+        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</div>
+        {row.modelMeta && (
+          <div style={{ marginTop: 2, display: "flex", gap: 4, flexWrap: "wrap" }}>
+            <Tag color={row.modelMeta.isDL ? "purple" : "green"} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+              {row.modelMeta.shortTag}
+            </Tag>
+            {row.modelMeta.extra && (
+              <Tag style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px", padding: "0 5px" }}>
+                {row.modelMeta.extra}
+              </Tag>
+            )}
+          </div>
+        )}
+      </div>
+    ),
+  },
   {
     title: (
       <Tooltip title="把每个测试片段（如 1 分钟）当成一道「有没有抓挠」的是非题，衡量有没有报警/记录准不准">
@@ -1854,8 +1953,12 @@ function EvalTab({ setId, testSet, coverage, planTarget, items: allItems, colors
   };
 
   const allRecomputedRows = useMemo(
-    () => allRows.map((x) => ({ ...x, r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin) })),
-    [allRows, p.iou, edgeTolSec, confMin],
+    () => allRows.map((x) => ({
+      ...x,
+      modelMeta: x.modelMeta ?? describeModelArch(x.r.model_tag, x.r.mode, p.mvByJob),
+      r: recomputeVersionAt(x.r, p.iou, edgeTolSec, confMin),
+    })),
+    [allRows, p.iou, edgeTolSec, confMin, p.mvByJob],
   );
   const rows = useMemo(
     () => (p.label === "ALL" ? allRecomputedRows : allRecomputedRows.filter((r) => r.label === p.label)),
