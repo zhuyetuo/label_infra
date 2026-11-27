@@ -2333,7 +2333,7 @@ function SeenTab({ setId }: { setId: number }) {
 }
 
 // ───────────────────────── 一批测试集 ─────────────────────────
-function SetDetail({ setId }: { setId: number }) {
+function SetDetail({ setId, setMeta }: { setId: number; setMeta?: TestSet | null }) {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -2879,7 +2879,14 @@ function SetDetail({ setId }: { setId: number }) {
         },
         { key: "seen", label: "模型见没见过", children: <SeenTab setId={setId} /> },
         { key: "eval", label: "打分", children: (
-          <EvalTab setId={setId} testSet={data.set} coverage={data.coverage} planTarget={data.set.plan?.target} items={data.items} colors={colors} opening={opening}
+          <EvalTab setId={setId} testSet={{
+            ...setMeta,
+            ...data.set,
+            creator_name: data.set.creator_name ?? setMeta?.creator_name,
+            seen_ref: data.set.seen_ref ?? setMeta?.seen_ref,
+            n_seen: setMeta?.n_seen ?? data.set.n_seen,
+            n_unseen: setMeta?.n_unseen ?? data.set.n_unseen,
+          }} coverage={data.coverage} planTarget={data.set.plan?.target} items={data.items} colors={colors} opening={opening}
             promoting={promoting} frozen={frozen} onOpenTask={openTask} onPromoteItem={(itemId) => promoteItem(itemId, false)} />
         ) },
       ]} />
@@ -3099,7 +3106,7 @@ export default function ModelTest() {
                     ]}
                   />),
               }]} />
-              {cur != null && sets.some((s) => s.id === cur) && <SetDetail key={cur} setId={cur} />}
+              {cur != null && sets.some((s) => s.id === cur) && <SetDetail key={cur} setId={cur} setMeta={curSet} />}
             </Space>
           ),
         },

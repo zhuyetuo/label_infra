@@ -307,7 +307,13 @@ async def get_items(set_id: int, db: AsyncSession = Depends(get_db)):
         plan = json.loads(s.plan) if s.plan else None
     except ValueError:
         plan = None
-    return ok({"set": {**_set_out(s, len(items), len({i.sample_id for i in items})), "plan": plan},
+    creator_name: str | None = None
+    if s.created_by is not None:
+        u = await db.get(User, s.created_by)
+        if u is not None:
+            creator_name = u.display_name or u.username
+    n_checked = sum(1 for i in items if i.checked_at is not None)
+    return ok({"set": {**_set_out(s, len(items), len({i.sample_id for i in items}), n_checked=n_checked, creator_name=creator_name), "plan": plan},
                "items": rows, "coverage": svc.coverage(rows), "colors": await svc.label_colors(db)})
 
 
